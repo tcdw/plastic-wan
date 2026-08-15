@@ -1,0 +1,158 @@
+# Telegram 与 Agent 流程
+
+## 接收边界
+
+服务使用 grammY long polling，只订阅：
+
+- `message`
+- `edited_message`
+- `my_chat_member`
+
+群聊不要求 mention Bot。是否处理消息只由配置和代码决定，不由 Prompt 决定。
+
+`TelegramIngestion` 对每个 Update 先写 `telegram_updates` 审计，再判定：
+
+1. Chat 类型是否支持。
+2. Chat ID 是否在 `telegram.chats`。
+3. Forum Topic 是否在可选 `topic_ids`。
+4. 消息是否来自 Bot/Service，以及 `process_bot_messages` 是否允许。
+5. Message/Edited Message 结构是否可归一化。
+
+拒绝的 Update 不进入 Bucket，但保留稳定 `rejection_reason`，例如 `chat_not_allowed`、`topic_not_allowed`。排查 allowlist 时同时比较配置哈希；配置不会热重载。
+
+## Chat、Conversation 与 Topic
+
+- Telegram Chat 归一化到 `chats`。
+- Supergroup 迁移通过 `chat_migrations` 把旧 ID 指向 canonical Chat。
+- Conversation 由 Chat 与 `message_thread_id` 组成。
+- 非 Forum/普通消息使用 thread ID `0`。
+- 不同 Forum Topic 的消息、Bucket、Context、Reply 和预算相互隔离。
+
+## Message Revision
+
+`messages` 保存 Telegram Message 的稳定身份；每次首次接收或编辑产生一条 `message_revisions`：
+
+- Text/Caption
+- Sender user 或 sender_chat
+- Reply 快照
+- Forward origin
+- Media group ID
+- Service 片段
+- 受限原始 JSON 片段
+- 关联 Media
+
+相同内容的重复 Update 不创建无意义 Revision。截止时间到达时，Scheduler 冻结当时最新 Revision；截止后的编辑只进入未来 Invocation 的 history。
+
+## 15 秒 Bucket
+
+第一条可处理消息创建 `collecting` Bucket：
+
+```text
+first_received_at = T
+fixed deadline     = T + 15s
+```
+
+后续消息加入该 Bucket，但不会滑动截止时间。到期后：
+
+1. Bucket 从 `collecting` 进入队列。
+2. Scheduler 冻结 `history` 与 `new` 快照。
+3. 创建一个 Invocation。
+4. 同一 Conversation 已有运行任务时，新任务继续排队；过多队列可合并。
+5. Chat 每日 Invocation/Token 预算不足时进入 `skipped_budget`。
+
+Bot 自己通过 `send` 产生的消息写入可见历史，但不会再次触发收集循环。
+
+## Context
+
+`ContextBuilder` 生成：
+
+- `systemPrompt`：安全边界、全局 Prompt、私聊/群聊参与策略、Chat instructions、当前时间。
+- `userPrompt`：最近 history 与本 Bucket new messages。
+- `visibleReplyMessageIds`：本次允许 Reply 的 Telegram Message ID。
+- `imageCapabilities`：本次允许 `read_image` 的不透明引用 → 内部 Media ID。
+- `omittedNewMessages`：因 Context 上限省略的新消息数量。
+
+私聊策略提示模型积极参与；群聊提示只在有明确价值时发言。它是行为偏好，不绕过 Tool 或预算授权。
+
+Context 受模型窗口限制：为系统提示、Tool Schema、历史、新消息和输出保留空间。超过 `context_stop_ratio` 后停止继续 Tool 循环，避免下一轮超窗。
+
+## Agent 循环
+
+每次 Invocation 使用 Fresh Agent：
+
+```text
+Context
+  → model turn
+  → zero or more Tool Calls
+  → Tool Results
+  → next model turn
+  → completed / failed / aborted / outcome_unknown
+```
+
+限制来自配置：最大轮次、Tool Call 数、发送数、输出 Token、Invocation 超时和全局并发。模型调用与 Tool Call 分别写入审计。
+
+普通 Assistant Message 永不自动发布。模型不调用 `send` 即表示保持沉默，这在群聊中是正常成功结果。
+
+## send Tool
+
+`send` 是唯一 Telegram 输出边界，支持：
+
+- 纯文本。
+- 配置允许且当前 capability 授权的 Sticker。
+- 可选 Reply，但目标 Message ID 必须在当前 `visibleReplyMessageIds`。
+
+发送前写 pending 审计并标记副作用边界。明确失败可按策略处理；网络中断后无法确认 Telegram 是否接收时记录 `outcome_unknown`，不能盲目重发。
+
+成功发送后：
+
+- `tool_calls` 记为 success。
+- `telegram_sends` 保存 Telegram 返回 ID/时间。
+- 发送内容写入可见消息历史。
+- Agent 的私有 Assistant 文本仍不进入 Telegram。
+
+## read_image
+
+模型只能使用 Context 中展示的不透明 `image_ref`。Tool 不接受原始 Telegram file ID、任意 URL 或任意 Media ID。
+
+处理流程：
+
+1. 校验 capability、Invocation deadline 与 Chat Vision 预算。
+2. 从 Telegram 下载到 `paths.media_cache` 下的临时目录。
+3. 检查下载大小、图片格式、像素数和标准化输出大小。
+4. 提取 Sticker 代表帧。
+5. 调用 Vision 模型并审计 Token/图片预算。
+6. 按 `file_unique_id + analysis_version` 缓存。
+7. 删除临时文件。
+
+Sticker 代表帧：
+
+- Telegram thumbnail 优先。
+- 静态 WEBP 直接标准化。
+- 视频 WEBM 使用 FFprobe 获取时长、FFmpeg 提取中间帧。
+- 动画 TGS 使用 python-lottie 导出指定中间帧 SVG，再由 Sharp 标准化。
+
+Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、动作、中英文标签。不要改回“提示模型输出 JSON 后直接 `JSON.parse`”；Provider 可能返回 Markdown code fence，曾导致真实 `read_image` 失败。
+
+## Sticker 搜索与后台索引
+
+启动时 `StickerService.sync` 拉取配置中的完整 Set：
+
+- Set/Sticker 元数据写入 SQLite。
+- 新增或版本变化的 Sticker 进入索引队列。
+- 后台固定单并发，用户 `read_image` 优先。
+- 分析成功后更新 `sticker_search` FTS5 trigram 索引。
+- 失败记录次数与 `next_retry_at`，避免热循环。
+
+`search_stickers` 只返回已允许、已成功索引的 Sticker capability。`send` 只接受这些 capability，而不是模型给出的 file ID 或 Set 名称。
+
+## 常见排查顺序
+
+1. `check-config` 输出是否为预期哈希。
+2. `serve_started.config_hash` 是否一致。
+3. `telegram_updates.allowed/rejection_reason`。
+4. Bucket 与 Invocation 是否进入终态。
+5. `model_calls` 是否 success，Token 是否计入。
+6. `tool_calls` 与 `telegram_sends` 是否 success/outcome_unknown。
+7. 媒体问题检查 `media_analyses` 和对应 Vision `model_calls`。
+
+一次自然语言回复看似成功，不代表内部 Tool 都成功；必须以审计表为准。

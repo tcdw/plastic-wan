@@ -1,0 +1,136 @@
+# 数据层
+
+Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索引、预算与审计。数据库不是长期记忆；默认在线保留窗口为 30 天，具体值由 `retention.online_days` 配置。
+
+## 打开与迁移
+
+`SqliteStore.open` 使用 Bun SQLite，并启用：
+
+- `strict: true`
+- `safeIntegers: true`
+- WAL journal
+- `synchronous = FULL`
+- foreign keys
+- 5 秒 busy timeout
+
+迁移文件位于 `src/migrations/`，文件名为 `NNN_name.sql`，按编号排序。每个迁移在 IMMEDIATE transaction 中执行并记录到 `schema_migrations`。已有数据库存在待执行迁移时，先在备份目录创建 `pre-migration-*.sqlite`。
+
+新增迁移时：
+
+1. 创建下一个连续编号文件。
+2. 使用 SQLite STRICT 表和显式 CHECK/FOREIGN KEY。
+3. 不修改已发布迁移。
+4. 更新依赖新字段的查询与测试。
+5. 验证从空数据库和旧版本数据库升级。
+
+## 表组
+
+### 配置与 Telegram 接入
+
+| 表 | 用途 |
+| --- | --- |
+| `schema_migrations` | 已应用迁移版本 |
+| `app_state` | 初始化标记等小型进程状态 |
+| `telegram_updates` | 每个 Update 的 allow/reject 审计 |
+| `chats` | Telegram Chat、canonical Chat 和类型 |
+| `chat_migrations` | Supergroup 等 Chat ID 迁移映射 |
+| `conversations` | `(chat, message_thread_id)` 对话隔离 |
+| `senders` | user/sender_chat 去重身份 |
+| `messages` | Telegram Message 稳定身份和当前 Revision |
+| `message_revisions` | 文本、Caption、Reply、Forward、Service 与原始片段修订 |
+| `media` | Revision 关联的 photo/document/sticker capability 来源 |
+
+### 调度与上下文
+
+| 表 | 用途 |
+| --- | --- |
+| `buckets` | 15 秒收集窗口与状态机 |
+| `bucket_messages` | Bucket 中消息的稳定顺序 |
+| `invocations` | 一次 Agent 运行、配置哈希、计数和终态 |
+| `invocation_messages` | 冻结的 `history`/`new` Message Revision 快照 |
+| `agent_messages` | Agent 内部 transcript；Assistant 文本不等于 Telegram 发送 |
+
+`invocation_messages` 是可重放边界。消息在 Invocation 创建后被编辑，只影响未来 Context，不改写已经冻结的快照。
+
+### 模型、Tool 与发送审计
+
+| 表 | 用途 |
+| --- | --- |
+| `model_calls` | Provider/Model、角色、Token、成本、耗时和错误码 |
+| `tool_calls` | Tool 参数、结果、状态、副作用标记和错误码 |
+| `telegram_sends` | 文本/Sticker 发送请求、Telegram 结果和未知结果 |
+| `daily_usage` | Chat/全局资源预算计数 |
+
+`side_effect_started` 和 `outcome_unknown` 用于阻止不可逆 Tool 的盲目重试。审计记录应保留稳定错误码；不要依赖解析自由文本错误。
+
+### 媒体与 Sticker
+
+| 表 | 用途 |
+| --- | --- |
+| `media_analyses` | `file_unique_id + analysis_version` 视觉缓存、状态和元数据 |
+| `sticker_sets` | 配置允许的 Set 别名与同步状态 |
+| `stickers` | Sticker 文件信息、索引状态、失败次数和重试时间 |
+| `sticker_search` | FTS5 trigram 描述/标签索引 |
+
+Sticker 分析在 Set 仍受配置允许时可长期保留；普通图片分析按在线保留窗口清理。`vision.prompt_version`、Provider 和 Model 参与分析版本，避免不同规则错误复用缓存。
+
+### MCP
+
+| 表 | 用途 |
+| --- | --- |
+| `mcp_server_state` | Server 状态、Tool registry hash、重连次数和错误码 |
+
+MCP Tool 调用本身复用 `tool_calls`，预算复用 `daily_usage`。
+
+## ID 与 JSON 规则
+
+- SQLite 整数 ID 在 TypeScript 中使用 `bigint`。
+- Telegram Chat/Message ID 进入 JSON 快照时字符串化，避免超出 JavaScript 安全整数。
+- 原始 Update 不整体永久保存；只保存需要审计和重放的受限片段。
+- 读取 `snapshot_json`、`telegram_json`、`metadata_json` 时必须在使用前校验结构。
+
+## 保留清理
+
+`backup` 在备份前调用 `purgeExpiredData`。清理仅删除已完成终态和不再被活跃引用的数据：
+
+- 过期 Telegram Update 与终态 Invocation/Send/Bucket。
+- 不再被 Invocation/Bucket 引用的旧 Message。
+- 仍被快照引用的旧 Message 保留身份，但匿名化 Revision 文本、Sender、Reply/Forward 和 Service 内容。
+- 删除无引用 Sender、过期普通图片分析、独立 Doctor 模型调用与旧预算日期。
+- Sticker 长期视觉索引不按普通图片策略删除。
+
+不要把 `DELETE FROM messages WHERE received_at < ...` 当作等价实现；外键和冻结快照要求分阶段清理。
+
+## 备份
+
+```bash
+bun run src/cli.ts backup --config dev-data/config.toml
+```
+
+流程：
+
+1. 打开现有 SQLite 并启用与服务一致的 PRAGMA。
+2. 执行保留清理。
+3. 使用 `VACUUM INTO` 写入同目录临时文件。
+4. 非 Windows 系统将临时文件设为 `0600`。
+5. 原子 rename 为 `plasticwan-<timestamp>-<uuid>.sqlite`。
+6. 按修改时间保留 `retention.backup_copies` 份。
+
+systemd timer 每天 UTC 00:00 调用该命令。恢复或复制前应额外运行 `PRAGMA integrity_check`；当前备份命令不替代恢复演练。
+
+## 本地路径
+
+开发配置通常使用：
+
+```text
+dev-data/
+├── config.toml
+└── data/
+    ├── plasticwan.sqlite
+    ├── plasticwan.sqlite-wal
+    ├── plasticwan.sqlite-shm
+    ├── media/
+    └── backups/
+```
+
+`dev-data/` 已 gitignore。不得提交数据库、WAL/SHM、媒体缓存、备份或真实配置。

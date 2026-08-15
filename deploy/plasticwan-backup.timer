@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Plastic Wan backup daily at UTC midnight
+
+[Timer]
+OnCalendar=*-*-* 00:00:00 UTC
+Persistent=true
+Unit=plasticwan-backup.service
+
+[Install]
+WantedBy=timers.target

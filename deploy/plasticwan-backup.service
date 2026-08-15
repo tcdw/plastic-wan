@@ -1,0 +1,19 @@
+[Unit]
+Description=Plastic Wan SQLite retention and backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=plasticwan
+Group=plasticwan
+WorkingDirectory=/opt/plasticwan
+ExecStart=/usr/local/bin/bun run /opt/plasticwan/src/cli.ts backup --config /etc/plasticwan/config.toml
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/plasticwan

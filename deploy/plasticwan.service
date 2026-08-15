@@ -1,0 +1,27 @@
+[Unit]
+Description=Plastic Wan Telegram Agent Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=plasticwan
+Group=plasticwan
+WorkingDirectory=/opt/plasticwan
+ExecStart=/usr/local/bin/bun run /opt/plasticwan/src/cli.ts serve --config /etc/plasticwan/config.toml
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=45s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/plasticwan
+
+[Install]
+WantedBy=multi-user.target

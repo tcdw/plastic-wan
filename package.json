@@ -1,0 +1,26 @@
+{
+  "name": "plasticwan",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "plasticwan": "./src/cli.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "bun test",
+    "start": "bun run src/cli.ts serve"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.84.2",
+    "@earendil-works/pi-ai": "0.84.2",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "grammy": "1.45.1",
+    "sharp": "0.35.3",
+    "typebox": "1.3.14"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,4 +1,4 @@
-export type Command = "serve" | "check-config" | "doctor" | "backup";
+export type Command = "serve" | "check-config" | "doctor" | "backup" | "configure";
 
 export interface CliOptions {
   readonly command: Command;
@@ -10,6 +10,7 @@ const COMMANDS: Record<Command, true> = {
   "check-config": true,
   doctor: true,
   backup: true,
+  configure: true,
 };
 
 export function parseCli(argv: readonly string[]): CliOptions {
@@ -32,5 +33,5 @@ function isCommand(value: string): value is Command {
 }
 
 export function usage(): string {
-  return "Usage: plasticwan <serve|check-config|doctor|backup> --config <path>";
+  return "Usage: plasticwan <serve|check-config|doctor|backup|configure> --config <path>";
 }

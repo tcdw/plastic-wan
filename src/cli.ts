@@ -4,6 +4,7 @@ import { loadConfig } from "./config.ts";
 import { backupDatabase } from "./database.ts";
 import { parseCli } from "./cli-options.ts";
 import { runDoctor } from "./doctor.ts";
+import { runConfigure } from "./tui/configure.ts";
 
 try {
   const options = parseCli(Bun.argv.slice(2));
@@ -24,6 +25,9 @@ try {
       break;
     case "serve":
       await serve(options.configPath);
+      break;
+    case "configure":
+      await runConfigure(options.configPath);
       break;
   }
 } catch (error) {

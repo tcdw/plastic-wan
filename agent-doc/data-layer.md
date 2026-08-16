@@ -82,6 +82,15 @@ Sticker 分析在 Set 仍受配置允许时可长期保留；普通图片分析�
 
 MCP Tool 调用本身复用 `tool_calls`，预算复用 `daily_usage`。
 
+### Admin Panel
+
+| 表 | 用途 |
+| --- | --- |
+| `admin_users` | 用户名、Argon2id 密码 hash、创建/更新/最近登录时间 |
+| `admin_sessions` | Session Token 的 SHA-256 摘要、所属用户、过期与最近活动时间 |
+
+密码明文和 Session Token 原文都不入库。两张表不参与在线保留清理：管理员账号不是会话数据；过期 Session 由 `AdminAuth` 在认证、新建 Session 和服务启动时删除。
+
 ## ID 与 JSON 规则
 
 - SQLite 整数 ID 在 TypeScript 中使用 `bigint`。

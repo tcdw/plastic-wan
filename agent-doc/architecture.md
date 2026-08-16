@@ -76,6 +76,7 @@ send Tool → Telegram API → 审计
 | `stickers.ts` | Set 同步、后台单并发索引、FTS 搜索和发送能力 |
 | `mcp.ts` | Server 生命周期、Tool 注册、策略、大小限制和预算 |
 | `doctor.ts` | 本地依赖、模型、Vision、Telegram、required MCP 的真实探针 |
+| `admin/` | Admin Panel 认证、只读审计查询与本地 HTTP/静态边界 |
 
 ## 并发模型
 

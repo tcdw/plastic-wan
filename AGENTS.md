@@ -13,6 +13,7 @@ Plastic Wan 是一个运行在 Telegram 私聊、群组、Supergroup 与 Forum T
 - 支持图片理解、Sticker 视觉索引与受限 MCP Tool。
 - 不向模型暴露 Bash、任意代码执行或不受限文件系统能力。
 - 审计 Invocation、模型调用、Tool Call、Telegram 发送与预算使用。
+- 提供本地 Admin Panel，只读审计 Tool Session、消息与 Sticker 视觉缓存。
 - 在线数据默认保留 30 天；不实现长期记忆。
 
 ## Project Structure & Module Organization
@@ -34,8 +35,10 @@ plastic-wan/
 │   ├── config.ts           # 严格 TOML Schema 与语义校验
 │   ├── providers.ts        # Pi AI Provider/Model 注册
 │   ├── doctor.ts           # 真实依赖与外部连接诊断
+│   ├── admin/              # Admin Panel 认证、审计查询与 HTTP 边界
 │   └── cli.ts              # serve/check-config/doctor/backup
 ├── test/                   # Bun 行为测试与 MCP fixture
+├── apps/admin/             # Rsbuild + React + Ant Design Admin Panel 前端
 ├── deploy/                 # systemd service 与 backup timer
 ├── agent-doc/              # 面向 agent 的按主题文档
 │   └── design/             # 产品设计与技术设计原文
@@ -70,6 +73,7 @@ Telegram Update
 | SQLite 表组、迁移、保留与备份 | [agent-doc/data-layer.md](agent-doc/data-layer.md) |
 | Telegram 入库、Bucket、Context、发送与媒体流程 | [agent-doc/telegram-agent-flow.md](agent-doc/telegram-agent-flow.md) |
 | 本地运行、依赖、systemd、诊断和故障处理 | [agent-doc/operations.md](agent-doc/operations.md) |
+| Admin Panel 认证、审计 API 与前端 | [agent-doc/admin-panel.md](agent-doc/admin-panel.md) |
 | 测试命令与真实验收矩阵 | [agent-doc/verification.md](agent-doc/verification.md) |
 | 产品范围与验收要求 | [agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20设计方案.md](agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20设计方案.md) |
 | 原始技术设计与安全约束 | [agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20技术设计.md](agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20技术设计.md) |
@@ -84,6 +88,8 @@ bun run src/cli.ts check-config --config dev-data/config.toml
 bun run src/cli.ts doctor --config dev-data/config.toml
 bun run src/cli.ts serve --config dev-data/config.toml
 bun run src/cli.ts backup --config dev-data/config.toml
+bun run admin:build
+bun run admin:dev
 ```
 
 - `bun run check`：严格 TypeScript 检查，不生成文件。
@@ -92,6 +98,8 @@ bun run src/cli.ts backup --config dev-data/config.toml
 - `doctor`：执行 SQLite/Sharp/FFmpeg/Lottie、Provider、Vision、Telegram 与 required MCP 的真实探针。
 - `serve`：启动 Telegram long polling；配置只在启动时加载，不支持热重载。
 - `backup`：执行保留清理、SQLite `VACUUM INTO` 备份与轮换；完整性检查属于独立恢复验证。
+- `admin:build`：构建 `apps/admin` 生产 bundle，供 `serve` 静态托管。
+- `admin:dev`：启动 Rsbuild dev server，`/api` 代理到运行中的 Admin Panel。
 
 ## Long-Running Process Rules
 
@@ -99,6 +107,7 @@ bun run src/cli.ts backup --config dev-data/config.toml
 - 同一 `data_dir` 只能有一个实例；`ServeLock` 使用 `serve.lock` 防止双实例和 Telegram long polling 竞争。
 - 修改 `config.toml` 后必须重启。用启动日志中的 `config_hash` 与 `check-config` 输出对比，避免误判白名单或模型配置。
 - 本地人工运行使用 `Ctrl+C` 停止；不要用未验证 PID 的强制终止命令。
+- Admin Panel 随 `serve` 在同一进程内启动，仅在 `admin.enabled = true` 时监听，且必须绑定回环地址。
 
 ## Coding Style & Naming Conventions
 
@@ -109,6 +118,7 @@ bun run src/cli.ts backup --config dev-data/config.toml
 - SQLite ID 使用 `bigint`；Telegram JSON 中需要字符串化的 ID 不得经过不安全 `number` 转换。
 - 不新增第二套 Provider、调度、审计或进程执行约定；复用现有模块。
 - 清理式切换：迁移所有调用方并删除旧路径，不保留兼容别名或隐藏 fallback。
+- Admin Panel 后端复用 `SqliteStore`，只做只读审计查询；不新增第二套数据访问层。
 
 ## Testing Guidelines
 
@@ -133,3 +143,5 @@ bun run src/cli.ts backup --config dev-data/config.toml
 - Secret 优先使用环境变量或受限 command SecretRef；错误输出必须经 `SecretStore.redact`。
 - MCP HTTP 禁止重定向和 URL 凭据；stdio 仅执行配置中的固定 argv。
 - 配置文件和 `data_dir` 在非 Windows 系统上必须满足权限检查；systemd 单元使用 `UMask=0077` 与最小写路径。
+- Admin Panel 密码只以 Argon2id hash 存储；Session Token 只存 SHA-256 摘要，Cookie 为 `HttpOnly` + `SameSite=Strict`。
+- Admin 审计 API 全部只读；过滤参数经白名单校验并使用绑定参数，禁止拼接 SQL。

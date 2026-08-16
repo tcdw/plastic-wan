@@ -7,6 +7,7 @@ import Compile from "typebox/compile";
 const Strict = { additionalProperties: false } as const;
 const PositiveInteger = Type.Integer({ minimum: 1 });
 const NonNegativeNumber = Type.Number({ minimum: 0 });
+const ADMIN_HOSTS = ["127.0.0.1", "::1", "localhost"];
 const SecretRefSchema = Type.Union([
   Type.String({ minLength: 1 }),
   Type.Object({ env: Type.String({ pattern: "^[A-Za-z_][A-Za-z0-9_]*$" }) }, Strict),
@@ -131,6 +132,16 @@ const HttpMcpSchema = Type.Object(
   },
   Strict,
 );
+const AdminSchema = Type.Object(
+  {
+    enabled: Type.Boolean(),
+    host: Type.String({ minLength: 1 }),
+    port: Type.Integer({ minimum: 1, maximum: 65_535 }),
+    session_ttl_hours: Type.Integer({ minimum: 1, maximum: 720 }),
+    static_dir: Type.Optional(Type.String({ minLength: 1 })),
+  },
+  Strict,
+);
 
 export const ConfigSchema = Type.Object(
   {
@@ -201,6 +212,7 @@ export const ConfigSchema = Type.Object(
     mcp: Type.Optional(
       Type.Object({ servers: Type.Array(Type.Union([StdioMcpSchema, HttpMcpSchema])) }, Strict),
     ),
+    admin: Type.Optional(AdminSchema),
   },
   Strict,
 );
@@ -298,6 +310,9 @@ function validateSemantics(config: RawConfig): void {
         }
       }
     }
+  }
+  if (config.admin !== undefined && !ADMIN_HOSTS.includes(config.admin.host)) {
+    throw new Error(`admin.host must be a loopback address (${ADMIN_HOSTS.join(", ")}); place a reverse proxy in front for remote access`);
   }
 }
 

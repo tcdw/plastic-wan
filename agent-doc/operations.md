@@ -50,10 +50,11 @@ bun run src/cli.ts serve --config dev-data/config.toml
 人工前台运行使用 `Ctrl+C`。服务会：
 
 1. 停止 Telegram long polling。
-2. 最多等待 Scheduler 30 秒。
-3. 停止 Sticker worker 与 MCP。
-4. 关闭 SQLite。
-5. 释放 `serve.lock`。
+2. 停止 Admin Panel HTTP server。
+3. 最多等待 Scheduler 30 秒。
+4. 停止 Sticker worker 与 MCP。
+5. 关闭 SQLite。
+6. 释放 `serve.lock`。
 
 不要启动第二份实例。同一 `data_dir` 的 `serve.lock` 会拒绝双实例；绕过锁会造成 Telegram long polling 竞争和未知副作用。
 
@@ -109,6 +110,7 @@ Doctor 会产生 `role = 'doctor'` 的模型调用审计并消耗少量 Provider
 用户可见日志写 stdout，格式为单行 JSON；框架 trace 可能写 stderr。至少监控：
 
 - `serve_started`
+- `admin_started`（仅在 `admin.enabled = true` 时出现）
 - 进程退出与重启次数
 - required MCP 初始化失败
 - 未脱敏前的错误不得直接输出
@@ -148,6 +150,14 @@ Doctor 会产生 `role = 'doctor'` 的模型调用审计并消耗少量 Provider
 - 正常停止后锁自动删除。
 - 服务启动会识别并修复已退出 PID 的 stale lock。
 - 锁存在时先确认 PID 与进程归属；不要在活动进程期间手动删除。
+
+### Admin Panel 打不开
+
+1. 确认 `admin.enabled = true` 且已重启 `serve`。
+2. 启动日志中应有一条 `admin_started`，`host`/`port` 与配置一致。
+3. 页面返回 503 `admin_bundle_missing`：先 `bun run admin:build`，或修正 `static_dir`。
+4. 忘记密码时没有恢复入口：删除 `admin_users` 行会重新进入首次初始化流程；这是写操作，只能在停止 `serve` 后手动执行。
+5. 登录返回 429 `too_many_attempts`：同一用户名连续 10 次失败后锁定 15 分钟，重启 `serve` 会清空内存计数。
 
 ## 备份
 

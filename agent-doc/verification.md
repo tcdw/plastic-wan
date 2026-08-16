@@ -19,6 +19,7 @@ bun test test/agent-runtime.test.ts
 bun test test/media.test.ts test/stickers.test.ts
 bun test test/mcp.test.ts
 bun test test/operations.test.ts test/foundation.test.ts
+bun test test/admin.test.ts
 ```
 
 | 测试 | 主要契约 |
@@ -32,6 +33,7 @@ bun test test/operations.test.ts test/foundation.test.ts
 | `stickers.test.ts` | Set 同步、结构化视觉 Tool Call、索引、搜索、发送 |
 | `mcp.test.ts` | stdio/HTTP transport、策略、预算、Header、重定向和审计 |
 | `operations.test.ts` | Retention、备份轮换、Scheduler 关闭 |
+| `admin.test.ts` | Admin 首次设置、登录、Session、只读审计 API 与静态托管 |
 
 跨模块改动完成后运行全部测试与 TypeScript 检查。
 
@@ -83,6 +85,26 @@ bun run src/cli.ts serve --config dev-data/config.toml
 6. `Ctrl+C` 后 Scheduler、数据库和 lock 正常收尾。
 
 长期进程必须用进程监督器或人工前台运行；不要让测试命令无限阻塞。
+
+## Admin Panel 冒烟
+
+```bash
+bun run admin:build
+bun run src/cli.ts serve --config dev-data/config.toml
+```
+
+验证：
+
+1. 出现一次 `admin_started`，host 为回环地址。
+2. 首次打开 `http://127.0.0.1:<port>/` 渲染「创建管理员」表单，`GET /api/auth/session` 返回 `setup_required = true`。
+3. 创建账号后 Overview 显示 Invocation、消息与视觉缓存计数。
+4. Tool session 详情五个 Tab（Tool calls / Model calls / Telegram sends / Agent transcript / Frozen context）各自渲染对应表格。
+5. 消息搜索命中当前 Chat 的文本，详情展示全部 Revision。
+6. Sticker cache 按 Set 与 `index_state` 过滤后行数变化。
+7. 登出后访问深链接回落登录页；重新登录恢复访问。
+8. `admin_users.password_hash` 以 `$argon2id$` 开头，`admin_sessions` 只有 64 位十六进制摘要。
+
+未构建 bundle 时静态路由返回 503 `admin_bundle_missing`，API 仍可用；这不是启动失败。
 
 ## 真实 Telegram 验收
 

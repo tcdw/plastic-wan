@@ -1,4 +1,5 @@
 import { Bot } from "grammy";
+import { AdminServer } from "./admin/server.ts";
 import { AgentRuntime } from "./agent-runtime.ts";
 import { assertConfigPermissions, loadConfig } from "./config.ts";
 import { KeyedSemaphore } from "./concurrency.ts";
@@ -24,6 +25,7 @@ export async function serve(configPath: string): Promise<void> {
   let scheduler: BucketScheduler | undefined;
   let stickers: StickerService | undefined;
   let mcp: McpManager | undefined;
+  let admin: AdminServer | undefined;
   const shutdown = (): void => {
     bot?.stop();
   };
@@ -97,6 +99,12 @@ export async function serve(configPath: string): Promise<void> {
     ]));
     await mcpManager.start();
     startedScheduler.start();
+    if (loaded.config.admin?.enabled === true) {
+      const adminServer = new AdminServer({ store, config: loaded.config });
+      admin = adminServer;
+      const listening = adminServer.start();
+      logEvent("admin_started", { host: listening.hostname, port: listening.port });
+    }
     bot.use(async (context) => {
       ingestion.ingest(context.update);
       startedScheduler.wake();
@@ -109,6 +117,7 @@ export async function serve(configPath: string): Promise<void> {
   } finally {
     process.off("SIGTERM", shutdown);
     process.off("SIGINT", shutdown);
+    await admin?.stop();
     await scheduler?.stop(30_000);
     await stickers?.stop();
     await mcp?.stop();

@@ -7,3 +7,4 @@ dist/
 *.sqlite-wal
 test-tmp/
 dev-data/
+.env.local

@@ -54,6 +54,7 @@ command SecretRef：
 | `agent` | 对话模型、Prompt、轮次、超时和并发 |
 | `vision` | 图片模型、并发、Prompt 版本和预算 |
 | `mcp` | 可选的 stdio/Streamable HTTP Server |
+| `admin` | 可选的本地只读 Admin Panel |
 | `retention` | 在线保留天数与备份份数 |
 | `paths` | SQLite、媒体缓存和备份目录 |
 
@@ -171,3 +172,21 @@ global_daily_calls = 200
 ```
 
 Streamable HTTP 使用 `url` 与可选 SecretRef `headers`，且 `follow_redirects` 必须为 `false`。每个 Tool 使用显式策略或 `default_tool_policy`；没有策略的 Tool 不会暴露给模型。`required = true` 的 Server 启动失败会阻止 `serve`/`doctor` 成功。
+
+## Admin Panel
+
+```toml
+[admin]
+enabled = true
+host = "127.0.0.1"
+port = 8787
+session_ttl_hours = 168
+static_dir = "/opt/plasticwan/apps/admin/dist"
+```
+
+- `enabled = false` 或省略整个 section 时 `serve` 不监听任何 HTTP 端口。
+- `host` 只接受 `127.0.0.1`、`::1`、`localhost`；远程访问必须由反向代理承担 TLS 与网络暴露。
+- `session_ttl_hours` 为 1–720，同时决定 Session 过期与 Cookie `Max-Age`。
+- `static_dir` 可选，默认 `apps/admin/dist`；目录缺失时审计 API 仍可用，静态路由返回 503 `admin_bundle_missing`。
+
+详细认证、API 与前端约定见 [admin-panel.md](admin-panel.md)。

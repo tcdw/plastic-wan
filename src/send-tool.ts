@@ -1,28 +1,31 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { GrammyError, HttpError } from "grammy";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import Type from "typebox";
+import Type, { type Static } from "typebox";
 import type { SqliteStore } from "./database.ts";
 import type { InvocationContext } from "./context-builder.ts";
 
-export const SendInputSchema = Type.Union([
-  Type.Object(
-    {
-      kind: Type.Literal("text"),
-      text: Type.String({ minLength: 1, maxLength: 4096 }),
-      reply_to_message_id: Type.Optional(Type.String({ pattern: "^[1-9][0-9]*$" })),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      kind: Type.Literal("sticker"),
-      sticker_ref: Type.String({ minLength: 1 }),
-      reply_to_message_id: Type.Optional(Type.String({ pattern: "^[1-9][0-9]*$" })),
-    },
-    { additionalProperties: false },
-  ),
-]);
+export const SendInputSchema = Type.Object(
+  {
+    kind: Type.Enum({ text: "text", sticker: "sticker" }),
+    text: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
+    sticker_ref: Type.Optional(Type.String({ minLength: 1 })),
+    reply_to_message_id: Type.Optional(Type.String({ pattern: "^[1-9][0-9]*$" })),
+  },
+  { additionalProperties: false },
+);
+
+export type SendToolInput =
+  | { readonly kind: "text"; readonly text: string; readonly reply_to_message_id?: string }
+  | { readonly kind: "sticker"; readonly sticker_ref: string; readonly reply_to_message_id?: string };
+
+function narrowSendInput(input: Static<typeof SendInputSchema>): SendToolInput | undefined {
+  const reply = input.reply_to_message_id === undefined ? {} : { reply_to_message_id: input.reply_to_message_id };
+  if (input.kind === "text") {
+    return input.text === undefined ? undefined : { kind: "text", text: input.text, ...reply };
+  }
+  return input.sticker_ref === undefined ? undefined : { kind: "sticker", sticker_ref: input.sticker_ref, ...reply };
+}
 
 interface TelegramSendResponse {
   readonly message_id: number;
@@ -67,28 +70,30 @@ export function createSendTool(environment: SendToolEnvironment): AgentTool<type
     parameters: SendInputSchema,
     executionMode: "sequential",
     execute: async (toolCallId, input, signal) => {
-      let validationError: string | undefined;
-      if (
-        input.reply_to_message_id !== undefined
-        && !environment.context.visibleReplyMessageIds.has(input.reply_to_message_id)
-      ) {
-        validationError = "reply_not_visible";
+      const send = narrowSendInput(input);
+      if (send === undefined) {
+        recordRejectedSend(environment, toolCallId, input, "send_input_invalid");
+        throw new Error("send input is missing the field required by its kind");
       }
-      const stickerFileId = input.kind === "sticker"
-        ? environment.stickerCapabilities.get(input.sticker_ref)
+      if (
+        send.reply_to_message_id !== undefined
+        && !environment.context.visibleReplyMessageIds.has(send.reply_to_message_id)
+      ) {
+        recordRejectedSend(environment, toolCallId, input, "reply_not_visible");
+        throw new Error("reply_to_message_id is not visible in this invocation");
+      }
+      const stickerFileId = send.kind === "sticker"
+        ? environment.stickerCapabilities.get(send.sticker_ref)
         : undefined;
-      if (input.kind === "sticker" && stickerFileId === undefined) validationError = "sticker_ref_not_authorized";
-      if (validationError !== undefined) {
-        recordRejectedSend(environment, toolCallId, input, validationError);
-        throw new Error(validationError === "reply_not_visible"
-          ? "reply_to_message_id is not visible in this invocation"
-          : "sticker_ref was not returned by search_stickers in this invocation");
+      if (send.kind === "sticker" && stickerFileId === undefined) {
+        recordRejectedSend(environment, toolCallId, input, "sticker_ref_not_authorized");
+        throw new Error("sticker_ref was not returned by search_stickers in this invocation");
       }
       const pending = environment.store.transaction(() => {
         const now = new Date().toISOString();
         const tool = environment.store.db
           .query("INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, state, side_effect, created_at) VALUES (?, ?, 'send', ?, 'pending', 1, ?)")
-          .run(environment.context.invocationId, toolCallId, JSON.stringify(input), now);
+          .run(environment.context.invocationId, toolCallId, JSON.stringify(send), now);
         const toolId = BigInt(tool.lastInsertRowid);
         const quota = environment.store.db
           .query("UPDATE invocations SET sends_used = sends_used + 1, side_effect_started = 1 WHERE id = ? AND sends_used < ?")
@@ -99,33 +104,33 @@ export function createSendTool(environment: SendToolEnvironment): AgentTool<type
             .run(now, toolId);
           return { toolId, sendId: null };
         }
-        const send = environment.store.db
+        const sendInsert = environment.store.db
           .query("INSERT INTO telegram_sends(tool_call_id, conversation_id, kind, request_json, state, created_at) VALUES (?, ?, ?, ?, 'pending', ?)")
           .run(
             toolId,
             environment.context.conversationId,
-            input.kind,
-            JSON.stringify({ kind: input.kind, reply_to_message_id: input.reply_to_message_id ?? null }),
+            send.kind,
+            JSON.stringify({ kind: send.kind, reply_to_message_id: send.reply_to_message_id ?? null }),
             now,
           );
-        return { toolId, sendId: BigInt(send.lastInsertRowid) };
+        return { toolId, sendId: BigInt(sendInsert.lastInsertRowid) };
       });
       if (pending.sendId === null) throw new Error(`send limit of ${environment.maxSends} reached`);
       const options = {
         ...(environment.context.threadId === 0n
           ? {}
           : { message_thread_id: Number(environment.context.threadId) }),
-        ...(input.reply_to_message_id === undefined
+        ...(send.reply_to_message_id === undefined
           ? {}
-          : { reply_parameters: { message_id: Number(input.reply_to_message_id) } }),
+          : { reply_parameters: { message_id: Number(send.reply_to_message_id) } }),
       };
       const startedAt = performance.now();
       try {
         let response: TelegramSendResponse;
         while (true) {
           try {
-            response = input.kind === "text"
-              ? await environment.api.sendMessage(environment.context.chatId.toString(), input.text, options)
+            response = send.kind === "text"
+              ? await environment.api.sendMessage(environment.context.chatId.toString(), send.text, options)
               : await environment.api.sendSticker(environment.context.chatId.toString(), stickerFileId!, options);
             break;
           } catch (error) {
@@ -143,7 +148,7 @@ export function createSendTool(environment: SendToolEnvironment): AgentTool<type
           environment.store.db
             .query("UPDATE telegram_sends SET state = 'success', telegram_message_id = ?, response_json = ?, finished_at = ? WHERE id = ?")
             .run(BigInt(response.message_id), JSON.stringify({ message_id: response.message_id }), now, pending.sendId);
-          recordOutgoingMessage(environment, response, input, stickerFileId ?? null, now);
+          recordOutgoingMessage(environment, response, send, stickerFileId ?? null, now);
         });
         return {
           content: [{ type: "text", text: `Sent Telegram message ${response.message_id}` }],
@@ -189,8 +194,7 @@ function recordRejectedSend(
 function recordOutgoingMessage(
   environment: SendToolEnvironment,
   response: TelegramSendResponse,
-  input: { readonly kind: "text"; readonly text: string; readonly reply_to_message_id?: string }
-    | { readonly kind: "sticker"; readonly sticker_ref: string; readonly reply_to_message_id?: string },
+  input: SendToolInput,
   stickerFileId: string | null,
   recordedAt: string,
 ): void {

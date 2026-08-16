@@ -13,7 +13,7 @@ import { McpManager } from "../src/mcp.ts";
 import { BucketScheduler } from "../src/scheduler.ts";
 import { SecretStore } from "../src/secrets.ts";
 import { TelegramIngestion } from "../src/telegram-ingestion.ts";
-import { testConfigToml } from "./helpers.ts";
+import { testConfigToml, writeTestConfig } from "./helpers.ts";
 
 const directories: string[] = [];
 
@@ -45,7 +45,7 @@ timeout_seconds = 5
 per_chat_daily_calls = 1
 global_daily_calls = 2
 `;
-  await Bun.write(configPath, `${testConfigToml(directory)}${mcpToml}`);
+  await writeTestConfig(directory, configPath, `${testConfigToml(directory)}${mcpToml}`);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   const manager = new McpManager(store, loaded.config, new SecretStore());
@@ -153,7 +153,7 @@ timeout_seconds = 5
 per_chat_daily_calls = 2
 global_daily_calls = 2
 `;
-  await Bun.write(configPath, `${testConfigToml(directory)}${mcpToml}`);
+  await writeTestConfig(directory, configPath, `${testConfigToml(directory)}${mcpToml}`);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   const manager = new McpManager(store, loaded.config, new SecretStore());

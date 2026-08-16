@@ -8,7 +8,7 @@ import { loadConfig } from "../src/config.ts";
 import { backupDatabase, purgeExpiredData, SqliteStore } from "../src/database.ts";
 import { BucketScheduler } from "../src/scheduler.ts";
 import { TelegramIngestion } from "../src/telegram-ingestion.ts";
-import { testConfigToml } from "./helpers.ts";
+import { writeTestConfig } from "./helpers.ts";
 
 const directories: string[] = [];
 
@@ -21,7 +21,7 @@ test("retention scrubs referenced history and backup keeps seven consistent copi
   const directory = await mkdtemp(join(tmpdir(), "plasticwan-operations-"));
   directories.push(directory);
   const configPath = join(directory, "config.toml");
-  await Bun.write(configPath, testConfigToml(directory));
+  await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });

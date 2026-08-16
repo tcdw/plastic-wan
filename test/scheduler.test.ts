@@ -7,7 +7,7 @@ import { loadConfig, type LoadedConfig } from "../src/config.ts";
 import { SqliteStore } from "../src/database.ts";
 import { BucketScheduler } from "../src/scheduler.ts";
 import { TelegramIngestion } from "../src/telegram-ingestion.ts";
-import { testConfigToml } from "./helpers.ts";
+import { testConfigToml, writeTestConfig } from "./helpers.ts";
 
 const directories: string[] = [];
 
@@ -26,7 +26,7 @@ async function setup(transform?: (toml: string) => string): Promise<{
   directories.push(directory);
   const configPath = join(directory, "config.toml");
   const toml = transform?.(testConfigToml(directory)) ?? testConfigToml(directory);
-  await Bun.write(configPath, toml);
+  await writeTestConfig(directory, configPath, toml);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   return {

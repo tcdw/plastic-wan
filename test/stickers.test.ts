@@ -15,7 +15,7 @@ import { BucketScheduler } from "../src/scheduler.ts";
 import { createSendTool, type TelegramSendApi } from "../src/send-tool.ts";
 import { StickerService } from "../src/stickers.ts";
 import { TelegramIngestion } from "../src/telegram-ingestion.ts";
-import { testConfigToml } from "./helpers.ts";
+import { testConfigToml, writeTestConfig } from "./helpers.ts";
 
 const directories: string[] = [];
 
@@ -33,7 +33,7 @@ test("sync, representative-frame indexing, search, and sticker send share scoped
 alias = "cats"
 name = "CatSet"
 `;
-  await Bun.write(configPath, toml);
+  await writeTestConfig(directory, configPath, toml);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   const fixturePath = join(directory, "sticker.webp");

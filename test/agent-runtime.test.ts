@@ -11,7 +11,7 @@ import type { ModelRegistry } from "../src/providers.ts";
 import { BucketScheduler } from "../src/scheduler.ts";
 import type { TelegramSendApi } from "../src/send-tool.ts";
 import { TelegramIngestion } from "../src/telegram-ingestion.ts";
-import { testConfigToml } from "./helpers.ts";
+import { writeTestConfig } from "./helpers.ts";
 
 const directories: string[] = [];
 
@@ -24,7 +24,7 @@ test("a fresh Agent publishes only through send and audits model usage", async (
   const directory = await mkdtemp(join(tmpdir(), "plasticwan-agent-"));
   directories.push(directory);
   const configPath = join(directory, "config.toml");
-  await Bun.write(configPath, testConfigToml(directory));
+  await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });

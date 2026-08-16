@@ -10,7 +10,7 @@ import { SqliteStore } from "../src/database.ts";
 import { BucketScheduler } from "../src/scheduler.ts";
 import { createSendTool, type TelegramSendApi } from "../src/send-tool.ts";
 import { TelegramIngestion } from "../src/telegram-ingestion.ts";
-import { testConfigToml } from "./helpers.ts";
+import { writeTestConfig } from "./helpers.ts";
 
 const directories: string[] = [];
 
@@ -28,7 +28,7 @@ async function setup(): Promise<{
   const directory = await mkdtemp(join(tmpdir(), "plasticwan-context-"));
   directories.push(directory);
   const configPath = join(directory, "config.toml");
-  await Bun.write(configPath, testConfigToml(directory));
+  await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   return {

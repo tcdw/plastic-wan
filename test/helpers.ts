@@ -12,7 +12,7 @@ process_bot_messages = false
 
 [[telegram.chats]]
 id = 123456789
-instructions = "private"
+instructions_file = "chat-instructions.md"
 budget = { max_invocations_per_day = 100, max_tokens_per_day = 300000 }
 
 [providers.agent]
@@ -50,7 +50,7 @@ provider = "agent"
 model = "agent-model"
 max_output_tokens = 4096
 thinking_level = "low"
-system_prompt = "Participate safely."
+system_prompt_file = "agent-system-prompt.md"
 max_turns = 8
 max_tool_calls = 12
 max_sends = 6
@@ -80,4 +80,10 @@ database = ${path("plasticwan.sqlite")}
 media_cache = ${path("media")}
 backups = ${path("backups")}
 `;
+}
+
+export async function writeTestConfig(directory: string, configPath: string, toml: string = testConfigToml(directory)): Promise<void> {
+  await Bun.write(join(directory, "agent-system-prompt.md"), "Participate safely.");
+  await Bun.write(join(directory, "chat-instructions.md"), "private");
+  await Bun.write(configPath, toml);
 }

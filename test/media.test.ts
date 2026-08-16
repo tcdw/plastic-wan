@@ -13,7 +13,7 @@ import { createLottieCommand, MediaService, type MediaDownloader } from "../src/
 import type { ModelRegistry } from "../src/providers.ts";
 import { BucketScheduler } from "../src/scheduler.ts";
 import { TelegramIngestion } from "../src/telegram-ingestion.ts";
-import { testConfigToml } from "./helpers.ts";
+import { writeTestConfig } from "./helpers.ts";
 
 const directories: string[] = [];
 
@@ -36,7 +36,7 @@ test("read_image normalizes once and reuses the 30-day description cache", async
   const directory = await mkdtemp(join(tmpdir(), "plasticwan-media-"));
   directories.push(directory);
   const configPath = join(directory, "config.toml");
-  await Bun.write(configPath, testConfigToml(directory));
+  await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   const fixturePath = join(directory, "fixture.png");

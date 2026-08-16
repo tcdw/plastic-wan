@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import Type, { type Static } from "typebox";
 import Compile from "typebox/compile";
 
@@ -75,7 +75,7 @@ const ChatSchema = Type.Object(
     id: Type.Integer(),
     topic_ids: Type.Optional(Type.Array(PositiveInteger, { minItems: 1, uniqueItems: true })),
     timezone: Type.Optional(Type.String({ minLength: 1 })),
-    instructions: Type.String(),
+    instructions_file: Type.Optional(Type.String({ minLength: 1 })),
     budget: ChatBudgetSchema,
   },
   Strict,
@@ -171,7 +171,7 @@ export const ConfigSchema = Type.Object(
           Type.Literal("high"),
           Type.Literal("xhigh"),
         ]),
-        system_prompt: Type.String({ minLength: 1 }),
+        system_prompt_file: Type.String({ minLength: 1 }),
         max_turns: Type.Integer({ minimum: 1, maximum: 8 }),
         max_tool_calls: Type.Integer({ minimum: 1, maximum: 12 }),
         max_sends: Type.Integer({ minimum: 1, maximum: 6 }),
@@ -218,12 +218,22 @@ export const ConfigSchema = Type.Object(
 );
 
 export type SecretRef = Static<typeof SecretRefSchema>;
-export type RawConfig = Static<typeof ConfigSchema>;
+export type TomlConfig = Static<typeof ConfigSchema>;
+export type TomlChat = TomlConfig["telegram"]["chats"][number];
+// RawConfig is the resolved runtime shape: prompt text lives in the .md files
+// referenced by TomlConfig and is inlined before the rest of the app consumes it.
+export type RawConfig = Omit<TomlConfig, "agent" | "telegram"> & {
+  agent: Omit<TomlConfig["agent"], "system_prompt_file"> & { system_prompt: string };
+  telegram: Omit<TomlConfig["telegram"], "chats"> & {
+    chats: Array<Omit<TomlChat, "instructions_file"> & { instructions: string }>;
+  };
+};
 export type ProviderConfig = RawConfig["providers"][string];
 export type McpServerConfig = NonNullable<RawConfig["mcp"]>["servers"][number];
 
 export interface LoadedConfig {
   readonly config: RawConfig;
+  readonly toml: TomlConfig;
   readonly configPath: string;
   readonly hash: string;
 }
@@ -247,11 +257,49 @@ export async function loadConfig(path: string): Promise<LoadedConfig> {
     throw new Error(`Invalid config: ${details}`);
   }
   validateSemantics(parsed);
+  const { config, promptFiles } = await resolvePrompts(parsed, dirname(configPath));
+  const hash = createHash("sha256");
+  hash.update(text);
+  for (const file of promptFiles) hash.update("\u0000" + file.content);
+  return { config, toml: parsed, configPath, hash: hash.digest("hex") };
+}
+
+interface PromptFile {
+  readonly content: string;
+}
+
+async function resolvePrompts(toml: TomlConfig, directory: string): Promise<{ config: RawConfig; promptFiles: PromptFile[] }> {
+  const promptFiles: PromptFile[] = [];
+  const systemPrompt = await readPromptFile(resolve(directory, toml.agent.system_prompt_file), "agent.system_prompt_file", promptFiles);
+  if (systemPrompt.length === 0) throw new Error(`agent.system_prompt_file is empty: ${toml.agent.system_prompt_file}`);
+  const chats: Array<Omit<TomlChat, "instructions_file"> & { instructions: string }> = [];
+  for (const chat of toml.telegram.chats) {
+    const instructions = chat.instructions_file === undefined
+      ? ""
+      : await readPromptFile(resolve(directory, chat.instructions_file), `chat ${chat.id} instructions_file`, promptFiles);
+    const { instructions_file, ...rest } = chat;
+    chats.push({ ...rest, instructions });
+  }
+  const { system_prompt_file, ...agent } = toml.agent;
   return {
-    config: parsed,
-    configPath,
-    hash: createHash("sha256").update(text).digest("hex"),
+    promptFiles,
+    config: {
+      ...toml,
+      agent: { ...agent, system_prompt: systemPrompt },
+      telegram: { ...toml.telegram, chats },
+    },
   };
+}
+
+async function readPromptFile(path: string, label: string, sink: PromptFile[]): Promise<string> {
+  let content: string;
+  try {
+    content = await Bun.file(path).text();
+  } catch (error) {
+    throw new Error(`Cannot read ${label} file ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  sink.push({ content });
+  return content;
 }
 
 export async function assertConfigPermissions(configPath: string): Promise<void> {
@@ -262,7 +310,7 @@ export async function assertConfigPermissions(configPath: string): Promise<void>
   if ((parent.mode & 0o777) !== 0o700) throw new Error(`Config parent must have mode 0700: ${resolve(configPath, "..")}`);
 }
 
-function validateSemantics(config: RawConfig): void {
+function validateSemantics(config: TomlConfig): void {
   validateTimezone(config.timezone, "timezone");
   const chatIds = new Set<number>();
   for (const chat of config.telegram.chats) {
@@ -317,7 +365,7 @@ function validateSemantics(config: RawConfig): void {
 }
 
 function validateModelReference(
-  config: RawConfig,
+  config: TomlConfig,
   providerAlias: string,
   modelId: string,
   role: string,

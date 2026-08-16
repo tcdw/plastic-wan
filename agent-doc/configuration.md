@@ -6,9 +6,10 @@ Plastic Wan 使用严格 TOML 配置。Schema 位于 `src/config.ts`，未知字
 
 - CLI 必须显式传入 `--config <path>`。
 - 配置在 `serve` 启动时读取一次，不支持热重载。
-- 配置哈希是原始 TOML 文本的 SHA-256，写入 Invocation 并打印在 `serve_started` 日志中。
+- 配置哈希是原始 TOML 文本与所有 Prompt 文件内容的 SHA-256，写入 Invocation 并打印在 `serve_started` 日志中。
 - 修改 allowlist、Provider、Prompt、Sticker Set 或 MCP 后必须重启。
 - 相对 `data_dir`/`paths` 按服务当前工作目录解释；systemd 固定在 `/opt/plasticwan`。
+- Prompt 文件路径（`system_prompt_file`、`instructions_file`）相对于配置文件所在目录解释；修改文件内容同样会改变 `config_hash`。
 - 非 Windows 系统要求配置文件 `0600`、父目录 `0700`。
 
 验证命令：
@@ -67,7 +68,7 @@ process_bot_messages = false
 
 [[telegram.chats]]
 id = -1001234567890
-instructions = "群聊中只在有明确价值时参与。"
+instructions_file = "prompts/chat-1001234567890.md"
 timezone = "Asia/Shanghai"
 topic_ids = [100, 200]
 budget = { max_invocations_per_day = 100, max_tokens_per_day = 300000 }
@@ -79,7 +80,7 @@ budget = { max_invocations_per_day = 100, max_tokens_per_day = 300000 }
 - 未配置 `topic_ids`：允许该 Chat 的普通消息与所有 Topic。
 - 配置 `topic_ids`：只允许列出的正整数 Topic ID；未列出的 Topic 被审计为拒绝。
 - Forum Topic 按 `(chat_id, message_thread_id)` 隔离 Conversation。
-- `instructions` 进入该 Chat 的系统提示，不提供额外授权。
+- `instructions_file`（可选）指向该 Chat 的附加系统提示 Markdown 文件，缺省时为空；提示内容不提供额外授权。
 - 修改 Chat 后重启，并比较 `check-config` 与 `serve_started` 的 `config_hash`。
 
 ## Sticker Set
@@ -134,6 +135,7 @@ cost = { input = 0, output = 0, cache_read = 0, cache_write = 0 }
 
 `agent` 约束：
 
+- `system_prompt_file`: 指向全局系统提示的 Markdown 文件，路径相对配置文件目录，内容必须非空。
 - `max_turns`: 1–8。
 - `max_tool_calls`: 1–12。
 - `max_sends`: 1–6。

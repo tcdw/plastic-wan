@@ -1,6 +1,6 @@
 import { input, select, confirm } from "@inquirer/prompts";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import type { RawConfig, SecretRef } from "../config.ts";
+import type { SecretRef, TomlConfig } from "../config.ts";
 import {
   fetchModelsDevCatalog,
   listProviders as listModelsDevProviders,
@@ -55,7 +55,7 @@ type ProviderKind = "builtin" | "custom";
 type CustomProviderField = "base_url" | "api" | "api_key" | "headers" | "models" | "cancel";
 type ModelField = "name" | "reasoning" | "input" | "context_window" | "max_tokens" | "cost" | "cancel";
 
-export async function runProviderWizard(config: RawConfig): Promise<RawConfig> {
+export async function runProviderWizard(config: TomlConfig): Promise<TomlConfig> {
   let providers: Record<string, ProviderConfig> = { ...(config.providers as Record<string, ProviderConfig>) };
   let exit = false;
   while (!exit) {
@@ -102,7 +102,7 @@ export async function runProviderWizard(config: RawConfig): Promise<RawConfig> {
         break;
     }
   }
-  return { ...config, providers: providers as RawConfig["providers"] };
+  return { ...config, providers: providers as TomlConfig["providers"] };
 }
 
 async function selectProviderAlias(providers: Record<string, ProviderConfig>): Promise<string | undefined> {

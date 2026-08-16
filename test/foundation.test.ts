@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { backupDatabase, SqliteStore } from "../src/database.ts";
 import { loadConfig } from "../src/config.ts";
 import { SecretStore } from "../src/secrets.ts";
-import { testConfigToml } from "./helpers.ts";
+import { testConfigToml, writeTestConfig } from "./helpers.ts";
 
 const directories: string[] = [];
 
@@ -17,7 +17,7 @@ async function fixture(): Promise<{ directory: string; configPath: string }> {
   const directory = await mkdtemp(join(tmpdir(), "plasticwan-"));
   directories.push(directory);
   const configPath = join(directory, "config.toml");
-  await Bun.write(configPath, testConfigToml(directory));
+  await writeTestConfig(directory, configPath);
   return { directory, configPath };
 }
 

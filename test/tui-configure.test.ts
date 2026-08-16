@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify } from "smol-toml";
 import { loadConfig } from "../src/config.ts";
-import { testConfigToml } from "./helpers.ts";
+import { writeTestConfig } from "./helpers.ts";
 import {
   extractInputCapabilities,
   extractReasoningEffortOptions,
@@ -23,16 +23,16 @@ async function fixture(): Promise<{ directory: string; configPath: string }> {
   const directory = await mkdtemp(join(tmpdir(), "plasticwan-"));
   directories.push(directory);
   const configPath = join(directory, "config.toml");
-  await Bun.write(configPath, testConfigToml(directory));
+  await writeTestConfig(directory, configPath);
   return { directory, configPath };
 }
 
 describe("configure TOML round-trip", () => {
   test("smol-toml output is accepted by loadConfig", async () => {
     const { configPath } = await fixture();
-    const { config } = await loadConfig(configPath);
+    const { toml } = await loadConfig(configPath);
     const outPath = configPath.replace("config.toml", "out.toml");
-    await Bun.write(outPath, stringify(config as Record<string, unknown>));
+    await Bun.write(outPath, stringify(toml as Record<string, unknown>));
     const { config: reparsed } = await loadConfig(outPath);
     expect(reparsed.version).toBe(1);
     expect(reparsed.providers.agent?.kind).toBe("custom");

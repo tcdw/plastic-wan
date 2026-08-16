@@ -6,7 +6,7 @@ import type { Update } from "grammy/types";
 import { loadConfig } from "../src/config.ts";
 import { SqliteStore } from "../src/database.ts";
 import { TelegramIngestion } from "../src/telegram-ingestion.ts";
-import { testConfigToml } from "./helpers.ts";
+import { testConfigToml, writeTestConfig } from "./helpers.ts";
 
 const directories: string[] = [];
 
@@ -18,7 +18,7 @@ async function setup(transform: (toml: string) => string = (toml) => toml): Prom
   const directory = await mkdtemp(join(tmpdir(), "plasticwan-ingest-"));
   directories.push(directory);
   const configPath = join(directory, "config.toml");
-  await Bun.write(configPath, transform(testConfigToml(directory)));
+  await writeTestConfig(directory, configPath, transform(testConfigToml(directory)));
   const { config } = await loadConfig(configPath);
   const store = await SqliteStore.open(config);
   return { store, ingestion: new TelegramIngestion(store, config, { id: 999 }) };
@@ -115,9 +115,9 @@ describe("Telegram ingestion", () => {
   });
   test("isolates allowed forum topics and rejects unconfigured topics", async () => {
     const { store, ingestion } = await setup((toml) => toml.replace(
-      'instructions = "private"',
+      'instructions_file = "chat-instructions.md"',
       `topic_ids = [100, 200]
-instructions = "private"`,
+instructions_file = "chat-instructions.md"`,
     ));
     const topicUpdate = (updateId: number, messageId: number, threadId: number): Update => ({
       update_id: updateId,

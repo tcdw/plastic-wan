@@ -1,5 +1,5 @@
 import { select, confirm } from "@inquirer/prompts";
-import { loadConfig, type RawConfig } from "../config.ts";
+import { loadConfig, type TomlConfig } from "../config.ts";
 import { runProviderWizard } from "./provider-wizard.ts";
 import { readConfigToml, writeConfigToml } from "./toml.ts";
 
@@ -11,11 +11,11 @@ export async function runConfigure(configPath: string): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  let config: RawConfig;
+  let config: TomlConfig;
   let originalToml: string;
   try {
     const loaded = await loadConfig(configPath);
-    config = loaded.config;
+    config = loaded.toml;
     originalToml = await readConfigToml(configPath);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -63,7 +63,7 @@ export async function runConfigure(configPath: string): Promise<void> {
   }
 }
 
-async function saveConfig(path: string, config: RawConfig, originalToml: string): Promise<boolean> {
+async function saveConfig(path: string, config: TomlConfig, originalToml: string): Promise<boolean> {
   try {
     await writeConfigToml(path, config);
     const loaded = await loadConfig(path);

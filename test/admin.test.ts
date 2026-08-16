@@ -8,7 +8,7 @@ import { loadConfig, type LoadedConfig } from "../src/config.ts";
 import { SqliteStore } from "../src/database.ts";
 import { BucketScheduler } from "../src/scheduler.ts";
 import { TelegramIngestion } from "../src/telegram-ingestion.ts";
-import { testConfigToml } from "./helpers.ts";
+import { testConfigToml, writeTestConfig } from "./helpers.ts";
 
 const PASSWORD = "correct-horse-battery";
 const directories: string[] = [];
@@ -32,7 +32,7 @@ async function fixture(extra = ""): Promise<Fixture> {
   const staticDir = join(directory, "bundle");
   await Bun.write(join(staticDir, "index.html"), "<!doctype html><title>admin</title>");
   await Bun.write(join(staticDir, "static", "app.js"), "console.log('admin');");
-  await Bun.write(
+  await writeTestConfig(directory,
     configPath,
     `${testConfigToml(directory)}
 [admin]

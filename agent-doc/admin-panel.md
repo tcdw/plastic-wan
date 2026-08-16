@@ -2,7 +2,7 @@
 
 Admin Panel 是随 `serve` 启动的本地只读审计界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息与 Sticker 视觉缓存。后端在 `src/admin/`，前端在 `apps/admin/`（Rsbuild + React + Ant Design + TanStack Query + TanStack Router）。
 
-Admin Panel 不提供任何写操作。它不能发送消息、修改配置、重跑 Invocation 或删除审计记录。
+Admin Panel 以只读审计为主，仅提供一项受控写操作：取消所有待处理的会话。它不能发送消息、修改配置、重跑 Invocation 或删除审计记录。
 
 ## 配置
 
@@ -70,6 +70,7 @@ static_dir = "/opt/plasticwan/apps/admin/dist"
 | `GET /messages/:id` | 全部 Revision 与媒体（含视觉描述） |
 | `GET /sticker-sets` | Set 同步状态与索引进度 |
 | `GET /stickers` | Sticker 视觉缓存条目与分析元数据 |
+| `POST /cancel-pending-sessions` | 取消所有 `collecting`/`queued` Bucket 及其 queued Invocation，并退回当日调用预算 |
 
 列表参数：`limit`（1–100，默认 25）、`cursor`（上一页 `next_cursor`）、`state`、`chat`、`set`、`search`。分页为 ID 倒序 keyset：请求 `limit + 1` 行，多出一行则返回 `next_cursor`。
 

@@ -2,6 +2,7 @@ import { join, resolve, sep } from "node:path";
 import type { Server } from "bun";
 import type { RawConfig } from "../config.ts";
 import type { SqliteStore } from "../database.ts";
+import type { BucketScheduler } from "../scheduler.ts";
 import { AdminAuth, AdminAuthError, type AdminCredentials } from "./auth.ts";
 import {
   AdminQueryError,
@@ -15,6 +16,7 @@ import {
   parseId,
   type ListQuery,
 } from "./audit.ts";
+import { cancelPendingSessions } from "./operations.ts";
 
 const SESSION_COOKIE = "plasticwan_admin";
 const MAX_BODY_BYTES = 8_192;
@@ -47,12 +49,14 @@ export type AdminConfig = NonNullable<RawConfig["admin"]>;
 export interface AdminServerOptions {
   readonly store: SqliteStore;
   readonly config: RawConfig;
+  readonly scheduler?: BucketScheduler;
 }
 
 export class AdminServer {
   readonly #store: SqliteStore;
   readonly #admin: AdminConfig;
   readonly #auth: AdminAuth;
+  readonly #scheduler: BucketScheduler | undefined;
   readonly #staticDir: string;
   #server: Server<undefined> | undefined;
 
@@ -62,6 +66,7 @@ export class AdminServer {
     this.#store = options.store;
     this.#admin = admin;
     this.#auth = new AdminAuth(options.store.db, admin.session_ttl_hours);
+    this.#scheduler = options.scheduler;
     this.#staticDir = resolve(admin.static_dir ?? join(import.meta.dir, "..", "..", "apps", "admin", "dist"));
   }
 
@@ -140,6 +145,11 @@ export class AdminServer {
     }
     const session = this.#auth.authenticate(readCookie(request, SESSION_COOKIE));
     if (session === null) return json({ error: "unauthenticated", message: "Admin session is required" }, 401);
+    if (route === "cancel-pending-sessions" && request.method === "POST") {
+      const result = cancelPendingSessions(this.#store.db, new Date());
+      this.#scheduler?.wake();
+      return json(result);
+    }
     if (request.method !== "GET") return json({ error: "method_not_allowed", message: "Audit routes are read-only" }, 405);
     const query: ListQuery = {
       limit: url.searchParams.get("limit"),

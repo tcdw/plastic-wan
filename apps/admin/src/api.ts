@@ -239,6 +239,12 @@ export interface UsageEntry {
   readonly amount: number;
 }
 
+export interface CancelPendingResult {
+  readonly canceled_buckets: number;
+  readonly canceled_invocations: number;
+  readonly refunded_invocations: number;
+}
+
 export interface Overview {
   readonly generated_at: string;
   readonly invocation_states: readonly LabelCount[];
@@ -347,4 +353,8 @@ export function listStickerSets(): Promise<{ items: readonly StickerSetEntry[] }
 
 export function listStickers(filters: ListFilters): Promise<Page<StickerEntry>> {
   return call<Page<StickerEntry>>(listPath("/stickers", filters));
+}
+
+export function cancelPendingSessions(): Promise<CancelPendingResult> {
+  return call<CancelPendingResult>("/cancel-pending-sessions", { method: "POST" });
 }

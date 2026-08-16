@@ -1,6 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
-import { Card, Col, Row, Statistic, Table, Typography } from "antd";
-import type { LabelCount, UsageEntry } from "../api.ts";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Button, Card, Col, message, Popconfirm, Row, Statistic, Table, Typography } from "antd";
+import type { CancelPendingResult, LabelCount, UsageEntry } from "../api.ts";
+import { cancelPendingSessions } from "../api.ts";
 import { queryState, StateTag } from "../components.tsx";
 import { formatNumber, formatTime } from "../format.ts";
 import { overviewQuery } from "../queries.ts";
@@ -46,11 +47,26 @@ const USAGE_COLUMNS = [
 ];
 
 export function OverviewPage(): React.ReactElement {
+  const queryClient = useQueryClient();
   const { data, isPending, error } = useQuery(overviewQuery);
+  const { mutate, isPending: isCanceling } = useMutation<CancelPendingResult, Error, void>({
+    mutationFn: cancelPendingSessions,
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ["overview"] });
+      void queryClient.invalidateQueries({ queryKey: ["invocations"] });
+      message.success(
+        `Canceled ${formatNumber(result.canceled_buckets)} buckets / ${formatNumber(result.canceled_invocations)} invocations`,
+      );
+    },
+    onError: (err) => {
+      message.error(err instanceof Error ? err.message : "Cancel failed");
+    },
+  });
   const placeholder = queryState({ isPending: isPending || data === undefined, error });
   if (placeholder !== null) return placeholder;
   if (data === undefined) throw new Error("Overview data is missing");
   const totalInvocations = data.invocation_states.reduce((sum, entry) => sum + entry.count, 0);
+  const queuedInvocations = data.invocation_states.find((entry) => entry.label === "queued")?.count ?? 0;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <Row gutter={16}>
@@ -67,6 +83,26 @@ export function OverviewPage(): React.ReactElement {
         <Col span={8}>
           <Card>
             <Statistic title="Cached vision analyses" value={data.cached_analysis_count} />
+          </Card>
+        </Col>
+      </Row>
+      <Row gutter={16}>
+        <Col span={8}>
+          <Card title="Operations" size="small">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <Statistic title="Queued invocations" value={queuedInvocations} valueStyle={{ fontSize: 24 }} />
+              <Popconfirm
+                title="Cancel all pending sessions?"
+                description="This will expire collecting/queued buckets and abort queued invocations."
+                onConfirm={() => mutate()}
+                okText="Cancel"
+                okButtonProps={{ danger: true, loading: isCanceling }}
+              >
+                <Button danger type="primary" loading={isCanceling}>
+                  Cancel pending
+                </Button>
+              </Popconfirm>
+            </div>
           </Card>
         </Col>
       </Row>

@@ -109,7 +109,7 @@ export async function serve(configPath: string): Promise<void> {
     await mcpManager.start();
     startedScheduler.start();
     if (loaded.config.admin?.enabled === true) {
-      const adminServer = new AdminServer({ store, config: loaded.config });
+      const adminServer = new AdminServer({ store, config: loaded.config, scheduler: startedScheduler });
       admin = adminServer;
       const listening = adminServer.start();
       logEvent("admin_started", { host: listening.hostname, port: listening.port });

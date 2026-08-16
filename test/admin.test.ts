@@ -297,6 +297,46 @@ session_ttl_hours = 12
   await expect(loadConfig(configPath)).rejects.toThrow("admin.host must be a loopback address");
 });
 
+test("admin can cancel all pending sessions", async () => {
+  const { store, server, loaded } = await fixture();
+  try {
+    const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({ state: "completed", reason: "done" }));
+    const received = new Date("2026-03-01T00:00:00.000Z");
+    ingestion.ingest(textUpdate(1, 10, "backlogged"), received);
+    const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
+    if (invocationId === undefined) throw new Error("Expected an invocation");
+
+    const cookie = sessionCookie(await server.handle(post("/api/auth/setup", { username: "owner", password: PASSWORD })));
+    const headers = { cookie };
+
+    const beforeUsage = store.db
+      .query<{ amount: bigint }, []>("SELECT amount FROM daily_usage WHERE metric = 'agent_invocations'")
+      .get();
+    expect(beforeUsage?.amount).toBe(1n);
+
+    const canceled = await server.handle(post("/api/cancel-pending-sessions", {}, cookie));
+    expect(canceled.status).toBe(200);
+    const body = await readJson(canceled);
+    expect(body).toMatchObject({ canceled_buckets: 1, canceled_invocations: 1, refunded_invocations: 1 });
+
+    const bucketState = store.db.query<{ state: string }, []>("SELECT state FROM buckets").get()?.state;
+    expect(bucketState).toBe("expired");
+    const invocationState = store.db.query<{ state: string }, [bigint]>("SELECT state FROM invocations WHERE id = ?").get(invocationId)?.state;
+    expect(invocationState).toBe("aborted");
+
+    const afterUsage = store.db
+      .query<{ amount: bigint }, []>("SELECT amount FROM daily_usage WHERE metric = 'agent_invocations'")
+      .get();
+    expect(afterUsage?.amount).toBe(0n);
+
+    const overview = await readJson((await server.handle(request("/api/overview", { headers }))));
+    expect(overview.invocation_states).toContainEqual({ label: "aborted", count: 1 });
+  } finally {
+    store.close();
+  }
+});
+
 function textUpdate(updateId: number, messageId: number, text: string): Update {
   return {
     update_id: updateId,

@@ -123,6 +123,7 @@ api_key = { env = "GATEWAY_API_KEY" }
 [[providers.gateway.models]]
 id = "model-id"
 reasoning = true
+compat = { supports_developer_role = false }
 input = ["text", "image"]
 context_window = 128000
 max_tokens = 8192
@@ -130,6 +131,8 @@ cost = { input = 0, output = 0, cache_read = 0, cache_write = 0 }
 ```
 
 可用 `api`：`openai-responses`、`openai-completions`、`anthropic-messages`。`agent` 模型必须支持 text；`vision` 模型必须支持 image；配置输出上限不能超过注册模型上限。
+
+`compat.supports_developer_role` 覆盖 Pi AI 对 OpenAI 兼容接口的自动检测。仅接受 `system`、`assistant`、`user`、`tool` 角色的接口必须设为 `false`；省略时继续自动检测。该字段仅适用于 `openai-responses` 和 `openai-completions`。
 
 ## Agent 与 Vision
 

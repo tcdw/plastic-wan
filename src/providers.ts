@@ -61,6 +61,9 @@ export async function createModelRegistry(config: RawConfig, secrets: SecretStor
         provider: alias,
         baseUrl,
         reasoning: model.reasoning,
+        ...(model.compat === undefined
+          ? {}
+          : { compat: { supportsDeveloperRole: model.compat.supports_developer_role } }),
         input: [...model.input],
         contextWindow: model.context_window,
         maxTokens: model.max_tokens,

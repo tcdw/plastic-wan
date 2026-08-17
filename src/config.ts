@@ -25,11 +25,18 @@ const CostSchema = Type.Object(
   },
   Strict,
 );
+const ModelCompatSchema = Type.Object(
+  {
+    supports_developer_role: Type.Boolean(),
+  },
+  Strict,
+);
 const ModelSchema = Type.Object(
   {
     id: Type.String({ minLength: 1 }),
     name: Type.Optional(Type.String({ minLength: 1 })),
     reasoning: Type.Boolean(),
+    compat: Type.Optional(ModelCompatSchema),
     input: Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]), {
       minItems: 1,
       uniqueItems: true,
@@ -334,6 +341,9 @@ function validateSemantics(config: TomlConfig): void {
       for (const model of provider.models) {
         if (model.max_tokens > model.context_window) {
           throw new Error(`Provider ${alias} model ${model.id} max_tokens exceeds context_window`);
+        }
+        if (model.compat !== undefined && provider.api === "anthropic-messages") {
+          throw new Error(`Provider ${alias} model ${model.id} supports_developer_role requires an OpenAI API adapter`);
         }
       }
     }

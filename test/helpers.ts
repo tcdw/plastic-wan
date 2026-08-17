@@ -25,6 +25,7 @@ api_key = "agent-secret"
 id = "agent-model"
 name = "Agent Model"
 reasoning = true
+compat = { supports_developer_role = false }
 input = ["text"]
 context_window = 200000
 max_tokens = 32768

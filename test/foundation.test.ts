@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { backupDatabase, SqliteStore } from "../src/database.ts";
 import { loadConfig } from "../src/config.ts";
 import { SecretStore } from "../src/secrets.ts";
+import { createModelRegistry } from "../src/providers.ts";
 import { testConfigToml, writeTestConfig } from "./helpers.ts";
 
 const directories: string[] = [];
@@ -26,6 +27,12 @@ describe("configuration", () => {
     const { configPath } = await fixture();
     const loaded = await loadConfig(configPath);
     expect(loaded.config.agent.max_sends).toBe(6);
+    const agentProvider = loaded.config.providers.agent;
+    expect(agentProvider?.kind).toBe("custom");
+    if (agentProvider?.kind !== "custom") throw new Error("Expected the custom agent provider");
+    expect(agentProvider.models[0]?.compat?.supports_developer_role).toBe(false);
+    const registry = await createModelRegistry(loaded.config, new SecretStore());
+    expect(registry.agentModel.compat).toMatchObject({ supportsDeveloperRole: false });
     expect(loaded.hash).toMatch(/^[a-f0-9]{64}$/);
   });
 
@@ -39,6 +46,12 @@ describe("configuration", () => {
     const { directory, configPath } = await fixture();
     await Bun.write(configPath, testConfigToml(directory).replace('input = ["text", "image"]', 'input = ["text"]'));
     await expect(loadConfig(configPath)).rejects.toThrow("lacks image input capability");
+  });
+
+  test("rejects developer-role compatibility for an Anthropic adapter", async () => {
+    const { directory, configPath } = await fixture();
+    await Bun.write(configPath, testConfigToml(directory).replace('api = "openai-responses"', 'api = "anthropic-messages"'));
+    await expect(loadConfig(configPath)).rejects.toThrow("supports_developer_role requires an OpenAI API adapter");
   });
 });
 

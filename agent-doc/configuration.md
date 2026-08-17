@@ -173,7 +173,7 @@ per_chat_daily_calls = 20
 global_daily_calls = 200
 ```
 
-Streamable HTTP 使用 `url` 与可选 SecretRef `headers`，且 `follow_redirects` 必须为 `false`。每个 Tool 使用显式策略或 `default_tool_policy`；没有策略的 Tool 不会暴露给模型。`required = true` 的 Server 启动失败会阻止 `serve`/`doctor` 成功。
+Streamable HTTP 使用 `url` 与可选 SecretRef `headers`，且 `follow_redirects` 必须为 `false`。`url` 可以包含服务协议要求的查询参数，但禁止 URL userinfo 与 fragment；机密值应使用 SecretRef `headers`，不应写入查询参数。每个 Tool 使用显式策略或 `default_tool_policy`；没有策略的 Tool 不会暴露给模型。`required = true` 的 Server 启动失败会阻止 `serve`/`doctor` 成功。
 
 ## Admin Panel
 

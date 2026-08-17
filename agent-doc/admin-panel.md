@@ -65,7 +65,7 @@ static_dir = "/opt/plasticwan/apps/admin/dist"
 | `POST /auth/logout` | 撤销当前 Session |
 | `GET /overview` | Invocation/Sticker 状态分布、Top Tool、当日预算用量、消息与缓存计数 |
 | `GET /invocations` | Tool Session 列表 |
-| `GET /invocations/:id` | Tool Call、Model Call、Agent transcript、Telegram 发送、冻结上下文 |
+| `GET /invocations/:id` | Overview 时间线所需的冻结消息、Tool Call、Model Call、Agent transcript、Telegram 发送与冻结上下文 |
 | `GET /messages` | 消息列表 |
 | `GET /messages/:id` | 全部 Revision 与媒体（含视觉描述） |
 | `GET /sticker-sets` | Set 同步状态与索引进度 |
@@ -108,7 +108,7 @@ bun run admin:dev     # Rsbuild dev server，/api 代理到 ADMIN_API_TARGET
 
 `queryState()` 是普通函数而非组件：调用方依赖 `null` 判断是否渲染真实数据，JSX 元素永远不为 `null`。
 
-Agent transcript 页面显式标注 Assistant 文本是私有推理，只有 `send` Tool 会发往 Telegram。
+Tool session 详情默认打开 Overview 时间线：按时间合并冻结消息、Invocation 生命周期、Model Call、Tool Call 与 Agent transcript；消息正文和 `send` 参数中的发送内容直接展示，Tool 结果与完整参数按需展开。Assistant 文本显式标注为私有推理，只有 `send` Tool 会发往 Telegram。
 
 ## 数据表
 
@@ -131,4 +131,4 @@ bun run admin:build
 
 `test/admin.test.ts` 覆盖：首次初始化与登录态转换、弱密码拒绝且不写入用户、`setup` 重复调用冲突、错误凭据与未知用户的统一 401、跨站 `POST` 拒绝、审计三大视图的字段与过滤、非法 `limit`/`state` 的 400、审计路由写操作 405、静态资源回退与目录穿越拒绝、`admin.host` 非回环时配置加载失败。
 
-浏览器冒烟应确认：初始化表单 → Overview 统计 → Tool session 详情五个 Tab 的表格内容 → 消息搜索与详情 Revision → Sticker Set 与 `index_state` 过滤 → 登出后深链接回落登录页 → 重新登录恢复。
+浏览器冒烟应确认：初始化表单 → Overview 统计 → Tool session 详情六个 Tab，默认 Overview 按时间显示收到的消息与 `send` 内容 → 消息搜索与详情 Revision → Sticker Set 与 `index_state` 过滤 → 登出后深链接回落登录页 → 重新登录恢复。

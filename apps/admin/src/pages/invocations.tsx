@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Button, Card, Descriptions, Input, Select, Space, Table, Tabs, Tag, Typography } from "antd";
+import { Button, Card, Collapse, Descriptions, Input, Select, Space, Table, Tabs, Tag, Timeline, Typography } from "antd";
 import type {
   AgentMessageEntry,
   ContextMessageEntry,
+  InvocationDetail,
   InvocationListItem,
   ModelCallEntry,
   TelegramSendEntry,
@@ -23,6 +24,359 @@ const INVOCATION_STATES = [
   "outcome_unknown",
   "skipped_budget",
 ];
+
+interface SessionTimelineEvent {
+  readonly at: string;
+  readonly order: number;
+  readonly color: string;
+  readonly content: React.ReactNode;
+}
+
+function parseJsonObject(value: string): Readonly<Record<string, unknown>> | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Readonly<Record<string, unknown>>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function stringField(value: Readonly<Record<string, unknown>> | null, key: string): string | null {
+  const field = value?.[key];
+  return typeof field === "string" && field.length > 0 ? field : null;
+}
+
+function objectField(
+  value: Readonly<Record<string, unknown>> | null,
+  key: string,
+): Readonly<Record<string, unknown>> | null {
+  const field = value?.[key];
+  return typeof field === "object" && field !== null && !Array.isArray(field)
+    ? field as Readonly<Record<string, unknown>>
+    : null;
+}
+
+function ToolTimelineCard({
+  tool,
+  send,
+}: {
+  readonly tool: ToolCallEntry;
+  readonly send: TelegramSendEntry | undefined;
+}): React.ReactElement {
+  const argumentsValue = parseJsonObject(tool.arguments_json);
+  const sendKind = stringField(argumentsValue, "kind") ?? send?.kind ?? null;
+  const sendText = stringField(argumentsValue, "text");
+  const stickerRef = stringField(argumentsValue, "sticker_ref");
+  const replyTo = stringField(argumentsValue, "reply_to_message_id");
+  const sendContent = sendKind === "text"
+    ? sendText
+    : sendKind === "sticker" && stickerRef !== null
+      ? `Sticker ${stickerRef}`
+      : null;
+  return (
+    <Card
+      size="small"
+      title={(
+        <Space size="small" wrap>
+          <Tag color={tool.tool_name === "send" ? "green" : "cyan"}>{tool.tool_name}</Tag>
+          <Typography.Text code>{tool.tool_call_id}</Typography.Text>
+        </Space>
+      )}
+      extra={(
+        <Space size="small" wrap>
+          <StateTag state={tool.state} />
+          <Typography.Text type="secondary">{formatTime(tool.created_at)}</Typography.Text>
+        </Space>
+      )}
+    >
+      <Space direction="vertical" size="small" style={{ width: "100%" }}>
+        {tool.tool_name !== "send" ? null : (
+          <>
+            {sendContent === null ? (
+              <Typography.Text type="secondary">No send content recorded</Typography.Text>
+            ) : (
+              <Typography.Paragraph
+                copyable={sendKind === "text"}
+                style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+              >
+                {sendContent}
+              </Typography.Paragraph>
+            )}
+            <Space size="small" wrap>
+              {replyTo === null ? null : (
+                <Typography.Text type="secondary">Reply to Telegram message {replyTo}</Typography.Text>
+              )}
+              {send === undefined ? null : (
+                <>
+                  <Typography.Text type="secondary">Telegram delivery</Typography.Text>
+                  <StateTag state={send.state} />
+                  {send.telegram_message_id === null ? null : (
+                    <Typography.Text type="secondary">
+                      Message {send.telegram_message_id}
+                    </Typography.Text>
+                  )}
+                </>
+              )}
+            </Space>
+          </>
+        )}
+        <Space size="middle" wrap>
+          <Typography.Text type="secondary">Duration {formatDuration(tool.duration_ms)}</Typography.Text>
+          {tool.error_code === null ? null : (
+            <Typography.Text type="danger">Error {tool.error_code}</Typography.Text>
+          )}
+        </Space>
+        <Collapse
+          size="small"
+          items={[
+            {
+              key: "details",
+              label: "Arguments and result",
+              children: (
+                <Space direction="vertical" style={{ width: "100%" }}>
+                  <Typography.Text strong>Arguments</Typography.Text>
+                  <JsonBlock value={tool.arguments_json} />
+                  <Typography.Text strong>Result</Typography.Text>
+                  <JsonBlock value={tool.result_text} />
+                </Space>
+              ),
+            },
+          ]}
+        />
+      </Space>
+    </Card>
+  );
+}
+
+function ContextTimelineCard({
+  message,
+}: {
+  readonly message: ContextMessageEntry;
+}): React.ReactElement {
+  const snapshot = parseJsonObject(message.snapshot_json);
+  const sender = objectField(snapshot, "sender");
+  const username = stringField(sender, "username");
+  const senderName = stringField(sender, "name") ?? (username === null ? "Unknown sender" : `@${username}`);
+  const telegramMessageId = stringField(snapshot, "message_id");
+  const kind = stringField(snapshot, "kind") ?? "message";
+  const text = stringField(snapshot, "text") ?? stringField(snapshot, "caption");
+  const media = snapshot?.["media"];
+  const mediaCount = Array.isArray(media) ? media.length : 0;
+  const sentByBot = snapshot?.["sent_by_bot"] === true;
+  return (
+    <Card
+      size="small"
+      title={(
+        <Space size="small" wrap>
+          <Tag color={message.section === "new" ? "blue" : "default"}>
+            {message.section === "new" ? "Incoming message" : "Context history"}
+          </Tag>
+          <Typography.Text strong>{senderName}</Typography.Text>
+          {username === null || senderName === `@${username}` ? null : (
+            <Typography.Text type="secondary">@{username}</Typography.Text>
+          )}
+          {sentByBot ? <Tag>bot</Tag> : null}
+        </Space>
+      )}
+      extra={<Typography.Text type="secondary">{formatTime(stringField(snapshot, "telegram_date"))}</Typography.Text>}
+    >
+      <Space direction="vertical" size="small" style={{ width: "100%" }}>
+        {text === null ? (
+          <Typography.Text type="secondary">
+            {kind}{mediaCount === 0 ? "" : ` · ${mediaCount} media`}
+          </Typography.Text>
+        ) : (
+          <Typography.Paragraph
+            copyable
+            style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          >
+            {text}
+          </Typography.Paragraph>
+        )}
+        <Space size="small" wrap>
+          <Typography.Text type="secondary">
+            {telegramMessageId === null ? kind : `Telegram message ${telegramMessageId} · ${kind}`}
+          </Typography.Text>
+          <Link to="/messages/$messageId" params={{ messageId: message.message_id }}>
+            Open message record
+          </Link>
+        </Space>
+      </Space>
+    </Card>
+  );
+}
+
+function AgentTimelineCard({ message }: { readonly message: AgentMessageEntry }): React.ReactElement {
+  const assistant = message.role === "assistant";
+  return (
+    <Card
+      size="small"
+      title={(
+        <Space size="small" wrap>
+          <Tag color={assistant ? "gold" : "purple"}>
+            {assistant ? "Assistant private text" : "Tool result"}
+          </Tag>
+          {assistant ? (
+            <Typography.Text type="secondary">Not published to Telegram</Typography.Text>
+          ) : null}
+        </Space>
+      )}
+      extra={<Typography.Text type="secondary">{formatTime(message.created_at)}</Typography.Text>}
+    >
+      {message.text.length === 0 ? (
+        <Typography.Text type="secondary">No text content</Typography.Text>
+      ) : assistant ? (
+        <Typography.Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {message.text}
+        </Typography.Paragraph>
+      ) : (
+        <Collapse
+          size="small"
+          items={[
+            {
+              key: "result",
+              label: "View tool result passed to the agent",
+              children: (
+                <Typography.Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                  {message.text}
+                </Typography.Paragraph>
+              ),
+            },
+          ]}
+        />
+      )}
+    </Card>
+  );
+}
+
+function ModelTimelineCard({ model }: { readonly model: ModelCallEntry }): React.ReactElement {
+  return (
+    <Card
+      size="small"
+      title={(
+        <Space size="small" wrap>
+          <Tag color="geekblue">Model call</Tag>
+          <Typography.Text strong>{model.provider}/{model.model}</Typography.Text>
+        </Space>
+      )}
+      extra={(
+        <Space size="small" wrap>
+          <StateTag state={model.state} />
+          <Typography.Text type="secondary">{formatTime(model.created_at)}</Typography.Text>
+        </Space>
+      )}
+    >
+      <Space size="middle" wrap>
+        <Typography.Text type="secondary">Attempt {model.attempt}</Typography.Text>
+        <Typography.Text type="secondary">Tokens {formatNumber(model.total_tokens)}</Typography.Text>
+        <Typography.Text type="secondary">Cost {formatCost(model.cost)}</Typography.Text>
+        <Typography.Text type="secondary">Duration {formatDuration(model.duration_ms)}</Typography.Text>
+        {model.error_code === null ? null : (
+          <Typography.Text type="danger">Error {model.error_code}</Typography.Text>
+        )}
+      </Space>
+    </Card>
+  );
+}
+
+function SessionOverview({ invocation }: { readonly invocation: InvocationDetail }): React.ReactElement {
+  const events: SessionTimelineEvent[] = [
+    {
+      at: invocation.created_at,
+      order: -3_000,
+      color: "blue",
+      content: (
+        <Card size="small">
+          <Space size="small" wrap>
+            <Typography.Text strong>Invocation queued</Typography.Text>
+            <Typography.Text type="secondary">{formatTime(invocation.created_at)}</Typography.Text>
+          </Space>
+        </Card>
+      ),
+    },
+  ];
+  if (invocation.started_at !== null) {
+    events.push({
+      at: invocation.started_at,
+      order: -2_000,
+      color: "green",
+      content: (
+        <Card size="small">
+          <Space size="small" wrap>
+            <Typography.Text strong>Agent session started</Typography.Text>
+            <Typography.Text type="secondary">{formatTime(invocation.started_at)}</Typography.Text>
+          </Space>
+        </Card>
+      ),
+    });
+  }
+  invocation.context_messages.forEach((message) => {
+    const snapshot = parseJsonObject(message.snapshot_json);
+    events.push({
+      at: stringField(snapshot, "telegram_date") ?? invocation.created_at,
+      order: -10_000 + message.sequence_no,
+      color: message.section === "new" ? "blue" : "gray",
+      content: <ContextTimelineCard message={message} />,
+    });
+  });
+  invocation.model_calls.forEach((model, index) => {
+    events.push({
+      at: model.created_at,
+      order: index * 10,
+      color: "geekblue",
+      content: <ModelTimelineCard model={model} />,
+    });
+  });
+  const sendsByToolCall = new Map(invocation.telegram_sends.map((send) => [send.tool_call_id, send]));
+  invocation.tool_calls.forEach((tool, index) => {
+    events.push({
+      at: tool.created_at,
+      order: index * 10 + 2,
+      color: tool.tool_name === "send" ? "green" : "cyan",
+      content: <ToolTimelineCard tool={tool} send={sendsByToolCall.get(tool.tool_call_id)} />,
+    });
+  });
+  invocation.agent_messages.forEach((message) => {
+    events.push({
+      at: message.created_at,
+      order: message.sequence_no * 10 + 4,
+      color: message.role === "assistant" ? "gold" : "purple",
+      content: <AgentTimelineCard message={message} />,
+    });
+  });
+  if (invocation.finished_at !== null) {
+    const failed = invocation.state === "failed" || invocation.state === "aborted" || invocation.state === "outcome_unknown";
+    events.push({
+      at: invocation.finished_at,
+      order: 10_000,
+      color: failed ? "red" : "green",
+      content: (
+        <Card size="small">
+          <Space size="small" wrap>
+            <Typography.Text strong>Agent session finished</Typography.Text>
+            <StateTag state={invocation.state} />
+            <TextValue value={invocation.completion_reason} />
+            <Typography.Text type="secondary">{formatTime(invocation.finished_at)}</Typography.Text>
+          </Space>
+        </Card>
+      ),
+    });
+  }
+  events.sort((left, right) => {
+    const time = Date.parse(left.at) - Date.parse(right.at);
+    return time === 0 ? left.order - right.order : time;
+  });
+  return (
+    <Timeline
+      items={events.map((event) => ({
+        color: event.color,
+        children: event.content,
+      }))}
+    />
+  );
+}
 
 export function InvocationsPage(): React.ReactElement {
   const [state, setState] = useState<string | undefined>(undefined);
@@ -161,6 +515,11 @@ export function InvocationDetailPage({ id }: { readonly id: string }): React.Rea
       <Card size="small">
         <Tabs
           items={[
+            {
+              key: "overview",
+              label: "Overview",
+              children: <SessionOverview invocation={data} />,
+            },
             {
               key: "tools",
               label: `Tool calls (${data.tool_calls.length})`,

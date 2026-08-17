@@ -107,7 +107,7 @@ global_daily_calls = 2
   }
 });
 
-test("Streamable HTTP MCP uses static headers and rejects redirects", async () => {
+test("Streamable HTTP MCP preserves query parameters and static headers while rejecting redirects", async () => {
   const directory = await mkdtemp(join(tmpdir(), "plasticwan-mcp-http-"));
   directories.push(directory);
   const configPath = join(directory, "config.toml");
@@ -129,6 +129,8 @@ test("Streamable HTTP MCP uses static headers and rejects redirects", async () =
     hostname: "127.0.0.1",
     port: 0,
     fetch: (request) => {
+      const url = new URL(request.url);
+      if (url.searchParams.get("api_key") !== "public-key") return new Response("unauthorized", { status: 401 });
       if (request.headers.get("authorization") !== "Bearer static-secret") return new Response("unauthorized", { status: 401 });
       return transport.handleRequest(request);
     },
@@ -138,7 +140,7 @@ test("Streamable HTTP MCP uses static headers and rejects redirects", async () =
 [[mcp.servers]]
 alias = "web"
 transport = "streamable_http"
-url = ${JSON.stringify(`http://127.0.0.1:${http.port}/mcp`)}
+url = ${JSON.stringify(`http://127.0.0.1:${http.port}/mcp?api_key=public-key`)}
 follow_redirects = false
 required = true
 tools = ["lookup"]

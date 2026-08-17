@@ -341,7 +341,9 @@ function validateSemantics(config: TomlConfig): void {
   const servers = config.mcp?.servers ?? [];
   assertUnique(servers, (server) => server.alias, "MCP server alias");
   for (const server of servers) {
-    if (server.transport === "streamable_http") validateEndpoint(server.url, `MCP server ${server.alias} URL`);
+    if (server.transport === "streamable_http") {
+      validateEndpoint(server.url, `MCP server ${server.alias} URL`, { allowQuery: true });
+    }
     if (server.tools === "*" && server.default_tool_policy === undefined) {
       throw new Error(`MCP server ${server.alias} wildcard tools require default_tool_policy`);
     }
@@ -382,15 +384,21 @@ function validateModelReference(
   if (configuredMax > model.max_tokens) throw new Error(`${role}.max_output_tokens exceeds model ${modelId} max_tokens`);
 }
 
-function validateEndpoint(value: string, label: string): void {
+function validateEndpoint(
+  value: string,
+  label: string,
+  options: { allowQuery?: boolean } = {},
+): void {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
     throw new Error(`${label} must be an absolute URL`);
   }
-  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || url.search || url.hash) {
-    throw new Error(`${label} must be an HTTP(S) URL without credentials, query, or fragment`);
+  const invalidQuery = !options.allowQuery && url.search.length > 0;
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || invalidQuery || url.hash) {
+    const forbiddenParts = options.allowQuery ? "credentials or fragment" : "credentials, query, or fragment";
+    throw new Error(`${label} must be an HTTP(S) URL without ${forbiddenParts}`);
   }
 }
 

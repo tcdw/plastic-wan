@@ -18,7 +18,7 @@ Config + SecretStore
         └─ BucketScheduler
 ```
 
-启动顺序有语义：先加载并校验配置与权限，再取得单实例锁、迁移数据库、连接 Telegram、同步 Sticker Set、启动 MCP，最后启动 Scheduler 和 Telegram long polling。关闭时停止 Bot，等待 Scheduler，停止 Sticker/MCP 服务，关闭数据库并释放锁。
+启动顺序有语义：先加载并校验配置与权限，再取得单实例锁、迁移数据库、连接 Telegram、同步 Sticker Set；随后排空 Telegram pending updates，按 Chat 创建 startup catch-up Invocation；最后启动 MCP、Scheduler 和常规 long polling。关闭时停止 Bot，等待 Scheduler，停止 Sticker/MCP 服务，关闭数据库并释放锁。
 
 ## 主数据流
 

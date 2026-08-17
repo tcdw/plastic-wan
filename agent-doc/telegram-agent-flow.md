@@ -26,7 +26,7 @@
 - Supergroup 迁移通过 `chat_migrations` 把旧 ID 指向 canonical Chat。
 - Conversation 由 Chat 与 `message_thread_id` 组成。
 - 非 Forum/普通消息使用 thread ID `0`。
-- 不同 Forum Topic 的消息、Bucket、Context、Reply 和预算相互隔离。
+- 常规消息处理中，不同 Forum Topic 的 Bucket、Context、Reply 和预算相互隔离；启动追赶是显式的 Chat 级例外。
 
 ## Message Revision
 
@@ -42,6 +42,19 @@
 - 关联 Media
 
 相同内容的重复 Update 不创建无意义 Revision。截止时间到达时，Scheduler 冻结当时最新 Revision；截止后的编辑只进入未来 Invocation 的 history。
+
+## 启动追赶
+
+普通重启在启动 Scheduler 和常规 long polling 前，以非阻塞 `getUpdates` 排空 Telegram pending updates：
+
+1. Update 仍经过 allowlist、去重、Revision 与媒体持久化，但不创建常规 15 秒 Bucket。
+2. `app_state.telegram_startup_catch_up` 保存本轮起点；进程在排空或建任务时崩溃，下一次启动从同一起点完成，不丢失已确认 Update。
+3. 每个有可处理人类消息的 Chat 只创建一个 `startup_catch_up` Bucket。
+4. Bucket 仅包含该 Chat 按 Telegram 时间排序的最新 `agent.history_messages` 条本轮消息；Forum Topic 可以混合。
+5. Snapshot 携带 `message_thread_id`。回复可见消息时，`send` 路由到该消息所属 Topic；不带 Reply 时路由到最新消息所属 Topic。
+6. 排空完成并原子清除启动状态后，才切换到常规按 Conversation 收集。
+
+当前 `dev-data/config.toml` 的 `agent.history_messages = 10`，因此每个群的启动追赶任务最多包含 10 条消息。
 
 ## 15 秒 Bucket
 

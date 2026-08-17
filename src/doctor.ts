@@ -300,7 +300,7 @@ function previewContext(): InvocationContext {
     systemPrompt: "",
     userPrompt: "",
     imageCapabilities: new Map(),
-    visibleReplyMessageIds: new Set(),
+    replyTargets: new Map(),
     omittedNewMessages: 0,
   };
 }

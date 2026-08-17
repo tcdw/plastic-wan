@@ -12,6 +12,7 @@ import { createModelRegistry } from "./providers.ts";
 import { BucketScheduler } from "./scheduler.ts";
 import { StickerService } from "./stickers.ts";
 import { TelegramIngestion } from "./telegram-ingestion.ts";
+import { runStartupCatchUp } from "./startup-catch-up.ts";
 
 const ALLOWED_UPDATES = ["message", "edited_message", "my_chat_member"] as const;
 
@@ -26,11 +27,13 @@ export async function serve(configPath: string): Promise<void> {
   let stickers: StickerService | undefined;
   let mcp: McpManager | undefined;
   let admin: AdminServer | undefined;
+  let startupCatchUpController: AbortController | undefined;
   let shuttingDown = false;
   const shutdown = (): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     logEvent("shutdown_requested");
+    startupCatchUpController?.abort(new Error("shutdown"));
     // Unblock bot.start() so the finally block below runs the full cleanup.
     // grammY's stop() also fires a best-effort offset-confirming getUpdates;
     // swallow its rejection so it can never become an unhandled promise
@@ -98,7 +101,7 @@ export async function serve(configPath: string): Promise<void> {
       systemPrompt: "",
       userPrompt: "",
       imageCapabilities: new Map(),
-      visibleReplyMessageIds: new Set(),
+      replyTargets: new Map(),
       omittedNewMessages: 0,
     };
     mcpManager.setRegistryValidator((mcpTools) => runtime.validateAdditionalTools(preview, [
@@ -106,6 +109,22 @@ export async function serve(configPath: string): Promise<void> {
       stickerService.createSearchTool(preview, new Map()),
       ...mcpTools,
     ]));
+    const catchUpController = new AbortController();
+    startupCatchUpController = catchUpController;
+    const catchUp = await runStartupCatchUp({
+      api: bot.api,
+      store,
+      ingestion,
+      scheduler: startedScheduler,
+      allowedUpdates: ALLOWED_UPDATES,
+      signal: catchUpController.signal,
+    });
+    startupCatchUpController = undefined;
+    logEvent("startup_catch_up_completed", {
+      updates: catchUp.updates,
+      stored_messages: catchUp.storedMessages,
+      invocations: catchUp.invocationIds.length,
+    });
     await mcpManager.start();
     startedScheduler.start();
     if (loaded.config.admin?.enabled === true) {

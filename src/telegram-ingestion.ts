@@ -72,10 +72,14 @@ export class TelegramIngestion {
   }
 
   ingest(update: Update, receivedAt = new Date()): IngestResult {
-    return this.#store.transaction(() => this.#ingestTransaction(update, receivedAt));
+    return this.#store.transaction(() => this.#ingestTransaction(update, receivedAt, true));
   }
 
-  #ingestTransaction(update: Update, receivedAt: Date): IngestResult {
+  ingestCatchUp(update: Update, receivedAt = new Date()): IngestResult {
+    return this.#store.transaction(() => this.#ingestTransaction(update, receivedAt, false));
+  }
+
+  #ingestTransaction(update: Update, receivedAt: Date, schedule: boolean): IngestResult {
     const message = update.edited_message ?? update.message;
     const membership = update.my_chat_member;
     const chat = message?.chat ?? membership?.chat;
@@ -119,7 +123,7 @@ export class TelegramIngestion {
     const stored = this.#storeMessage(message, internalChatId, threadId, receivedAt, edited);
     if (stored === undefined) return { duplicate: false, allowed: true };
     let bucketId: bigint | undefined;
-    if (!edited) bucketId = this.#appendToBucket(internalChatId, threadId, stored, receivedAt);
+    if (!edited && schedule) bucketId = this.#appendToBucket(internalChatId, threadId, stored, receivedAt);
     return {
       duplicate: false,
       allowed: true,

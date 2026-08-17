@@ -41,9 +41,10 @@ bun run src/cli.ts doctor --config dev-data/config.toml
 bun run src/cli.ts serve --config dev-data/config.toml
 ```
 
-成功标志：
+成功标志依次包含启动追赶完成与常规轮询启动：
 
 ```json
+{"event":"startup_catch_up_completed","updates":0,"stored_messages":0,"invocations":0,"at":"..."}
 {"event":"serve_started","bot_id":"...","config_hash":"...","at":"..."}
 ```
 

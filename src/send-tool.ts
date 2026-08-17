@@ -66,7 +66,7 @@ export function createSendTool(environment: SendToolEnvironment): AgentTool<type
   return {
     name: "send",
     label: "Send to Telegram",
-    description: "Send one plain-text message or one previously searched sticker to this invocation's Telegram conversation. Reply targets must be visible in this invocation.",
+    description: "Send one plain-text message or one previously searched sticker to this invocation's Telegram chat. Reply targets must be visible in this invocation.",
     parameters: SendInputSchema,
     executionMode: "sequential",
     execute: async (toolCallId, input, signal) => {
@@ -75,13 +75,15 @@ export function createSendTool(environment: SendToolEnvironment): AgentTool<type
         recordRejectedSend(environment, toolCallId, input, "send_input_invalid");
         throw new Error("send input is missing the field required by its kind");
       }
-      if (
-        send.reply_to_message_id !== undefined
-        && !environment.context.visibleReplyMessageIds.has(send.reply_to_message_id)
-      ) {
+      const replyTarget = send.reply_to_message_id === undefined
+        ? undefined
+        : environment.context.replyTargets.get(send.reply_to_message_id);
+      if (send.reply_to_message_id !== undefined && replyTarget === undefined) {
         recordRejectedSend(environment, toolCallId, input, "reply_not_visible");
         throw new Error("reply_to_message_id is not visible in this invocation");
       }
+      const targetConversationId = replyTarget?.conversationId ?? environment.context.conversationId;
+      const targetThreadId = replyTarget?.threadId ?? environment.context.threadId;
       const stickerFileId = send.kind === "sticker"
         ? environment.stickerCapabilities.get(send.sticker_ref)
         : undefined;
@@ -108,7 +110,7 @@ export function createSendTool(environment: SendToolEnvironment): AgentTool<type
           .query("INSERT INTO telegram_sends(tool_call_id, conversation_id, kind, request_json, state, created_at) VALUES (?, ?, ?, ?, 'pending', ?)")
           .run(
             toolId,
-            environment.context.conversationId,
+            targetConversationId,
             send.kind,
             JSON.stringify({ kind: send.kind, reply_to_message_id: send.reply_to_message_id ?? null }),
             now,
@@ -117,9 +119,9 @@ export function createSendTool(environment: SendToolEnvironment): AgentTool<type
       });
       if (pending.sendId === null) throw new Error(`send limit of ${environment.maxSends} reached`);
       const options = {
-        ...(environment.context.threadId === 0n
+        ...(targetThreadId === 0n
           ? {}
-          : { message_thread_id: Number(environment.context.threadId) }),
+          : { message_thread_id: Number(targetThreadId) }),
         ...(send.reply_to_message_id === undefined
           ? {}
           : { reply_parameters: { message_id: Number(send.reply_to_message_id) } }),
@@ -148,7 +150,7 @@ export function createSendTool(environment: SendToolEnvironment): AgentTool<type
           environment.store.db
             .query("UPDATE telegram_sends SET state = 'success', telegram_message_id = ?, response_json = ?, finished_at = ? WHERE id = ?")
             .run(BigInt(response.message_id), JSON.stringify({ message_id: response.message_id }), now, pending.sendId);
-          recordOutgoingMessage(environment, response, send, stickerFileId ?? null, now);
+          recordOutgoingMessage(environment, response, send, stickerFileId ?? null, targetConversationId, now);
         });
         return {
           content: [{ type: "text", text: `Sent Telegram message ${response.message_id}` }],
@@ -196,6 +198,7 @@ function recordOutgoingMessage(
   response: TelegramSendResponse,
   input: SendToolInput,
   stickerFileId: string | null,
+  conversationId: bigint,
   recordedAt: string,
 ): void {
   environment.store.db
@@ -212,7 +215,7 @@ function recordOutgoingMessage(
   const created = environment.store.db
     .query("INSERT INTO messages(conversation_id, chat_id, telegram_message_id, visible, sent_by_bot, telegram_date, received_at) VALUES (?, ?, ?, 1, 1, ?, ?)")
     .run(
-      environment.context.conversationId,
+      conversationId,
       chat.id,
       BigInt(response.message_id),
       new Date(response.date * 1000).toISOString(),

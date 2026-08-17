@@ -76,8 +76,8 @@ export async function createModelRegistry(config: RawConfig, secrets: SecretStor
       })),
     }));
   }
-  const agentModel = requireModel(models, config.agent.provider, config.agent.model, "text");
-  const visionModel = requireModel(models, config.vision.provider, config.vision.model, "image");
+  const agentModel = requireModel(models, config.agent.provider, config.agent.model, ["text"]);
+  const visionModel = requireModel(models, config.vision.provider, config.vision.model, ["image"]);
   if (config.agent.max_output_tokens > agentModel.maxTokens) {
     throw new Error("Agent max_output_tokens exceeds registered model limit");
   }
@@ -120,9 +120,16 @@ function fixedAuth(alias: string, apiKey: string): ProviderAuth {
   };
 }
 
-function requireModel(models: Models, provider: string, modelId: string, capability: "text" | "image"): Model<Api> {
+function requireModel(
+  models: Models,
+  provider: string,
+  modelId: string,
+  capabilities: readonly ("text" | "image")[],
+): Model<Api> {
   const model = models.getModel(provider, modelId);
   if (model === undefined) throw new Error(`Model ${provider}/${modelId} is not registered`);
-  if (!model.input.includes(capability)) throw new Error(`Model ${provider}/${modelId} lacks ${capability} input capability`);
+  for (const capability of capabilities) {
+    if (!model.input.includes(capability)) throw new Error(`Model ${provider}/${modelId} lacks ${capability} input capability`);
+  }
   return model;
 }

@@ -85,6 +85,7 @@ export async function serve(configPath: string): Promise<void> {
         username: me.username ?? null,
       },
       modelGate,
+      directImageLoader: (context, signal) => media.loadDirectImages(context.directImages, signal),
       additionalTools: (context, state, deadline) => [
         media.createReadImageTool(context, deadline),
         stickerService.createSearchTool(context, state.stickerCapabilities),
@@ -101,6 +102,7 @@ export async function serve(configPath: string): Promise<void> {
       systemPrompt: "",
       userPrompt: "",
       imageCapabilities: new Map(),
+      directImages: [],
       replyTargets: new Map(),
       omittedNewMessages: 0,
     };

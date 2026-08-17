@@ -329,8 +329,8 @@ function validateSemantics(config: TomlConfig): void {
   assertUnique(config.telegram.sticker_sets ?? [], (item) => item.alias, "sticker set alias");
   assertUnique(config.telegram.sticker_sets ?? [], (item) => item.name, "sticker set name");
   const providerAliases = new Set(Object.keys(config.providers));
-  validateModelReference(config, config.agent.provider, config.agent.model, "agent", true);
-  validateModelReference(config, config.vision.provider, config.vision.model, "vision", false);
+  validateModelReference(config, config.agent.provider, config.agent.model, "agent", ["text"]);
+  validateModelReference(config, config.vision.provider, config.vision.model, "vision", ["image"]);
   if (!providerAliases.has(config.agent.provider) || !providerAliases.has(config.vision.provider)) {
     throw new Error("Agent and vision providers must reference configured aliases");
   }
@@ -381,15 +381,16 @@ function validateModelReference(
   providerAlias: string,
   modelId: string,
   role: string,
-  requireText: boolean,
+  requiredInputs: readonly ("text" | "image")[],
 ): void {
   const provider = config.providers[providerAlias];
   if (provider === undefined) throw new Error(`${role}.provider references unknown alias ${providerAlias}`);
   if (provider.kind === "builtin") return;
   const model = provider.models.find((candidate) => candidate.id === modelId);
   if (model === undefined) throw new Error(`${role}.model ${modelId} is absent from provider ${providerAlias}`);
-  const requiredInput = requireText ? "text" : "image";
-  if (!model.input.includes(requiredInput)) throw new Error(`${role}.model ${modelId} lacks ${requiredInput} input capability`);
+  for (const requiredInput of requiredInputs) {
+    if (!model.input.includes(requiredInput)) throw new Error(`${role}.model ${modelId} lacks ${requiredInput} input capability`);
+  }
   const configuredMax = role === "agent" ? config.agent.max_output_tokens : config.vision.max_output_tokens;
   if (configuredMax > model.max_tokens) throw new Error(`${role}.max_output_tokens exceeds model ${modelId} max_tokens`);
 }

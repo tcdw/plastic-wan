@@ -7,6 +7,7 @@ import {
   type Model,
   type Models,
   type Usage,
+  type ImageContent,
 } from "@earendil-works/pi-ai";
 import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { RawConfig } from "./config.ts";
@@ -26,7 +27,10 @@ export type AdditionalToolFactory = (
   state: ToolRuntimeState,
   deadline: number,
 ) => readonly AgentTool[];
-
+export type DirectImageLoader = (
+  context: InvocationContext,
+  signal: AbortSignal,
+) => Promise<readonly ImageContent[]>;
 
 export interface AgentRuntimeOptions {
   readonly store: SqliteStore;
@@ -35,6 +39,7 @@ export interface AgentRuntimeOptions {
   readonly telegramApi: TelegramSendApi;
   readonly bot: { readonly id: bigint; readonly displayName: string; readonly username: string | null };
   readonly additionalTools?: AdditionalToolFactory;
+  readonly directImageLoader?: DirectImageLoader;
   readonly modelGate?: KeyedSemaphore;
 }
 
@@ -46,6 +51,7 @@ export class AgentRuntime {
   readonly #telegramApi: TelegramSendApi;
   readonly #bot: AgentRuntimeOptions["bot"];
   readonly #additionalTools: AdditionalToolFactory | undefined;
+  readonly #directImageLoader: DirectImageLoader | undefined;
   readonly #contextBuilder: ContextBuilder;
   readonly #modelGate: KeyedSemaphore;
 
@@ -57,6 +63,7 @@ export class AgentRuntime {
     this.#telegramApi = options.telegramApi;
     this.#bot = options.bot;
     this.#additionalTools = options.additionalTools;
+    this.#directImageLoader = options.directImageLoader;
     this.#modelGate = options.modelGate ?? new KeyedSemaphore();
     this.#contextBuilder = new ContextBuilder(options.store, options.config);
   }
@@ -73,10 +80,14 @@ export class AgentRuntime {
     validateToolRegistry([send, ...additionalTools], this.#model.contextWindow);
   }
 
-
   async run(invocationId: bigint, schedulerSignal: AbortSignal): Promise<InvocationOutcome> {
     const state: ToolRuntimeState = { stickerCapabilities: new Map() };
-    const provisionalContext = this.#contextBuilder.build(invocationId, this.#model.contextWindow, 0);
+    const provisionalContext = this.#contextBuilder.build(
+      invocationId,
+      this.#model.contextWindow,
+      0,
+      this.#model.input.includes("image"),
+    );
     const deadline = Date.now() + this.#config.agent.timeout_seconds * 1000;
     const preliminarySend = createSendTool({
       store: this.#store,
@@ -88,9 +99,13 @@ export class AgentRuntime {
       bot: this.#bot,
     });
     const preliminaryTools = [preliminarySend, ...(this.#additionalTools?.(provisionalContext, state, deadline) ?? [])];
-    validateToolRegistry(preliminaryTools, this.#model.contextWindow);
     const schemaCharacters = preliminaryTools.reduce((total, tool) => total + JSON.stringify(tool.parameters).length, 0);
-    const context = this.#contextBuilder.build(invocationId, this.#model.contextWindow, schemaCharacters);
+    const context = this.#contextBuilder.build(
+      invocationId,
+      this.#model.contextWindow,
+      schemaCharacters,
+      this.#model.input.includes("image"),
+    );
     const send = createSendTool({
       store: this.#store,
       api: this.#telegramApi,
@@ -195,7 +210,8 @@ export class AgentRuntime {
     const abortAgent = (): void => agent.abort();
     signal.addEventListener("abort", abortAgent, { once: true });
     try {
-      await agent.prompt(context.userPrompt);
+      const directImages = await this.#directImageLoader?.(context, signal) ?? [];
+      await agent.prompt(context.userPrompt, [...directImages]);
     } finally {
       signal.removeEventListener("abort", abortAgent);
     }

@@ -49,7 +49,13 @@ test("read_image normalizes once and reuses the 30-day description cache", async
       date: 1_700_000_000,
       chat: { id: 123456789, type: "private", first_name: "Owner" },
       from: { id: 42, is_bot: false, first_name: "Alice" },
-      photo: [{ file_id: "file-id", file_unique_id: "unique-id", width: 32, height: 16, file_size: 100 }],
+      photo: [{
+        file_id: "file-id",
+        file_unique_id: "unique-id",
+        width: 32,
+        height: 16,
+        file_size: 100,
+      }],
     },
   };
   const received = new Date("2026-08-15T00:00:00.000Z");
@@ -60,6 +66,7 @@ test("read_image normalizes once and reuses the 30-day description cache", async
   const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0);
   const [imageRef] = context.imageCapabilities.keys();
   if (imageRef === undefined) throw new Error("Expected an image capability");
+  expect(context.directImages).toEqual([]);
 
   const faux = fauxProvider({
     provider: "vision",

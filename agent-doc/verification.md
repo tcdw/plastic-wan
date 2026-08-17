@@ -132,9 +132,11 @@ bun run src/cli.ts serve --config dev-data/config.toml
 
 ### 图片与 Sticker
 
-- 发送图片并诱导读取：`read_image` success，普通图片缓存有过期时间。
-- 发送从未分析的静态/视频/TGS Sticker：视觉分析成功并写结构化元数据。
-- 再次发送同一 Sticker：命中 `file_unique_id + analysis_version` 缓存。
+- 使用 image-capable Agent 发送 Photo/图片 Document：首轮 User Message 直接包含标准化图片，不产生 `read_image` 或 `vision_chat`。
+- 使用 text-only Agent 发送 Photo/图片 Document：Context 提供 `image_ref`，`read_image` 成功且产生 `vision_chat` 审计。
+- 同一 Telegram Photo 的多尺寸数组只保留最高分辨率变体。
+- 发送从未分析的静态/视频/TGS Sticker：`read_image` 或后台索引触发视觉分析并写结构化元数据。
+- 普通图片与 Sticker 再次读取：命中各自的 `file_unique_id + analysis_version` 缓存。
 - Sticker 分析必须产生 `report_sticker_analysis` Tool Call；文本 JSON/code fence 不算成功。
 - `search_stickers` 只返回允许 Set 中已索引 Sticker。
 - `send` 不能使用模型虚构的 file ID。

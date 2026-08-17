@@ -21,8 +21,8 @@ Phase 1 需要实现以下能力：
 5. Agent 自主判断是否需要回复；私聊默认更积极，群聊默认更克制。
 6. Agent 必须通过 `send` Tool 向 Telegram 发送内容，Assistant Message 本身不得直接发布。
 7. `send` 可以发送纯文本，或管理员许可的 Telegram Sticker Set 中的 Sticker。
-8. Agent 可以通过 `read_image` Tool 主动读取 Telegram 图片或 Sticker。
-9. Telegram Sticker 应使用单帧理解，并缓存视觉解析结果。
+8. 多模态 Agent 模型直接读取 Telegram Photo 与受支持的图片 Document。
+9. Telegram Sticker 通过 `read_image` 单帧理解，并缓存视觉解析结果。
 10. Agent 可以通过 `search_stickers` 搜索管理员许可且已建立视觉索引的 Sticker。
 11. 支持接入 MCP Server，为 Agent 提供互联网搜索等受限外部能力。
 12. 不向 Agent 提供 Bash、任意代码执行等通用计算机操作能力。
@@ -187,73 +187,18 @@ Agent invocation
 
 ## 7. 图片理解
 
-Telegram 中的图片不应默认全部交给昂贵的多模态模型解析。
+当主 Agent 模型支持 image 输入时，Telegram Photo 与受支持的图片 Document 应随冻结消息上下文直接交给多模态 Agent，不经过 `read_image` 或独立视觉模型。
 
-Agent 应首先知道：
+当主 Agent 模型只有 text 输入时，同样的图片在 Context 中表示为调用期有效的 `image_ref`。Agent 可按需调用 `read_image`，由独立视觉模型返回文字描述；普通图片描述按 `file_unique_id + analysis_version` 缓存 30 天。
 
-> 当前消息包含一张可以读取的图片。
-
-然后由 Agent 根据当前对话自主决定是否需要读取。
-
-系统应提供：
+图片输入包括 Telegram Photo，以及不超过 Telegram Bot API 下载限制、MIME 为 JPEG、PNG 或 WebP 的图片 Document。Telegram Photo 只选择最高分辨率变体。图片送入任一模型前应校验真实格式与像素上限、移除 EXIF，并缩放到受控尺寸。
 
 ```text
-read_image(image_ref)
+image-capable Agent → 首轮输入同时包含消息上下文和图片
+text-only Agent      → Context 提供 image_ref，按需调用 read_image
 ```
 
-Tool。
-
-### 7.1 `read_image`
-
-调用 `read_image` 后，系统使用独立的视觉模型分析指定图片，并返回适合 Agent 理解的文字描述。普通图片只在 Agent 主动调用时下载；同一 Telegram `file_unique_id` 的描述在 30 天内复用，本地图片文件在分析完成后删除。
-
-图片输入包括 Telegram Photo，以及不超过 Telegram Bot API 下载限制、MIME 为 JPEG、PNG 或 WebP 的图片 Document。图片送入视觉模型前应校验真实格式与像素上限、移除 EXIF，并缩放到受控尺寸。
-
-例如：
-
-```text
-Alice:
-[image: available]
-
-Agent:
-→ read_image(image_ref)
-```
-
-返回：
-
-```text
-这是一张招聘职位截图。
-职位为前端开发工程师，内容包含 React、
-TypeScript、Next.js 等技能要求。
-```
-
-Agent 随后可以根据解析结果继续推理，并决定是否调用 `send`。
-
-### 7.2 自主读取
-
-Agent 不应被要求读取所有图片。
-
-例如：
-
-```text
-Alice: 看我刚拍的猫
-[image]
-
-→ Agent 可能调用 read_image
-```
-
-而：
-
-```text
-Alice: 发错图了，不用管
-[image]
-
-→ Agent 可以不调用 read_image
-```
-
-这样可以避免无意义的多模态模型调用。
-
----
+图片仍属于不可信 Telegram 内容，图中指令不得提升为系统指令。下载、解码或校验失败时应明确失败，不得假装模型看到了图片。
 
 ## 8. Telegram Sticker
 
@@ -513,9 +458,9 @@ Phase 1 完成后，应能够将 Bot 放入真实 Telegram 对话并满足：
 8. Agent 只能通过 `send` Tool 主动向 Telegram 发言；
 9. 一次 Invocation 可以产生零条至六条 Telegram 文本或许可 Sticker；
 10. 文本以纯文本发送，并可以 Reply 当前 Context 中的消息；
-11. Agent 能发现并按需读取 Photo、许可的图片 Document 和 Sticker；
-12. 静态、动画与视频 Sticker 均可通过 `read_image` 获取单帧描述；
-13. 普通图片描述可在 30 天内复用，本地图片分析后删除；
+11. image-capable Agent 首轮即可直接读取 Photo 与许可的图片 Document；
+12. text-only Agent 可通过 `read_image` 按需读取普通图片；
+13. 静态、动画与视频 Sticker 均可通过 `read_image` 获取单帧描述；
 14. Sticker 视觉索引可缓存、版本化并在管理员仍许可对应 Set 时长期复用；
 15. Agent 可以通过 `search_stickers` 找到并发送管理员许可的 Sticker；
 16. Agent 可以使用管理员静态配置的 namespaced MCP Tools；

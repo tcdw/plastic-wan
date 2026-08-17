@@ -2,13 +2,13 @@ import { chmod, mkdir, mkdtemp, open, rm, unlink } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, ImageContent, Model, Models } from "@earendil-works/pi-ai";
 import sharp from "sharp";
 import Type, { type Static } from "typebox";
 import Compile from "typebox/compile";
 import type { RawConfig } from "./config.ts";
 import { AsyncSemaphore, KeyedSemaphore } from "./concurrency.ts";
-import type { InvocationContext } from "./context-builder.ts";
+import type { DirectImage, InvocationContext } from "./context-builder.ts";
 import type { SqliteStore } from "./database.ts";
 import type { ModelRegistry } from "./providers.ts";
 
@@ -150,13 +150,48 @@ export class MediaService {
     this.#visionSemaphore = new AsyncSemaphore(options.config.vision.max_concurrency);
   }
 
+  async loadDirectImages(images: readonly DirectImage[], signal: AbortSignal): Promise<ImageContent[]> {
+    if (images.length === 0) return [];
+    await mkdir(this.#config.paths.media_cache, { recursive: true, mode: 0o700 });
+    const temporaryDirectory = await mkdtemp(join(this.#config.paths.media_cache, "direct-"));
+    if (process.platform !== "win32") await chmod(temporaryDirectory, 0o700);
+    try {
+      const content: ImageContent[] = [];
+      for (let index = 0; index < images.length; index += 1) {
+        const image = images[index]!;
+        const media = this.#store.db
+          .query<MediaRow, [bigint]>("SELECT id, kind, file_id, file_unique_id, mime_type, file_size, telegram_json FROM media WHERE id = ?")
+          .get(image.mediaId);
+        if (media === null || media.kind === "sticker") throw new Error("Direct image is unavailable");
+        if (media.file_size !== null && media.file_size > BigInt(MAX_DOWNLOAD_BYTES)) {
+          throw new Error("Telegram media exceeds 20 MB");
+        }
+        const imageDirectory = join(temporaryDirectory, String(index));
+        await mkdir(imageDirectory, { mode: 0o700 });
+        const normalized = await prepareMediaImage(
+          media,
+          join(imageDirectory, "input"),
+          imageDirectory,
+          this.#mediaClient,
+          signal,
+        );
+        content.push({
+          type: "image",
+          data: Buffer.from(await Bun.file(normalized.path).arrayBuffer()).toString("base64"),
+          mimeType: normalized.mimeType,
+        });
+      }
+      return content;
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
   createReadImageTool(context: InvocationContext, invocationDeadline: number): AgentTool<typeof ReadImageSchema, { cached: boolean }> {
     return {
       name: "read_image",
       label: "Read Telegram image",
-      description: "Analyze one image or sticker referenced in this invocation. Accepts only an image_ref shown in the current Telegram context.",
+      description: "Analyze one Photo, image Document, or Sticker referenced in this invocation. Accepts only an image_ref shown in the current Telegram context.",
       parameters: ReadImageSchema,
-      executionMode: "sequential",
       execute: async (toolCallId, input, signal) => {
         const mediaId = context.imageCapabilities.get(input.image_ref);
         if (mediaId === undefined) {

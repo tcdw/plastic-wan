@@ -353,7 +353,8 @@ function normalizeMessage(message: Message, service: boolean): NormalizedMessage
   if (message.text !== undefined) kind = "text";
   if (message.photo !== undefined) {
     kind = "photo";
-    for (const photo of message.photo) {
+    const photo = message.photo.at(-1);
+    if (photo !== undefined) {
       media.push({
         kind: "photo",
         fileId: photo.file_id,

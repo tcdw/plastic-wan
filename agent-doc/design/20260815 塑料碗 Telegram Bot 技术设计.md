@@ -10,7 +10,7 @@
 - 每 Conversation 固定 15 秒 Message Bucket；
 - 每轮重建短期 Context 的 Agent Invocation；
 - 只能通过受限 Tool 产生外部副作用；
-- 图片与 Sticker 的按需单帧理解；
+- Photo/图片 Document 直传多模态 Agent，Sticker 按需单帧理解；
 - 管理员许可 Sticker Set 的检索与发送；
 - MCP Tools 接入；
 - SQLite 持久化、审计、预算、恢复与备份。
@@ -48,10 +48,11 @@ flowchart TD
     INGEST -->|single transaction| DB[(SQLite WAL)]
     DB --> SCHED[Bucket Scheduler]
     SCHED --> QUEUE[Global Invocation Semaphore]
-    QUEUE --> INV[Fresh Pi Agent Invocation]
+    QUEUE --> MEDIA[图片下载、校验与标准化]
+    MEDIA --> INV[Fresh Pi Agent Invocation]
 
     INV --> SEND[send]
-    INV --> IMAGE[read_image]
+    INV --> IMAGE[Sticker read_image]
     INV --> STICKER[search_stickers]
     INV --> MCP[MCP Tool Adapters]
 
@@ -152,7 +153,7 @@ Phase 1 的 custom Provider 只接受已编译并测试的 API adapter：
 
 `base_url` 是 API 根路径，不是完整方法 URL。OpenAI Responses、Chat Completions 与 Anthropic Messages 的具体方法路径分别由 adapter 添加。应用不自动补 `/v1`，只移除末尾 `/`；URL 必须是绝对 HTTP/HTTPS URL，且不得包含 query 或 fragment。
 
-自定义模型 metadata 必须完整声明：`id`、`reasoning`、`input`、`context_window`、`max_tokens` 与四类费用。应用将其转换成 Pi AI `Model` 的 `api`、`provider`、`baseUrl`、`contextWindow`、`maxTokens` 与 `cost` 字段，再通过 `createProvider`/`models.setProvider` 注册。Phase 1 不调用自定义 endpoint 的 models API 自动猜测模型能力。
+自定义模型 metadata 必须完整声明：`id`、`reasoning`、`input`、`context_window`、`max_tokens` 与四类费用。应用将其转换成 Pi AI `Model` 的 `api`、`provider`、`baseUrl`、`contextWindow`、`maxTokens` 与 `cost` 字段，再通过 `createProvider`/`models.setProvider` 注册。配置向导可携带已解析的 `api_key` 与附加 Header 请求 `${base_url}/models`，但只把通过 Schema 校验的模型 ID 作为候选项；模型能力、限制与费用仍必须由 models.dev 或管理员补全，不能根据 URL、模型名或响应形状推断。
 
 附加 Header 的值复用 SecretRef。标准 Authorization 由对应 API adapter 和 `api_key` 生成；配置中的 Header 用于网关额外认证或路由，不进入 Agent Context 或审计正文。
 
@@ -591,27 +592,21 @@ type SendInput =
 
 Reply 目标不存在时返回 Tool Error，不降级成普通消息。
 
-### 9.2 `read_image`
+### 9.2 按主模型能力分流图片
 
-Agent 只看到 Invocation-scoped 随机引用。引用映射到当前 Context 中的 Media ID；不能接受 URL、路径、Telegram file_id 或其他 Chat 的媒体。
+Telegram Photo 与 JPEG/PNG/WebP 图片 Document 只有在主 Agent 模型声明 image 输入能力时才直接加入首轮 User Message；否则暴露为 Invocation-scoped `image_ref`，由 `read_image` 调用独立 Vision 模型。Photo 只在入库时保留 Telegram 尺寸数组中的最后一个最高分辨率变体。
 
-支持：
+两条路径共用受控图片管线：
 
-- Telegram Photo：选择最大可用尺寸；
-- JPEG/PNG/WebP image Document：Telegram 报告大小不超过 20 MB；
-- static/animated/video Sticker。
+1. 通过 `getFile` 下载到权限 `0700` 的临时目录；
+2. `sharp` 检查真实格式、限制 decoded pixels、自动旋转、移除元数据、最长边缩放到 2048 px；
+3. 不透明照片输出 JPEG，透明图输出 PNG；
+4. image-capable Agent 获得 base64 图片；text-only Agent 的 `read_image` 获得 Vision 文字描述；
+5. `finally` 删除下载文件和中间文件。
 
-普通图片流程：
+直传下载、格式或像素校验失败会使 Invocation 失败，不能静默省略。普通图片 `read_image` 分析按 `file_unique_id + analysis_version` 缓存 30 天。
 
-1. 查询 `(file_unique_id, analysis_version)` 30 天缓存；
-2. miss 时通过 `getFile` 下载到权限 `0700` 的临时目录；
-3. `sharp` 检查真实格式、限制 decoded pixels、自动旋转、移除元数据、最长边缩放到 2048 px；
-4. 照片输出 JPEG，透明图输出 PNG；
-5. 调用独立 Pi AI vision model；
-6. 保存文字描述、Usage 与分析版本；
-7. `finally` 删除下载文件和中间文件。
-
-视觉 Tool 默认 30 秒超时。聊天中的 `read_image` 受 Chat Token 预算和全局视觉 semaphore 控制。
+`read_image` 接受当前 Context 授权的普通图片或 Sticker 随机引用，不能接受 URL、路径、Telegram file_id 或其他 Chat 的媒体。Sticker 始终使用独立 Pi AI vision model；普通图片只在主模型缺少 image 能力时可被授权。前台调用受 30 秒超时、Chat Token 预算和全局视觉 semaphore 控制。
 
 ### 9.3 Sticker 单帧
 
@@ -738,7 +733,7 @@ Streamable HTTP：
 
 - 全局最多 4 个 running Invocation，TOML 可调。
 - 同一 Conversation 永远最多 1 个 running Invocation。
-- 同一 `chat_id` 下同时最多 1 个主模型或聊天触发的视觉模型调用；不同 Topic 的 Invocation 可以在等待 Tool 等阶段并发，但通过共享 Chat 预算闸门逐次调用模型。
+- 同一 `chat_id` 下主模型与聊天触发的 Sticker 视觉模型调用共享模型闸门；不同 Topic 的 Invocation 可以在等待 Tool 等阶段并发。
 - 这样 Chat 日 Token 上限最多被最后一个已经放行的模型调用小幅超出一次。
 
 ### 11.2 Chat 日预算
@@ -748,7 +743,7 @@ Streamable HTTP：
 - `max_invocations_per_day`；
 - `max_tokens_per_day`。
 
-主 Agent 与该 Chat 触发的 `read_image` Usage 合并计入 `max_tokens_per_day`。使用 Pi AI 返回的 `Usage.totalTokens`；input、output、cache read、cache write 与费用拆分同时审计。
+主 Agent 与该 Chat 触发的 Sticker `read_image` Usage 合并计入 `max_tokens_per_day`。使用 Pi AI 返回的 `Usage.totalTokens`；input、output、cache read、cache write 与费用拆分同时审计。
 
 Provider 在响应后才返回准确 Usage，因此规则是：每次模型调用前检查已消费量；调用完成后记账；达到上限后禁止后续调用。最后一次调用可以造成小幅超额。
 
@@ -801,8 +796,8 @@ Provider 在响应后才返回准确 Usage，因此规则是：每次模型调�
 
 ### 12.2 保留
 
-- 在线消息、raw Update、Revision、Prompt、Tool Result、Invocation、普通图片描述：30 天；
-- 普通图片与中间文件：分析完成后立即删除；
+- 在线消息、raw Update、Revision、Prompt、Tool Result 与 Invocation：30 天；
+- 普通图片下载文件和中间文件：模型请求载荷构造完成后立即删除；
 - 管理员仍许可的 Sticker 代表帧与索引：长期保留；
 - Chat、迁移映射、Schema 版本、预算配置身份等运行元数据：持续保留；
 - 本地一致性备份：最近 7 份，因此聊天数据在备份中最长约 37 天。
@@ -1023,13 +1018,14 @@ MCP：
 3. Agent 通过 `send` 连续发送 0–6 条纯文本；
 4. Agent Reply 当前 Context 消息；
 5. 截止前编辑消息进入最终输入，截止后编辑不重跑；
-6. Photo、图片 Document、三类 Sticker 均可按需读取；
-7. 同一媒体缓存命中不重复调用视觉模型；
-8. `search_stickers` 找到并发送配置 Set 中的 Sticker；
-9. MCP 搜索成功且未配置 Tool 不可见；
-10. 重启恢复 5 分钟内 Bucket，过期 Bucket 不回复；
-11. SQLite 中可核对 Model Usage、Tool、Telegram send 与 retention 字段；
-12. Agent 无 Bash、文件系统、通用 HTTP 或动态 MCP 能力。
+6. image-capable Agent 直接接收 Photo/图片 Document，且不产生 `read_image`/`vision_chat` 审计；
+7. text-only Agent 通过 `read_image` 成功读取普通图片并产生 `vision_chat` 审计；
+8. 三类 Sticker 均可通过 `read_image` 读取，同一媒体缓存命中不重复调用视觉模型；
+9. `search_stickers` 找到并发送配置 Set 中的 Sticker；
+10. MCP 搜索成功且未配置 Tool 不可见；
+11. 重启恢复 5 分钟内 Bucket，过期 Bucket 不回复；
+12. SQLite 中可核对 Model Usage、Tool、Telegram send 与 retention 字段；
+13. Agent 无 Bash、文件系统、通用 HTTP 或动态 MCP 能力。
 
 ---
 
@@ -1039,7 +1035,7 @@ MCP：
 2. grammY ingestion、allowlist、Message Revision 与 raw Update 审计。
 3. 数据库驱动 Bucket scheduler、重启恢复、合并与预算计数。
 4. Context builder、fresh Pi Agent Invocation、运行限制与 `send`。
-5. `sharp` 图片管线、独立视觉模型、`read_image` 缓存。
+5. `sharp` 图片管线、主模型多模态直传、Sticker `read_image` 缓存。
 6. Sticker Set 同步、单帧转换、后台索引、FTS5 与 Sticker send。
 7. 官方 MCP SDK、两种 transport、policy、namespace、预算与恢复。
 8. retention、`VACUUM INTO` backup、systemd service/timer 与 `doctor`。

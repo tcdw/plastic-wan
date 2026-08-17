@@ -42,10 +42,22 @@ describe("configuration", () => {
     await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
   });
 
+  test("accepts an agent model without image input", async () => {
+    const { directory, configPath } = await fixture();
+    const config = testConfigToml(directory).replace('input = ["text", "image"]', 'input = ["text"]');
+    await Bun.write(configPath, config);
+    const loaded = await loadConfig(configPath);
+    const registry = await createModelRegistry(loaded.config, new SecretStore());
+    expect(registry.agentModel.input).toEqual(["text"]);
+  });
+
   test("rejects a vision model without image input", async () => {
     const { directory, configPath } = await fixture();
-    await Bun.write(configPath, testConfigToml(directory).replace('input = ["text", "image"]', 'input = ["text"]'));
-    await expect(loadConfig(configPath)).rejects.toThrow("lacks image input capability");
+    const config = testConfigToml(directory);
+    const firstModel = config.indexOf('input = ["text", "image"]');
+    const secondModel = config.indexOf('input = ["text", "image"]', firstModel + 1);
+    await Bun.write(configPath, `${config.slice(0, secondModel)}input = ["text"]${config.slice(secondModel + 'input = ["text", "image"]'.length)}`);
+    await expect(loadConfig(configPath)).rejects.toThrow("vision.model vision-model lacks image input capability");
   });
 
   test("rejects developer-role compatibility for an Anthropic adapter", async () => {

@@ -40,16 +40,17 @@ BucketScheduler
   └─ 调用 AgentRuntime
         │
         ▼
-ContextBuilder
+ContextBuilder / MediaService
   ├─ 系统提示与 Chat 指令
   ├─ 最近历史和本 Bucket 新消息
   ├─ Reply 可见集合
-  └─ 图片/Sticker capability 引用
+  ├─ 模型支持 image：Photo/图片 Document 多模态载荷
+  └─ 模型不支持 image：图片 capability 引用
         │
         ▼
 Fresh Pi Agent
   ├─ send
-  ├─ read_image
+  ├─ read_image（Sticker；text-only Agent 也用于普通图片）
   ├─ search_stickers
   └─ allowlisted MCP tools
         │
@@ -69,10 +70,10 @@ send Tool → Telegram API → 审计
 | `database.ts` | SQLite 打开、迁移、单实例锁、保留清理和备份 |
 | `telegram-ingestion.ts` | Update 判定、消息/修订/媒体入库、Chat 迁移 |
 | `scheduler.ts` | Bucket 状态机、Invocation 快照、恢复、合并和并发 |
-| `context-builder.ts` | Prompt、消息窗口、Reply 与媒体 capability |
-| `agent-runtime.ts` | Pi Agent 循环、模型/Tool 预算、调用审计 |
+| `context-builder.ts` | Prompt、消息窗口、Reply 与按模型能力选择的媒体载荷/capability |
+| `agent-runtime.ts` | Pi Agent 循环、多模态/文本回退输入、模型/Tool 预算、调用审计 |
 | `send-tool.ts` | 文本/Sticker 发送、Reply 授权、重试与副作用审计 |
-| `media.ts` | Telegram 媒体下载、代表帧、标准化、视觉缓存 |
+| `media.ts` | Telegram 图片直传准备、普通图片回退分析、Sticker 代表帧、标准化与视觉缓存 |
 | `stickers.ts` | Set 同步、后台单并发索引、FTS 搜索和发送能力 |
 | `mcp.ts` | Server 生命周期、Tool 注册、策略、大小限制和预算 |
 | `doctor.ts` | 本地依赖、模型、Vision、Telegram、required MCP 的真实探针 |
@@ -82,8 +83,8 @@ send Tool → Telegram API → 审计
 
 - Scheduler 最多并行运行 `agent.max_concurrency` 个 Invocation。
 - 同一 Conversation 只允许一个 running Invocation。
-- `KeyedSemaphore` 避免同一 Chat 的 Agent 与用户触发 Vision 并发占用模型。
-- Vision 总并发由 `vision.max_concurrency` 限制；后台 Sticker 索引固定单并发，且优先级低于用户 `read_image`。
+- `KeyedSemaphore` 避免同一 Chat 的 Agent 与 `read_image` Vision 并发占用模型。
+- Vision 总并发由 `vision.max_concurrency` 限制；后台 Sticker 索引固定单并发，且优先级低于前台 `read_image`。
 - MCP 每个 Server 有独立的调用 semaphore、重连状态和审计。
 
 ## 恢复与合并

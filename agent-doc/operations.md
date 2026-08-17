@@ -136,14 +136,14 @@ Doctor 会产生 `role = 'doctor'` 的模型调用审计并消耗少量 Provider
 2. Bucket 是否到达 15 秒 deadline。
 3. Invocation 是否 completed。
 4. `sends_used = 0`：Agent 主动不发言。
-5. 有 `tool_calls` 时继续检查 `send`/`read_image`/MCP 状态。
+5. 有 `tool_calls` 时继续检查 `send`/`read_image`/MCP 状态；image-capable Agent 的图片直传失败时检查 Invocation 的 `completion_reason`。
 
-### Sticker 理解失败
+### 图片或 Sticker 理解失败
 
-- `media_analyses.state/error/failure_count`。
-- 对应 Vision `model_calls`。
-- FFmpeg/FFprobe 或 python-lottie 是否在 PATH。
-- 模型是否返回 `report_sticker_analysis` Tool Call。
+- text-only Agent 的普通图片与全部 Sticker：检查 `media_analyses.state/error/failure_count` 和对应 Vision `model_calls`。
+- image-capable Agent 的普通图片：检查 Invocation/Agent `model_calls`，不会产生 `read_image`。
+- 视频/动画 Sticker 检查 FFmpeg/FFprobe 或 python-lottie 是否在 PATH。
+- Sticker 模型是否返回 `report_sticker_analysis` Tool Call。
 - 重试成功后确认分析状态和 `read_image` Tool Call 都为 success。
 
 ### Serve lock

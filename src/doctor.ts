@@ -121,6 +121,7 @@ async function runDoctorChecks(config: RawConfig, configHash: string, secrets: S
         username: me.username ?? null,
       },
       modelGate,
+      directImageLoader: (context, signal) => media.loadDirectImages(context.directImages, signal),
       additionalTools: (context, state, deadline) => [
         media.createReadImageTool(context, deadline),
         stickers.createSearchTool(context, state.stickerCapabilities),
@@ -300,6 +301,7 @@ function previewContext(): InvocationContext {
     systemPrompt: "",
     userPrompt: "",
     imageCapabilities: new Map(),
+    directImages: [],
     replyTargets: new Map(),
     omittedNewMessages: 0,
   };

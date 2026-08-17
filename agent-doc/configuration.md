@@ -53,7 +53,7 @@ command SecretRef：
 | `telegram` | Token、Chat/Topic allowlist、Sticker Set |
 | `providers` | 内置或自定义 Provider 别名 |
 | `agent` | 对话模型、Prompt、轮次、超时和并发 |
-| `vision` | 图片模型、并发、Prompt 版本和预算 |
+| `vision` | Sticker 视觉模型、并发、Prompt 版本和预算 |
 | `mcp` | 可选的 stdio/Streamable HTTP Server |
 | `admin` | 可选的本地只读 Admin Panel |
 | `retention` | 在线保留天数与备份份数 |
@@ -130,9 +130,11 @@ max_tokens = 8192
 cost = { input = 0, output = 0, cache_read = 0, cache_write = 0 }
 ```
 
-可用 `api`：`openai-responses`、`openai-completions`、`anthropic-messages`。`agent` 模型必须支持 text；`vision` 模型必须支持 image；配置输出上限不能超过注册模型上限。
+可用 `api`：`openai-responses`、`openai-completions`、`anthropic-messages`。`agent` 模型必须支持 text；若同时支持 image，用户 Photo/图片 Document 直接作为多模态输入，否则保留为 `read_image` capability 并由独立 `vision` 模型按需解析。`vision` 模型必须支持 image，也负责 Sticker 的按需理解与后台索引；配置输出上限不能超过注册模型上限。
 
 `compat.supports_developer_role` 覆盖 Pi AI 对 OpenAI 兼容接口的自动检测。仅接受 `system`、`assistant`、`user`、`tool` 角色的接口必须设为 `false`；省略时继续自动检测。该字段仅适用于 `openai-responses` 和 `openai-completions`。
+
+`configure` 向导可使用已配置的 `api_key` 与附加 Header 请求 `${base_url}/models`，再按关键词筛选并选择返回的模型 ID。该响应只用于发现可路由的 ID；`reasoning`、输入能力、上下文、输出上限与费用仍由 models.dev 或管理员确认后写入。
 
 ## Agent 与 Vision
 
@@ -149,8 +151,8 @@ cost = { input = 0, output = 0, cache_read = 0, cache_write = 0 }
 
 `vision` 约束：
 
-- 独立 Provider/Model 与输出上限。
-- 用户图片并发由 `max_concurrency` 控制。
+- 独立 Provider/Model 与输出上限，用于 text-only Agent 的普通图片回退和 Sticker 分析。
+- 前台 `read_image` 并发由 `max_concurrency` 控制。
 - `background_sticker_concurrency` 当前必须为 `1`。
 - `prompt_version` 参与视觉缓存版本；改变描述规则时递增。
 - `daily_budget` 同时限制 Token 和图片数。

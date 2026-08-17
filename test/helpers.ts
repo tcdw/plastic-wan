@@ -26,7 +26,7 @@ id = "agent-model"
 name = "Agent Model"
 reasoning = true
 compat = { supports_developer_role = false }
-input = ["text"]
+input = ["text", "image"]
 context_window = 200000
 max_tokens = 32768
 cost = { input = 1, output = 2, cache_read = 0.1, cache_write = 1 }

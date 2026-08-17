@@ -664,6 +664,7 @@ function previewContext(): InvocationContext {
     systemPrompt: "",
     userPrompt: "",
     imageCapabilities: new Map(),
+    directImages: [],
     replyTargets: new Map(),
     omittedNewMessages: 0,
   };

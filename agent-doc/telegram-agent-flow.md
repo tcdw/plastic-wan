@@ -81,8 +81,9 @@ Bot 自己通过 `send` 产生的消息写入可见历史，但不会再次触�
 
 - `systemPrompt`：安全边界、全局 Prompt、私聊/群聊参与策略、Chat instructions、当前时间。
 - `userPrompt`：最近 history 与本 Bucket new messages。
+- `directImages`：当 `agent` 模型支持 image 时，选中消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容。
 - `visibleReplyMessageIds`：本次允许 Reply 的 Telegram Message ID。
-- `imageCapabilities`：本次允许 `read_image` 的不透明引用 → 内部 Media ID。
+- `imageCapabilities`：Sticker 始终可用；当 `agent` 模型不支持 image 时也包含 Photo/图片 Document，供 `read_image` 使用。
 - `omittedNewMessages`：因 Context 上限省略的新消息数量。
 
 私聊策略提示模型积极参与；群聊提示只在有明确价值时发言。它是行为偏好，不绕过 Tool 或预算授权。
@@ -123,9 +124,17 @@ Context
 - 发送内容写入可见消息历史。
 - Agent 的私有 Assistant 文本仍不进入 Telegram。
 
-## read_image
+## 用户图片模型分流
 
-模型只能使用 Context 中展示的不透明 `image_ref`。Tool 不接受原始 Telegram file ID、任意 URL 或任意 Media ID。
+当 `agent` 模型支持 image 时，Photo 与受支持的图片 Document 随冻结 Context 直接送入主模型，不经过 `read_image` 或独立 `vision` 模型。Telegram Photo 只保留最高分辨率变体，避免同一照片重复占用模型输入。
+
+当 `agent` 模型只有 text 输入时，普通图片不附到主模型请求，而是在 Context 中保留 Invocation-scoped `image_ref`。Agent 可按需调用 `read_image`，由独立 `vision` 模型返回文字描述。普通图片继续按 `file_unique_id + analysis_version` 缓存 30 天。
+
+直传图片在首次 Agent 请求前下载到 `paths.media_cache` 临时目录，并执行下载大小、真实格式、像素数、EXIF 移除、最大边长与标准化输出大小限制；请求载荷完成构造后立即删除临时文件。下载或校验失败会使 Invocation 失败，不会把缺失图片伪装成成功。
+
+## `read_image`
+
+模型只能使用 Context 中展示的不透明 `image_ref`。多模态 Agent 只获得 Sticker 引用；text-only Agent 还会获得 Photo 与图片 Document 引用。Tool 不接受原始 Telegram file ID、任意 URL 或任意 Media ID。
 
 处理流程：
 
@@ -152,7 +161,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 - Set/Sticker 元数据写入 SQLite。
 - 新增或版本变化的 Sticker 进入索引队列。
-- 后台固定单并发，用户 `read_image` 优先。
+- 后台固定单并发，前台 Sticker `read_image` 优先。
 - 分析成功后更新 `sticker_search` FTS5 trigram 索引。
 - 失败记录次数与 `next_retry_at`，避免热循环。
 

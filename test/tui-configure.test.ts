@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify } from "smol-toml";
 import { loadConfig } from "../src/config.ts";
+import { SecretStore } from "../src/secrets.ts";
 import { writeTestConfig } from "./helpers.ts";
 import {
   extractInputCapabilities,
@@ -11,6 +12,8 @@ import {
   toModelDefaults,
   type ModelsDevModel,
 } from "../src/tui/models-dev.ts";
+import { fetchProviderModels, modelsEndpoint } from "../src/tui/provider-models.ts";
+import { filterSearchChoices } from "../src/tui/provider-wizard.ts";
 import { parseCli } from "../src/cli-options.ts";
 
 const directories: string[] = [];
@@ -90,6 +93,76 @@ describe("models.dev client", () => {
     expect(defaults.context_window).toBe(100000);
     expect(defaults.max_tokens).toBe(8192);
     expect(defaults.cost).toEqual({ input: 3, output: 9, cache_read: 1.5, cache_write: 3 });
+  });
+});
+
+describe("provider wizard discovery", () => {
+  test("filters choices by case-insensitive keywords", () => {
+    const choices = [
+      { value: "openai", name: "OpenAI (openai)", description: "GPT models" },
+      { value: "anthropic", name: "Claude Sonnet (anthropic)", description: "Reasoning models" },
+      { value: "google", name: "Google Gemini (google)" },
+    ];
+    expect(filterSearchChoices(choices, "CLAUDE anthropic").map((choice) => choice.value)).toEqual(["anthropic"]);
+    expect(filterSearchChoices(choices, "reasoning").map((choice) => choice.value)).toEqual(["anthropic"]);
+    expect(filterSearchChoices(choices, "   ")).toBe(choices);
+  });
+
+  test("appends models to the configured API root", () => {
+    expect(modelsEndpoint("https://example.test/v1/")).toBe("https://example.test/v1/models");
+    expect(() => modelsEndpoint("https://user@example.test/v1")).toThrow("without credentials");
+    expect(() => modelsEndpoint("https://example.test/v1?tenant=a")).toThrow("query");
+  });
+
+  test("fetches, authenticates, validates, and deduplicates provider models", async () => {
+    let observedPath = "";
+    let observedAuthorization = "";
+    let observedRoute = "";
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        observedPath = new URL(request.url).pathname;
+        observedAuthorization = request.headers.get("authorization") ?? "";
+        observedRoute = request.headers.get("x-route") ?? "";
+        if (observedPath === "/invalid/models") return Response.json({ models: [] });
+        return Response.json({
+          object: "list",
+          data: [
+            { id: "zeta", object: "model" },
+            { id: "alpha", name: "Alpha", object: "model" },
+            { id: "zeta", object: "model" },
+          ],
+        });
+      },
+    });
+    try {
+      const baseUrl = server.url.toString().replace(/\/$/, "");
+      const models = await fetchProviderModels(
+        {
+          baseUrl: `${baseUrl}/v1`,
+          api: "openai-responses",
+          apiKey: "provider-secret",
+          headers: { "x-route": "route-secret" },
+        },
+        new SecretStore(),
+      );
+      expect(observedPath).toBe("/v1/models");
+      expect(observedAuthorization).toBe("Bearer provider-secret");
+      expect(observedRoute).toBe("route-secret");
+      expect(models).toEqual([{ id: "alpha", name: "Alpha" }, { id: "zeta" }]);
+
+      await expect(fetchProviderModels(
+        {
+          baseUrl: `${baseUrl}/invalid`,
+          api: "openai-completions",
+          apiKey: "provider-secret",
+        },
+        new SecretStore(),
+      )).rejects.toThrow("invalid OpenAI models response");
+    } finally {
+      await server.stop(true);
+    }
   });
 });
 

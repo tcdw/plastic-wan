@@ -97,10 +97,10 @@ bun run src/cli.ts serve --config dev-data/config.toml
 
 1. 出现一次 `admin_started`，host 为回环地址。
 2. 首次打开 `http://127.0.0.1:<port>/` 渲染「创建管理员」表单，`GET /api/auth/session` 返回 `setup_required = true`。
-3. 创建账号后 Overview 显示 Invocation、消息与视觉缓存计数。
+3. 创建账号后 Overview 分别显示 Invocation、消息、媒体分析缓存与已配置 Sticker 索引状态。
 4. Tool session 详情五个 Tab（Tool calls / Model calls / Telegram sends / Agent transcript / Frozen context）各自渲染对应表格。
 5. 消息搜索命中当前 Chat 的文本，详情展示全部 Revision。
-6. Sticker cache 按 Set 与 `index_state` 过滤后行数变化。
+6. Bot sticker sets 页面明确说明只包含 `telegram.sticker_sets` 中配置的 Set，并按 Set 与 `index_state` 过滤后行数变化。
 7. 登出后访问深链接回落登录页；重新登录恢复访问。
 8. `admin_users.password_hash` 以 `$argon2id$` 开头，`admin_sessions` 只有 64 位十六进制摘要。
 

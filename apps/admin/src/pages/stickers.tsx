@@ -19,7 +19,11 @@ export function StickersPage(): React.ReactElement {
   const items = stickers.data?.pages.flatMap((page) => page.items) ?? [];
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-      <Card title="Sticker sets" size="small">
+      <Card title="Configured sticker sets" size="small">
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+          Only sets listed in <Typography.Text code>telegram.sticker_sets</Typography.Text> are synchronized here.
+          Stickers received in chats are not automatically added or approved for sending.
+        </Typography.Paragraph>
         {queryState({ isPending: sets.isPending, error: sets.error })}
         {sets.isPending || sets.error !== null ? null : (
           <Table<StickerSetEntry>
@@ -58,8 +62,13 @@ export function StickersPage(): React.ReactElement {
           />
         )}
       </Card>
-      <Card title="Vision index cache" size="small">
+      <Card title="Bot search index" size="small">
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
+            Only successfully analyzed stickers from configured sets appear here and are available to{" "}
+            <Typography.Text code>search_stickers</Typography.Text>. On-demand analyses of chat media are stored
+            separately and appear in message details.
+          </Typography.Paragraph>
           <Space wrap>
             <Select
               allowClear

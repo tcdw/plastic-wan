@@ -198,7 +198,7 @@ export function MessageDetailPage({ id }: { readonly id: string }): React.ReactE
               render: (_: unknown, row) => (row.width === null || row.height === null ? "—" : `${row.width}×${row.height}`),
             },
             {
-              title: "Vision cache",
+              title: "Media analysis",
               key: "analysis",
               render: (_: unknown, row) => <TextValue value={row.analysis_description ?? row.analysis_state} />,
             },

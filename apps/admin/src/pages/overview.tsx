@@ -82,7 +82,7 @@ export function OverviewPage(): React.ReactElement {
         </Col>
         <Col span={8}>
           <Card>
-            <Statistic title="Cached vision analyses" value={data.cached_analysis_count} />
+            <Statistic title="Cached media analyses" value={data.cached_analysis_count} />
           </Card>
         </Col>
       </Row>
@@ -119,7 +119,7 @@ export function OverviewPage(): React.ReactElement {
           </Card>
         </Col>
         <Col span={8}>
-          <Card title="Sticker index states" size="small">
+          <Card title="Configured sticker index states" size="small">
             <Table<LabelCount>
               rowKey="label"
               size="small"

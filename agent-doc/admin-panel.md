@@ -1,6 +1,6 @@
 # Admin Panel
 
-Admin Panel 是随 `serve` 启动的本地只读审计界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息与 Sticker 视觉缓存。后端在 `src/admin/`，前端在 `apps/admin/`（Rsbuild + React + Ant Design + TanStack Query + TanStack Router）。
+Admin Panel 是随 `serve` 启动的本地只读审计界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析与已配置 Sticker Set 的可搜索索引。后端在 `src/admin/`，前端在 `apps/admin/`（Rsbuild + React + Ant Design + TanStack Query + TanStack Router）。
 
 Admin Panel 以只读审计为主，仅提供一项受控写操作：取消所有待处理的会话。它不能发送消息、修改配置、重跑 Invocation 或删除审计记录。
 
@@ -63,14 +63,16 @@ static_dir = "/opt/plasticwan/apps/admin/dist"
 | `POST /auth/setup` | 创建首个管理员并签发 Session |
 | `POST /auth/login` | 登录 |
 | `POST /auth/logout` | 撤销当前 Session |
-| `GET /overview` | Invocation/Sticker 状态分布、Top Tool、当日预算用量、消息与缓存计数 |
+| `GET /overview` | Invocation/已配置 Sticker 索引状态、Top Tool、当日预算用量、消息与媒体分析缓存计数 |
 | `GET /invocations` | Tool Session 列表 |
 | `GET /invocations/:id` | Overview 时间线所需的冻结消息、Tool Call、Model Call、Agent transcript、Telegram 发送与冻结上下文 |
 | `GET /messages` | 消息列表 |
 | `GET /messages/:id` | 全部 Revision 与媒体（含视觉描述） |
 | `GET /sticker-sets` | Set 同步状态与索引进度 |
-| `GET /stickers` | Sticker 视觉缓存条目与分析元数据 |
+| `GET /stickers` | 已配置 Sticker Set 的可搜索索引条目与分析元数据 |
 | `POST /cancel-pending-sessions` | 取消所有 `collecting`/`queued` Bucket 及其 queued Invocation，并退回当日调用预算 |
+
+`GET /stickers` 不列出群聊中收到的任意 Sticker。只有 `telegram.sticker_sets` 中配置的 Set 才会同步到该索引并获准供 Bot 搜索和发送；聊天媒体的按需视觉分析属于 `media_analyses`，在消息详情中展示。
 
 列表参数：`limit`（1–100，默认 25）、`cursor`（上一页 `next_cursor`）、`state`、`chat`、`set`、`search`。分页为 ID 倒序 keyset：请求 `limit + 1` 行，多出一行则返回 `next_cursor`。
 
@@ -104,7 +106,7 @@ bun run admin:dev     # Rsbuild dev server，/api 代理到 ADMIN_API_TARGET
 | `src/queries.ts` | TanStack Query option 工厂（列表用 infinite query） |
 | `src/routes.tsx` | 认证门、登录/初始化卡片、Layout 与路由树 |
 | `src/components.tsx` | `queryState()` 占位渲染、JSON 块、状态 Tag |
-| `src/pages/*.tsx` | Overview、Tool sessions、Messages、Sticker cache |
+| `src/pages/*.tsx` | Overview、Tool sessions、Messages、Bot Sticker Set 索引 |
 
 `queryState()` 是普通函数而非组件：调用方依赖 `null` 判断是否渲染真实数据，JSX 元素永远不为 `null`。
 
@@ -131,4 +133,4 @@ bun run admin:build
 
 `test/admin.test.ts` 覆盖：首次初始化与登录态转换、弱密码拒绝且不写入用户、`setup` 重复调用冲突、错误凭据与未知用户的统一 401、跨站 `POST` 拒绝、审计三大视图的字段与过滤、非法 `limit`/`state` 的 400、审计路由写操作 405、静态资源回退与目录穿越拒绝、`admin.host` 非回环时配置加载失败。
 
-浏览器冒烟应确认：初始化表单 → Overview 统计 → Tool session 详情六个 Tab，默认 Overview 按时间显示收到的消息与 `send` 内容 → 消息搜索与详情 Revision → Sticker Set 与 `index_state` 过滤 → 登出后深链接回落登录页 → 重新登录恢复。
+浏览器冒烟应确认：初始化表单 → Overview 统计 → Tool session 详情六个 Tab，默认 Overview 按时间显示收到的消息与 `send` 内容 → 消息搜索与详情 Revision、媒体分析 → 已配置 Sticker Set 与 `index_state` 过滤 → 登出后深链接回落登录页 → 重新登录恢复。

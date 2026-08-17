@@ -21,7 +21,7 @@ const MENU_ITEMS = [
   { key: "/", label: <Link to="/">Overview</Link> },
   { key: "/invocations", label: <Link to="/invocations">Tool sessions</Link> },
   { key: "/messages", label: <Link to="/messages">Messages</Link> },
-  { key: "/stickers", label: <Link to="/stickers">Sticker cache</Link> },
+  { key: "/stickers", label: <Link to="/stickers">Bot sticker sets</Link> },
 ];
 
 interface RouterContext {

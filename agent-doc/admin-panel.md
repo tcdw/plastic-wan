@@ -2,7 +2,7 @@
 
 Admin Panel 是随 `serve` 启动的本地只读审计界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析与已配置 Sticker Set 的可搜索索引。后端在 `src/admin/`，前端在 `apps/admin/`（Rsbuild + React + Ant Design + TanStack Query + TanStack Router）。
 
-Admin Panel 以只读审计为主，仅提供一项受控写操作：取消所有待处理的会话。它不能发送消息、修改配置、重跑 Invocation 或删除审计记录。
+Admin Panel 以只读审计为主，另提供受控的管理员凭据修改和取消所有待处理会话操作。它不能发送消息、修改运行配置、重跑 Invocation 或删除审计记录。
 
 ## 配置
 
@@ -50,6 +50,7 @@ static_dir = "/opt/plasticwan/apps/admin/dist"
 - 同一 `(client, username)` 连续 10 次失败后锁定 15 分钟，返回 429 `too_many_attempts`。
 - 过期 Session 在认证时删除，并在新建 Session 与服务启动时批量清理。
 - `POST /api/auth/logout` 按 Token 摘要删除 Session。
+- `POST /api/auth/credentials` 修改当前管理员用户名和密码，保留当前 Session、撤销该用户其它 Session，并签发新的 Cookie。
 
 跨站防护：所有 `POST` 校验 `Origin`，主机不匹配返回 403 `bad_origin`；审计路由只接受 `GET`，其它方法返回 405。
 
@@ -59,10 +60,8 @@ static_dir = "/opt/plasticwan/apps/admin/dist"
 
 | 路由 | 说明 |
 | --- | --- |
-| `GET /auth/session` | 是否需要初始化、当前登录态与过期时间 |
-| `POST /auth/setup` | 创建首个管理员并签发 Session |
-| `POST /auth/login` | 登录 |
 | `POST /auth/logout` | 撤销当前 Session |
+| `POST /auth/credentials` | 修改当前管理员用户名和密码，并撤销该用户其它 Session |
 | `GET /overview` | Invocation/已配置 Sticker 索引状态、Top Tool、当日预算用量、消息与媒体分析缓存计数 |
 | `GET /invocations` | Tool Session 列表 |
 | `GET /invocations/:id` | Overview 时间线所需的冻结消息、Tool Call、Model Call、Agent transcript、Telegram 发送与冻结上下文 |

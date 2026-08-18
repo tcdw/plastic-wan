@@ -751,6 +751,8 @@ export function usage(db: Database, days: number, now = new Date()): UsageSeries
       agent_invocations: 0,
     });
   }
+  const firstDate = new Date(today);
+  firstDate.setUTCDate(today.getUTCDate() - (days - 1));
   const rows = db
     .query<{ utc_date: string; metric: string; total: bigint }, [string, string]>(
       `SELECT utc_date, metric, SUM(amount) AS total
@@ -758,7 +760,7 @@ export function usage(db: Database, days: number, now = new Date()): UsageSeries
        WHERE utc_date >= ? AND utc_date <= ? AND metric IN ('model_tokens', 'vision_tokens', 'tool_calls', 'agent_invocations')
        GROUP BY utc_date, metric`,
     )
-    .all(result[0].date, result[result.length - 1].date);
+    .all(firstDate.toISOString().slice(0, 10), today.toISOString().slice(0, 10));
   const byDate = new Map<string, UsagePoint>();
   for (const point of result) byDate.set(point.date, point);
   for (const row of rows) {

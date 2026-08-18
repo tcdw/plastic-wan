@@ -73,6 +73,23 @@ export class AdminAuth {
     }).immediate();
     return this.#createSession(userId, now);
   }
+  async changeCredentials(userId: bigint, credentials: AdminCredentials, now = new Date()): Promise<string> {
+    assertCredentials(credentials);
+    const passwordHash = await Bun.password.hash(credentials.password, HASH_OPTIONS);
+    const iso = now.toISOString();
+    return this.#db.transaction(() => {
+      const existing = this.#db.query<{ id: bigint }, [string]>("SELECT id FROM admin_users WHERE username = ?").get(credentials.username);
+      if (existing !== null && existing.id !== userId) {
+        throw new AdminAuthError(409, "username_taken", "Username is already in use");
+      }
+      const updated = this.#db
+        .query("UPDATE admin_users SET username = ?, password_hash = ?, updated_at = ? WHERE id = ?")
+        .run(credentials.username, passwordHash, iso, userId);
+      if (updated.changes === 0) throw new AdminAuthError(401, "unauthenticated", "Admin session is required");
+      this.#db.query("DELETE FROM admin_sessions WHERE user_id = ?").run(userId);
+      return this.#createSession(userId, now);
+    }).immediate();
+  }
 
   async login(credentials: AdminCredentials, now = new Date(), clientKey = "unknown"): Promise<string> {
     const username = typeof credentials.username === "string" ? credentials.username : "";

@@ -152,6 +152,35 @@ test("admin login persists only hashes and rejects invalid credentials", async (
   }
 });
 
+test("admin can change username and password from an authenticated session", async () => {
+  const { store, server } = await fixture();
+  try {
+    const created = await server.handle(post("/api/auth/setup", { username: "owner", password: PASSWORD }));
+    const cookie = sessionCookie(created);
+    const otherLogin = await server.handle(post("/api/auth/login", { username: "owner", password: PASSWORD }));
+    const otherCookie = sessionCookie(otherLogin);
+    const updated = await server.handle(
+      post("/api/auth/credentials", { username: "new-owner", password: "new-correct-horse-battery" }, cookie),
+    );
+    expect(updated.status).toBe(200);
+    const refreshedCookie = sessionCookie(updated);
+    expect(refreshedCookie).not.toBe(cookie);
+
+    const currentSession = await readJson(await server.handle(request("/api/auth/session", { headers: { cookie: refreshedCookie } })));
+    expect(currentSession).toMatchObject({ authenticated: true, username: "new-owner" });
+    expect((await server.handle(request("/api/invocations", { headers: { cookie: otherCookie } }))).status).toBe(401);
+    expect((await server.handle(post("/api/auth/login", { username: "owner", password: PASSWORD }))).status).toBe(401);
+    expect((await server.handle(post("/api/auth/login", { username: "new-owner", password: "new-correct-horse-battery" }))).status).toBe(200);
+
+    const stored = store.db.query<{ username: string; password_hash: string }, []>("SELECT username, password_hash FROM admin_users").get();
+    expect(stored?.username).toBe("new-owner");
+    expect(stored?.password_hash).toStartWith("$argon2id$");
+    expect(stored?.password_hash).not.toContain("new-correct-horse-battery");
+  } finally {
+    store.close();
+  }
+});
+
 test("audit routes expose tool sessions, messages and sticker cache", async () => {
   const { store, server, loaded } = await fixture();
   try {

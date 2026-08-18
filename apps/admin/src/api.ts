@@ -334,6 +334,14 @@ export function login(credentials: Credentials): Promise<{ status: string }> {
     body: JSON.stringify(credentials),
   });
 }
+export function updateCredentials(credentials: Credentials): Promise<{ status: string }> {
+  return call("/auth/credentials", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(credentials),
+  });
+}
+
 
 export function logout(): Promise<{ status: string }> {
   return call("/auth/logout", { method: "POST" });

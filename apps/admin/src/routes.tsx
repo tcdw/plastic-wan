@@ -9,7 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { App as AntApp, Button, Card, Form, Input, Layout, Menu, Space, Typography } from "antd";
 import { useState } from "react";
-import { ApiError, createFirstAdmin, login, logout, type Credentials } from "./api.ts";
+import { ApiError, createFirstAdmin, login, logout, updateCredentials, type Credentials } from "./api.ts";
 import { queryState } from "./components.tsx";
 import { InvocationDetailPage, InvocationsPage } from "./pages/invocations.tsx";
 import { MessageDetailPage, MessagesPage } from "./pages/messages.tsx";
@@ -22,6 +22,7 @@ const MENU_ITEMS = [
   { key: "/invocations", label: <Link to="/invocations">Tool sessions</Link> },
   { key: "/messages", label: <Link to="/messages">Messages</Link> },
   { key: "/stickers", label: <Link to="/stickers">Bot sticker sets</Link> },
+  { key: "/settings", label: <Link to="/settings">Settings</Link> },
 ];
 
 interface RouterContext {
@@ -105,6 +106,57 @@ function CredentialsCard({ mode }: { readonly mode: "setup" | "login" }): React.
   );
 }
 
+function SettingsPage(): React.ReactElement {
+  const queryClient = useQueryClient();
+  const { message } = AntApp.useApp();
+  const [failure, setFailure] = useState<string | null>(null);
+  const submit = useMutation({
+    mutationFn: updateCredentials,
+    onSuccess: async () => {
+      setFailure(null);
+      message.success("Credentials updated; all other sessions were signed out");
+      await queryClient.invalidateQueries();
+    },
+    onError: (error: unknown) => {
+      setFailure(error instanceof ApiError ? `${error.code}: ${error.message}` : "Request failed");
+    },
+  });
+  return (
+    <Card title="Admin credentials" style={{ maxWidth: 520 }}>
+      <Typography.Paragraph type="secondary">
+        Change the username and password. The current session remains signed in.
+      </Typography.Paragraph>
+      <Form<Credentials> layout="vertical" requiredMark={false} onFinish={(values) => submit.mutate(values)}>
+        <Form.Item
+          name="username"
+          label="Username"
+          rules={[
+            { required: true, message: "Username is required" },
+            { pattern: /^[A-Za-z0-9._-]{3,32}$/, message: "3-32 letters, digits, dot, underscore, or hyphen" },
+          ]}
+        >
+          <Input autoComplete="username" />
+        </Form.Item>
+        <Form.Item
+          name="password"
+          label="New password"
+          rules={[
+            { required: true, message: "Password is required" },
+            { min: 12, message: "At least 12 characters" },
+          ]}
+        >
+          <Input.Password autoComplete="new-password" />
+        </Form.Item>
+        {failure === null ? null : <Typography.Text type="danger">{failure}</Typography.Text>}
+        <Button type="primary" htmlType="submit" loading={submit.isPending}>
+          Update credentials
+        </Button>
+      </Form>
+    </Card>
+  );
+}
+
+
 function AdminShell({ username }: { readonly username: string }): React.ReactElement {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -145,7 +197,10 @@ function AdminShell({ username }: { readonly username: string }): React.ReactEle
   );
 }
 
+
 const rootRoute = createRootRouteWithContext<RouterContext>()({ component: AuthGate });
+
+const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
 
 const overviewRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: OverviewPage });
 
@@ -183,5 +238,6 @@ export const routeTree = rootRoute.addChildren([
   invocationDetailRoute,
   messagesRoute,
   messageDetailRoute,
+  settingsRoute,
   stickersRoute,
 ]);

@@ -146,6 +146,10 @@ export class AdminServer {
     }
     const session = this.#auth.authenticate(readCookie(request, SESSION_COOKIE));
     if (session === null) return json({ error: "unauthenticated", message: "Admin session is required" }, 401);
+    if (route === "auth/credentials" && request.method === "POST") {
+      const token = await this.#auth.changeCredentials(session.userId, await readCredentials(request));
+      return json({ status: "ok" }, 200, this.#sessionCookie(token));
+    }
     if (route === "cancel-pending-sessions" && request.method === "POST") {
       const result = cancelPendingSessions(this.#store.db, new Date());
       this.#scheduler?.wake();

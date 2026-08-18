@@ -1,10 +1,12 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Card, Col, message, Popconfirm, Row, Statistic, Table, Typography } from "antd";
+import { Button, Card, Col, message, Popconfirm, Row, Statistic, Table, Tabs, Typography } from "antd";
 import type { CancelPendingResult, LabelCount, UsageEntry } from "../api.ts";
 import { cancelPendingSessions } from "../api.ts";
 import { queryState, StateTag } from "../components.tsx";
 import { formatNumber, formatTime } from "../format.ts";
-import { overviewQuery } from "../queries.ts";
+import { overviewQuery, usageQuery } from "../queries.ts";
+import { UsageChart } from "./usage-chart.tsx";
 
 const COUNT_COLUMNS = [
   {
@@ -47,8 +49,10 @@ const USAGE_COLUMNS = [
 ];
 
 export function OverviewPage(): React.ReactElement {
+  const [days, setDays] = useState(7);
   const queryClient = useQueryClient();
   const { data, isPending, error } = useQuery(overviewQuery);
+  const { data: usage, isPending: usagePending } = useQuery({ ...usageQuery(days), enabled: data !== undefined });
   const { mutate, isPending: isCanceling } = useMutation<CancelPendingResult, Error, void>({
     mutationFn: cancelPendingSessions,
     onSuccess: (result) => {
@@ -141,6 +145,29 @@ export function OverviewPage(): React.ReactElement {
           </Card>
         </Col>
       </Row>
+      <Card
+        title="Token usage"
+        size="small"
+        extra={
+          <Tabs
+            size="small"
+            activeKey={String(days)}
+            onChange={(key) => setDays(Number(key))}
+            items={[
+              { key: "7", label: "7d" },
+              { key: "30", label: "30d" },
+            ]}
+          />
+        }
+      >
+        {usagePending ? (
+          <div style={{ height: 240 }} />
+        ) : usage !== undefined ? (
+          <UsageChart data={usage.series} />
+        ) : (
+          <Typography.Text type="secondary">No usage data</Typography.Text>
+        )}
+      </Card>
       <Card title="Today's budget usage (UTC)" size="small">
         <Table<UsageEntry>
           rowKey={(row) => `${row.resource}|${row.metric}|${row.scope}`}

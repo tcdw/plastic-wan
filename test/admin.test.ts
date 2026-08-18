@@ -243,6 +243,23 @@ test("audit routes expose tool sessions, messages and sticker cache", async () =
     expect(overview.message_count).toBe(1);
     expect(overview.cached_analysis_count).toBe(1);
 
+    const now = new Date().toISOString();
+    store.db
+      .query("INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', '123456789', 'model_tokens', 500, ?)")
+      .run(now.slice(0, 10), now);
+
+    const usage = await readJson((await server.handle(request("/api/usage?days=7", { headers }))));
+    expect(usage.days).toBe(7);
+    expect(usage.series.length).toBe(7);
+    const today = now.slice(0, 10);
+    const todayEntry = usage.series.find((entry: { date: string }) => entry.date === today);
+    expect(todayEntry).toMatchObject({ date: today, model_tokens: 500 });
+
+    const invalidDays = await server.handle(request("/api/usage?days=0", { headers }));
+    expect(invalidDays.status).toBe(400);
+    const tooManyDays = await server.handle(request("/api/usage?days=365", { headers }));
+    expect(tooManyDays.status).toBe(400);
+
     const rejectedLimit = await server.handle(request("/api/invocations?limit=500", { headers }));
     expect(rejectedLimit.status).toBe(400);
     expect(await readJson(rejectedLimit)).toMatchObject({ error: "invalid_limit" });

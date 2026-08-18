@@ -14,6 +14,7 @@ import {
   listStickers,
   overview,
   parseId,
+  usage,
   type ListQuery,
 } from "./audit.ts";
 import { cancelPendingSessions } from "./operations.ts";
@@ -161,6 +162,14 @@ export class AdminServer {
     };
     const database = this.#store.db;
     if (route === "overview") return json(overview(database));
+    if (route === "usage") {
+      const daysParam = url.searchParams.get("days");
+      const days = daysParam === null ? 7 : Number.parseInt(daysParam, 10);
+      if (!Number.isInteger(days) || days < 1 || days > 90) {
+        return json({ error: "invalid_days", message: "days must be an integer between 1 and 90" }, 400);
+      }
+      return json(usage(database, days));
+    }
     if (route === "invocations") return json(listInvocations(database, query));
     if (segments[0] === "invocations" && segments.length === 2) {
       const found = getInvocation(database, parseId(segments[1] ?? "", "id"));

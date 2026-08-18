@@ -254,6 +254,18 @@ export interface Overview {
   readonly message_count: number;
   readonly cached_analysis_count: number;
 }
+export interface UsageResponse {
+  readonly days: number;
+  readonly series: readonly UsagePoint[];
+}
+
+export interface UsagePoint {
+  readonly date: string;
+  readonly model_tokens: number;
+  readonly vision_tokens: number;
+  readonly tool_calls: number;
+  readonly agent_invocations: number;
+}
 
 export interface ListFilters {
   readonly limit?: number;
@@ -357,4 +369,8 @@ export function listStickers(filters: ListFilters): Promise<Page<StickerEntry>> 
 
 export function cancelPendingSessions(): Promise<CancelPendingResult> {
   return call<CancelPendingResult>("/cancel-pending-sessions", { method: "POST" });
+}
+
+export function getUsage(days: number): Promise<UsageResponse> {
+  return call<UsageResponse>(`/usage?days=${encodeURIComponent(String(days))}`);
 }

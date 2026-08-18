@@ -1,9 +1,10 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
-import {
+ import {
   getInvocation,
   getMessage,
   getOverview,
   getSession,
+  getUsage,
   listInvocations,
   listMessages,
   listStickerSets,
@@ -23,6 +24,13 @@ export const overviewQuery = queryOptions({
   queryKey: ["overview"],
   queryFn: getOverview,
 });
+
+export function usageQuery(days: number) {
+  return queryOptions({
+    queryKey: ["usage", days],
+    queryFn: () => getUsage(days),
+  });
+}
 
 export const stickerSetsQuery = queryOptions({
   queryKey: ["sticker-sets"],

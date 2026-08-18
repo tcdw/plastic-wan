@@ -724,3 +724,47 @@ function assertToken(value: string, label: string): string {
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(value)) throw new AdminQueryError(`invalid_${label}`, `${label} filter is invalid`);
   return value;
 }
+export interface UsageSeries {
+  readonly days: number;
+  readonly series: readonly UsagePoint[];
+}
+
+export interface UsagePoint {
+  readonly date: string;
+  readonly model_tokens: number;
+  readonly vision_tokens: number;
+  readonly tool_calls: number;
+  readonly agent_invocations: number;
+}
+
+export function usage(db: Database, days: number, now = new Date()): UsageSeries {
+  const result: UsagePoint[] = [];
+  const today = new Date(now);
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setUTCDate(today.getUTCDate() - i);
+    result.push({
+      date: d.toISOString().slice(0, 10),
+      model_tokens: 0,
+      vision_tokens: 0,
+      tool_calls: 0,
+      agent_invocations: 0,
+    });
+  }
+  const rows = db
+    .query<{ utc_date: string; metric: string; total: bigint }, [string, string]>(
+      `SELECT utc_date, metric, SUM(amount) AS total
+       FROM daily_usage
+       WHERE utc_date >= ? AND utc_date <= ? AND metric IN ('model_tokens', 'vision_tokens', 'tool_calls', 'agent_invocations')
+       GROUP BY utc_date, metric`,
+    )
+    .all(result[0].date, result[result.length - 1].date);
+  const byDate = new Map<string, UsagePoint>();
+  for (const point of result) byDate.set(point.date, point);
+  for (const row of rows) {
+    const point = byDate.get(row.utc_date);
+    if (point === undefined) continue;
+    byDate.set(row.utc_date, { ...point, [row.metric]: Number(row.total) });
+  }
+  return { days, series: Array.from(byDate.values()) };
+}

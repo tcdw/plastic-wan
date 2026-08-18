@@ -65,7 +65,7 @@ first_received_at = T
 fixed deadline     = T + telegram.bucket_window_seconds
 ```
 
-`telegram.bucket_window_seconds` 是全局配置，接受 1–300 的整数秒。后续消息加入该 Bucket，但不会滑动截止时间。到期后：
+`telegram.bucket_window_seconds` 是全局配置，接受 1–300 的整数秒。若配置了 `telegram.bucket_message_threshold`，Bucket 中的消息数达到阈值时会提前关闭（deadline 提前到当前时间）。后续消息加入该 Bucket，但不会滑动截止时间。`bucket_window_seconds` 仍是最长等待时间。到期或达到消息阈值后：
 
 1. Bucket 从 `collecting` 进入队列。
 2. Scheduler 冻结 `history` 与 `new` 快照。

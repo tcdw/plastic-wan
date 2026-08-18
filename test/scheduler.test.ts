@@ -172,4 +172,33 @@ describe("bucket scheduler", () => {
     expect(states).toEqual(["queued", "skipped_budget"]);
     store.close();
   });
+
+  test("closes a bucket early when the message threshold is reached", async () => {
+    const { store, ingestion, scheduler } = await setup((toml) =>
+      toml.replace("bucket_window_seconds = 15", "bucket_window_seconds = 300\nbucket_message_threshold = 3")
+    );
+    const start = new Date("2026-08-15T00:00:00.000Z");
+    ingestion.ingest(textUpdate(1, 10, "one"), start);
+    ingestion.ingest(textUpdate(2, 11, "two"), new Date(start.getTime() + 1_000));
+    expect(scheduler.processDue(new Date(start.getTime() + 2_000))).toHaveLength(0);
+    ingestion.ingest(textUpdate(3, 12, "three"), new Date(start.getTime() + 2_000));
+    const invocations = scheduler.processDue(new Date(start.getTime() + 2_000));
+    expect(invocations).toHaveLength(1);
+    expect(store.db.query<{ state: string }, []>("SELECT state FROM buckets").get()?.state).toBe("queued");
+    store.close();
+  });
+
+  test("still triggers a bucket at the deadline before the message threshold is reached", async () => {
+    const { store, ingestion, scheduler } = await setup((toml) =>
+      toml.replace("bucket_window_seconds = 15", "bucket_window_seconds = 6\nbucket_message_threshold = 5")
+    );
+    const start = new Date("2026-08-15T00:00:00.000Z");
+    ingestion.ingest(textUpdate(1, 10, "one"), start);
+    ingestion.ingest(textUpdate(2, 11, "two"), new Date(start.getTime() + 1_000));
+    expect(scheduler.processDue(new Date(start.getTime() + 5_999))).toHaveLength(0);
+    const invocations = scheduler.processDue(new Date(start.getTime() + 6_000));
+    expect(invocations).toHaveLength(1);
+    expect(store.db.query<{ state: string }, []>("SELECT state FROM buckets").get()?.state).toBe("queued");
+    store.close();
+  });
 });

@@ -119,6 +119,7 @@ bun run src/cli.ts serve --config dev-data/config.toml
 ### 时间窗口与 Revision
 
 - `telegram.bucket_window_seconds` 时间内连续发送多条：合并进一个 Bucket/Invocation。
+- 配置了 `telegram.bucket_message_threshold` 时，消息数达到阈值即触发 Bucket/Invocation（仍受窗口最长时间约束）。
 - 第一条消息后继续发送：deadline 不滑动。
 - deadline 前编辑：冻结新 Revision。
 - deadline 后编辑：旧 Invocation 不变，未来 history 使用新 Revision。

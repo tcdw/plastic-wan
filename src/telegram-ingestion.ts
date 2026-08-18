@@ -321,6 +321,17 @@ export class TelegramIngestion {
     this.#store.db
       .query("INSERT INTO bucket_messages(bucket_id, message_id, sequence_no, source_bucket_id) VALUES (?, ?, ?, ?)")
       .run(bucketId, message.id, sequence.next_sequence, bucketId);
+    if (this.#config.telegram.bucket_message_threshold > 0) {
+      const count = this.#store.db
+        .query<{ count: bigint }, [bigint]>("SELECT COUNT(*) AS count FROM bucket_messages WHERE bucket_id = ?")
+        .get(bucketId);
+      if (count !== null && count.count >= BigInt(this.#config.telegram.bucket_message_threshold)) {
+        const now = receivedAt.toISOString();
+        this.#store.db
+          .query("UPDATE buckets SET deadline_at = ?, updated_at = ? WHERE id = ? AND state = 'collecting'")
+          .run(now, now, bucketId);
+      }
+    }
     return bucketId;
   }
 }

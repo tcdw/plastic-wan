@@ -28,6 +28,7 @@ describe("configuration", () => {
     const loaded = await loadConfig(configPath);
     expect(loaded.config.agent.max_sends).toBe(6);
     expect(loaded.config.telegram.bucket_window_seconds).toBe(15);
+    expect(loaded.config.telegram.bucket_message_threshold).toBe(0);
     const agentProvider = loaded.config.providers.agent;
     expect(agentProvider?.kind).toBe("custom");
     if (agentProvider?.kind !== "custom") throw new Error("Expected the custom agent provider");
@@ -48,6 +49,21 @@ describe("configuration", () => {
     await Bun.write(configPath, testConfigToml(directory).replace("bucket_window_seconds = 15", "bucket_window_seconds = 0"));
     await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
     await Bun.write(configPath, testConfigToml(directory).replace("bucket_window_seconds = 15", "bucket_window_seconds = 301"));
+    await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
+  });
+
+  test("rejects bucket message thresholds outside one to one hundred", async () => {
+    const { directory, configPath } = await fixture();
+    const withThreshold = testConfigToml(directory).replace(
+      "bucket_window_seconds = 15",
+      "bucket_window_seconds = 15\nbucket_message_threshold = 0",
+    );
+    await Bun.write(configPath, withThreshold);
+    await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
+    await Bun.write(
+      configPath,
+      testConfigToml(directory).replace("bucket_window_seconds = 15", "bucket_window_seconds = 15\nbucket_message_threshold = 101"),
+    );
     await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
   });
 

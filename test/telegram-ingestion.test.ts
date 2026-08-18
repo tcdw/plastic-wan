@@ -50,12 +50,12 @@ describe("Telegram ingestion", () => {
     store.close();
   });
 
-  test("deduplicates updates and preserves the fixed first deadline", async () => {
-    const { store, ingestion } = await setup();
+  test("uses the configured window and preserves the first deadline", async () => {
+    const { store, ingestion } = await setup((toml) => toml.replace("bucket_window_seconds = 15", "bucket_window_seconds = 6"));
     const firstTime = new Date("2026-08-15T00:00:00.000Z");
     const first = ingestion.ingest(textUpdate(1, 10, "first"), firstTime);
     const duplicate = ingestion.ingest(textUpdate(1, 10, "first"), firstTime);
-    const second = ingestion.ingest(textUpdate(2, 11, "second"), new Date(firstTime.getTime() + 10_000));
+    const second = ingestion.ingest(textUpdate(2, 11, "second"), new Date(firstTime.getTime() + 5_000));
     expect(duplicate.duplicate).toBe(true);
     expect(first.bucketId).toBe(second.bucketId);
     const bucket = store.db
@@ -63,7 +63,7 @@ describe("Telegram ingestion", () => {
         "SELECT b.deadline_at, COUNT(bm.message_id) AS messages FROM buckets b JOIN bucket_messages bm ON bm.bucket_id = b.id GROUP BY b.id",
       )
       .get();
-    expect(bucket).toEqual({ deadline_at: "2026-08-15T00:00:15.000Z", messages: 2n });
+    expect(bucket).toEqual({ deadline_at: "2026-08-15T00:00:06.000Z", messages: 2n });
     store.close();
   });
 

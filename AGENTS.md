@@ -7,7 +7,7 @@ Plastic Wan 是一个运行在 Telegram 私聊、群组、Supergroup 与 Forum T
 ## Project Goals
 
 - 仅处理配置允许的 Chat 与 Topic。
-- 以固定 15 秒 Bucket 聚合连续消息，并保留编辑修订。
+- 以全局可配置的固定长度 Bucket 聚合连续消息，并保留编辑修订。
 - 私聊积极、群聊克制；模型可以选择不回复。
 - Assistant 普通文本永不直接发布，必须调用 `send`。
 - 支持图片理解、Sticker 视觉索引与受限 MCP Tool。
@@ -51,7 +51,7 @@ plastic-wan/
 Telegram Update
   → allowlist/topic 校验
   → SQLite 消息与 Revision 入库
-  → 15 秒 Bucket
+  → 配置长度 Bucket
   → Invocation 快照
   → ContextBuilder
   → Fresh Agent + 受限 Tools

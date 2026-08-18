@@ -26,7 +26,7 @@ bun test test/admin.test.ts
 | --- | --- |
 | `foundation.test.ts` | 严格配置、Secret 脱敏、迁移与备份 |
 | `telegram-ingestion.test.ts` | allowlist、Revision、Bot/Service、Topic 隔离 |
-| `scheduler.test.ts` | 15 秒 deadline、冻结快照、恢复和合并 |
+| `scheduler.test.ts` | 配置 deadline、冻结快照、恢复和合并 |
 | `context-send.test.ts` | Context 可见性、Reply capability、发送次数与未知结果 |
 | `agent-runtime.test.ts` | Fresh Agent、Tool 循环、预算和 transcript 隔离 |
 | `media.test.ts` | 图片标准化、缓存和 Vision reasoning |
@@ -112,13 +112,13 @@ bun run src/cli.ts serve --config dev-data/config.toml
 
 - 私聊发送普通消息：无需 mention，Bot 可积极回复。
 - 群聊发送普通消息：无需 mention，Bot 能观察但允许保持沉默。
-- 群聊 mention Bot：仍通过相同 15 秒 Bucket，不走特殊旁路。
+- 群聊 mention Bot：仍通过相同配置窗口的 Bucket，不走特殊旁路。
 - 未允许 Chat：`telegram_updates.allowed = 0`，原因是 `chat_not_allowed`。
 - 新增 Chat 后未重启：旧进程仍拒绝；重启且哈希变化后允许。
 
 ### 时间窗口与 Revision
 
-- 15 秒内连续发送多条：合并进一个 Bucket/Invocation。
+- `telegram.bucket_window_seconds` 时间内连续发送多条：合并进一个 Bucket/Invocation。
 - 第一条消息后继续发送：deadline 不滑动。
 - deadline 前编辑：冻结新 Revision。
 - deadline 后编辑：旧 Invocation 不变，未来 history 使用新 Revision。

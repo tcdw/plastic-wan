@@ -7,7 +7,7 @@ Plastic Wan 使用严格 TOML 配置。Schema 位于 `src/config.ts`，未知字
 - CLI 必须显式传入 `--config <path>`。
 - 配置在 `serve` 启动时读取一次，不支持热重载。
 - 配置哈希是原始 TOML 文本与所有 Prompt 文件内容的 SHA-256，写入 Invocation 并打印在 `serve_started` 日志中。
-- 修改 allowlist、Provider、Prompt、Sticker Set 或 MCP 后必须重启。
+- 修改 allowlist、Bucket 窗口、Provider、Prompt、Sticker Set 或 MCP 后必须重启。
 - 相对 `data_dir`/`paths` 按服务当前工作目录解释；systemd 固定在 `/opt/plasticwan`。
 - Prompt 文件路径（`system_prompt_file`、`instructions_file`）相对于配置文件所在目录解释；修改文件内容同样会改变 `config_hash`。
 - 非 Windows 系统要求配置文件 `0600`、父目录 `0700`。
@@ -50,7 +50,7 @@ command SecretRef：
 | `version` | 当前只接受 `1` |
 | `data_dir` | Serve lock 与运行数据根目录 |
 | `timezone` | 默认 IANA 时区 |
-| `telegram` | Token、Chat/Topic allowlist、Sticker Set |
+| `telegram` | Token、Bucket 窗口、Chat/Topic allowlist、Sticker Set |
 | `providers` | 内置或自定义 Provider 别名 |
 | `agent` | 对话模型、Prompt、轮次、超时和并发 |
 | `vision` | Sticker 视觉模型、并发、Prompt 版本和预算 |
@@ -65,6 +65,7 @@ command SecretRef：
 [telegram]
 token = { env = "TELEGRAM_BOT_TOKEN" }
 process_bot_messages = false
+bucket_window_seconds = 15
 
 [[telegram.chats]]
 id = -1001234567890
@@ -76,6 +77,7 @@ budget = { max_invocations_per_day = 100, max_tokens_per_day = 300000 }
 
 规则：
 
+- `bucket_window_seconds` 是全局固定 Bucket 窗口，单位秒；接受 1–300 的整数，示例值为 15。
 - Chat ID 必须是非零安全整数且不可重复。
 - 未配置 `topic_ids`：允许该 Chat 的普通消息与所有 Topic。
 - 配置 `topic_ids`：只允许列出的正整数 Topic ID；未列出的 Topic 被审计为拒绝。

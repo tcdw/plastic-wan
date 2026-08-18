@@ -52,7 +52,7 @@ function textUpdate(updateId: number, messageId: number, text: string): Update {
 
 describe("bucket scheduler", () => {
   test("freezes the latest revision at the fixed deadline", async () => {
-    const { store, ingestion, scheduler } = await setup();
+    const { store, ingestion, scheduler } = await setup((toml) => toml.replace("bucket_window_seconds = 15", "bucket_window_seconds = 6"));
     const start = new Date("2026-08-15T00:00:00.000Z");
     ingestion.ingest(textUpdate(1, 10, "before"), start);
     const edited: Update = {
@@ -67,8 +67,8 @@ describe("bucket scheduler", () => {
       },
     };
     ingestion.ingest(edited, new Date(start.getTime() + 5_000));
-    expect(scheduler.processDue(new Date(start.getTime() + 14_999))).toHaveLength(0);
-    expect(scheduler.processDue(new Date(start.getTime() + 15_000))).toHaveLength(1);
+    expect(scheduler.processDue(new Date(start.getTime() + 5_999))).toHaveLength(0);
+    expect(scheduler.processDue(new Date(start.getTime() + 6_000))).toHaveLength(1);
     const snapshot = store.db
       .query<{ snapshot_json: string }, []>("SELECT snapshot_json FROM invocation_messages WHERE section = 'new'")
       .get();

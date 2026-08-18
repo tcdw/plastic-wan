@@ -17,7 +17,7 @@ Phase 1 需要实现以下能力：
 1. 接入 Telegram 私聊、群组、Supergroup 与 Forum Topic。
 2. 仅处理管理员明确允许的 Chat；群聊不要求 mention Bot。
 3. 保存并向 Agent 提供近期 Chat Message。
-4. 使用固定 15 秒窗口收集连续发生的新消息，并统一交给 Agent 处理。
+4. 使用全局可配置的固定长度窗口收集连续发生的新消息，并统一交给 Agent 处理。
 5. Agent 自主判断是否需要回复；私聊默认更积极，群聊默认更克制。
 6. Agent 必须通过 `send` Tool 向 Telegram 发送内容，Assistant Message 本身不得直接发布。
 7. `send` 可以发送纯文本，或管理员许可的 Telegram Sticker Set 中的 Sticker。
@@ -101,7 +101,7 @@ Bot 不应在收到每一条 Telegram Message 后立即调用 Agent。
 
 1. 创建新的 Message Bucket；
 2. 启动固定长度的收集窗口；
-3. Phase 1 固定窗口长度为 **15 秒**；
+3. Phase 1 窗口由 `telegram.bucket_window_seconds` 全局配置为 1–300 的整数秒，示例值为 **15 秒**；
 4. 窗口期间收到的后续消息加入当前 Bucket；
 5. 后续消息不会重置计时器；
 6. 时间到达后，将整个 Bucket 一次性交给 Agent；
@@ -318,7 +318,7 @@ Telegram Messages
         ↓
 创建 / 加入 Message Bucket
         ↓
-固定 15 秒收集窗口
+配置长度的固定收集窗口
         ↓
 准备近期 Chat Context
         ↓
@@ -450,7 +450,7 @@ Phase 1 完成后，应能够将 Bot 放入真实 Telegram 对话并满足：
 
 1. 能够读取允许名单内 Telegram 私聊、群组、Supergroup 与 Forum Topic 的近期消息；
 2. 不同 Forum Topic 使用独立 Conversation Context，但共享所在 Group 的每日预算；
-3. 能够以固定 15 秒窗口收集一批新消息，后续消息不延长当前窗口；
+3. 能够以全局配置的固定长度窗口收集一批新消息，后续消息不延长当前窗口；
 4. 同一 Conversation 的 Invocation 串行执行，运行期间的新消息进入下一 Bucket；
 5. Bucket 截止时使用当时最新的已知 Message Revision；
 6. Agent 能区分最近 20 条 Telegram 可见历史与当前 Message Bucket；

@@ -31,7 +31,6 @@ const SERVICE_KEYS: Record<string, true> = {
   video_chat_ended: true,
   video_chat_participants_invited: true,
 };
-const BUCKET_WINDOW_MS = 15_000;
 const MAX_IMAGE_DOCUMENT_BYTES = 20 * 1024 * 1024;
 
 interface ChatAuthorization {
@@ -312,7 +311,7 @@ export class TelegramIngestion {
       const now = receivedAt.toISOString();
       const created = this.#store.db
         .query("INSERT INTO buckets(conversation_id, state, first_received_at, deadline_at, created_at, updated_at) VALUES (?, 'collecting', ?, ?, ?, ?)")
-        .run(conversation.id, now, new Date(receivedAt.getTime() + BUCKET_WINDOW_MS).toISOString(), now, now);
+        .run(conversation.id, now, new Date(receivedAt.getTime() + this.#config.telegram.bucket_window_seconds * 1_000).toISOString(), now, now);
       bucketId = BigInt(created.lastInsertRowid);
     }
     const sequence = this.#store.db

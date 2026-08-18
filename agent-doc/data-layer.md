@@ -44,7 +44,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 | 表 | 用途 |
 | --- | --- |
-| `buckets` | `realtime` 15 秒窗口或 `startup_catch_up` 启动追赶任务及其状态机 |
+| `buckets` | `realtime` 配置长度窗口或 `startup_catch_up` 启动追赶任务及其状态机 |
 | `bucket_messages` | Bucket 中消息的稳定顺序 |
 | `invocations` | 一次 Agent 运行、配置哈希、计数和终态 |
 | `invocation_messages` | 冻结的 `history`/`new` Message Revision 快照 |

@@ -9,6 +9,7 @@ timezone = "UTC"
 [telegram]
 token = "telegram-secret"
 process_bot_messages = false
+bucket_window_seconds = 15
 
 [[telegram.chats]]
 id = 123456789

@@ -47,7 +47,7 @@
 
 普通重启在启动 Scheduler 和常规 long polling 前，以非阻塞 `getUpdates` 排空 Telegram pending updates：
 
-1. Update 仍经过 allowlist、去重、Revision 与媒体持久化，但不创建常规 15 秒 Bucket。
+1. Update 仍经过 allowlist、去重、Revision 与媒体持久化，但不创建常规实时 Bucket。
 2. `app_state.telegram_startup_catch_up` 保存本轮起点；进程在排空或建任务时崩溃，下一次启动从同一起点完成，不丢失已确认 Update。
 3. 每个有可处理人类消息的 Chat 只创建一个 `startup_catch_up` Bucket。
 4. Bucket 仅包含该 Chat 按 Telegram 时间排序的最新 `agent.history_messages` 条本轮消息；Forum Topic 可以混合。
@@ -56,16 +56,16 @@
 
 当前 `dev-data/config.toml` 的 `agent.history_messages = 10`，因此每个群的启动追赶任务最多包含 10 条消息。
 
-## 15 秒 Bucket
+## 可配置 Bucket
 
 第一条可处理消息创建 `collecting` Bucket：
 
 ```text
 first_received_at = T
-fixed deadline     = T + 15s
+fixed deadline     = T + telegram.bucket_window_seconds
 ```
 
-后续消息加入该 Bucket，但不会滑动截止时间。到期后：
+`telegram.bucket_window_seconds` 是全局配置，接受 1–300 的整数秒。后续消息加入该 Bucket，但不会滑动截止时间。到期后：
 
 1. Bucket 从 `collecting` 进入队列。
 2. Scheduler 冻结 `history` 与 `new` 快照。

@@ -7,7 +7,7 @@
 目标是用一个长期运行的 VPS 进程实现：
 
 - Telegram long polling 接入；
-- 每 Conversation 固定 15 秒 Message Bucket；
+- 每 Conversation 使用全局可配置长度的固定 Message Bucket；
 - 每轮重建短期 Context 的 Agent Invocation；
 - 只能通过受限 Tool 产生外部副作用；
 - Photo/图片 Document 直传多模态 Agent，Sticker 按需单帧理解；
@@ -169,6 +169,7 @@ timezone = "Asia/Shanghai"
 [telegram]
 token = { env = "TELEGRAM_BOT_TOKEN" }
 process_bot_messages = false
+bucket_window_seconds = 15
 
 [providers.primary_relay]
 kind = "custom"
@@ -335,7 +336,7 @@ new Database(path, {
 | `messages` | Telegram 消息稳定身份与当前 Revision | `(chat_id, telegram_message_id)` 唯一 |
 | `message_revisions` | 正文、Caption、媒体、Reply、Forward 的每个版本 | `(message_id, revision_no)` 唯一 |
 | `media` | Photo/Document/Sticker 的 Telegram 引用与类型 | 保存 `file_id`、`file_unique_id`、MIME、尺寸 |
-| `buckets` | 15 秒窗口与排队状态 | 每 Conversation 最多一个 `collecting` Bucket |
+| `buckets` | 配置长度窗口与排队状态 | 每 Conversation 最多一个 `collecting` Bucket |
 | `bucket_messages` | Bucket 中的稳定 Message 身份 | `(bucket_id, message_id)` 唯一 |
 | `invocations` | Agent Invocation 生命周期与预算结果 | 每 Conversation 最多一个 `running` Invocation |
 | `invocation_messages` | 实际进入 Context 的 Message Revision 快照 | 保存 history/new、顺序、省略信息 |
@@ -424,7 +425,7 @@ Forward 消息的发送者仍是当前转发者；只保存 Telegram 公开提�
 
 - 首次消息创建 `messages` 与 revision 1。
 - 每个 `edited_message` 追加 Revision，并原子更新 `messages.current_revision_id`。
-- 编辑不创建 Bucket、不延长 15 秒窗口。
+- 编辑不创建 Bucket、不延长配置窗口。
 - Bucket 截止时读取当时 current revision，写入 `invocation_messages` 后冻结。
 - 截止后到达的编辑只影响未来历史。
 - Telegram Bot API 不提供通用 `getMessage` 或普通消息删除事件，因此系统不主动检查消息删除。
@@ -440,14 +441,14 @@ stateDiagram-v2
     [*] --> Idle
     Idle --> Collecting: first eligible human message
     Collecting --> Collecting: more messages / edits do not reset deadline
-    Collecting --> Queued: first_received_at + 15s
+    Collecting --> Queued: first_received_at + configured window
     Queued --> Running: conversation free + global slot
     Running --> Idle: completed / failed / aborted
     Running --> Collecting: new human message starts next fixed window
 ```
 
-- 窗口全局固定 15 秒，不按 Chat 覆盖。
-- deadline 为第一条 eligible human message 的 `received_at + 15s`。
+- 窗口通过全局 `telegram.bucket_window_seconds` 配置为 1–300 的整数秒，不按 Chat 覆盖。
+- deadline 为第一条 eligible human message 的 `received_at + bucket_window_seconds`。
 - 使用数据库驱动的单一调度器：查询最近 deadline，等待；新建更早 deadline 时唤醒。
 - deadline 与状态持久化；不为每个 Chat 创建独立 `setTimeout`。
 
@@ -466,7 +467,7 @@ stateDiagram-v2
 ### 7.3 排队与合并
 
 - 同一 Conversation 最多一个 running Invocation，按 FIFO 执行。
-- 当前 Invocation 运行时，新真人消息可以启动下一个独立 15 秒 Bucket。
+- 当前 Invocation 运行时，新真人消息可以启动下一个独立的配置长度 Bucket。
 - 尚未执行 Bucket 超过 3 个时，事务性合并全部 queued Bucket：保留消息顺序与原 Bucket 边界，原 Bucket 标记 `merged`，只生成一次新 Invocation。
 - 达到 Chat 日预算时，截止 Bucket 标记 `skipped_budget`；消息仍进入历史，不排队到次日。
 
@@ -952,7 +953,7 @@ Timer：
 使用 fake clock、临时 SQLite 和 fake Telegram API 验证：
 
 - 第一条消息创建 deadline；
-- 后续消息不重置 15 秒；
+- 后续消息不重置配置窗口；
 - edit 不重置、不创建 Bucket；
 - 截止采用最新 Revision；
 - 截止后 edit 只影响未来历史；
@@ -1013,7 +1014,7 @@ MCP：
 
 在一个私聊和一个关闭 Privacy Mode 的测试群完成：
 
-1. 连续拆分消息只产生一个 15 秒 Bucket；
+1. 连续拆分消息只产生一个配置长度的 Bucket；
 2. Agent 选择沉默时没有 Telegram 输出；
 3. Agent 通过 `send` 连续发送 0–6 条纯文本；
 4. Agent Reply 当前 Context 消息；

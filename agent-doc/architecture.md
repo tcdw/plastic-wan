@@ -30,7 +30,7 @@ TelegramIngestion
   ├─ allowlist / Topic / bot-message 校验
   ├─ Chat 迁移归一化
   ├─ Message + Revision + Media 持久化
-  └─ 收集进 15 秒 Bucket
+  └─ 收集进配置长度的 Bucket
         │
         ▼
 BucketScheduler

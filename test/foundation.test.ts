@@ -27,6 +27,7 @@ describe("configuration", () => {
     const { configPath } = await fixture();
     const loaded = await loadConfig(configPath);
     expect(loaded.config.agent.max_sends).toBe(6);
+    expect(loaded.config.telegram.bucket_window_seconds).toBe(15);
     const agentProvider = loaded.config.providers.agent;
     expect(agentProvider?.kind).toBe("custom");
     if (agentProvider?.kind !== "custom") throw new Error("Expected the custom agent provider");
@@ -39,6 +40,14 @@ describe("configuration", () => {
   test("rejects unknown fields", async () => {
     const { directory, configPath } = await fixture();
     await Bun.write(configPath, `${testConfigToml(directory)}\nunknown = true\n`);
+    await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
+  });
+
+  test("rejects bucket windows outside one to three hundred seconds", async () => {
+    const { directory, configPath } = await fixture();
+    await Bun.write(configPath, testConfigToml(directory).replace("bucket_window_seconds = 15", "bucket_window_seconds = 0"));
+    await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
+    await Bun.write(configPath, testConfigToml(directory).replace("bucket_window_seconds = 15", "bucket_window_seconds = 301"));
     await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
   });
 

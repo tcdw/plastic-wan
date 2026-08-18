@@ -4,6 +4,7 @@ import {
   Outlet,
   createRootRouteWithContext,
   createRoute,
+  useLocation,
   useNavigate,
   useParams,
 } from "@tanstack/react-router";
@@ -168,8 +169,9 @@ function AdminShell({ username }: { readonly username: string }): React.ReactEle
       await queryClient.invalidateQueries();
     },
   });
+  const { pathname } = useLocation();
   const selected = MENU_ITEMS.map((item) => item.key)
-    .filter((key) => key !== "/" && window.location.pathname.startsWith(key));
+    .filter((key) => key !== "/" && pathname.startsWith(key));
   return (
     <Layout style={{ minHeight: "100%" }}>
       <Layout.Header style={{ display: "flex", alignItems: "center", gap: 24, paddingInline: 24 }}>

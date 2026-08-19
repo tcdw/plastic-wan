@@ -167,6 +167,9 @@ describe("send tool", () => {
     await expect(quotaTool.execute("quota-6", { kind: "text", text: "seventh" })).rejects.toThrow("send limit");
     expect(successfulCalls).toBe(6);
 
+    store.db.query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)").run(invocationId);
+    store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(invocationId);
+
     const secondReceived = new Date(received.getTime() + 20_000);
     ingestion.ingest(update(2, 11, "next"), secondReceived);
     const secondInvocation = processOne(scheduler, new Date(secondReceived.getTime() + 15_000));

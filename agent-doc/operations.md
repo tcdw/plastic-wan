@@ -133,7 +133,7 @@ Doctor 会产生 `role = 'doctor'` 的模型调用审计并消耗少量 Provider
 沉默可能是成功行为。检查：
 
 1. Update 是否 allowed。
-2. Bucket 是否到达 `telegram.bucket_window_seconds` 指定的 deadline，或是否达到 `telegram.bucket_message_threshold` 指定的消息数阈值。
+2. Bucket 是否到达 `telegram.bucket_window_seconds` 节拍；同一群内前一个 Invocation 仍在运行时，需等待它结束。
 3. Invocation 是否 completed。
 4. `sends_used = 0`：Agent 主动不发言。
 5. 有 `tool_calls` 时继续检查 `send`/`read_image`/MCP 状态；image-capable Agent 的图片直传失败时检查 Invocation 的 `completion_reason`。

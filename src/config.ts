@@ -160,7 +160,6 @@ export const ConfigSchema = Type.Object(
         token: SecretRefSchema,
         process_bot_messages: Type.Boolean(),
         bucket_window_seconds: Type.Integer({ minimum: 1, maximum: 300 }),
-        bucket_message_threshold: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
         chats: Type.Array(ChatSchema, { minItems: 1 }),
         sticker_sets: Type.Optional(Type.Array(StickerSetSchema)),
       },
@@ -233,8 +232,7 @@ export type TomlChat = TomlConfig["telegram"]["chats"][number];
 // referenced by TomlConfig and is inlined before the rest of the app consumes it.
 export type RawConfig = Omit<TomlConfig, "agent" | "telegram"> & {
   agent: Omit<TomlConfig["agent"], "system_prompt_file"> & { system_prompt: string };
-  telegram: Omit<TomlConfig["telegram"], "chats" | "bucket_message_threshold"> & {
-    bucket_message_threshold: number;
+  telegram: Omit<TomlConfig["telegram"], "chats"> & {
     chats: Array<Omit<TomlChat, "instructions_file"> & { instructions: string }>;
   };
 };
@@ -296,7 +294,7 @@ async function resolvePrompts(toml: TomlConfig, directory: string): Promise<{ co
     config: {
       ...toml,
       agent: { ...agent, system_prompt: systemPrompt },
-      telegram: { ...toml.telegram, bucket_message_threshold: toml.telegram.bucket_message_threshold ?? 0, chats },
+      telegram: { ...toml.telegram, chats },
     },
   };
 }

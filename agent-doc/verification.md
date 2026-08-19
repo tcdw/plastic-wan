@@ -118,11 +118,14 @@ bun run src/cli.ts serve --config dev-data/config.toml
 
 ### 时间窗口与 Revision
 
-- `telegram.bucket_window_seconds` 时间内连续发送多条：合并进一个 Bucket/Invocation。
-- 配置了 `telegram.bucket_message_threshold` 时，消息数达到阈值即触发 Bucket/Invocation（仍受窗口最长时间约束）。
-- 第一条消息后继续发送：deadline 不滑动。
-- deadline 前编辑：冻结新 Revision。
-- deadline 后编辑：旧 Invocation 不变，未来 history 使用新 Revision。
+- 空闲 Chat 的第一条消息等待 `telegram.bucket_window_seconds` 后启动 Invocation。
+- Invocation 运行期间连续发送多条：消息合并进各自 Topic 的下一 Bucket，同一群不会并发启动 Agent。
+- Forum Topic 消息各自收集；一个 Topic 的会话不会让另一个 Topic 的消息混入 Context。
+- 前一个 Invocation 短于窗口：下一 Invocation 从前一次开始算满窗口后启动。
+- 前一个 Invocation 长于窗口：结束后若下一 Bucket 非空则立即启动。
+- 前一个 Invocation 结束且没有新消息：不创建新的 Invocation。
+- 不同 Chat 的 Invocation 可以并发。
+- Bucket 冻结前编辑：使用新 Revision；冻结后编辑：旧 Invocation 不变，未来 history 使用新 Revision。
 
 ### 输出与 Reply
 

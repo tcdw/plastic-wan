@@ -99,13 +99,10 @@ Bot 不应在收到每一条 Telegram Message 后立即调用 Agent。
 
 当一个 Chat 处于就绪状态，并收到第一条待处理消息时：
 
-1. 创建新的 Message Bucket；
-2. 启动固定长度的收集窗口；
-3. Phase 1 窗口由 `telegram.bucket_window_seconds` 全局配置为 1–300 的整数秒，示例值为 **15 秒**；
-4. 窗口期间收到的后续消息加入当前 Bucket；
-5. 后续消息不会重置计时器；
-6. 时间到达后，将整个 Bucket 一次性交给 Agent；
-7. 当前 Bucket 结束，并允许进入下一轮收集。
+1. 创建该 Topic/Conversation 的 Message Bucket；
+2. 等待一个 `telegram.bucket_window_seconds` 节拍，Phase 1 接受 1–300 的整数秒，示例值为 **15 秒**；
+3. 等待期间的后续消息加入当前 Bucket，且不重置计时器；
+4. 节拍到达后，将整个 Bucket 一次性交给 Agent。
 
 例如：
 
@@ -127,11 +124,11 @@ Bot 不应在收到每一条 Telegram Message 后立即调用 Agent。
 
 ### 5.2 截止、排队与恢复
 
-Bucket 截止时应读取其中每条消息当时最新的已知 Revision，并形成不可变的 Invocation 输入快照。
+Bucket 交给 Agent 时应读取其中每条消息当时最新的已知 Revision，并形成不可变的 Invocation 输入快照。
 
-同一 Conversation 的 Agent Invocation 必须串行执行。当前 Invocation 运行期间到达的新消息进入新的固定窗口 Bucket，不中断或修改当前 Invocation。
+Agent Invocation 按 Chat 串行执行，消息收集仍按 Conversation 隔离：同一时刻每个群最多一个 Invocation，但 Forum Topic 的 Context 与 Reply 互不混入。Chat 内任意 Invocation 运行期间到达的新消息进入各自 Topic 的下一 Bucket，不中断或修改当前 Invocation。
 
-未执行 Bucket 按 FIFO 排队。积压超过 3 个时，应合并全部尚未执行的 Bucket，保留消息顺序和原 Bucket 边界，只产生一次 Invocation。
+下一 Invocation 的启动时间不得早于前一 Invocation 的开始时间加 `bucket_window_seconds`，也不得早于前一 Invocation 的结束时间，均按 Chat 计算。前一 Invocation 运行超过一个节拍时，结束后立即处理非空的下一 Bucket；运行不足一个节拍时等待到节拍边界。没有新消息时不得启动空 Invocation。
 
 普通重启应恢复 5 分钟内尚未执行的 Bucket；更早的 Bucket 标记为过期，不调用 Agent，但其中消息仍进入近期历史。首次部署可以丢弃 Telegram 已有积压 Update。
 

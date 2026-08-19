@@ -2,7 +2,6 @@ import type { RawConfig } from "./config.ts";
 import type { SqliteStore } from "./database.ts";
 
 const RECOVERY_MAX_AGE_MS = 5 * 60_000;
-const MAX_QUEUED_BEFORE_MERGE = 3;
 export const STARTUP_CATCH_UP_STATE_KEY = "telegram_startup_catch_up";
 
 
@@ -218,7 +217,16 @@ export class BucketScheduler {
     return this.#store.transaction(() => {
       const due = this.#store.db
         .query<BucketRow, [string, string]>(
-          "SELECT id, conversation_id, first_received_at, deadline_at FROM buckets WHERE state = 'collecting' AND deadline_at <= ? AND first_received_at >= ? ORDER BY deadline_at, id",
+          `SELECT b.id, b.conversation_id, b.first_received_at, b.deadline_at
+           FROM buckets b
+           JOIN conversations v ON v.id = b.conversation_id
+           WHERE b.state = 'collecting' AND b.deadline_at <= ? AND b.first_received_at >= ?
+             AND NOT EXISTS (
+               SELECT 1 FROM invocations i
+               JOIN conversations v2 ON v2.id = i.conversation_id
+               WHERE v2.chat_id = v.chat_id AND i.state IN ('queued', 'running')
+             )
+           ORDER BY b.deadline_at, b.id`,
         )
         .all(now.toISOString(), new Date(now.getTime() - RECOVERY_MAX_AGE_MS).toISOString());
       const invocations: bigint[] = [];
@@ -251,7 +259,17 @@ export class BucketScheduler {
 
   #nextDelayMilliseconds(): number {
     const row = this.#store.db
-      .query<{ deadline_at: string }, []>("SELECT deadline_at FROM buckets WHERE state = 'collecting' ORDER BY deadline_at, id LIMIT 1")
+      .query<{ deadline_at: string }, []>(
+        `SELECT b.deadline_at FROM buckets b
+         JOIN conversations v ON v.id = b.conversation_id
+         WHERE b.state = 'collecting'
+           AND NOT EXISTS (
+             SELECT 1 FROM invocations i
+             JOIN conversations v2 ON v2.id = i.conversation_id
+             WHERE v2.chat_id = v.chat_id AND i.state IN ('queued', 'running')
+           )
+         ORDER BY b.deadline_at, b.id LIMIT 1`,
+      )
       .get();
     if (row === null) return 60_000;
     return Math.max(0, Math.min(60_000, Date.parse(row.deadline_at) - Date.now()));
@@ -276,14 +294,7 @@ export class BucketScheduler {
     this.#store.db
       .query("UPDATE buckets SET state = 'queued', queued_at = ?, updated_at = ? WHERE id = ? AND state = 'collecting'")
       .run(now.toISOString(), now.toISOString(), bucket.id);
-    const invocationId = this.#insertInvocation(bucket.id, bucket.conversation_id, now, true);
-    const queuedCount = this.#store.db
-      .query<{ count: bigint }, [bigint]>("SELECT COUNT(*) AS count FROM buckets WHERE conversation_id = ? AND state = 'queued' AND kind = 'realtime'")
-      .get(bucket.conversation_id);
-    if (queuedCount !== null && queuedCount.count > BigInt(MAX_QUEUED_BEFORE_MERGE)) {
-      return this.#mergeQueued(bucket.conversation_id, chat.telegram_chat_id, now);
-    }
-    return invocationId;
+    return this.#insertInvocation(bucket.id, bucket.conversation_id, now, true);
   }
 
   #insertInvocation(bucketId: bigint, conversationId: bigint, now: Date, includeHistory: boolean): bigint {
@@ -398,58 +409,24 @@ export class BucketScheduler {
       .run(invocationId, message.message_id, message.revision_id, section, sequence, message.source_bucket_id, snapshot);
   }
 
-  #mergeQueued(conversationId: bigint, chatId: bigint, now: Date): bigint {
-    const originals = this.#store.db
-      .query<BucketRow & { invocation_id: bigint }, [bigint]>(
-        "SELECT b.id, b.conversation_id, b.first_received_at, b.deadline_at, i.id AS invocation_id FROM buckets b JOIN invocations i ON i.bucket_id = b.id AND i.state = 'queued' WHERE b.conversation_id = ? AND b.state = 'queued' AND b.kind = 'realtime' ORDER BY b.id",
-      )
-      .all(conversationId);
-    if (originals.length <= MAX_QUEUED_BEFORE_MERGE) return originals.at(-1)!.invocation_id;
-    const timestamp = now.toISOString();
-    const mergedBucket = this.#store.db
-      .query("INSERT INTO buckets(conversation_id, state, first_received_at, deadline_at, queued_at, created_at, updated_at) VALUES (?, 'queued', ?, ?, ?, ?, ?)")
-      .run(
-        conversationId,
-        originals[0]!.first_received_at,
-        originals.at(-1)!.deadline_at,
-        timestamp,
-        timestamp,
-        timestamp,
-      );
-    const mergedBucketId = BigInt(mergedBucket.lastInsertRowid);
-    let bucketSequence = 1n;
-    for (const original of originals) {
-      const messages = this.#store.db
-        .query<{ message_id: bigint }, [bigint]>("SELECT message_id FROM bucket_messages WHERE bucket_id = ? ORDER BY sequence_no")
-        .all(original.id);
-      for (const message of messages) {
-        this.#store.db
-          .query("INSERT INTO bucket_messages(bucket_id, message_id, sequence_no, source_bucket_id) VALUES (?, ?, ?, ?)")
-          .run(mergedBucketId, message.message_id, bucketSequence, original.id);
-        bucketSequence += 1n;
-      }
-      this.#store.db
-        .query("UPDATE buckets SET state = 'merged', merged_into_bucket_id = ?, finished_at = ?, updated_at = ? WHERE id = ?")
-        .run(mergedBucketId, timestamp, timestamp, original.id);
-      this.#store.db
-        .query("UPDATE invocations SET state = 'aborted', completion_reason = 'merged', finished_at = ? WHERE id = ?")
-        .run(timestamp, original.invocation_id);
-    }
-    this.#refundInvocations(chatId, originals.length - 1, now);
-    return this.#insertInvocation(mergedBucketId, conversationId, now, true);
-  }
 
   #launchQueued(): void {
     while (this.#running && this.#active.size < this.#config.agent.max_concurrency) {
       const invocation = this.#store.transaction(() => {
         const candidate = this.#store.db
-          .query<InvocationRow, []>(
+          .query<InvocationRow, [string]>(
             `SELECT i.id, i.bucket_id, i.conversation_id FROM invocations i
-             WHERE i.state = 'queued'
-               AND NOT EXISTS (SELECT 1 FROM invocations r WHERE r.conversation_id = i.conversation_id AND r.state = 'running')
+             JOIN buckets b ON b.id = i.bucket_id
+             JOIN conversations v ON v.id = i.conversation_id
+             WHERE i.state = 'queued' AND b.deadline_at <= ?
+               AND NOT EXISTS (
+                 SELECT 1 FROM invocations r
+                 JOIN conversations v2 ON v2.id = r.conversation_id
+                 WHERE v2.chat_id = v.chat_id AND r.state = 'running'
+               )
              ORDER BY i.id LIMIT 1`,
           )
-          .get();
+          .get(new Date().toISOString());
         if (candidate === null) return null;
         const now = new Date().toISOString();
         this.#store.db.query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?").run(now, candidate.id);
@@ -473,16 +450,40 @@ export class BucketScheduler {
         reason: error instanceof Error ? error.name : "invocation_error",
       };
     }
+    let finishedAt: Date;
     this.#store.transaction(() => {
-      const now = new Date().toISOString();
+      finishedAt = new Date();
+      const nowIso = finishedAt.toISOString();
       this.#store.db
         .query("UPDATE invocations SET state = ?, completion_reason = ?, finished_at = ? WHERE id = ? AND state = 'running'")
-        .run(outcome.state, outcome.reason, now, invocation.id);
+        .run(outcome.state, outcome.reason, nowIso, invocation.id);
       this.#store.db
         .query("UPDATE buckets SET state = ?, finished_at = ?, updated_at = ? WHERE id = ? AND state = 'running'")
-        .run(outcome.state, now, now, invocation.bucket_id);
+        .run(outcome.state, nowIso, nowIso, invocation.bucket_id);
+      const started = this.#store.db
+        .query<{ started_at: string }, [bigint]>("SELECT started_at FROM invocations WHERE id = ?")
+        .get(invocation.id);
+      if (started === null) throw new Error(`Invocation ${invocation.id} has no start time`);
+      const nextDeadline = new Date(
+        Math.max(
+          finishedAt.getTime(),
+          Date.parse(started.started_at) + this.#config.telegram.bucket_window_seconds * 1_000,
+        ),
+      ).toISOString();
+      const chat = this.#store.db
+        .query<{ chat_id: bigint }, [bigint]>("SELECT chat_id FROM conversations WHERE id = ?")
+        .get(invocation.conversation_id);
+      if (chat === null) throw new Error(`Invocation ${invocation.id} has no chat`);
+      this.#store.db
+        .query(
+          `UPDATE buckets SET deadline_at = ?, updated_at = ?
+           WHERE conversation_id IN (SELECT id FROM conversations WHERE chat_id = ?)
+             AND state = 'collecting' AND deadline_at < ?`,
+        )
+        .run(nextDeadline, nowIso, chat.chat_id, nextDeadline);
     });
     this.#active.delete(invocation.id.toString());
+    this.processDue(finishedAt!);
     this.wake();
   }
 
@@ -511,11 +512,6 @@ export class BucketScheduler {
     return true;
   }
 
-  #refundInvocations(chatId: bigint, count: number, now: Date): void {
-    this.#store.db
-      .query("UPDATE daily_usage SET amount = MAX(0, amount - ?), updated_at = ? WHERE utc_date = ? AND scope = 'chat' AND resource = ? AND metric = 'agent_invocations'")
-      .run(BigInt(count), now.toISOString(), now.toISOString().slice(0, 10), chatId.toString());
-  }
 
   #markBucketSkipped(bucketId: bigint, now: Date, reason: string): void {
     const timestamp = now.toISOString();

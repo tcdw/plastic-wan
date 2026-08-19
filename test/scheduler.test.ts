@@ -16,7 +16,10 @@ afterAll(async () => {
   await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })));
 });
 
-async function setup(transform?: (toml: string) => string): Promise<{
+async function setup(
+  transform?: (toml: string) => string,
+  handler: ConstructorParameters<typeof BucketScheduler>[3] = async () => ({ state: "completed", reason: "done" }),
+): Promise<{
   loaded: LoadedConfig;
   store: SqliteStore;
   ingestion: TelegramIngestion;
@@ -33,17 +36,32 @@ async function setup(transform?: (toml: string) => string): Promise<{
     loaded,
     store,
     ingestion: new TelegramIngestion(store, loaded.config, { id: 999 }),
-    scheduler: new BucketScheduler(store, loaded.config, loaded.hash, async () => ({ state: "completed", reason: "done" })),
+    scheduler: new BucketScheduler(store, loaded.config, loaded.hash, handler),
   };
 }
 
-function textUpdate(updateId: number, messageId: number, text: string): Update {
+function textUpdate(updateId: number, messageId: number, text: string, chatId = 123456789): Update {
   return {
     update_id: updateId,
     message: {
       message_id: messageId,
       date: 1_700_000_000 + messageId,
-      chat: { id: 123456789, type: "private", first_name: "Owner" },
+      chat: { id: chatId, type: "private", first_name: "Owner" },
+      from: { id: 42, is_bot: false, first_name: "Alice" },
+      text,
+    },
+  };
+}
+
+function topicUpdate(updateId: number, messageId: number, threadId: number, text: string): Update {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: messageId,
+      message_thread_id: threadId,
+      is_topic_message: true,
+      date: 1_700_000_000 + messageId,
+      chat: { id: 123456789, type: "supergroup", title: "Forum", is_forum: true },
       from: { id: 42, is_bot: false, first_name: "Alice" },
       text,
     },
@@ -131,29 +149,23 @@ describe("bucket scheduler", () => {
     store.close();
   });
 
-  test("merges more than three queued buckets and refunds reservations", async () => {
+  test("does not queue another invocation while the conversation is busy", async () => {
     const { store, ingestion, scheduler } = await setup();
     const start = new Date("2026-08-15T00:00:00.000Z");
-    for (let index = 0; index < 4; index += 1) {
-      const received = new Date(start.getTime() + index * 20_000);
-      ingestion.ingest(textUpdate(index + 1, index + 10, `message-${index}`), received);
-      scheduler.processDue(new Date(received.getTime() + 15_000));
-    }
-    const states = store.db
-      .query<{ state: string; count: bigint }, []>("SELECT state, COUNT(*) AS count FROM buckets GROUP BY state ORDER BY state")
-      .all();
-    expect(states).toEqual([
-      { state: "merged", count: 4n },
-      { state: "queued", count: 1n },
-    ]);
-    const invocationUsage = store.db
-      .query<{ amount: bigint }, []>("SELECT amount FROM daily_usage WHERE metric = 'agent_invocations'")
-      .get();
-    expect(invocationUsage?.amount).toBe(1n);
-    const boundaries = store.db
-      .query<{ count: bigint }, []>("SELECT COUNT(DISTINCT source_bucket_id) AS count FROM bucket_messages WHERE bucket_id = (SELECT id FROM buckets WHERE state = 'queued')")
-      .get();
-    expect(boundaries?.count).toBe(4n);
+    ingestion.ingest(textUpdate(1, 10, "first"), start);
+    const [firstInvocation] = scheduler.processDue(new Date(start.getTime() + 15_000));
+    if (firstInvocation === undefined) throw new Error("Expected first invocation");
+    store.db
+      .query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
+      .run(new Date(start.getTime() + 15_000).toISOString(), firstInvocation);
+    store.db
+      .query("UPDATE buckets SET state = 'running', started_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+      .run(new Date(start.getTime() + 15_000).toISOString(), firstInvocation);
+    ingestion.ingest(textUpdate(2, 11, "during"), new Date(start.getTime() + 16_000));
+    expect(scheduler.processDue(new Date(start.getTime() + 60_000))).toHaveLength(0);
+    expect(
+      store.db.query<{ state: string }, []>("SELECT state FROM buckets ORDER BY id DESC LIMIT 1").get()?.state,
+    ).toBe("collecting");
     store.close();
   });
 
@@ -161,44 +173,131 @@ describe("bucket scheduler", () => {
     const { store, ingestion, scheduler } = await setup((toml) => toml.replace("max_invocations_per_day = 100", "max_invocations_per_day = 1"));
     const start = new Date("2026-08-15T00:00:00.000Z");
     ingestion.ingest(textUpdate(1, 10, "first"), start);
-    scheduler.processDue(new Date(start.getTime() + 15_000));
+    const [firstInvocation] = scheduler.processDue(new Date(start.getTime() + 15_000));
+    if (firstInvocation === undefined) throw new Error("Expected first invocation");
+    store.db.query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)").run(firstInvocation);
+    store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(firstInvocation);
     const secondStart = new Date(start.getTime() + 20_000);
     ingestion.ingest(textUpdate(2, 11, "second"), secondStart);
     scheduler.processDue(new Date(secondStart.getTime() + 15_000));
-    const states = store.db
-      .query<{ state: string }, []>("SELECT state FROM buckets ORDER BY id")
-      .all()
-      .map((row) => row.state);
-    expect(states).toEqual(["queued", "skipped_budget"]);
+    const states = store.db.query<{ state: string }, []>("SELECT state FROM buckets ORDER BY id").all().map((row) => row.state);
+    expect(states).toEqual(["completed", "skipped_budget"]);
     store.close();
   });
 
-  test("closes a bucket early when the message threshold is reached", async () => {
+  test("starts the next busy-period bucket on the prior session pace", async () => {
     const { store, ingestion, scheduler } = await setup((toml) =>
-      toml.replace("bucket_window_seconds = 15", "bucket_window_seconds = 300\nbucket_message_threshold = 3")
+      toml.replace("bucket_window_seconds = 15", "bucket_window_seconds = 6")
     );
     const start = new Date("2026-08-15T00:00:00.000Z");
-    ingestion.ingest(textUpdate(1, 10, "one"), start);
-    ingestion.ingest(textUpdate(2, 11, "two"), new Date(start.getTime() + 1_000));
-    expect(scheduler.processDue(new Date(start.getTime() + 2_000))).toHaveLength(0);
-    ingestion.ingest(textUpdate(3, 12, "three"), new Date(start.getTime() + 2_000));
-    const invocations = scheduler.processDue(new Date(start.getTime() + 2_000));
-    expect(invocations).toHaveLength(1);
-    expect(store.db.query<{ state: string }, []>("SELECT state FROM buckets").get()?.state).toBe("queued");
+    ingestion.ingest(textUpdate(1, 10, "first"), start);
+    const [firstInvocation] = scheduler.processDue(new Date(start.getTime() + 6_000));
+    if (firstInvocation === undefined) throw new Error("Expected first invocation");
+    const firstStarted = new Date(start.getTime() + 6_000);
+    store.db
+      .query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
+      .run(firstStarted.toISOString(), firstInvocation);
+    store.db
+      .query("UPDATE buckets SET state = 'running', started_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+      .run(firstStarted.toISOString(), firstInvocation);
+    ingestion.ingest(textUpdate(2, 11, "next"), new Date(start.getTime() + 9_000));
+    expect(scheduler.processDue(new Date(start.getTime() + 11_999))).toHaveLength(0);
+    store.db
+      .query("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
+      .run(new Date(start.getTime() + 10_000).toISOString(), firstInvocation);
+    store.db
+      .query("UPDATE buckets SET state = 'completed', finished_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+      .run(new Date(start.getTime() + 10_000).toISOString(), firstInvocation);
+    expect(scheduler.processDue(new Date(start.getTime() + 12_000))).toHaveLength(1);
+    const secondDeadline = store.db
+      .query<{ deadline_at: string }, []>("SELECT deadline_at FROM buckets ORDER BY id DESC LIMIT 1")
+      .get();
+    expect(secondDeadline?.deadline_at).toBe("2026-08-15T00:00:12.000Z");
     store.close();
   });
 
-  test("still triggers a bucket at the deadline before the message threshold is reached", async () => {
+  test("waits for a slow session to finish before queueing the next bucket", async () => {
     const { store, ingestion, scheduler } = await setup((toml) =>
-      toml.replace("bucket_window_seconds = 15", "bucket_window_seconds = 6\nbucket_message_threshold = 5")
+      toml.replace("bucket_window_seconds = 15", "bucket_window_seconds = 6")
     );
     const start = new Date("2026-08-15T00:00:00.000Z");
-    ingestion.ingest(textUpdate(1, 10, "one"), start);
-    ingestion.ingest(textUpdate(2, 11, "two"), new Date(start.getTime() + 1_000));
-    expect(scheduler.processDue(new Date(start.getTime() + 5_999))).toHaveLength(0);
-    const invocations = scheduler.processDue(new Date(start.getTime() + 6_000));
-    expect(invocations).toHaveLength(1);
-    expect(store.db.query<{ state: string }, []>("SELECT state FROM buckets").get()?.state).toBe("queued");
+    ingestion.ingest(textUpdate(1, 10, "first"), start);
+    const [firstInvocation] = scheduler.processDue(new Date(start.getTime() + 6_000));
+    if (firstInvocation === undefined) throw new Error("Expected first invocation");
+    store.db
+      .query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
+      .run(new Date(start.getTime() + 6_000).toISOString(), firstInvocation);
+    store.db
+      .query("UPDATE buckets SET state = 'running', started_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+      .run(new Date(start.getTime() + 6_000).toISOString(), firstInvocation);
+    ingestion.ingest(textUpdate(2, 11, "during"), new Date(start.getTime() + 8_000));
+    expect(scheduler.processDue(new Date(start.getTime() + 20_000))).toHaveLength(0);
+    store.db
+      .query("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
+      .run(new Date(start.getTime() + 20_000).toISOString(), firstInvocation);
+    store.db
+      .query("UPDATE buckets SET state = 'completed', finished_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+      .run(new Date(start.getTime() + 20_000).toISOString(), firstInvocation);
+    expect(scheduler.processDue(new Date(start.getTime() + 20_000))).toHaveLength(1);
+    store.close();
+  });
+
+  test("does not create another invocation without new human messages", async () => {
+    const { store, ingestion, scheduler } = await setup();
+    const start = new Date("2026-08-15T00:00:00.000Z");
+    ingestion.ingest(textUpdate(1, 10, "only"), start);
+    const [invocationId] = scheduler.processDue(new Date(start.getTime() + 15_000));
+    if (invocationId === undefined) throw new Error("Expected invocation");
+    store.db.query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)").run(invocationId);
+    store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(invocationId);
+    expect(scheduler.processDue(new Date(start.getTime() + 60_000))).toHaveLength(0);
+    expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM invocations").get()?.count).toBe(1n);
+    store.close();
+  });
+
+  test("serializes agent sessions across forum topics of the same chat", async () => {
+    const { store, ingestion, scheduler } = await setup((toml) => toml.replace("bucket_window_seconds = 15", "bucket_window_seconds = 6"));
+    const start = new Date("2026-08-15T00:00:00.000Z");
+    ingestion.ingest(topicUpdate(1, 10, 100, "topic-a"), start);
+    ingestion.ingest(topicUpdate(2, 11, 200, "topic-b"), new Date(start.getTime() + 1_000));
+    const [firstId] = scheduler.processDue(new Date(start.getTime() + 6_000));
+    if (firstId === undefined) throw new Error("Expected first invocation");
+    const firstStarted = new Date(start.getTime() + 6_000);
+    store.db.query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?").run(firstStarted.toISOString(), firstId);
+    store.db.query("UPDATE buckets SET state = 'running', started_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)").run(firstStarted.toISOString(), firstId);
+    // the second topic's bucket is due, but the chat session is still busy
+    expect(scheduler.processDue(new Date(start.getTime() + 7_000))).toHaveLength(0);
+    // finish the first session; its completion pushes every collecting bucket of the chat to the pace
+    store.db.query("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?").run(new Date(start.getTime() + 6_500).toISOString(), firstId);
+    store.db.query("UPDATE buckets SET state = 'completed', finished_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)").run(new Date(start.getTime() + 6_500).toISOString(), firstId);
+    const chatId = store.db.query<{ chat_id: bigint }, []>("SELECT chat_id FROM conversations LIMIT 1").get()!.chat_id;
+    store.db
+      .query(
+        `UPDATE buckets SET deadline_at = ?, updated_at = ?
+         WHERE conversation_id IN (SELECT id FROM conversations WHERE chat_id = ?) AND state = 'collecting'`,
+      )
+      .run(new Date(start.getTime() + 12_000).toISOString(), new Date(start.getTime() + 6_500).toISOString(), chatId);
+    expect(scheduler.processDue(new Date(start.getTime() + 11_999))).toHaveLength(0);
+    const [secondId] = scheduler.processDue(new Date(start.getTime() + 12_000));
+    expect(secondId).toBeDefined();
+    const secondBucket = store.db
+      .query<{ conversation_id: bigint; thread_id: bigint }, [bigint]>(
+        `SELECT b.conversation_id, v.message_thread_id AS thread_id FROM buckets b
+         JOIN conversations v ON v.id = b.conversation_id
+         WHERE b.id = (SELECT bucket_id FROM invocations WHERE id = ?)`,
+      )
+      .get(secondId!);
+    expect(secondBucket?.thread_id).toBe(200n);
+    store.close();
+  });
+
+  test("runs agent sessions of different chats concurrently", async () => {
+    const { store, ingestion, scheduler } = await setup((toml) => `${toml}\n[[telegram.chats]]\nid = 987654321\nbudget = { max_invocations_per_day = 100, max_tokens_per_day = 300000 }\n`);
+    const start = new Date("2026-08-15T00:00:00.000Z");
+    ingestion.ingest(textUpdate(1, 10, "chat-a", 123456789), start);
+    ingestion.ingest(textUpdate(2, 11, "chat-b", 987654321), start);
+    const invocations = scheduler.processDue(new Date(start.getTime() + 15_000));
+    expect(invocations).toHaveLength(2);
     store.close();
   });
 });

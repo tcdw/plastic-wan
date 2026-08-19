@@ -66,7 +66,6 @@ command SecretRef：
 token = { env = "TELEGRAM_BOT_TOKEN" }
 process_bot_messages = false
 bucket_window_seconds = 15
-bucket_message_threshold = 5
 
 [[telegram.chats]]
 id = -1001234567890
@@ -78,8 +77,8 @@ budget = { max_invocations_per_day = 100, max_tokens_per_day = 300000 }
 
 规则：
 
-- `bucket_window_seconds` 是全局固定 Bucket 窗口，单位秒；接受 1–300 的整数，示例值为 15。
-- `bucket_message_threshold`（可选）是全局消息数阈值；接受 1–100 的整数。配置后，当 collecting Bucket 中的消息数达到该值时会提前触发 Agent（仍受 `bucket_window_seconds` 的最长等待时间约束）。省略时仅按时间窗口触发。
+- `bucket_window_seconds` 是全局 Agent 会话节拍，单位秒；接受 1–300 的整数，示例值为 15。节拍按 Chat（群）计算：同一时刻每个群最多一个 Agent 会话，下一会话在前一会话开始满一个节拍、且前一会话结束后启动。
+- 消息收集仍按 Conversation 隔离：Forum Topic 各自收集、Context 互不混入，只是 Agent 会话在群内串行。
 - Chat ID 必须是非零安全整数且不可重复。
 - 未配置 `topic_ids`：允许该 Chat 的普通消息与所有 Topic。
 - 配置 `topic_ids`：只允许列出的正整数 Topic ID；未列出的 Topic 被审计为拒绝。

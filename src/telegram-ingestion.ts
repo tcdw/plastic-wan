@@ -309,9 +309,26 @@ export class TelegramIngestion {
     if (bucketId === undefined) {
       if (!message.eligibleHuman) return undefined;
       const now = receivedAt.toISOString();
+      const latestInvocation = this.#store.db
+        .query<{ state: string; started_at: string | null }, [bigint]>(
+          `SELECT i.state, i.started_at FROM invocations i
+           JOIN conversations v ON v.id = i.conversation_id
+           WHERE v.chat_id = ?
+           ORDER BY i.id DESC LIMIT 1`,
+        )
+        .get(chatId);
+      const priorPaceAt = latestInvocation?.started_at === null || latestInvocation?.started_at === undefined
+        ? receivedAt.getTime()
+        : Date.parse(latestInvocation.started_at) + this.#config.telegram.bucket_window_seconds * 1_000;
+      const remainsOnPriorPace = latestInvocation?.state === "queued"
+        || latestInvocation?.state === "running"
+        || receivedAt.getTime() < priorPaceAt;
+      const deadline = remainsOnPriorPace
+        ? Math.max(receivedAt.getTime(), priorPaceAt)
+        : receivedAt.getTime() + this.#config.telegram.bucket_window_seconds * 1_000;
       const created = this.#store.db
         .query("INSERT INTO buckets(conversation_id, state, first_received_at, deadline_at, created_at, updated_at) VALUES (?, 'collecting', ?, ?, ?, ?)")
-        .run(conversation.id, now, new Date(receivedAt.getTime() + this.#config.telegram.bucket_window_seconds * 1_000).toISOString(), now, now);
+        .run(conversation.id, now, new Date(deadline).toISOString(), now, now);
       bucketId = BigInt(created.lastInsertRowid);
     }
     const sequence = this.#store.db
@@ -321,17 +338,6 @@ export class TelegramIngestion {
     this.#store.db
       .query("INSERT INTO bucket_messages(bucket_id, message_id, sequence_no, source_bucket_id) VALUES (?, ?, ?, ?)")
       .run(bucketId, message.id, sequence.next_sequence, bucketId);
-    if (this.#config.telegram.bucket_message_threshold > 0) {
-      const count = this.#store.db
-        .query<{ count: bigint }, [bigint]>("SELECT COUNT(*) AS count FROM bucket_messages WHERE bucket_id = ?")
-        .get(bucketId);
-      if (count !== null && count.count >= BigInt(this.#config.telegram.bucket_message_threshold)) {
-        const now = receivedAt.toISOString();
-        this.#store.db
-          .query("UPDATE buckets SET deadline_at = ?, updated_at = ? WHERE id = ? AND state = 'collecting'")
-          .run(now, now, bucketId);
-      }
-    }
     return bucketId;
   }
 }

@@ -11,7 +11,10 @@ import { testConfigToml, writeTestConfig } from "./helpers.ts";
 const directories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  Bun.gc(true);
+  await Promise.all(directories.splice(0).map((directory) =>
+    rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  ));
 });
 
 async function setup(transform: (toml: string) => string = (toml) => toml): Promise<{ store: SqliteStore; ingestion: TelegramIngestion }> {

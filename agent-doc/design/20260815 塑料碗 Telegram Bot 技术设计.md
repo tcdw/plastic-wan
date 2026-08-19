@@ -336,9 +336,9 @@ new Database(path, {
 | `messages` | Telegram 消息稳定身份与当前 Revision | `(chat_id, telegram_message_id)` 唯一 |
 | `message_revisions` | 正文、Caption、媒体、Reply、Forward 的每个版本 | `(message_id, revision_no)` 唯一 |
 | `media` | Photo/Document/Sticker 的 Telegram 引用与类型 | 保存 `file_id`、`file_unique_id`、MIME、尺寸 |
-| `buckets` | 配置长度窗口与排队状态 | 每 Conversation 最多一个 `collecting` Bucket |
+| `buckets` | 配置长度窗口与排队状态 | 每个 Conversation 一个 `collecting` Bucket（Topic 各自收集），同一 Chat 的会话串行启动 |
 | `bucket_messages` | Bucket 中的稳定 Message 身份 | `(bucket_id, message_id)` 唯一 |
-| `invocations` | Agent Invocation 生命周期与预算结果 | 每 Conversation 最多一个 `running` Invocation |
+| `invocations` | Agent Invocation 生命周期与预算结果 | 同一 Chat 最多一个 `running` Invocation，数据库按 Conversation 约束 |
 | `invocation_messages` | 实际进入 Context 的 Message Revision 快照 | 保存 history/new、顺序、省略信息 |
 | `model_calls` | 每次主模型/视觉模型请求 | Usage、费用、重试、错误、耗时 |
 | `agent_messages` | 完成后的 Assistant/Tool Result 消息 | 不存流式 delta；thinking 正文为空 |
@@ -439,24 +439,24 @@ Forward 消息的发送者仍是当前转发者；只保存 Telegram 公开提�
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
-    Idle --> Collecting: first eligible human message
-    Collecting --> Collecting: more messages / edits do not reset deadline
-    Collecting --> Queued: first_received_at + configured window
-    Queued --> Running: conversation free + global slot
-    Running --> Idle: completed / failed / aborted
-    Running --> Collecting: new human message starts next fixed window
+    Idle --> Collecting: first eligible human message in a topic
+    Collecting --> Running: first message + configured pace
+    Running --> Collecting: new human message in any topic fills its bucket
+    Running --> Idle: completed and no non-empty bucket
+    Running --> Running: completed and a non-empty bucket reaches the pace
 ```
 
-- 窗口通过全局 `telegram.bucket_window_seconds` 配置为 1–300 的整数秒，不按 Chat 覆盖。
-- deadline 为第一条 eligible human message 的 `received_at + bucket_window_seconds`。
-- 使用数据库驱动的单一调度器：查询最近 deadline，等待；新建更早 deadline 时唤醒。
+- 节拍通过全局 `telegram.bucket_window_seconds` 配置为 1–300 的整数秒，不按 Chat 覆盖，按 Chat 串行。
+- 空闲 Chat 的首次 deadline 为第一条 eligible human message 的 `received_at + bucket_window_seconds`；不同 Topic 的 Bucket 各自持有 deadline。
+- Chat 内任意 Invocation 运行期间，各 Topic 只收集一个下一 Bucket。下一启动时间为 `max(previous started_at + bucket_window_seconds, previous finished_at)`，按 Chat 计算。
+- 使用数据库驱动的单一调度器：查询最近 deadline，等待；新建更早 deadline 或 Invocation 结束时唤醒。
 - deadline 与状态持久化；不为每个 Chat 创建独立 `setTimeout`。
 
 ### 7.2 截止
 
 调度器用短事务完成：
 
-1. claim 到期 Bucket；
+1. 确认到期 Bucket 的 Chat 没有 queued/running Invocation；
 2. 查询每条 Message 当前 Revision；
 3. 写不可变 Invocation 输入快照；
 4. 将 Bucket 设为 `queued`；
@@ -464,12 +464,13 @@ stateDiagram-v2
 
 当前 Bucket 自身超出输入预算时，所有消息仍入库，但 Prompt 从最新消息向前装入；在 `new_messages` 起始处写明确的省略数量。一个 Bucket仍然只调用 Agent 一次。
 
-### 7.3 排队与合并
+### 7.3 串行与节拍
 
-- 同一 Conversation 最多一个 running Invocation，按 FIFO 执行。
-- 当前 Invocation 运行时，新真人消息可以启动下一个独立的配置长度 Bucket。
-- 尚未执行 Bucket 超过 3 个时，事务性合并全部 queued Bucket：保留消息顺序与原 Bucket 边界，原 Bucket 标记 `merged`，只生成一次新 Invocation。
-- 达到 Chat 日预算时，截止 Bucket 标记 `skipped_budget`；消息仍进入历史，不排队到次日。
+- 同一 Chat 最多一个 queued/running Invocation；不同 Chat 之间不受影响，可并发。
+- Chat 内任意 Invocation 运行时，各 Topic 的新真人消息进入各自的 collecting Bucket。
+- 当前 Invocation 短于节拍时，下一 Bucket 等到节拍边界；长于节拍时，结束后立即处理下一 Bucket。
+- 下一 Bucket 为空时不创建 Invocation。
+- 达到 Chat 日预算时，到期 Bucket 标记 `skipped_budget`；消息仍进入历史，不排队到次日。
 
 ### 7.4 重启恢复
 
@@ -952,16 +953,16 @@ Timer：
 
 使用 fake clock、临时 SQLite 和 fake Telegram API 验证：
 
-- 第一条消息创建 deadline；
-- 后续消息不重置配置窗口；
+- 第一条消息创建一个节拍后的 deadline；
 - edit 不重置、不创建 Bucket；
 - 截止采用最新 Revision；
 - 截止后 edit 只影响未来历史；
 - Service/other Bot 不能独立触发；
 - Forum Topic Context 隔离；
-- 同 Conversation Invocation 串行；
-- running 期间新消息进入下一 Bucket；
-- 超过 3 个 queued Bucket 合并且保序；
+- 同 Chat Invocation 串行，不同 Chat 并发；
+- running 期间各 Topic 新消息进入各自的下一 Bucket；
+- 短 Invocation 等满节拍，长 Invocation 结束后立即续跑；
+- 没有新消息时不创建下一 Invocation；
 - 5 分钟内恢复、超过 5 分钟过期；
 - Update 重投不重复创建 Message/Bucket。
 

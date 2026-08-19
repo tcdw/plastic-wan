@@ -56,24 +56,25 @@
 
 当前 `dev-data/config.toml` 的 `agent.history_messages = 10`，因此每个群的启动追赶任务最多包含 10 条消息。
 
-## 可配置 Bucket
+## 会话节拍与 Bucket
 
-第一条可处理消息创建 `collecting` Bucket：
+Chat（群）空闲时，第一条可处理消息创建该 Conversation 的 `collecting` Bucket，并先等待一个完整节拍：
 
 ```text
 first_received_at = T
-fixed deadline     = T + telegram.bucket_window_seconds
+first session      = T + telegram.bucket_window_seconds
 ```
 
-`telegram.bucket_window_seconds` 是全局配置，接受 1–300 的整数秒。若配置了 `telegram.bucket_message_threshold`，Bucket 中的消息数达到阈值时会提前关闭（deadline 提前到当前时间）。后续消息加入该 Bucket，但不会滑动截止时间。`bucket_window_seconds` 仍是最长等待时间。到期或达到消息阈值后：
+`telegram.bucket_window_seconds` 是全局配置，接受 1–300 的整数秒。**Agent 会话按 Chat 串行**，消息收集仍按 Conversation 隔离：
 
-1. Bucket 从 `collecting` 进入队列。
-2. Scheduler 冻结 `history` 与 `new` 快照。
-3. 创建一个 Invocation。
-4. 同一 Conversation 已有运行任务时，新任务继续排队；过多队列可合并。
-5. Chat 每日 Invocation/Token 预算不足时进入 `skipped_budget`。
+1. 不同 Forum Topic 的消息各自进入自己的 `collecting` Bucket；Context 与 Reply 只包含本 Topic 内容，互不混入。
+2. 同一 Chat 同时最多一个 queued/running Invocation；会话运行期间任何 Topic 的新消息只进入自己的 Bucket，不修改当前 Invocation。
+3. 下一次允许启动的时间为 `max(前一会话 started_at + bucket_window_seconds, 前一会话 finished_at)`，按 Chat 计算。
+4. 前一会话短于一个节拍时，等待满节拍；长于一个节拍时，结束后立即处理下一 Bucket。
+5. 没有新的人类消息时不创建 Bucket，也不启动空会话。
+6. 到达启动时间后，Scheduler 冻结 `history` 与 `new` 快照、预留预算并创建 Invocation。
 
-Bot 自己通过 `send` 产生的消息写入可见历史，但不会再次触发收集循环。
+因此，如果 Agent 会话耗时为 0 且群友持续发送消息，会话开始时间固定相隔 `bucket_window_seconds`，与该群有多少活跃 Topic 无关。Bot 自己通过 `send` 产生的消息写入可见历史，但不会触发下一 Bucket。
 
 ## Context
 

@@ -52,16 +52,29 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 `invocation_messages` 是可重放边界。消息在 Invocation 创建后被编辑，只影响未来 Context，不改写已经冻结的快照。
 
+### 短期记忆
+
+| 表 | 用途 |
+| --- | --- |
+| `memories` | Conversation 级短期记忆：模型写入的内容、创建/过期时间 |
+
+`memories` 由 Agent 通过 `add_memory`/`delete_memory` 维护，也可在 Admin Panel 手工增删改查：
+
+- 每条记忆归属一个 `conversations` 行（Chat + Forum Topic 隔离，互不可见）。
+- `content` 硬限制 150 字符（SQLite `CHECK` 兜底；Tool Schema 与 Admin API 先校验）。
+- `expires_at` 由 `created_at + ttl_seconds` 决定，默认 TTL 1 天；过期行在每次写操作机会性清除，`purgeExpiredData` 也会清除。
+- 系统不禁止长 TTL；剩余寿命超过 `agent.memory_ttl_warning_days`（默认 30 天）的记忆在 Admin Panel 显示 warning，由管理员决定保留、删除或提升进 `agents.md`。
+
 ### 模型、Tool 与发送审计
 
 | 表 | 用途 |
 | --- | --- |
-| `model_calls` | Provider/Model、角色、Token、成本、耗时和错误码 |
+| `model_calls` | Provider/Model、角色、Token、成本、耗时、错误码和每次请求附带的工具名（`tools_json`） |
 | `tool_calls` | Tool 参数、结果、状态、副作用标记和错误码 |
 | `telegram_sends` | 文本/Sticker 发送请求、Telegram 结果和未知结果 |
 | `daily_usage` | Chat/全局资源预算计数 |
 
-`side_effect_started` 和 `outcome_unknown` 用于阻止不可逆 Tool 的盲目重试。审计记录应保留稳定错误码；不要依赖解析自由文本错误。
+`invocations.tool_registry_hash` 之外还有 `tool_registry_json`：本次 Invocation 实际展示给模型的完整工具快照（`name`/`label`/`description`）。`model_calls.tools_json` 记录该次请求真正附带的工具名数组——Agent 循环在 context 接近上限时会把工具裁剪到只剩 `send`，因此同一 Invocation 内不同请求的工具列表可能不同；这两列共同回答“模型当时能看到哪些工具”。`side_effect_started` 和 `outcome_unknown` 用于阻止不可逆 Tool 的盲目重试。审计记录应保留稳定错误码；不要依赖解析自由文本错误。
 
 ### 媒体与 Sticker
 
@@ -102,6 +115,7 @@ MCP Tool 调用本身复用 `tool_calls`，预算复用 `daily_usage`。
 
 `backup` 在备份前调用 `purgeExpiredData`。清理仅删除已完成终态和不再被活跃引用的数据：
 
+- 已过期的 `memories`（按自身 TTL，不参与 30 天在线窗口）。
 - 过期 Telegram Update 与终态 Invocation/Send/Bucket。
 - 不再被 Invocation/Bucket 引用的旧 Message。
 - 仍被快照引用的旧 Message 保留身份，但匿名化 Revision 文本、Sender、Reply/Forward 和 Service 内容。

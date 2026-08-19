@@ -10,6 +10,7 @@ import type {
   ModelCallEntry,
   TelegramSendEntry,
   ToolCallEntry,
+  ToolRegistryEntry,
 } from "../api.ts";
 import { JsonBlock, queryState, StateTag, TextValue } from "../components.tsx";
 import { formatCost, formatDuration, formatNumber, formatTime } from "../format.ts";
@@ -512,6 +513,44 @@ export function InvocationDetailPage({ id }: { readonly id: string }): React.Rea
           ]}
         />
       </Card>
+      <Collapse
+        size="small"
+        items={[
+          {
+            key: "tool-registry",
+            label: (
+              <Space>
+                Tool registry
+                <Typography.Text type="secondary">Snapshot of the tools presented to the model</Typography.Text>
+              </Space>
+            ),
+            children: data.tool_registry === null || data.tool_registry.length === 0 ? (
+              <Typography.Text type="secondary">No registry snapshot recorded.</Typography.Text>
+            ) : (
+              <Table<ToolRegistryEntry>
+                rowKey="name"
+                size="small"
+                pagination={false}
+                dataSource={[...data.tool_registry]}
+                columns={[
+                  { title: "Name", dataIndex: "name", key: "name", render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
+                  { title: "Label", dataIndex: "label", key: "label" },
+                  {
+                    title: "Description (as sent to the model)",
+                    dataIndex: "description",
+                    key: "description",
+                    render: (value: string) => (
+                      <Typography.Paragraph ellipsis={{ rows: 3 }} style={{ margin: 0, maxWidth: 640 }}>
+                        {value}
+                      </Typography.Paragraph>
+                    ),
+                  },
+                ]}
+              />
+            ),
+          },
+        ]}
+      />
       <Card size="small">
         <Tabs
           items={[
@@ -581,6 +620,20 @@ export function InvocationDetailPage({ id }: { readonly id: string }): React.Rea
                     { title: "Provider", dataIndex: "provider", key: "provider" },
                     { title: "Model", dataIndex: "model", key: "model" },
                     { title: "Attempt", dataIndex: "attempt", key: "attempt", align: "right" },
+                    {
+                      title: "Tools in request",
+                      key: "tools",
+                      render: (_: unknown, row) =>
+                        row.tools === null ? (
+                          <Typography.Text type="secondary">—</Typography.Text>
+                        ) : (
+                          <Space size={4} wrap>
+                            {row.tools.map((name) => (
+                              <Tag key={name}>{name}</Tag>
+                            ))}
+                          </Space>
+                        ),
+                    },
                     {
                       title: "State",
                       dataIndex: "state",

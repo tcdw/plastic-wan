@@ -150,6 +150,7 @@ cost = { input = 0, output = 0, cache_read = 0, cache_write = 0 }
 - `timeout_seconds`: 大于 0 且不超过 90 秒。
 - `context_stop_ratio`: 大于 0 且不超过 0.8。
 - `history_messages`: 1–20。
+- `memory_ttl_warning_days`（可选，默认 30）：Agent 记忆剩余寿命超过该天数时，Admin Panel 显示 warning，提示管理员判断保留、删除或提升进 `agents.md`。系统不禁止长 TTL。
 - `thinking_level`: `off|minimal|low|medium|high|xhigh`；Provider 仍可能限制具体模型支持级别。
 
 `vision` 约束：

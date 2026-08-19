@@ -79,6 +79,13 @@ export interface ModelCallEntry {
   readonly error_code: string | null;
   readonly created_at: string;
   readonly finished_at: string | null;
+  readonly tools: readonly string[] | null;
+}
+
+export interface ToolRegistryEntry {
+  readonly name: string;
+  readonly label: string;
+  readonly description: string;
 }
 
 export interface AgentMessageEntry {
@@ -113,6 +120,7 @@ export interface InvocationDetail extends InvocationListItem {
   readonly bucket_id: string;
   readonly prompt_version: number;
   readonly tool_registry_hash: string | null;
+  readonly tool_registry: readonly ToolRegistryEntry[] | null;
   readonly tool_calls: readonly ToolCallEntry[];
   readonly model_calls: readonly ModelCallEntry[];
   readonly agent_messages: readonly AgentMessageEntry[];
@@ -211,6 +219,39 @@ export interface StickerAnalysis {
   readonly description: string | null;
   readonly metadata_json: string | null;
   readonly updated_at: string | null;
+}
+
+export interface MemoryEntry {
+  readonly id: string;
+  readonly conversation_id: string;
+  readonly chat: ChatSummary;
+  readonly content: string;
+  readonly created_at: string;
+  readonly expires_at: string;
+  readonly updated_at: string;
+  readonly ttl_seconds: number;
+  readonly remaining_seconds: number;
+  readonly expired: boolean;
+  readonly long_ttl: boolean;
+}
+
+export interface MemoryChatOption {
+  readonly telegram_chat_id: string;
+  readonly type: string;
+  readonly title: string | null;
+  readonly username: string | null;
+}
+
+export interface MemoryDraft {
+  readonly chat_id: string;
+  readonly message_thread_id: number;
+  readonly content: string;
+  readonly ttl_seconds: number;
+}
+
+export interface MemoryUpdate {
+  readonly content?: string;
+  readonly ttl_seconds?: number;
 }
 
 export interface StickerEntry {
@@ -373,6 +414,34 @@ export function listStickerSets(): Promise<{ items: readonly StickerSetEntry[] }
 
 export function listStickers(filters: ListFilters): Promise<Page<StickerEntry>> {
   return call<Page<StickerEntry>>(listPath("/stickers", filters));
+}
+
+export function listMemories(filters: ListFilters): Promise<Page<MemoryEntry>> {
+  return call<Page<MemoryEntry>>(listPath("/memories", filters));
+}
+
+export function listMemoryChats(): Promise<{ items: readonly MemoryChatOption[] }> {
+  return call<{ items: readonly MemoryChatOption[] }>("/memories/chats");
+}
+
+export function createMemory(draft: MemoryDraft): Promise<MemoryEntry> {
+  return call<MemoryEntry>("/memories", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(draft),
+  });
+}
+
+export function updateMemory(id: string, update: MemoryUpdate): Promise<MemoryEntry> {
+  return call<MemoryEntry>(`/memories/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(update),
+  });
+}
+
+export function deleteMemory(id: string): Promise<{ status: string }> {
+  return call<{ status: string }>(`/memories/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function cancelPendingSessions(): Promise<CancelPendingResult> {

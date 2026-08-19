@@ -80,12 +80,14 @@ first session      = T + telegram.bucket_window_seconds
 
 `ContextBuilder` 生成：
 
-- `systemPrompt`：安全边界、全局 Prompt、私聊/群聊参与策略、Chat instructions、当前时间。
+- `systemPrompt`：安全边界、全局 Prompt、私聊/群聊参与策略、Chat instructions、当前时间、记忆列表。
 - `userPrompt`：最近 history 与本 Bucket new messages。
 - `directImages`：当 `agent` 模型支持 image 时，选中消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容。
 - `visibleReplyMessageIds`：本次允许 Reply 的 Telegram Message ID。
 - `imageCapabilities`：Sticker 始终可用；当 `agent` 模型不支持 image 时也包含 Photo/图片 Document，供 `read_image` 使用。
 - `omittedNewMessages`：因 Context 上限省略的新消息数量。
+
+当前 Conversation 全部有效记忆按创建时间升序追加在 system prompt 末尾（`<memory_list>` 块）：固定 Prompt → 当前时间 → 记忆列表。新增记忆等价于列表末尾 append，不重排已有项，尽量保留 Provider prefix cache；TTL 到期与 `delete_memory` 只破坏删除位置之后的缓存前缀。
 
 私聊策略提示模型积极参与；群聊提示只在有明确价值时发言。它是行为偏好，不绕过 Tool 或预算授权。
 
@@ -104,7 +106,9 @@ Context
   → completed / failed / aborted / outcome_unknown
 ```
 
-限制来自配置：最大轮次、Tool Call 数、发送数、输出 Token、Invocation 超时和全局并发。模型调用与 Tool Call 分别写入审计。
+限制来自配置：最大轮次、Tool Call 数、发送数、输出 Token、Invocation 超时和全局并发。模型调用与 Tool Call 分别写入审计。`add_memory`/`delete_memory` 是持久化副作用，按 Conversation 隔离并计入 `tool_calls` 审计；`send` 仍是唯一 Telegram 输出边界。
+
+每次模型请求都会附带完整的工具注册表（名称、label、描述与参数 Schema）。请求发出前把该请求实际附带的工具名写入 `model_calls.tools_json`，Invocation 启动时把完整注册表快照（`name`/`label`/`description`）写入 `invocations.tool_registry_json`——因此可以审计“模型在某一轮到底看到了哪些工具”。context 接近上限时，Agent 循环只保留 `send` 继续收尾，该轮请求的 `tools_json` 会如实记录为 `["send"]`。
 
 普通 Assistant Message 永不自动发布。模型不调用 `send` 即表示保持沉默，这在群聊中是正常成功结果。
 

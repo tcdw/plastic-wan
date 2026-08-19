@@ -120,7 +120,12 @@ export class AgentRuntime {
     const toolRegistryHash = createHash("sha256")
       .update(tools.map((tool) => `${tool.name}:${JSON.stringify(tool.parameters)}`).join("\n"))
       .digest("hex");
-    this.#store.db.query("UPDATE invocations SET tool_registry_hash = ? WHERE id = ?").run(toolRegistryHash, invocationId);
+    // Auditable snapshot of exactly what the model could see: name, label and
+    // description are the tool surface the provider serializes into every request.
+    const toolRegistry = tools.map((tool) => ({ name: tool.name, label: tool.label, description: tool.description }));
+    this.#store.db
+      .query("UPDATE invocations SET tool_registry_hash = ?, tool_registry_json = ? WHERE id = ?")
+      .run(toolRegistryHash, JSON.stringify(toolRegistry), invocationId);
     const timeoutSignal = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
     const signal = AbortSignal.any([schedulerSignal, timeoutSignal]);
     let turns = 0;
@@ -141,7 +146,9 @@ export class AgentRuntime {
           return errorStream(model, "chat_token_budget");
         }
         const release = await this.#modelGate.acquire(context.chatId.toString(), signal);
-        const callId = this.#startModelCall(invocationId, model);
+        // Per-request visibility audit: the exact tool names this llmContext
+        // carried (the loop can trim tools to send-only near the context limit).
+        const callId = this.#startModelCall(invocationId, model, modelContext.tools?.map((tool) => tool.name) ?? []);
         try {
           const stream = this.#models.streamSimple(model, modelContext, {
             ...options,
@@ -228,10 +235,10 @@ export class AgentRuntime {
     return { state: "completed", reason: closing ? "context_limit" : "completed" };
   }
 
-  #startModelCall(invocationId: bigint, model: Model<Api>): bigint {
+  #startModelCall(invocationId: bigint, model: Model<Api>, tools: readonly string[]): bigint {
     const created = this.#store.db
-      .query("INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, created_at) VALUES (?, 'agent', ?, ?, 1, 'pending', ?)")
-      .run(invocationId, model.provider, model.id, new Date().toISOString());
+      .query("INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, tools_json, created_at) VALUES (?, 'agent', ?, ?, 1, 'pending', ?, ?)")
+      .run(invocationId, model.provider, model.id, JSON.stringify(tools), new Date().toISOString());
     return BigInt(created.lastInsertRowid);
   }
 

@@ -21,12 +21,13 @@ export interface ListQuery {
 }
 
 export class AdminQueryError extends Error {
-  readonly status = 400;
+  readonly status: number;
   readonly code: string;
 
-  constructor(code: string, message: string) {
+  constructor(code: string, message: string, status = 400) {
     super(message);
     this.code = code;
+    this.status = status;
   }
 }
 
@@ -84,6 +85,7 @@ interface ModelCallRow {
   readonly error_code: string | null;
   readonly created_at: string;
   readonly finished_at: string | null;
+  readonly tools_json: string | null;
 }
 
 interface AgentMessageRow {
@@ -263,10 +265,15 @@ export function listInvocations(db: Database, query: ListQuery): Page<Record<str
 
 export function getInvocation(db: Database, id: bigint): Record<string, unknown> | null {
   const invocation = db
-    .query<InvocationListRow & { readonly prompt_version: bigint; readonly tool_registry_hash: string | null; readonly bucket_id: bigint }, [bigint]>(
+    .query<InvocationListRow & {
+      readonly prompt_version: bigint;
+      readonly tool_registry_hash: string | null;
+      readonly tool_registry_json: string | null;
+      readonly bucket_id: bigint;
+    }, [bigint]>(
       `SELECT i.id, i.state, i.created_at, i.started_at, i.finished_at, i.completion_reason, i.error_code,
               i.sends_used, i.tool_calls_used, i.turns_used, i.side_effect_started, i.config_hash,
-              i.prompt_version, i.tool_registry_hash, i.bucket_id,
+              i.prompt_version, i.tool_registry_hash, i.tool_registry_json, i.bucket_id,
               ch.telegram_chat_id, ch.type AS chat_type, ch.title AS chat_title, ch.username AS chat_username,
               c.message_thread_id,
               (SELECT COUNT(*) FROM tool_calls tc WHERE tc.invocation_id = i.id) AS tool_call_count,
@@ -289,7 +296,8 @@ export function getInvocation(db: Database, id: bigint): Record<string, unknown>
   const modelCalls = db
     .query<ModelCallRow, [bigint]>(
       `SELECT id, role, provider, model, attempt, state, input_tokens, output_tokens, cache_read_tokens,
-              cache_write_tokens, total_tokens, cost, duration_ms, error_code, created_at, finished_at
+              cache_write_tokens, total_tokens, cost, duration_ms, error_code, created_at, finished_at,
+              tools_json
        FROM model_calls WHERE invocation_id = ? ORDER BY id`,
     )
     .all(id);
@@ -330,6 +338,7 @@ export function getInvocation(db: Database, id: bigint): Record<string, unknown>
     config_hash: invocation.config_hash,
     prompt_version: Number(invocation.prompt_version),
     tool_registry_hash: invocation.tool_registry_hash,
+    tool_registry: parseToolRegistry(invocation.tool_registry_json),
     chat: chatSummary(invocation),
     total_tokens: Number(invocation.total_tokens),
     total_cost: invocation.total_cost,
@@ -363,6 +372,7 @@ export function getInvocation(db: Database, id: bigint): Record<string, unknown>
       error_code: row.error_code,
       created_at: row.created_at,
       finished_at: row.finished_at,
+      tools: parseStringArray(row.tools_json),
     })),
     agent_messages: agentMessages.map((row) => ({
       sequence_no: Number(row.sequence_no),
@@ -712,7 +722,7 @@ export function parseId(value: string, label: string): bigint {
   return BigInt(value);
 }
 
-function parseLimit(value: string | null | undefined): number {
+export function parseLimit(value: string | null | undefined): number {
   if (value === undefined || value === null || value.length === 0) return DEFAULT_PAGE_SIZE;
   if (!/^\d{1,3}$/.test(value)) throw new AdminQueryError("invalid_limit", "limit must be a positive integer");
   const limit = Number.parseInt(value, 10);
@@ -723,6 +733,40 @@ function parseLimit(value: string | null | undefined): number {
 function assertToken(value: string, label: string): string {
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(value)) throw new AdminQueryError(`invalid_${label}`, `${label} filter is invalid`);
   return value;
+}
+
+/** Stored JSON is untrusted; only accept a well-formed array of strings. */
+function parseStringArray(json: string | null): string[] | null {
+  if (json === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function parseToolRegistry(json: string | null): readonly { name: string; label: string; description: string }[] | null {
+  if (json === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed)) return null;
+    const entries = parsed.map((entry): { name: string; label: string; description: string } | null => {
+      if (typeof entry !== "object" || entry === null) return null;
+      const record = entry as Record<string, unknown>;
+      const name = record["name"];
+      const label = record["label"];
+      const description = record["description"];
+      if (typeof name !== "string" || typeof label !== "string" || typeof description !== "string") return null;
+      return { name, label, description };
+    });
+    const valid = entries.filter((entry): entry is { name: string; label: string; description: string } => entry !== null);
+    if (valid.length !== entries.length) return null;
+    return valid;
+  } catch {
+    return null;
+  }
 }
 export interface UsageSeries {
   readonly days: number;

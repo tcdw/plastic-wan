@@ -50,6 +50,7 @@ ContextBuilder / MediaService
         ▼
 Fresh Pi Agent
   ├─ send
+  ├─ add_memory / delete_memory
   ├─ read_image（Sticker；text-only Agent 也用于普通图片）
   ├─ search_stickers
   └─ allowlisted MCP tools
@@ -58,7 +59,7 @@ Fresh Pi Agent
 send Tool → Telegram API → 审计
 ```
 
-每个 Invocation 创建新的 Agent 实例。会话连续性来自 SQLite 中冻结的消息快照，不来自进程内长期记忆。
+每个 Invocation 创建新的 Agent 实例。会话连续性来自 SQLite 中冻结的消息快照，不来自进程内长期记忆；Conversation 级短期记忆（`memories`）在每次 Invocation 时按创建时间升序注入 system prompt 末尾，TTL 到期或 Agent 主动删除后消失。
 
 ## 模块职责
 
@@ -73,6 +74,7 @@ send Tool → Telegram API → 审计
 | `context-builder.ts` | Prompt、消息窗口、Reply 与按模型能力选择的媒体载荷/capability |
 | `agent-runtime.ts` | Pi Agent 循环、多模态/文本回退输入、模型/Tool 预算、调用审计 |
 | `send-tool.ts` | 文本/Sticker 发送、Reply 授权、重试与副作用审计 |
+| `memory.ts` | Conversation 级短期记忆存储、`add_memory`/`delete_memory` Tool 与 TTL 过期清理 |
 | `media.ts` | Telegram 图片直传准备、普通图片回退分析、Sticker 代表帧、标准化与视觉缓存 |
 | `stickers.ts` | Set 同步、后台单并发索引、FTS 搜索和发送能力 |
 | `mcp.ts` | Server 生命周期、Tool 注册、策略、大小限制和预算 |
@@ -97,6 +99,8 @@ send Tool → Telegram API → 审计
 ## 信任边界
 
 以下内容全部是不可信数据：Telegram 文本与媒体、Reply/Forward 元数据、MCP Tool 描述、MCP 结果、模型生成的 Tool 参数。
+
+Memory 内容是模型自己写入的持久化数据，按 Conversation 隔离，注入 system prompt 前只做长度校验；它不构成任何授权来源，管理员可在面板中人工审核或删除。
 
 代码而不是 Prompt 执行授权：
 

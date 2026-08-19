@@ -12,9 +12,10 @@ Plastic Wan 是一个运行在 Telegram 私聊、群组、Supergroup 与 Forum T
 - Assistant 普通文本永不直接发布，必须调用 `send`。
 - 支持图片理解、Sticker 视觉索引与受限 MCP Tool。
 - 不向模型暴露 Bash、任意代码执行或不受限文件系统能力。
-- 审计 Invocation、模型调用、Tool Call、Telegram 发送与预算使用。
-- 提供本地 Admin Panel，只读审计 Tool Session、消息与 Sticker 视觉缓存。
-- 在线数据默认保留 30 天；不实现长期记忆。
+- 审计 Invocation、模型调用（含每次请求附带的工具）、Tool Call、Telegram 发送与预算使用。
+- 提供 Agent 短期记忆：模型自己记、自己忘，TTL 兜底遗忘；管理面板人工审核长 TTL 记忆。
+- 提供本地 Admin Panel，审计 Tool Session、消息、Sticker 视觉缓存并管理记忆。
+- 在线数据默认保留 30 天；长期记忆只以人工审核后的 `agents.md` 形式存在。
 
 ## Project Structure & Module Organization
 
@@ -28,6 +29,7 @@ plastic-wan/
 │   ├── context-builder.ts  # 受限模型上下文与能力引用
 │   ├── agent-runtime.ts    # Pi Agent 循环、预算与 Tool 注册
 │   ├── send-tool.ts        # 唯一 Telegram 发送边界
+│   ├── memory.ts           # Conversation 级短期记忆存储与 add/delete 工具
 │   ├── media.ts            # 图片/Sticker 下载、转换与视觉理解
 │   ├── stickers.ts         # Sticker Set 同步、索引、搜索
 │   ├── mcp.ts              # MCP 生命周期、策略、预算与审计
@@ -59,7 +61,7 @@ Telegram Update
   → Telegram API
 ```
 
-媒体与 MCP 都在 Tool 边界内：模型只能读取当前 Invocation 授权的媒体引用；MCP Tool 经过 allowlist、只读策略、请求/响应大小限制、超时、每日预算和审计。
+媒体与 MCP 都在 Tool 边界内：模型只能读取当前 Invocation 授权的媒体引用；MCP Tool 经过 allowlist、只读策略、请求/响应大小限制、超时、每日预算和审计。记忆按 Conversation 隔离，由模型通过 `add_memory`/`delete_memory` 维护，TTL 到期自动清理；`agents.md` 才是经过人工审核的长期知识。
 
 架构细节见 [agent-doc/architecture.md](agent-doc/architecture.md)。
 
@@ -118,7 +120,7 @@ bun run admin:dev
 - SQLite ID 使用 `bigint`；Telegram JSON 中需要字符串化的 ID 不得经过不安全 `number` 转换。
 - 不新增第二套 Provider、调度、审计或进程执行约定；复用现有模块。
 - 清理式切换：迁移所有调用方并删除旧路径，不保留兼容别名或隐藏 fallback。
-- Admin Panel 后端复用 `SqliteStore`，只做只读审计查询；不新增第二套数据访问层。
+- Admin Panel 后端复用 `SqliteStore`，审计查询只读；记忆增删改查是唯一的管理写入例外。
 
 ## Testing Guidelines
 
@@ -144,4 +146,4 @@ bun run admin:dev
 - MCP HTTP 禁止重定向和 URL 凭据；stdio 仅执行配置中的固定 argv。
 - 配置文件和 `data_dir` 在非 Windows 系统上必须满足权限检查；systemd 单元使用 `UMask=0077` 与最小写路径。
 - Admin Panel 密码只以 Argon2id hash 存储；Session Token 只存 SHA-256 摘要，Cookie 为 `HttpOnly` + `SameSite=Strict`。
-- Admin 审计 API 全部只读；过滤参数经白名单校验并使用绑定参数，禁止拼接 SQL。
+- Admin 审计 API 全部只读；记忆管理 API 是唯一写入例外。过滤参数经白名单校验并使用绑定参数，禁止拼接 SQL。

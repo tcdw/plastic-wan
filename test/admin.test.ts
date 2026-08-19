@@ -192,8 +192,11 @@ test("audit routes expose tool sessions, messages and sticker cache", async () =
     if (invocationId === undefined) throw new Error("Expected an invocation");
     const iso = received.toISOString();
     store.db
-      .query("UPDATE invocations SET state = 'completed', started_at = ?, finished_at = ?, completion_reason = 'done', turns_used = 1, tool_calls_used = 1, sends_used = 1 WHERE id = ?")
-      .run(received.toISOString(), received.toISOString(), invocationId);
+      .query("UPDATE invocations SET state = 'completed', started_at = ?, finished_at = ?, completion_reason = 'done', turns_used = 1, tool_calls_used = 1, sends_used = 1, tool_registry_json = ? WHERE id = ?")
+      .run(received.toISOString(), received.toISOString(), JSON.stringify([
+        { name: "send", label: "Send to Telegram", description: "Send one plain-text message" },
+        { name: "add_memory", label: "Add memory", description: "Save a short-term note" },
+      ]), invocationId);
     store.db
       .query("INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, result_text, state, side_effect, duration_ms, created_at, finished_at) VALUES (?, 'call-1', 'send', '{\"text\":\"hi\"}', 'sent', 'success', 1, 42, ?, ?)")
       .run(invocationId, iso, iso);
@@ -203,8 +206,8 @@ test("audit routes expose tool sessions, messages and sticker cache", async () =
       .query("INSERT INTO telegram_sends(tool_call_id, conversation_id, kind, request_json, state, telegram_message_id, created_at, finished_at) VALUES (?, (SELECT conversation_id FROM invocations WHERE id = ?), 'text', '{\"text\":\"hi\"}', 'success', 555, ?, ?)")
       .run(toolRow.id, invocationId, iso, iso);
     store.db
-      .query("INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, input_tokens, output_tokens, total_tokens, cost, duration_ms, created_at, finished_at) VALUES (?, 'agent', 'agent', 'agent-model', 1, 'success', 100, 20, 120, 0.5, 900, ?, ?)")
-      .run(invocationId, iso, iso);
+      .query("INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, input_tokens, output_tokens, total_tokens, cost, duration_ms, tools_json, created_at, finished_at) VALUES (?, 'agent', 'agent', 'agent-model', 1, 'success', 100, 20, 120, 0.5, 900, ?, ?, ?)")
+      .run(invocationId, JSON.stringify(["send", "add_memory"]), iso, iso);
     store.db
       .query("INSERT INTO agent_messages(invocation_id, sequence_no, role, text, created_at) VALUES (?, 1, 'assistant', 'private reasoning', ?)")
       .run(invocationId, iso);
@@ -234,7 +237,11 @@ test("audit routes expose tool sessions, messages and sticker cache", async () =
 
     const detail = await readJson((await server.handle(request(`/api/invocations/${invocationId}`, { headers }))));
     expect(detail.tool_calls[0]).toMatchObject({ tool_name: "send", state: "success", side_effect: true, duration_ms: 42 });
+    expect(detail.tool_registry).toHaveLength(2);
+    expect(detail.tool_registry[0]).toMatchObject({ name: "send", label: "Send to Telegram" });
+    expect(detail.tool_registry[1]?.description).toBe("Save a short-term note");
     expect(detail.model_calls[0]).toMatchObject({ provider: "agent", model: "agent-model", total_tokens: 120 });
+    expect(detail.model_calls[0].tools).toEqual(["send", "add_memory"]);
     expect(detail.agent_messages[0]).toMatchObject({ role: "assistant", text: "private reasoning" });
     expect(detail.telegram_sends[0]).toMatchObject({ kind: "text", state: "success", telegram_message_id: "555" });
     expect(detail.context_messages.some((entry: { section: string }) => entry.section === "new")).toBe(true);

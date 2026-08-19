@@ -1,11 +1,13 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
- import {
+import {
   getInvocation,
   getMessage,
   getOverview,
   getSession,
   getUsage,
   listInvocations,
+  listMemories,
+  listMemoryChats,
   listMessages,
   listStickerSets,
   listStickers,
@@ -63,6 +65,20 @@ export function stickersQuery(filters: ListFilters) {
     getNextPageParam: (last) => last.next_cursor,
   });
 }
+
+export function memoriesQuery(filters: ListFilters) {
+  return infiniteQueryOptions({
+    queryKey: ["memories", filters],
+    queryFn: ({ pageParam }) => listMemories({ ...filters, limit: PAGE_SIZE, cursor: pageParam }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.next_cursor,
+  });
+}
+
+export const memoryChatsQuery = queryOptions({
+  queryKey: ["memory-chats"],
+  queryFn: listMemoryChats,
+});
 
 export function invocationQuery(id: string) {
   return queryOptions({

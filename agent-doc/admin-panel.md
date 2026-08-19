@@ -1,8 +1,8 @@
 # Admin Panel
 
-Admin Panel 是随 `serve` 启动的本地只读审计界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析与已配置 Sticker Set 的可搜索索引。后端在 `src/admin/`，前端在 `apps/admin/`（Rsbuild + React + Ant Design + TanStack Query + TanStack Router）。
+Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析、已配置 Sticker Set 的可搜索索引，以及 Agent 短期记忆（`memories`）。后端在 `src/admin/`，前端在 `apps/admin/`（Rsbuild + React + Ant Design + TanStack Query + TanStack Router）。
 
-Admin Panel 以只读审计为主，另提供受控的管理员凭据修改和取消所有待处理会话操作。它不能发送消息、修改运行配置、重跑 Invocation 或删除审计记录。
+审计数据只读；记忆管理是该规则唯一的写入例外：管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`）。面板不能发送消息、修改运行配置、重跑 Invocation 或删除审计记录。
 
 ## 配置
 
@@ -69,7 +69,14 @@ static_dir = "/opt/plasticwan/apps/admin/dist"
 | `GET /messages/:id` | 全部 Revision 与媒体（含视觉描述） |
 | `GET /sticker-sets` | Set 同步状态与索引进度 |
 | `GET /stickers` | 已配置 Sticker Set 的可搜索索引条目与分析元数据 |
+| `GET /memories` | 记忆列表，可按 `chat`（Telegram Chat ID）与 `state`（`active`/`expired`/`long_ttl`）过滤 |
+| `GET /memories/chats` | 已知 Chat 列表（记忆创建表单的选项来源） |
+| `POST /memories` | 创建记忆：`chat_id`、可选 `message_thread_id`（默认 0）、`content`（1–150 字符）、可选 `ttl_seconds`（默认 1 天） |
+| `PUT /memories/:id` | 修改 `content` 和/或按 `ttl_seconds` 续期（至少提供一项）；不存在返回 404 |
+| `DELETE /memories/:id` | 删除记忆；不存在返回 404 |
 | `POST /cancel-pending-sessions` | 取消所有 `collecting`/`queued` Bucket 及其 queued Invocation，并退回当日调用预算 |
+
+记忆列表项包含 `expired` 与 `long_ttl` 布尔标记：`long_ttl` 表示剩余寿命超过 `agent.memory_ttl_warning_days`（默认 30 天）。创建时若 `(chat_id, message_thread_id)` 对应的 Conversation 尚不存在会自动创建。
 
 `GET /stickers` 不列出群聊中收到的任意 Sticker。只有 `telegram.sticker_sets` 中配置的 Set 才会同步到该索引并获准供 Bot 搜索和发送；聊天媒体的按需视觉分析属于 `media_analyses`，在消息详情中展示。
 
@@ -105,7 +112,7 @@ bun run admin:dev     # Rsbuild dev server，/api 代理到 ADMIN_API_TARGET
 | `src/queries.ts` | TanStack Query option 工厂（列表用 infinite query） |
 | `src/routes.tsx` | 认证门、登录/初始化卡片、Layout 与路由树 |
 | `src/components.tsx` | `queryState()` 占位渲染、JSON 块、状态 Tag |
-| `src/pages/*.tsx` | Overview、Tool sessions、Messages、Bot Sticker Set 索引 |
+| `src/pages/*.tsx` | Overview、Tool sessions、Messages、Memories、Bot Sticker Set 索引 |
 
 `queryState()` 是普通函数而非组件：调用方依赖 `null` 判断是否渲染真实数据，JSX 元素永远不为 `null`。
 
@@ -126,10 +133,13 @@ Tool session 详情默认打开 Overview 时间线：按时间合并冻结消息
 
 ```bash
 bun test test/admin.test.ts
+bun test test/memory.test.ts
 bun run check
 bun run admin:build
 ```
 
 `test/admin.test.ts` 覆盖：首次初始化与登录态转换、弱密码拒绝且不写入用户、`setup` 重复调用冲突、错误凭据与未知用户的统一 401、跨站 `POST` 拒绝、审计三大视图的字段与过滤、非法 `limit`/`state` 的 400、审计路由写操作 405、静态资源回退与目录穿越拒绝、`admin.host` 非回环时配置加载失败。
 
-浏览器冒烟应确认：初始化表单 → Overview 统计 → Tool session 详情六个 Tab，默认 Overview 按时间显示收到的消息与 `send` 内容 → 消息搜索与详情 Revision、媒体分析 → 已配置 Sticker Set 与 `index_state` 过滤 → 登出后深链接回落登录页 → 重新登录恢复。
+`test/memory.test.ts` 覆盖：记忆持久化与 TTL 过期、跨 Conversation 隔离与删除幂等、Tool 审计与 150 字符硬限制、system prompt 注入顺序与过滤、管理 API 的 CRUD/聊天过滤/`long_ttl` 与 `expired` 标记/参数校验/404 与 405、`purgeExpiredData` 清理过期记忆。
+
+浏览器冒烟应确认：初始化表单 → Overview 统计 → Tool session 详情六个 Tab，默认 Overview 按时间显示收到的消息与 `send` 内容 → 消息搜索与详情 Revision、媒体分析 → 已配置 Sticker Set 与 `index_state` 过滤 → Memories 页面按群聊与状态过滤、新建/编辑/删除记忆、长 TTL 记忆显示 warning → 登出后深链接回落登录页 → 重新登录恢复。

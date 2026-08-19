@@ -20,6 +20,7 @@ bun test test/media.test.ts test/stickers.test.ts
 bun test test/mcp.test.ts
 bun test test/operations.test.ts test/foundation.test.ts
 bun test test/admin.test.ts
+bun test test/memory.test.ts
 ```
 
 | 测试 | 主要契约 |
@@ -28,12 +29,13 @@ bun test test/admin.test.ts
 | `telegram-ingestion.test.ts` | allowlist、Revision、Bot/Service、Topic 隔离 |
 | `scheduler.test.ts` | 配置 deadline、冻结快照、恢复和合并 |
 | `context-send.test.ts` | Context 可见性、Reply capability、发送次数与未知结果 |
-| `agent-runtime.test.ts` | Fresh Agent、Tool 循环、预算和 transcript 隔离 |
+| `agent-runtime.test.ts` | Fresh Agent、Tool 循环、预算、transcript 隔离与工具可见性审计 |
 | `media.test.ts` | 图片标准化、缓存和 Vision reasoning |
 | `stickers.test.ts` | Set 同步、结构化视觉 Tool Call、索引、搜索、发送 |
 | `mcp.test.ts` | stdio/HTTP transport、策略、预算、Header、重定向和审计 |
 | `operations.test.ts` | Retention、备份轮换、Scheduler 关闭 |
 | `admin.test.ts` | Admin 首次设置、登录、Session、只读审计 API 与静态托管 |
+| `memory.test.ts` | 记忆持久化与 TTL、Conversation 隔离、Tool 审计、system prompt 注入、Admin 记忆 CRUD |
 
 跨模块改动完成后运行全部测试与 TypeScript 检查。
 
@@ -101,8 +103,9 @@ bun run src/cli.ts serve --config dev-data/config.toml
 4. Tool session 详情五个 Tab（Tool calls / Model calls / Telegram sends / Agent transcript / Frozen context）各自渲染对应表格。
 5. 消息搜索命中当前 Chat 的文本，详情展示全部 Revision。
 6. Bot sticker sets 页面明确说明只包含 `telegram.sticker_sets` 中配置的 Set，并按 Set 与 `index_state` 过滤后行数变化。
-7. 登出后访问深链接回落登录页；重新登录恢复访问。
-8. `admin_users.password_hash` 以 `$argon2id$` 开头，`admin_sessions` 只有 64 位十六进制摘要。
+7. Memories 页面按群聊与状态过滤，新建/编辑/删除记忆后列表刷新；剩余寿命超过 `memory_ttl_warning_days` 的记忆带 warning 标记。
+8. 登出后访问深链接回落登录页；重新登录恢复访问。
+9. `admin_users.password_hash` 以 `$argon2id$` 开头，`admin_sessions` 只有 64 位十六进制摘要。
 
 未构建 bundle 时静态路由返回 503 `admin_bundle_missing`，API 仍可用；这不是启动失败。
 

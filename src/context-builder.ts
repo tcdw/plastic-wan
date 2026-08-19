@@ -2,6 +2,7 @@ import Type, { type Static } from "typebox";
 import Compile from "typebox/compile";
 import type { RawConfig } from "./config.ts";
 import type { SqliteStore } from "./database.ts";
+import { MemoryStore } from "./memory.ts";
 
 const Strict = { additionalProperties: false } as const;
 const MediaSnapshotSchema = Type.Object(
@@ -85,10 +86,12 @@ export interface InvocationContext {
 export class ContextBuilder {
   readonly #store: SqliteStore;
   readonly #config: RawConfig;
+  readonly #memory: MemoryStore;
 
   constructor(store: SqliteStore, config: RawConfig) {
     this.#store = store;
     this.#config = config;
+    this.#memory = new MemoryStore(store.db);
   }
 
   build(invocationId: bigint, contextWindow: number, toolSchemaCharacters: number, supportsImages = false): InvocationContext {
@@ -130,6 +133,7 @@ export class ContextBuilder {
       catchUp,
       chatConfig.instructions,
       `Current time in ${timezone}: ${currentTime}`,
+      this.#memoryPrompt(identity.conversation_id),
     ].filter((part) => part.length > 0).join("\n\n");
     const rows = this.#store.db
       .query<InvocationMessageRow, [bigint]>(
@@ -215,6 +219,20 @@ export class ContextBuilder {
       omittedNewMessages,
     };
   }
+  /**
+   * The memory block sits last in the system prompt, ordered by creation time, so
+   * that add_memory appends at the tail and preserves the provider prefix cache.
+   */
+  #memoryPrompt(conversationId: bigint): string {
+    const memories = this.#memory.listActive(conversationId, new Date());
+    return [
+      "Memory: short-term notes you deliberately saved for this conversation with add_memory. Keep each note under 100 characters; the hard limit is 150. Notes expire after their TTL (1 day by default). Delete wrong or obsolete notes with delete_memory. Setting a long TTL nominates stable knowledge for human review; durable rules live in agents.md and are curated by humans.",
+      "<memory_list>",
+      ...memories.map((entry) => `- ${entry.id}: ${entry.content}`),
+      "</memory_list>",
+    ].join("\n");
+  }
+
   #prepareSnapshot(
     json: string,
     capabilities: Map<string, bigint>,

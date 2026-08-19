@@ -81,6 +81,16 @@ test("a fresh Agent publishes only through send and audits model usage", async (
     .map((row) => row.text);
   expect(assistantTexts).toContain("private assistant text");
   expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM model_calls WHERE state = 'success'").get()?.count).toBe(2n);
+  const presented = store.db
+    .query<{ tools_json: string | null }, []>("SELECT tools_json FROM model_calls WHERE role = 'agent' ORDER BY id LIMIT 1")
+    .get();
+  expect(presented?.tools_json).toBe(JSON.stringify(["send"]));
+  const registryRow = store.db
+    .query<{ tool_registry_json: string | null }, [bigint]>("SELECT tool_registry_json FROM invocations WHERE id = ?")
+    .get(invocationId);
+  expect(registryRow?.tool_registry_json).toContain('"name":"send"');
+  expect(registryRow?.tool_registry_json).toContain('"label":"Send to Telegram"');
+  expect(registryRow?.tool_registry_json).toContain("Send one plain-text message");
   store.close();
 });
 
@@ -261,5 +271,10 @@ test("lets a text-only agent read a Telegram photo through read_image", async ()
   expect(visionFaux.state.callCount).toBe(1);
   expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM tool_calls WHERE tool_name = 'read_image' AND state = 'success'").get()?.count).toBe(1n);
   expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM model_calls WHERE role = 'vision_chat' AND state = 'success'").get()?.count).toBe(1n);
+  const presented = store.db
+    .query<{ tools_json: string | null }, []>("SELECT tools_json FROM model_calls WHERE role = 'agent' ORDER BY id LIMIT 1")
+    .get();
+  const toolsJson = presented?.tools_json ?? null;
+  expect(toolsJson === null ? null : JSON.parse(toolsJson)).toEqual(["send", "read_image"]);
   store.close();
 });

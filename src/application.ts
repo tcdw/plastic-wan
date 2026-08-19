@@ -7,6 +7,7 @@ import type { InvocationContext } from "./context-builder.ts";
 import { ServeLock, SqliteStore } from "./database.ts";
 import { SecretStore } from "./secrets.ts";
 import { MediaService, TelegramMediaClient } from "./media.ts";
+import { createMemoryTools, MemoryStore } from "./memory.ts";
 import { McpManager } from "./mcp.ts";
 import { createModelRegistry } from "./providers.ts";
 import { BucketScheduler } from "./scheduler.ts";
@@ -74,6 +75,7 @@ export async function serve(configPath: string): Promise<void> {
     stickerService.start();
     const mcpManager = new McpManager(store, loaded.config, secrets);
     mcp = mcpManager;
+    const memoryStore = new MemoryStore(store.db);
     const runtime = new AgentRuntime({
       store,
       config: loaded.config,
@@ -89,6 +91,7 @@ export async function serve(configPath: string): Promise<void> {
       additionalTools: (context, state, deadline) => [
         media.createReadImageTool(context, deadline),
         stickerService.createSearchTool(context, state.stickerCapabilities),
+        ...createMemoryTools(memoryStore, context),
         ...mcpManager.createTools(context, deadline),
       ],
     });
@@ -109,6 +112,7 @@ export async function serve(configPath: string): Promise<void> {
     mcpManager.setRegistryValidator((mcpTools) => runtime.validateAdditionalTools(preview, [
       media.createReadImageTool(preview, Number.MAX_SAFE_INTEGER),
       stickerService.createSearchTool(preview, new Map()),
+      ...createMemoryTools(memoryStore, preview),
       ...mcpTools,
     ]));
     const catchUpController = new AbortController();

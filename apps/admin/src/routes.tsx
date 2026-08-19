@@ -13,6 +13,7 @@ import { useState } from "react";
 import { ApiError, createFirstAdmin, login, logout, updateCredentials, type Credentials } from "./api.ts";
 import { queryState } from "./components.tsx";
 import { InvocationDetailPage, InvocationsPage } from "./pages/invocations.tsx";
+import { MemoriesPage } from "./pages/memories.tsx";
 import { MessageDetailPage, MessagesPage } from "./pages/messages.tsx";
 import { OverviewPage } from "./pages/overview.tsx";
 import { StickersPage } from "./pages/stickers.tsx";
@@ -22,6 +23,7 @@ const MENU_ITEMS = [
   { key: "/", label: <Link to="/">Overview</Link> },
   { key: "/invocations", label: <Link to="/invocations">Tool sessions</Link> },
   { key: "/messages", label: <Link to="/messages">Messages</Link> },
+  { key: "/memories", label: <Link to="/memories">Memories</Link> },
   { key: "/stickers", label: <Link to="/stickers">Bot sticker sets</Link> },
   { key: "/settings", label: <Link to="/settings">Settings</Link> },
 ];
@@ -223,6 +225,8 @@ const invocationDetailRoute = createRoute({
 
 const messagesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/messages", component: MessagesPage });
 
+const memoriesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/memories", component: MemoriesPage });
+
 const messageDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/messages/$messageId",
@@ -239,6 +243,7 @@ export const routeTree = rootRoute.addChildren([
   invocationsRoute,
   invocationDetailRoute,
   messagesRoute,
+  memoriesRoute,
   messageDetailRoute,
   settingsRoute,
   stickersRoute,

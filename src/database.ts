@@ -140,6 +140,7 @@ export async function backupDatabase(config: RawConfig): Promise<string> {
 export function purgeExpiredData(database: Database, config: RawConfig, now = new Date()): void {
   const cutoff = new Date(now.getTime() - config.retention.online_days * 86_400_000).toISOString();
   database.transaction(() => {
+    database.query("DELETE FROM memories WHERE expires_at <= ?").run(now.toISOString());
     database.query("DELETE FROM telegram_updates WHERE received_at < ?").run(cutoff);
     database.query(`
       DELETE FROM telegram_sends

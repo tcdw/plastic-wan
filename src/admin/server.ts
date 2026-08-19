@@ -17,6 +17,17 @@ import {
   usage,
   type ListQuery,
 } from "./audit.ts";
+import {
+  createMemory,
+  deleteMemory,
+  listMemories,
+  listMemoryChats,
+  parseCreateMemoryBody,
+  parseMemoryId,
+  parseUpdateMemoryBody,
+  updateMemory,
+} from "./memory-admin.ts";
+import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from "../memory.ts";
 import { cancelPendingSessions } from "./operations.ts";
 
 const SESSION_COOKIE = "plasticwan_admin";
@@ -59,6 +70,7 @@ export class AdminServer {
   readonly #auth: AdminAuth;
   readonly #scheduler: BucketScheduler | undefined;
   readonly #staticDir: string;
+  readonly #memoryWarningDays: number;
   #server: Server<undefined> | undefined;
 
   constructor(options: AdminServerOptions) {
@@ -69,6 +81,7 @@ export class AdminServer {
     this.#auth = new AdminAuth(options.store.db, admin.session_ttl_hours);
     this.#scheduler = options.scheduler;
     this.#staticDir = resolve(admin.static_dir ?? join(import.meta.dir, "..", "..", "apps", "admin", "dist"));
+    this.#memoryWarningDays = options.config.agent.memory_ttl_warning_days ?? DEFAULT_MEMORY_TTL_WARNING_DAYS;
   }
 
   start(): { readonly hostname: string; readonly port: number } {
@@ -112,10 +125,10 @@ export class AdminServer {
   }
 
   async #api(request: Request, url: URL, segments: readonly string[]): Promise<Response> {
-    if (request.method !== "GET" && request.method !== "POST") {
-      return json({ error: "method_not_allowed", message: "Only GET and POST are supported" }, 405);
+    if (request.method !== "GET" && request.method !== "POST" && request.method !== "PUT" && request.method !== "DELETE") {
+      return json({ error: "method_not_allowed", message: "Unsupported method" }, 405);
     }
-    if (request.method === "POST") {
+    if (request.method === "POST" || request.method === "PUT" || request.method === "DELETE") {
       const origin = request.headers.get("origin");
       if (origin !== null && new URL(origin).host !== url.host) {
         return json({ error: "bad_origin", message: "Cross-origin admin requests are rejected" }, 403);
@@ -155,7 +168,7 @@ export class AdminServer {
       this.#scheduler?.wake();
       return json(result);
     }
-    if (request.method !== "GET") return json({ error: "method_not_allowed", message: "Audit routes are read-only" }, 405);
+    const database = this.#store.db;
     const query: ListQuery = {
       limit: url.searchParams.get("limit"),
       cursor: url.searchParams.get("cursor"),
@@ -164,7 +177,31 @@ export class AdminServer {
       set: url.searchParams.get("set"),
       search: url.searchParams.get("search"),
     };
-    const database = this.#store.db;
+    if (route === "memories" && request.method === "GET") {
+      return json(listMemories(database, query, this.#memoryWarningDays));
+    }
+    if (route === "memories" && request.method === "POST") {
+      const body = parseCreateMemoryBody(await readJsonObject(request));
+      return json(createMemory(database, body, this.#memoryWarningDays));
+    }
+    if (route === "memories/chats" && request.method === "GET") {
+      return json({ items: listMemoryChats(database) });
+    }
+    if (segments[0] === "memories" && segments.length === 2) {
+      if (segments[1] === "chats") {
+        return json({ error: "method_not_allowed", message: "Memories chat options are read-only" }, 405);
+      }
+      const id = parseMemoryId(segments[1] ?? "");
+      if (request.method === "PUT") {
+        const body = parseUpdateMemoryBody(await readJsonObject(request));
+        return json(updateMemory(database, id, body, this.#memoryWarningDays));
+      }
+      if (request.method === "DELETE") {
+        deleteMemory(database, id);
+        return json({ status: "ok" });
+      }
+    }
+    if (request.method !== "GET") return json({ error: "method_not_allowed", message: "Audit routes are read-only" }, 405);
     if (route === "overview") return json(overview(database));
     if (route === "usage") {
       const daysParam = url.searchParams.get("days");
@@ -245,7 +282,7 @@ function readCookie(request: Request, name: string): string {
   return "";
 }
 
-async function readCredentials(request: Request): Promise<AdminCredentials> {
+async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
   const declared = request.headers.get("content-length");
   if (declared !== null && Number(declared) > MAX_BODY_BYTES) {
     throw new AdminAuthError(413, "body_too_large", "Request body is too large");
@@ -258,8 +295,14 @@ async function readCredentials(request: Request): Promise<AdminCredentials> {
   } catch {
     throw new AdminAuthError(400, "invalid_body", "Request body must be JSON");
   }
-  if (typeof parsed !== "object" || parsed === null) throw new AdminAuthError(400, "invalid_body", "Request body must be a JSON object");
-  const record = parsed as Record<string, unknown>;
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new AdminAuthError(400, "invalid_body", "Request body must be a JSON object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+async function readCredentials(request: Request): Promise<AdminCredentials> {
+  const record = await readJsonObject(request);
   const username = record["username"];
   const password = record["password"];
   if (typeof username !== "string" || typeof password !== "string") {

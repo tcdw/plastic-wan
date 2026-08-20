@@ -78,9 +78,6 @@ export async function createModelRegistry(config: RawConfig, secrets: SecretStor
   }
   const agentModel = requireModel(models, config.agent.provider, config.agent.model, ["text"]);
   const visionModel = requireModel(models, config.vision.provider, config.vision.model, ["image"]);
-  if (config.agent.max_output_tokens > agentModel.maxTokens) {
-    throw new Error("Agent max_output_tokens exceeds registered model limit");
-  }
   if (config.vision.max_output_tokens > visionModel.maxTokens) {
     throw new Error("Vision max_output_tokens exceeds registered model limit");
   }

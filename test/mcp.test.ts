@@ -74,7 +74,7 @@ global_daily_calls = 2
     const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({ state: "completed", reason: "done" }));
     const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
     if (invocationId === undefined) throw new Error("Expected a due invocation");
-    const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0);
+    const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
     const [tool] = manager.createTools(context, Date.now() + 30_000);
     if (tool === undefined) throw new Error("MCP tool was not exposed");
 
@@ -176,7 +176,7 @@ global_daily_calls = 2
     const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({ state: "completed", reason: "done" }));
     const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
     if (invocationId === undefined) throw new Error("Expected a due invocation");
-    const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0);
+    const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
     const [tool] = manager.createTools(context, Date.now() + 30_000);
     if (tool === undefined) throw new Error("HTTP MCP tool was not exposed");
     const result = await tool.execute("http-1", { key: "answer" });

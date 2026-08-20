@@ -30,6 +30,7 @@ import {
 import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from "../memory.ts";
 import { cancelPendingSessions } from "./operations.ts";
 import { addBotAdmin, listBotAdmins, parseAdminUserId, removeBotAdmin } from "./admins.ts";
+import { ModelSwitchError, type AgentModelSwitcher, type AgentModelOption } from "../model-switch.ts";
 
 const SESSION_COOKIE = "plasticwan_admin";
 const MAX_BODY_BYTES = 8_192;
@@ -63,13 +64,16 @@ export interface AdminServerOptions {
   readonly store: SqliteStore;
   readonly config: RawConfig;
   readonly scheduler?: BucketScheduler;
+  readonly modelSwitcher?: AgentModelSwitcher;
 }
 
 export class AdminServer {
   readonly #store: SqliteStore;
+  readonly #config: RawConfig;
   readonly #admin: AdminConfig;
   readonly #auth: AdminAuth;
   readonly #scheduler: BucketScheduler | undefined;
+  readonly #modelSwitcher: AgentModelSwitcher | undefined;
   readonly #staticDir: string;
   readonly #memoryWarningDays: number;
   #server: Server<undefined> | undefined;
@@ -78,9 +82,11 @@ export class AdminServer {
     const admin = options.config.admin;
     if (admin === undefined) throw new Error("Admin panel is not configured");
     this.#store = options.store;
+    this.#config = options.config;
     this.#admin = admin;
     this.#auth = new AdminAuth(options.store.db, admin.session_ttl_hours);
     this.#scheduler = options.scheduler;
+    this.#modelSwitcher = options.modelSwitcher;
     this.#staticDir = resolve(admin.static_dir ?? join(import.meta.dir, "..", "..", "apps", "admin", "dist"));
     this.#memoryWarningDays = options.config.agent.memory_ttl_warning_days ?? DEFAULT_MEMORY_TTL_WARNING_DAYS;
   }
@@ -112,8 +118,9 @@ export class AdminServer {
       if (segments[0] === "api") return await this.#api(request, url, segments.slice(1));
       return await this.#staticAsset(request, segments);
     } catch (error) {
-      if (error instanceof AdminAuthError || error instanceof AdminQueryError) {
-        return json({ error: error.code, message: error.message }, error.status);
+      if (error instanceof AdminAuthError || error instanceof AdminQueryError || error instanceof ModelSwitchError) {
+        const status = error instanceof ModelSwitchError ? 400 : error.status;
+        return json({ error: error.code, message: error.message }, status);
       }
       console.error(JSON.stringify({
         event: "admin_request_failed",
@@ -213,6 +220,25 @@ export class AdminServer {
       removeBotAdmin(database, parseAdminUserId(segments[1] ?? "", "admin_id"));
       return json({ status: "ok" });
     }
+    if (route === "model") {
+      const switcher = this.#modelSwitcher;
+      if (switcher === undefined) {
+        return json({ error: "model_switch_unavailable", message: "Runtime model switching is not wired" }, 503);
+      }
+      if (request.method === "GET") {
+        return json(this.#modelState(switcher, switcher.current()));
+      }
+      if (request.method === "PUT") {
+        const body = await readJsonObject(request);
+        if (typeof body.provider !== "string" || typeof body.model !== "string") {
+          return json({ error: "invalid_model_reference", message: "provider and model must be strings" }, 400);
+        }
+        return json(this.#modelState(switcher, switcher.switch(body.provider, body.model)));
+      }
+      if (request.method === "DELETE") {
+        return json(this.#modelState(switcher, switcher.reset()));
+      }
+    }
     if (request.method !== "GET") return json({ error: "method_not_allowed", message: "Audit routes are read-only" }, 405);
     if (route === "overview") return json(overview(database));
     if (route === "usage") {
@@ -236,6 +262,34 @@ export class AdminServer {
     if (route === "sticker-sets") return json({ items: listStickerSets(database) });
     if (route === "stickers") return json(listStickers(database, query));
     return json({ error: "not_found", message: "Unknown admin API route" }, 404);
+  }
+
+  #modelState(switcher: AgentModelSwitcher, current: AgentModelOption): {
+    readonly current: {
+      readonly provider: string;
+      readonly model: string;
+      readonly name: string;
+      readonly context_window: number;
+      readonly max_tokens: number;
+    };
+    readonly default: { readonly provider: string; readonly model: string };
+    readonly options: readonly { readonly provider: string; readonly model: string; readonly name: string }[];
+  } {
+    return {
+      current: {
+        provider: current.provider,
+        model: current.model,
+        name: current.name,
+        context_window: current.contextWindow,
+        max_tokens: current.maxTokens,
+      },
+      default: { provider: this.#config.agent.provider, model: this.#config.agent.model },
+      options: switcher.list().map((option) => ({
+        provider: option.provider,
+        model: option.model,
+        name: option.name,
+      })),
+    };
   }
 
   async #staticAsset(request: Request, segments: readonly string[]): Promise<Response> {

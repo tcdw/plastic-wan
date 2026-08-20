@@ -6,7 +6,10 @@ import type { Update } from "grammy/types";
 import { AdminServer } from "../src/admin/server.ts";
 import { loadConfig, type LoadedConfig } from "../src/config.ts";
 import { SqliteStore } from "../src/database.ts";
+import { AgentModelSwitcher } from "../src/model-switch.ts";
+import { createModelRegistry } from "../src/providers.ts";
 import { BucketScheduler } from "../src/scheduler.ts";
+import { SecretStore } from "../src/secrets.ts";
 import { TelegramIngestion } from "../src/telegram-ingestion.ts";
 import { testConfigToml, writeTestConfig } from "./helpers.ts";
 
@@ -436,6 +439,78 @@ test("admins API lists, adds and removes bot admins", async () => {
     expect(removed.status).toBe(200);
     expect(await readJson(removed)).toEqual({ status: "ok" });
     expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM bot_admins").get()?.count).toBe(0n);
+  } finally {
+    store.close();
+  }
+});
+
+test("model API lists, switches and resets the agent model", async () => {
+  const { store, loaded } = await fixture();
+  const registry = await createModelRegistry(loaded.config, new SecretStore());
+  const switcher = new AgentModelSwitcher(loaded.config, registry.models);
+  const server = new AdminServer({ store, config: loaded.config, modelSwitcher: switcher });
+  try {
+    const unauthenticated = await server.handle(request("/api/model"));
+    expect(unauthenticated.status).toBe(401);
+
+    const created = await server.handle(post("/api/auth/setup", { username: "owner", password: PASSWORD }));
+    const cookie = sessionCookie(created);
+    const call = (init: RequestInit = {}): Request =>
+      request("/api/model", { ...init, headers: { ...init.headers, cookie } });
+
+    const initial = await readJson((await server.handle(call())));
+    expect(initial.current).toMatchObject({
+      provider: "agent",
+      model: "agent-model",
+      name: "Agent Model",
+      context_window: 200_000,
+      max_tokens: 32_768,
+    });
+    expect(initial.default).toEqual({ provider: "agent", model: "agent-model" });
+    expect(initial.options).toEqual([
+      { provider: "agent", model: "agent-model", name: "Agent Model" },
+      { provider: "vision", model: "vision-model", name: "Vision Model" },
+    ]);
+
+    const switched = await readJson((await server.handle(call({
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "vision", model: "vision-model" }),
+    }))));
+    expect(switched.current).toMatchObject({ provider: "vision", model: "vision-model", max_tokens: 8_192 });
+    expect(switched.default).toEqual({ provider: "agent", model: "agent-model" });
+
+    const malformed = await server.handle(call({
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "vision" }),
+    }));
+    expect(malformed.status).toBe(400);
+    expect(await readJson(malformed)).toMatchObject({ error: "invalid_model_reference" });
+
+    const unknownProvider = await server.handle(call({
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "ghost", model: "agent-model" }),
+    }));
+    expect(unknownProvider.status).toBe(400);
+    expect(await readJson(unknownProvider)).toMatchObject({ error: "unknown_provider" });
+
+    const unknownModel = await server.handle(call({
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "agent", model: "ghost-model" }),
+    }));
+    expect(unknownModel.status).toBe(400);
+    expect(await readJson(unknownModel)).toMatchObject({ error: "unknown_model" });
+
+    // The failed switches must not change the effective model.
+    const afterFailures = await readJson((await server.handle(call())));
+    expect(afterFailures.current).toMatchObject({ provider: "vision", model: "vision-model" });
+
+    const reset = await readJson((await server.handle(call({ method: "DELETE" }))));
+    expect(reset.current).toMatchObject({ provider: "agent", model: "agent-model" });
+    expect(switcher.current()).toMatchObject({ provider: "agent", model: "agent-model" });
   } finally {
     store.close();
   }

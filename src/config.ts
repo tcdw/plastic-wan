@@ -171,7 +171,6 @@ export const ConfigSchema = Type.Object(
       {
         provider: Type.String({ minLength: 1 }),
         model: Type.String({ minLength: 1 }),
-        max_output_tokens: PositiveInteger,
         thinking_level: Type.Union([
           Type.Literal("off"),
           Type.Literal("minimal"),
@@ -399,8 +398,8 @@ function validateModelReference(
   for (const requiredInput of requiredInputs) {
     if (!model.input.includes(requiredInput)) throw new Error(`${role}.model ${modelId} lacks ${requiredInput} input capability`);
   }
-  const configuredMax = role === "agent" ? config.agent.max_output_tokens : config.vision.max_output_tokens;
-  if (configuredMax > model.max_tokens) throw new Error(`${role}.max_output_tokens exceeds model ${modelId} max_tokens`);
+  const configuredMax = config.vision.max_output_tokens;
+  if (configuredMax > model.max_tokens) throw new Error(`vision.max_output_tokens exceeds model ${modelId} max_tokens`);
 }
 
 function validateEndpoint(

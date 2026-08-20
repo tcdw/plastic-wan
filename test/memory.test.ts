@@ -107,7 +107,7 @@ test("add_memory and delete_memory audit tool calls and respect conversation sco
   const { store, loaded, conversationId, invocationId } = await fixture();
   try {
     const memory = new MemoryStore(store.db);
-    const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, false);
+    const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768, false);
     expect(context.conversationId).toBe(conversationId);
     const [addTool, deleteTool] = createMemoryTools(memory, context);
     if (addTool === undefined || deleteTool === undefined) throw new Error("Expected both memory tools");
@@ -166,7 +166,7 @@ test("the system prompt injects active memories in creation order", async () => 
     memory.add(conversationId, "short note", 60, now);
     memory.add(secondConversation(store, conversationId), "other conversation note", 30 * 86_400, now);
 
-    const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, false);
+    const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768, false);
     expect(context.systemPrompt).toContain("<memory_list>");
     const firstIndex = context.systemPrompt.indexOf(`- ${first.id}: first note`);
     const secondIndex = context.systemPrompt.indexOf(`- ${second.id}: second note`);

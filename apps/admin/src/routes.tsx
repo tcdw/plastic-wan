@@ -16,6 +16,7 @@ import { AdminsPage } from "./pages/admins.tsx";
 import { InvocationDetailPage, InvocationsPage } from "./pages/invocations.tsx";
 import { MemoriesPage } from "./pages/memories.tsx";
 import { MessageDetailPage, MessagesPage } from "./pages/messages.tsx";
+import { ModelPage } from "./pages/model.tsx";
 import { OverviewPage } from "./pages/overview.tsx";
 import { StickersPage } from "./pages/stickers.tsx";
 import { sessionQuery } from "./queries.ts";
@@ -26,6 +27,7 @@ const MENU_ITEMS = [
   { key: "/messages", label: <Link to="/messages">Messages</Link> },
   { key: "/memories", label: <Link to="/memories">Memories</Link> },
   { key: "/admins", label: <Link to="/admins">Bot admins</Link> },
+  { key: "/model", label: <Link to="/model">Model</Link> },
   { key: "/stickers", label: <Link to="/stickers">Bot sticker sets</Link> },
   { key: "/settings", label: <Link to="/settings">Settings</Link> },
 ];
@@ -231,6 +233,8 @@ const memoriesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/mem
 
 const adminsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admins", component: AdminsPage });
 
+const modelRoute = createRoute({ getParentRoute: () => rootRoute, path: "/model", component: ModelPage });
+
 const messageDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/messages/$messageId",
@@ -249,6 +253,7 @@ export const routeTree = rootRoute.addChildren([
   messagesRoute,
   memoriesRoute,
   adminsRoute,
+  modelRoute,
   messageDetailRoute,
   settingsRoute,
   stickersRoute,

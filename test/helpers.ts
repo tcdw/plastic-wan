@@ -50,7 +50,6 @@ cost = { input = 1, output = 2, cache_read = 0.1, cache_write = 1 }
 [agent]
 provider = "agent"
 model = "agent-model"
-max_output_tokens = 4096
 thinking_level = "low"
 system_prompt_file = "agent-system-prompt.md"
 max_turns = 8

@@ -7,7 +7,10 @@ import { BOT_COMMANDS, BotCommandService, parseBotCommand, registerBotCommands, 
 import { seedConfigAdmins } from "../src/admin/admins.ts";
 import { loadConfig, type LoadedConfig } from "../src/config.ts";
 import { SqliteStore } from "../src/database.ts";
+import { AgentModelSwitcher } from "../src/model-switch.ts";
+import { createModelRegistry } from "../src/providers.ts";
 import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from "../src/scheduler.ts";
+import { SecretStore } from "../src/secrets.ts";
 import { TelegramIngestion } from "../src/telegram-ingestion.ts";
 import { testConfigToml, writeTestConfig } from "./helpers.ts";
 
@@ -51,6 +54,9 @@ async function setup(
 }
 
 function commandUpdate(updateId: number, messageId: number, token: string, chatId = 123456789): Update {
+  // A bot_command entity spans only the command token (mention included),
+  // never the trailing argument text.
+  const entityLength = token.includes(" ") ? token.indexOf(" ") : token.length;
   return {
     update_id: updateId,
     message: {
@@ -59,7 +65,7 @@ function commandUpdate(updateId: number, messageId: number, token: string, chatI
       chat: { id: chatId, type: "private", first_name: "Owner" },
       from: { id: 42, is_bot: false, first_name: "Alice" },
       text: token,
-      entities: [{ offset: 0, length: token.length, type: "bot_command" }],
+      entities: [{ offset: 0, length: entityLength, type: "bot_command" }],
     },
   };
 }
@@ -91,8 +97,16 @@ describe("parseBotCommand", () => {
   });
 
   test("accepts an explicit matching bot mention and rejects others", async () => {
-    expect(parseBotCommand(message(commandUpdate(1, 1, `/pause@${BOT_USERNAME}`).message), BOT_USERNAME)).toEqual({ name: "pause" });
-    expect(parseBotCommand(message(commandUpdate(1, 1, "/pause@OtherBot").message), BOT_USERNAME)).toBeNull();
+    expect(parseBotCommand(message(commandUpdate(1, 1, "/pause@plasticwan_test_bot").message), BOT_USERNAME)).toEqual({ name: "pause" });
+    expect(parseBotCommand(message(commandUpdate(1, 1, "/pause@other_bot").message), BOT_USERNAME)).toBeNull();
+  });
+
+  test("captures the optional /model argument", async () => {
+    expect(parseBotCommand(message(commandUpdate(1, 1, "/model").message), BOT_USERNAME)).toEqual({ name: "model" });
+    expect(parseBotCommand(message(commandUpdate(1, 1, "/model 2").message), BOT_USERNAME)).toEqual({ name: "model", argument: "2" });
+    expect(parseBotCommand(message(commandUpdate(1, 1, "/Model reset").message), BOT_USERNAME)).toEqual({ name: "model", argument: "reset" });
+    expect(parseBotCommand(message(commandUpdate(1, 1, "/model@plasticwan_test_bot 2").message), BOT_USERNAME)).toEqual({ name: "model", argument: "2" });
+    expect(parseBotCommand(message(commandUpdate(1, 1, "/pause whatever").message), BOT_USERNAME)).toEqual({ name: "pause" });
   });
 
   test("ignores non-commands, unknown commands and trailing text", async () => {
@@ -229,6 +243,77 @@ describe("bot command service", () => {
     commands.run({ name: "pause" }, 123456789n, ALICE, FIXED_NOW);
     expect(commands.run({ name: "status" }, 123456789n, ALICE, FIXED_NOW)).toContain("已暂停");
     store.close();
+  });
+
+  test("status reflects a runtime model switch", async () => {
+    const { store, loaded, scheduler } = await setup();
+    const registry = await createModelRegistry(loaded.config, new SecretStore());
+    const switcher = new AgentModelSwitcher(loaded.config, registry.models);
+    const commands = new BotCommandService(store, loaded.config, scheduler, switcher);
+    switcher.switch("vision", "vision-model");
+    expect(commands.run({ name: "status" }, 123456789n, ALICE, FIXED_NOW)).toContain("vision / vision-model");
+    store.close();
+  });
+
+  describe("model command", () => {
+    async function commandSetup(): Promise<{
+      store: SqliteStore;
+      commands: BotCommandService;
+      switcher: AgentModelSwitcher;
+    }> {
+      const { store, loaded, scheduler } = await setup();
+      const registry = await createModelRegistry(loaded.config, new SecretStore());
+      const switcher = new AgentModelSwitcher(loaded.config, registry.models);
+      const commands = new BotCommandService(store, loaded.config, scheduler, switcher);
+      return { store, commands, switcher };
+    }
+
+    test("is denied for non-admins without changing the model", async () => {
+      const { store, commands, switcher } = await commandSetup();
+      const stranger: CommandSender = { id: 99n, name: "Mallory", username: "mallory" };
+      expect(commands.run({ name: "model" }, 123456789n, stranger, FIXED_NOW)).toBe("该命令仅对本 Bot 的管理员可用。");
+      expect(commands.run({ name: "model", argument: "2" }, 123456789n, stranger, FIXED_NOW)).toBe("该命令仅对本 Bot 的管理员可用。");
+      expect(switcher.current()).toMatchObject({ provider: "agent", model: "agent-model" });
+      store.close();
+    });
+
+    test("without an argument lists the current model and switchable options", async () => {
+      const { store, commands } = await commandSetup();
+      const reply = commands.run({ name: "model" }, 123456789n, ALICE, FIXED_NOW);
+      expect(reply).toContain("当前模型: agent / agent-model");
+      expect(reply).toContain("1. agent / agent-model（Agent Model）");
+      expect(reply).toContain("2. vision / vision-model（Vision Model）");
+      expect(reply).toContain("使用 /model 序号 切换，/model reset 恢复默认");
+      store.close();
+    });
+
+    test("switches by index and the status command reflects it", async () => {
+      const { store, commands, switcher } = await commandSetup();
+      const reply = commands.run({ name: "model", argument: "2" }, 123456789n, ALICE, FIXED_NOW);
+      expect(reply).toBe("已切换: vision / vision-model，将在下一次 agent session 生效。");
+      expect(switcher.current()).toMatchObject({ provider: "vision", model: "vision-model" });
+      expect(commands.run({ name: "status" }, 123456789n, ALICE, FIXED_NOW)).toContain("vision / vision-model");
+      store.close();
+    });
+
+    test("reset reverts to the config default", async () => {
+      const { store, commands, switcher } = await commandSetup();
+      switcher.switch("vision", "vision-model");
+      const reply = commands.run({ name: "model", argument: "reset" }, 123456789n, ALICE, FIXED_NOW);
+      expect(reply).toBe("已恢复 config.toml 默认模型: agent / agent-model。");
+      expect(switcher.current()).toMatchObject({ provider: "agent", model: "agent-model" });
+      store.close();
+    });
+
+    test("rejects invalid arguments without changing the model", async () => {
+      const { store, commands, switcher } = await commandSetup();
+      for (const argument of ["0", "3", "abc", "1x"]) {
+        const reply = commands.run({ name: "model", argument }, 123456789n, ALICE, FIXED_NOW);
+        expect(reply).toContain("无效序号");
+        expect(switcher.current()).toMatchObject({ provider: "agent", model: "agent-model" });
+      }
+      store.close();
+    });
   });
 
   test("status ignores token usage from other days and other chats", async () => {

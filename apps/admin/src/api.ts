@@ -266,6 +266,28 @@ export interface AdminDraft {
   readonly telegram_user_id: string;
 }
 
+export interface ModelOption {
+  readonly provider: string;
+  readonly model: string;
+  readonly name: string;
+}
+
+export interface CurrentModel extends ModelOption {
+  readonly context_window: number;
+  readonly max_tokens: number;
+}
+
+export interface ModelState {
+  readonly current: CurrentModel;
+  readonly default: ModelOption;
+  readonly options: readonly ModelOption[];
+}
+
+export interface ModelSwitchRequest {
+  readonly provider: string;
+  readonly model: string;
+}
+
 export interface StickerEntry {
   readonly id: string;
   readonly set_alias: string;
@@ -470,6 +492,22 @@ export function addBotAdmin(draft: AdminDraft): Promise<BotAdminEntry> {
 
 export function removeBotAdmin(telegramUserId: string): Promise<{ status: string }> {
   return call<{ status: string }>(`/admins/${encodeURIComponent(telegramUserId)}`, { method: "DELETE" });
+}
+
+export function getAgentModel(): Promise<ModelState> {
+  return call<ModelState>("/model");
+}
+
+export function switchAgentModel(request: ModelSwitchRequest): Promise<ModelState> {
+  return call<ModelState>("/model", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+export function resetAgentModel(): Promise<ModelState> {
+  return call<ModelState>("/model", { method: "DELETE" });
 }
 
 export function cancelPendingSessions(): Promise<CancelPendingResult> {

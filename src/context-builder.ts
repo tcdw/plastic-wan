@@ -94,7 +94,13 @@ export class ContextBuilder {
     this.#memory = new MemoryStore(store.db);
   }
 
-  build(invocationId: bigint, contextWindow: number, toolSchemaCharacters: number, supportsImages = false): InvocationContext {
+  build(
+    invocationId: bigint,
+    contextWindow: number,
+    toolSchemaCharacters: number,
+    maxOutputTokens: number,
+    supportsImages = false,
+  ): InvocationContext {
     const identity = this.#store.db
       .query<InvocationIdentityRow, [bigint]>(
         `SELECT i.conversation_id, c.telegram_chat_id, v.message_thread_id, c.type AS chat_type,
@@ -157,7 +163,7 @@ export class ContextBuilder {
       Math.floor(contextWindow * 4 * this.#config.agent.context_stop_ratio)
         - systemPrompt.length
         - toolSchemaCharacters
-        - this.#config.agent.max_output_tokens * 4,
+        - maxOutputTokens * 4,
     );
     const history = prepared.filter((entry) => entry.section === "history");
     const current = prepared.filter((entry) => entry.section === "new");

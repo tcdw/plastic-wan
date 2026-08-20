@@ -2,10 +2,12 @@ import type { Message } from "grammy/types";
 import { isBotAdmin } from "./admin/admins.ts";
 import type { RawConfig } from "./config.ts";
 import type { SqliteStore } from "./database.ts";
+import { AgentModelSwitcher } from "./model-switch.ts";
 import type { BucketScheduler } from "./scheduler.ts";
 
 export interface ParsedCommand {
-  readonly name: "pause" | "resume" | "status";
+  readonly name: "pause" | "resume" | "status" | "model";
+  readonly argument?: string;
 }
 
 export interface CommandSender {
@@ -14,7 +16,7 @@ export interface CommandSender {
   readonly username: string | null;
 }
 
-const COMMAND_NAMES = new Set<ParsedCommand["name"]>(["pause", "resume", "status"]);
+const COMMAND_NAMES = new Set<ParsedCommand["name"]>(["pause", "resume", "status", "model"]);
 const DENIED_REPLY = "该命令仅对本 Bot 的管理员可用。";
 
 export interface BotCommandRegistration {
@@ -28,6 +30,7 @@ export const BOT_COMMANDS: readonly BotCommandRegistration[] = [
   { command: "pause", description: "暂停本群互动（仅管理员）" },
   { command: "resume", description: "恢复本群互动（仅管理员）" },
   { command: "status", description: "查看当前模型、thinking effort 与本日 token 用量" },
+  { command: "model", description: "查看或切换 agent 模型（仅管理员）" },
 ];
 
 export interface CommandRegistrationApi {
@@ -54,7 +57,12 @@ export function parseBotCommand(message: Message, botUsername: string | null): P
   const name = (separator === -1 ? token.slice(1) : token.slice(1, separator)).toLowerCase();
   const mention = separator === -1 ? null : token.slice(separator + 1).toLowerCase();
   if (mention !== null && mention !== botUsername?.toLowerCase()) return null;
-  return COMMAND_NAMES.has(name as ParsedCommand["name"]) ? { name: name as ParsedCommand["name"] } : null;
+  if (!COMMAND_NAMES.has(name as ParsedCommand["name"])) return null;
+  // /model takes an optional argument (index or "reset"); the other commands
+  // ignore any trailing text.
+  if (name !== "model") return { name: name as ParsedCommand["name"] };
+  const argument = message.text.slice(entity.offset + entity.length).trim();
+  return argument.length === 0 ? { name: "model" } : { name: "model", argument };
 }
 
 // Chat-scoped control commands. State changes and replies are deterministic
@@ -63,11 +71,13 @@ export class BotCommandService {
   readonly #store: SqliteStore;
   readonly #config: RawConfig;
   readonly #scheduler: BucketScheduler;
+  readonly #modelSwitcher: AgentModelSwitcher | undefined;
 
-  constructor(store: SqliteStore, config: RawConfig, scheduler: BucketScheduler) {
+  constructor(store: SqliteStore, config: RawConfig, scheduler: BucketScheduler, modelSwitcher?: AgentModelSwitcher) {
     this.#store = store;
     this.#config = config;
     this.#scheduler = scheduler;
+    this.#modelSwitcher = modelSwitcher;
   }
 
   run(command: ParsedCommand, telegramChatId: bigint, sender: CommandSender | null, now = new Date()): string {
@@ -78,6 +88,8 @@ export class BotCommandService {
         return this.#adminGate(sender) ? this.#resume(telegramChatId) : DENIED_REPLY;
       case "status":
         return this.#status(telegramChatId, now);
+      case "model":
+        return this.#adminGate(sender) ? this.#modelSwitch(command.argument) : DENIED_REPLY;
     }
   }
 
@@ -125,6 +137,35 @@ export class BotCommandService {
     return "已恢复本群互动。";
   }
 
+  #modelSwitch(argument: string | undefined): string {
+    const switcher = this.#modelSwitcher;
+    if (switcher === undefined) return "运行时模型切换不可用。";
+    if (argument === undefined) return this.#modelMenu(switcher);
+    if (argument === "reset") {
+      const current = switcher.reset();
+      return `已恢复 config.toml 默认模型: ${current.provider} / ${current.model}。`;
+    }
+    const options = switcher.list();
+    const index = /^\d+$/.test(argument) ? Number.parseInt(argument, 10) : NaN;
+    if (!Number.isInteger(index) || index < 1 || index > options.length) {
+      return `无效序号。${this.#modelMenu(switcher)}`;
+    }
+    const option = options[index - 1];
+    if (option === undefined) return `无效序号。${this.#modelMenu(switcher)}`;
+    const current = switcher.switch(option.provider, option.model);
+    return `已切换: ${current.provider} / ${current.model}，将在下一次 agent session 生效。`;
+  }
+
+  #modelMenu(switcher: AgentModelSwitcher): string {
+    const current = switcher.current();
+    const lines = [`当前模型: ${current.provider} / ${current.model}`, "可用模型:"];
+    switcher.list().forEach((option, index) => {
+      lines.push(`${index + 1}. ${option.provider} / ${option.model}（${option.name}）`);
+    });
+    lines.push("使用 /model 序号 切换，/model reset 恢复默认");
+    return lines.join("\n");
+  }
+
   #status(telegramChatId: bigint, now: Date): string {
     const chat = this.#chatConfig(telegramChatId);
     if (chat === undefined) throw new Error(`Chat ${telegramChatId} is not configured`);
@@ -139,8 +180,12 @@ export class BotCommandService {
       && this.#store.db
         .query<{ present: bigint }, [bigint]>("SELECT 1 AS present FROM chat_pause WHERE chat_id = ?")
         .get(chatId) !== null;
+    const effective = this.#modelSwitcher?.current() ?? {
+      provider: this.#config.agent.provider,
+      model: this.#config.agent.model,
+    };
     const lines = [
-      `当前模型: ${this.#config.agent.provider} / ${this.#config.agent.model}`,
+      `当前模型: ${effective.provider} / ${effective.model}`,
       `thinking effort: ${this.#config.agent.thinking_level}`,
       `今日 token 用量: ${tokens} / ${chat.budget.max_tokens_per_day}`,
     ];

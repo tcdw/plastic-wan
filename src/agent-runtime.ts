@@ -15,6 +15,7 @@ import { KeyedSemaphore } from "./concurrency.ts";
 import { ContextBuilder, type InvocationContext } from "./context-builder.ts";
 import type { SqliteStore } from "./database.ts";
 import type { ModelRegistry } from "./providers.ts";
+import { AgentModelSwitcher } from "./model-switch.ts";
 import { createSendTool, type TelegramSendApi } from "./send-tool.ts";
 import type { InvocationOutcome } from "./scheduler.ts";
 
@@ -36,6 +37,7 @@ export interface AgentRuntimeOptions {
   readonly store: SqliteStore;
   readonly config: RawConfig;
   readonly registry: ModelRegistry;
+  readonly modelSwitcher: AgentModelSwitcher;
   readonly telegramApi: TelegramSendApi;
   readonly bot: { readonly id: bigint; readonly displayName: string; readonly username: string | null };
   readonly additionalTools?: AdditionalToolFactory;
@@ -48,6 +50,7 @@ export class AgentRuntime {
   readonly #config: RawConfig;
   readonly #models: Models;
   readonly #model: Model<Api>;
+  readonly #modelSwitcher: AgentModelSwitcher;
   readonly #telegramApi: TelegramSendApi;
   readonly #bot: AgentRuntimeOptions["bot"];
   readonly #additionalTools: AdditionalToolFactory | undefined;
@@ -60,6 +63,7 @@ export class AgentRuntime {
     this.#config = options.config;
     this.#models = options.registry.models;
     this.#model = options.registry.agentModel;
+    this.#modelSwitcher = options.modelSwitcher;
     this.#telegramApi = options.telegramApi;
     this.#bot = options.bot;
     this.#additionalTools = options.additionalTools;
@@ -81,12 +85,16 @@ export class AgentRuntime {
   }
 
   async run(invocationId: bigint, schedulerSignal: AbortSignal): Promise<InvocationOutcome> {
+    // Resolved at session start: a runtime model switch applies from here on,
+    // never to an invocation already in flight.
+    const model = this.#modelSwitcher.model();
     const state: ToolRuntimeState = { stickerCapabilities: new Map() };
     const provisionalContext = this.#contextBuilder.build(
       invocationId,
-      this.#model.contextWindow,
+      model.contextWindow,
       0,
-      this.#model.input.includes("image"),
+      model.maxTokens,
+      model.input.includes("image"),
     );
     const deadline = Date.now() + this.#config.agent.timeout_seconds * 1000;
     const preliminarySend = createSendTool({
@@ -102,9 +110,10 @@ export class AgentRuntime {
     const schemaCharacters = preliminaryTools.reduce((total, tool) => total + JSON.stringify(tool.parameters).length, 0);
     const context = this.#contextBuilder.build(
       invocationId,
-      this.#model.contextWindow,
+      model.contextWindow,
       schemaCharacters,
-      this.#model.input.includes("image"),
+      model.maxTokens,
+      model.input.includes("image"),
     );
     const send = createSendTool({
       store: this.#store,
@@ -116,7 +125,7 @@ export class AgentRuntime {
       bot: this.#bot,
     });
     const tools = [send, ...(this.#additionalTools?.(context, state, deadline) ?? [])];
-    validateToolRegistry(tools, this.#model.contextWindow);
+    validateToolRegistry(tools, model.contextWindow);
     const toolRegistryHash = createHash("sha256")
       .update(tools.map((tool) => `${tool.name}:${JSON.stringify(tool.parameters)}`).join("\n"))
       .digest("hex");
@@ -136,7 +145,7 @@ export class AgentRuntime {
     const agent = new Agent({
       initialState: {
         systemPrompt: context.systemPrompt,
-        model: this.#model,
+        model,
         thinkingLevel: this.#config.agent.thinking_level,
         tools,
       },
@@ -153,7 +162,7 @@ export class AgentRuntime {
           const stream = this.#models.streamSimple(model, modelContext, {
             ...options,
             signal,
-            maxTokens: this.#config.agent.max_output_tokens,
+            maxTokens: model.maxTokens,
             maxRetries: 2,
             maxRetryDelayMs: Math.max(0, deadline - Date.now()),
           });
@@ -181,12 +190,12 @@ export class AgentRuntime {
       },
       shouldStopAfterTurn: async () => {
         if (turns >= this.#config.agent.max_turns || closing) return true;
-        const stopThreshold = Math.floor(this.#model.contextWindow * this.#config.agent.context_stop_ratio);
-        return estimatedInputTokens + this.#config.agent.max_output_tokens >= this.#model.contextWindow
+        const stopThreshold = Math.floor(model.contextWindow * this.#config.agent.context_stop_ratio);
+        return estimatedInputTokens + model.maxTokens >= model.contextWindow
           && estimatedInputTokens >= stopThreshold;
       },
       prepareNextTurnWithContext: async (turn) => {
-        const stopThreshold = Math.floor(this.#model.contextWindow * this.#config.agent.context_stop_ratio);
+        const stopThreshold = Math.floor(model.contextWindow * this.#config.agent.context_stop_ratio);
         if (estimatedInputTokens < stopThreshold) return undefined;
         closing = true;
         const sendOnly = turn.context.tools?.filter((tool) => tool.name === "send");

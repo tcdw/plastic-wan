@@ -77,6 +77,9 @@ static_dir = "/opt/plasticwan/apps/admin/dist"
 | `GET /admins` | Bot 管理员列表（Telegram 用户 ID、显示名、来源、添加时间） |
 | `POST /admins` | 指派 Bot 管理员：`{ "telegram_user_id": 42 }`；重复添加幂等 |
 | `DELETE /admins/:id` | 移除 Bot 管理员（`:id` 为 Telegram 用户 ID）；配置种子项会在重启后重新出现 |
+| `GET /model` | 当前生效 agent 模型、config.toml 默认值与全部可切换选项（text 能力模型） |
+| `PUT /model` | 热切换 agent 模型：`{ "provider", "model" }`；未知 provider/model、无 text 能力返回 400（`unknown_provider`/`unknown_model`/`not_text_capable`） |
+| `DELETE /model` | 恢复 config.toml 默认 agent 模型 |
 | `POST /cancel-pending-sessions` | 取消所有 `collecting`/`queued` Bucket 及其 queued Invocation，并退回当日调用预算 |
 
 记忆列表项包含 `expired` 与 `long_ttl` 布尔标记：`long_ttl` 表示剩余寿命超过 `agent.memory_ttl_warning_days`（默认 30 天）。创建时若 `(chat_id, message_thread_id)` 对应的 Conversation 尚不存在会自动创建。
@@ -153,4 +156,4 @@ bun run admin:build
 
 `test/memory.test.ts` 覆盖：记忆持久化与 TTL 过期、跨 Conversation 隔离与删除幂等、Tool 审计与 150 字符硬限制、system prompt 注入顺序与过滤、管理 API 的 CRUD/聊天过滤/`long_ttl` 与 `expired` 标记/参数校验/404 与 405、`purgeExpiredData` 清理过期记忆。
 
-浏览器冒烟应确认：初始化表单 → Overview 统计 → Tool session 详情六个 Tab，默认 Overview 按时间显示收到的消息与 `send` 内容 → 消息搜索与详情 Revision、媒体分析 → 已配置 Sticker Set 与 `index_state` 过滤 → Memories 页面按群聊与状态过滤、新建/编辑/删除记忆、长 TTL 记忆显示 warning → Bot admins 页面添加/移除管理员与 `telegram.admins` 种子展示 → 登出后深链接回落登录页 → 重新登录恢复。
+浏览器冒烟应确认：初始化表单 → Overview 统计 → Tool session 详情六个 Tab，默认 Overview 按时间显示收到的消息与 `send` 内容 → 消息搜索与详情 Revision、媒体分析 → 已配置 Sticker Set 与 `index_state` 过滤 → Memories 页面按群聊与状态过滤、新建/编辑/删除记忆、长 TTL 记忆显示 warning → Bot admins 页面添加/移除管理员与 `telegram.admins` 种子展示 → Model 页面查看当前/默认模型、切换后 `/status` 立即反映新模型、恢复默认 → 登出后深链接回落登录页 → 重新登录恢复。

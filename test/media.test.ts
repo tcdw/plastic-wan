@@ -63,7 +63,7 @@ test("read_image normalizes once and reuses the 30-day description cache", async
   const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({ state: "completed", reason: "done" }));
   const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
   if (invocationId === undefined) throw new Error("Expected a due invocation");
-  const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0);
+  const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
   const [imageRef] = context.imageCapabilities.keys();
   if (imageRef === undefined) throw new Error("Expected an image capability");
   expect(context.directImages).toEqual([]);

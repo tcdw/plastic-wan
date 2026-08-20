@@ -76,6 +76,15 @@ describe("configuration", () => {
     await expect(loadConfig(configPath)).rejects.toThrow("supports_developer_role requires an OpenAI API adapter");
   });
 
+  test("rejects a leftover max_output_tokens in the agent section", async () => {
+    const { directory, configPath } = await fixture();
+    await Bun.write(
+      configPath,
+      testConfigToml(directory).replace('model = "agent-model"', 'model = "agent-model"\nmax_output_tokens = 4096'),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
+  });
+
   test("accepts configured telegram admin user IDs", async () => {
     const { directory, configPath } = await fixture();
     await Bun.write(

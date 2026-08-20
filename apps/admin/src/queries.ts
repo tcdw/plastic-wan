@@ -1,5 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import {
+  getAgentModel,
   getInvocation,
   getMessage,
   getOverview,
@@ -84,6 +85,11 @@ export const memoryChatsQuery = queryOptions({
 export const adminsQuery = queryOptions({
   queryKey: ["admins"],
   queryFn: listBotAdmins,
+});
+
+export const modelQuery = queryOptions({
+  queryKey: ["model"],
+  queryFn: getAgentModel,
 });
 
 export function invocationQuery(id: string) {

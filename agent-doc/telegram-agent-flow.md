@@ -183,6 +183,8 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 `/pause` 与 `/resume` 仅对 Bot 管理员开放（`bot_admins` 表，见下文）；`/status` 对任何成员开放。非管理员或匿名身份执行会收到拒绝回复，不产生任何状态变更。管理员执行命令时其显示名会刷新到 `bot_admins`。
 
+`/model` 同样仅限管理员，用于运行时切换 agent 模型（与 Admin Panel「Model」页共享同一 `AgentModelSwitcher`）：`/model` 列出当前模型与可切换序号；`/model 序号` 切换（立即对后续 Invocation 生效）；`/model reset` 恢复 config.toml 默认。无效参数返回提示且不改状态。
+
 `/pause` 立即生效（与 scheduler 同一事件循环，无竞态）：
 
 1. 写入 `chat_pause`（chat_id 为内部 `chats.id`）。
@@ -191,7 +193,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 暂停期间消息仍入库并保留 Revision，但不创建 Bucket、不启动会话；`processDue` 与启动追赶也会跳过暂停 Chat（追赶 Bucket 记 `skipped_budget`/`chat_paused`）。`/resume` 删除 `chat_pause` 行，恢复正常节拍。
 
-`/status` 返回当前 `agent.provider` / `agent.model`、`agent.thinking_level` 与本日（UTC 日期，与 `daily_usage`/预算口径一致）该 Chat 的 `model_tokens` 用量及 `budget.max_tokens_per_day` 上限；暂停中额外显示一行。
+`/status` 返回当前生效的 `agent.provider` / `agent.model`（含 Admin Panel 热切换后的运行时模型）、`agent.thinking_level` 与本日（UTC 日期，与 `daily_usage`/预算口径一致）该 Chat 的 `model_tokens` 用量及 `budget.max_tokens_per_day` 上限；暂停中额外显示一行。
 
 ## Bot 管理员列表
 

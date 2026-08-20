@@ -10,6 +10,7 @@ import { loadConfig } from "../src/config.ts";
 import { KeyedSemaphore } from "../src/concurrency.ts";
 import { SqliteStore } from "../src/database.ts";
 import { MediaService, type MediaDownloader } from "../src/media.ts";
+import { AgentModelSwitcher } from "../src/model-switch.ts";
 import type { ModelRegistry } from "../src/providers.ts";
 import { BucketScheduler } from "../src/scheduler.ts";
 import type { TelegramSendApi } from "../src/send-tool.ts";
@@ -68,6 +69,7 @@ test("a fresh Agent publishes only through send and audits model usage", async (
     store,
     config: loaded.config,
     registry,
+    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: "Plastic Wan", username: "plasticwan" },
   });
@@ -174,6 +176,7 @@ test("passes Telegram photos directly to the multimodal agent and keeps stickers
     store,
     config: loaded.config,
     registry,
+    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: "Plastic Wan", username: "plasticwan" },
     directImageLoader: (context, signal) => media.loadDirectImages(context.directImages, signal),
@@ -258,6 +261,7 @@ test("lets a text-only agent read a Telegram photo through read_image", async ()
     store,
     config: loaded.config,
     registry,
+    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 601, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 602, date: 1_700_000_100, chat: { id: 123456789 } }),

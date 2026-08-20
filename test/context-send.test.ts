@@ -89,7 +89,7 @@ describe("send tool", () => {
     const received = new Date("2026-08-15T00:00:00.000Z");
     ingestion.ingest(update(1, 10, "hello"), received);
     const invocationId = processOne(scheduler, new Date(received.getTime() + 15_000));
-    const context = builder.build(invocationId, 200_000, 0);
+    const context = builder.build(invocationId, 200_000, 0, 32768);
     const api: TelegramSendApi = {
       sendMessage: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 502, date: 1_700_000_101, chat: { id: 123456789 } }),
@@ -118,7 +118,7 @@ describe("send tool", () => {
     const received = new Date("2026-08-15T00:00:00.000Z");
     ingestion.ingest(update(1, 10, "hello"), received);
     const invocationId = processOne(scheduler, new Date(received.getTime() + 15_000));
-    const context = builder.build(invocationId, 200_000, 0);
+    const context = builder.build(invocationId, 200_000, 0, 32768);
     const api: TelegramSendApi = {
       sendMessage: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 502, date: 1_700_000_101, chat: { id: 123456789 } }),
@@ -143,7 +143,7 @@ describe("send tool", () => {
     const received = new Date("2026-08-15T00:00:00.000Z");
     ingestion.ingest(update(1, 10, "hello"), received);
     const invocationId = processOne(scheduler, new Date(received.getTime() + 15_000));
-    const context = builder.build(invocationId, 200_000, 0);
+    const context = builder.build(invocationId, 200_000, 0, 32768);
     let successfulCalls = 0;
     const successApi: TelegramSendApi = {
       sendMessage: async () => {
@@ -173,7 +173,7 @@ describe("send tool", () => {
     const secondReceived = new Date(received.getTime() + 20_000);
     ingestion.ingest(update(2, 11, "next"), secondReceived);
     const secondInvocation = processOne(scheduler, new Date(secondReceived.getTime() + 15_000));
-    const secondContext = builder.build(secondInvocation, 200_000, 0);
+    const secondContext = builder.build(secondInvocation, 200_000, 0, 32768);
     let unknownCalls = 0;
     const unknownApi: TelegramSendApi = {
       sendMessage: async () => {

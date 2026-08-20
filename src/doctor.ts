@@ -14,6 +14,7 @@ import type { InvocationContext } from "./context-builder.ts";
 import { SqliteStore } from "./database.ts";
 import { McpManager } from "./mcp.ts";
 import { createLottieCommand, MediaService, TelegramMediaClient } from "./media.ts";
+import { AgentModelSwitcher } from "./model-switch.ts";
 import { createModelRegistry, type ModelRegistry } from "./providers.ts";
 import { SecretStore } from "./secrets.ts";
 import { StickerService } from "./stickers.ts";
@@ -114,6 +115,7 @@ async function runDoctorChecks(config: RawConfig, configHash: string, secrets: S
       store,
       config,
       registry,
+      modelSwitcher: new AgentModelSwitcher(config, registry.models),
       telegramApi: bot.api,
       bot: {
         id: BigInt(me.id),

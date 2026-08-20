@@ -117,7 +117,7 @@ name = "CatSet"
   const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({ state: "completed", reason: "done" }));
   const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
   if (invocationId === undefined) throw new Error("Expected a due invocation");
-  const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0);
+  const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
   const capabilities = new Map<string, string>();
   const search = stickers.createSearchTool(context, capabilities);
   const result = await search.execute("search-1", { query: "委屈猫", set: "cats", limit: 5 });

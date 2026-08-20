@@ -11,6 +11,7 @@ import { SecretStore } from "./secrets.ts";
 import { MediaService, TelegramMediaClient } from "./media.ts";
 import { createMemoryTools, MemoryStore } from "./memory.ts";
 import { McpManager } from "./mcp.ts";
+import { AgentModelSwitcher } from "./model-switch.ts";
 import { createModelRegistry } from "./providers.ts";
 import { BucketScheduler } from "./scheduler.ts";
 import { StickerService } from "./stickers.ts";
@@ -53,6 +54,7 @@ export async function serve(configPath: string): Promise<void> {
     seedConfigAdmins(store.db, loaded.config.telegram.admins ?? []);
     bot = new Bot(token);
     const registry = await createModelRegistry(loaded.config, secrets);
+    const modelSwitcher = new AgentModelSwitcher(loaded.config, registry.models);
     const me = await bot.api.getMe();
     try {
       await registerBotCommands(bot.api);
@@ -93,6 +95,7 @@ export async function serve(configPath: string): Promise<void> {
       store,
       config: loaded.config,
       registry,
+      modelSwitcher,
       telegramApi: bot.api,
       bot: {
         id: BigInt(me.id),
@@ -110,7 +113,7 @@ export async function serve(configPath: string): Promise<void> {
     });
     const startedScheduler = new BucketScheduler(store, loaded.config, loaded.hash, (invocationId, signal) => runtime.run(invocationId, signal));
     scheduler = startedScheduler;
-    const commands = new BotCommandService(store, loaded.config, startedScheduler);
+    const commands = new BotCommandService(store, loaded.config, startedScheduler, modelSwitcher);
     const preview: InvocationContext = {
       invocationId: 0n,
       conversationId: 0n,
@@ -148,7 +151,7 @@ export async function serve(configPath: string): Promise<void> {
     await mcpManager.start();
     startedScheduler.start();
     if (loaded.config.admin?.enabled === true) {
-      const adminServer = new AdminServer({ store, config: loaded.config, scheduler: startedScheduler });
+      const adminServer = new AdminServer({ store, config: loaded.config, scheduler: startedScheduler, modelSwitcher });
       admin = adminServer;
       const listening = adminServer.start();
       logEvent("admin_started", { host: listening.hostname, port: listening.port });

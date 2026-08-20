@@ -153,6 +153,10 @@ cost = { input = 0, output = 0, cache_read = 0, cache_write = 0 }
 - `memory_ttl_warning_days`（可选，默认 30）：Agent 记忆剩余寿命超过该天数时，Admin Panel 显示 warning，提示管理员判断保留、删除或提升进 `agents.md`。系统不禁止长 TTL。
 - `thinking_level`: `off|minimal|low|medium|high|xhigh`；Provider 仍可能限制具体模型支持级别。
 
+Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用目标模型在 provider 中声明的 `max_tokens`。Provider 注册的模型必须满足 `max_tokens ≤ context_window`，且 agent 模型必须支持 text。
+
+运行时热切换：Admin Panel「Model」页面（`GET/PUT/DELETE /api/model`）可在已配置的 provider/模型之间切换 agent 模型。切换是内存态，立即对后续启动的 agent session（Invocation）生效，不影响进行中的会话；重启 `serve` 后恢复 `config.toml` 的默认值。`/status` 命令展示当前生效模型。
+
 `vision` 约束：
 
 - 独立 Provider/Model 与输出上限，用于 text-only Agent 的普通图片回退和 Sticker 分析。

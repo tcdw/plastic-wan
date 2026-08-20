@@ -146,7 +146,7 @@ export function OverviewPage(): React.ReactElement {
         </Col>
       </Row>
       <Card
-        title="Token usage"
+        title="Daily usage"
         size="small"
         extra={
           <Tabs
@@ -161,7 +161,7 @@ export function OverviewPage(): React.ReactElement {
         }
       >
         {usagePending ? (
-          <div style={{ height: 240 }} />
+          <div style={{ height: 280 }} />
         ) : usage !== undefined ? (
           <UsageChart data={usage.series} />
         ) : (

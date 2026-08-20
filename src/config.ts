@@ -186,7 +186,7 @@ export const ConfigSchema = Type.Object(
         timeout_seconds: Type.Number({ exclusiveMinimum: 0, maximum: 90 }),
         max_concurrency: PositiveInteger,
         context_stop_ratio: Type.Number({ exclusiveMinimum: 0, maximum: 0.8 }),
-        history_messages: Type.Integer({ minimum: 1, maximum: 20 }),
+        history_messages: Type.Integer({ minimum: 1 }),
         memory_ttl_warning_days: Type.Optional(PositiveInteger),
       },
       Strict,

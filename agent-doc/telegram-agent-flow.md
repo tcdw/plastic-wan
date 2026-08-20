@@ -172,6 +172,35 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 `search_stickers` 只返回已允许、已成功索引的 Sticker capability。`send` 只接受这些 capability，而不是模型给出的 file ID 或 Set 名称。
 
+## Bot Commands
+
+`/pause`、`/resume` 与 `/status` 是 Chat 级控制命令，作用于发送命令的 Chat（含 Forum 全部 Topic），不按 Topic 隔离。
+
+- 判定：`message.entities` 中 offset 为 0 的 `bot_command`；命令名大小写不敏感；带 `@用户名` 后缀时必须匹配当前 Bot；Bot 发送者的消息不触发命令。未知命令与非命令消息照常入库。
+- 启动时（`getMe` 后）调用 `setMyCommands` 自动注册 `/pause`、`/resume`、`/status` 及中文描述（`BOT_COMMANDS` 是唯一事实来源，注册前校验每个命令都能被 `parseBotCommand` 解析）；注册失败只记 `command_registration_failed`，不阻塞启动——命令菜单是便利设施，文本解析不依赖它。
+- 命令消息只写 `telegram_updates` 审计，不写入 `messages`，因此不会创建 Bucket 或进入 Agent 历史。
+- 回复是确定性 Bot 输出（不经模型），直接通过 Bot API 发送并 Reply 原命令消息，不经过 `send` Tool；发送失败只记 `command_reply_failed` 事件，不重试。
+
+`/pause` 与 `/resume` 仅对 Bot 管理员开放（`bot_admins` 表，见下文）；`/status` 对任何成员开放。非管理员或匿名身份执行会收到拒绝回复，不产生任何状态变更。管理员执行命令时其显示名会刷新到 `bot_admins`。
+
+`/pause` 立即生效（与 scheduler 同一事件循环，无竞态）：
+
+1. 写入 `chat_pause`（chat_id 为内部 `chats.id`）。
+2. 该 Chat 所有 `collecting`/`queued` Bucket 置为 `expired`、`error_code = chat_paused`；对应 `queued` Invocation 置为 `aborted`、`completion_reason = chat_paused`。
+3. Scheduler 中止该 Chat 正在运行的 Invocation（`pauseChat`）；正在飞行中的 `send` 可能已经落盘，属正常结果。
+
+暂停期间消息仍入库并保留 Revision，但不创建 Bucket、不启动会话；`processDue` 与启动追赶也会跳过暂停 Chat（追赶 Bucket 记 `skipped_budget`/`chat_paused`）。`/resume` 删除 `chat_pause` 行，恢复正常节拍。
+
+`/status` 返回当前 `agent.provider` / `agent.model`、`agent.thinking_level` 与本日（UTC 日期，与 `daily_usage`/预算口径一致）该 Chat 的 `model_tokens` 用量及 `budget.max_tokens_per_day` 上限；暂停中额外显示一行。
+
+## Bot 管理员列表
+
+`bot_admins`（迁移 `008_bot_admins.sql`）保存可执行 `/pause`、`/resume` 的 Telegram 用户 ID，Bot 全局共享：
+
+- 启动时 `telegram.admins`（TOML 数组）以 `ON CONFLICT DO NOTHING` 播种，保证运营者始终保有控制权；面板新增的条目不会被种子移除。
+- Admin Panel「Bot admins」页面（`GET/POST /api/admins`、`DELETE /api/admins/:id`）是运行时管理入口。
+- 权限判定在 `BotCommandService`：命令发送者的 `message.from.id` 命中 `bot_admins` 才放行；`sender_chat` 匿名身份一律拒绝。
+
 ## 常见排查顺序
 
 1. `check-config` 输出是否为预期哈希。

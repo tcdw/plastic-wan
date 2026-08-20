@@ -1,6 +1,8 @@
-import { Bot } from "grammy";
+import { Bot, type Context } from "grammy";
 import { AdminServer } from "./admin/server.ts";
+import { seedConfigAdmins } from "./admin/admins.ts";
 import { AgentRuntime } from "./agent-runtime.ts";
+import { BOT_COMMANDS, BotCommandService, registerBotCommands, type ParsedCommand } from "./bot-commands.ts";
 import { assertConfigPermissions, loadConfig } from "./config.ts";
 import { KeyedSemaphore } from "./concurrency.ts";
 import type { InvocationContext } from "./context-builder.ts";
@@ -48,9 +50,20 @@ export async function serve(configPath: string): Promise<void> {
     const token = await secrets.resolve(loaded.config.telegram.token);
     lock = await ServeLock.acquire(loaded.config.data_dir);
     store = await SqliteStore.open(loaded.config);
+    seedConfigAdmins(store.db, loaded.config.telegram.admins ?? []);
     bot = new Bot(token);
     const registry = await createModelRegistry(loaded.config, secrets);
     const me = await bot.api.getMe();
+    try {
+      await registerBotCommands(bot.api);
+      logEvent("commands_registered", { commands: BOT_COMMANDS.map((entry) => entry.command).join(",") });
+    } catch (error) {
+      // Registration is convenience only: command parsing works without the
+      // Telegram menu, so a failed setMyCommands must not block startup.
+      logEvent("command_registration_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     const initialized = store.db
       .query<{ value: string }, []>("SELECT value FROM app_state WHERE key = 'telegram_initialized'")
       .get() !== null;
@@ -97,6 +110,7 @@ export async function serve(configPath: string): Promise<void> {
     });
     const startedScheduler = new BucketScheduler(store, loaded.config, loaded.hash, (invocationId, signal) => runtime.run(invocationId, signal));
     scheduler = startedScheduler;
+    const commands = new BotCommandService(store, loaded.config, startedScheduler);
     const preview: InvocationContext = {
       invocationId: 0n,
       conversationId: 0n,
@@ -140,7 +154,10 @@ export async function serve(configPath: string): Promise<void> {
       logEvent("admin_started", { host: listening.hostname, port: listening.port });
     }
     bot.use(async (context) => {
-      ingestion.ingest(context.update);
+      const result = ingestion.ingest(context.update);
+      if (result.command !== undefined) {
+        await replyToCommand(context, commands, result.command);
+      }
       startedScheduler.wake();
     });
     logEvent("serve_started", { bot_id: String(me.id), config_hash: loaded.hash });
@@ -162,4 +179,41 @@ export async function serve(configPath: string): Promise<void> {
 
 export function logEvent(event: string, fields: Readonly<Record<string, string | number | boolean | null>> = {}): void {
   console.log(JSON.stringify({ event, ...fields, at: new Date().toISOString() }));
+}
+
+async function replyToCommand(context: Context, commands: BotCommandService, command: ParsedCommand): Promise<void> {
+  const message = context.update.message;
+  if (message === undefined) return;
+  const chatId = message.chat.id;
+  const sender = message.from === undefined
+    ? null
+    : {
+        id: BigInt(message.from.id),
+        name: [message.from.first_name, message.from.last_name].filter((part) => part !== undefined).join(" "),
+        username: message.from.username ?? null,
+      };
+  let text: string;
+  try {
+    text = commands.run(command, BigInt(chatId), sender);
+  } catch (error) {
+    logEvent("command_failed", {
+      command: command.name,
+      chat_id: String(chatId),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+  try {
+    await context.api.sendMessage(String(chatId), text, {
+      ...(message.message_thread_id === undefined ? {} : { message_thread_id: message.message_thread_id }),
+      reply_parameters: { message_id: message.message_id },
+    });
+    logEvent("command_reply_sent", { command: command.name, chat_id: String(chatId) });
+  } catch (error) {
+    logEvent("command_reply_failed", {
+      command: command.name,
+      chat_id: String(chatId),
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }

@@ -120,7 +120,7 @@ bun run admin:dev
 - SQLite ID 使用 `bigint`；Telegram JSON 中需要字符串化的 ID 不得经过不安全 `number` 转换。
 - 不新增第二套 Provider、调度、审计或进程执行约定；复用现有模块。
 - 清理式切换：迁移所有调用方并删除旧路径，不保留兼容别名或隐藏 fallback。
-- Admin Panel 后端复用 `SqliteStore`，审计查询只读；记忆增删改查是唯一的管理写入例外。
+- Admin Panel 后端复用 `SqliteStore`，审计查询只读；记忆增删改查与 Bot 管理员列表管理是仅有的管理写入例外。
 
 ## Testing Guidelines
 

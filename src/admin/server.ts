@@ -29,6 +29,7 @@ import {
 } from "./memory-admin.ts";
 import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from "../memory.ts";
 import { cancelPendingSessions } from "./operations.ts";
+import { addBotAdmin, listBotAdmins, parseAdminUserId, removeBotAdmin } from "./admins.ts";
 
 const SESSION_COOKIE = "plasticwan_admin";
 const MAX_BODY_BYTES = 8_192;
@@ -200,6 +201,17 @@ export class AdminServer {
         deleteMemory(database, id);
         return json({ status: "ok" });
       }
+    }
+    if (route === "admins" && request.method === "GET") {
+      return json({ items: listBotAdmins(database) });
+    }
+    if (route === "admins" && request.method === "POST") {
+      const body = await readJsonObject(request);
+      return json(addBotAdmin(database, parseAdminUserId(body.telegram_user_id), "admin-panel"));
+    }
+    if (segments[0] === "admins" && segments.length === 2 && request.method === "DELETE") {
+      removeBotAdmin(database, parseAdminUserId(segments[1] ?? "", "admin_id"));
+      return json({ status: "ok" });
     }
     if (request.method !== "GET") return json({ error: "method_not_allowed", message: "Audit routes are read-only" }, 405);
     if (route === "overview") return json(overview(database));

@@ -90,6 +90,26 @@ export class BucketScheduler {
     this.#wakeResolver = undefined;
   }
 
+  #isChatPaused(chatId: bigint): boolean {
+    return this.#store.db
+      .query<{ present: bigint }, [bigint]>("SELECT 1 AS present FROM chat_pause WHERE chat_id = ?")
+      .get(chatId) !== null;
+  }
+
+  // Aborts invocations currently running in a chat (used by /pause). The
+  // queued-invocation and bucket state transitions happen in the command
+  // service; this only interrupts live agent work.
+  pauseChat(chatId: bigint): void {
+    for (const [id, entry] of this.#active) {
+      const row = this.#store.db
+        .query<{ chat_id: bigint }, [bigint]>(
+          "SELECT v.chat_id FROM invocations i JOIN conversations v ON v.id = i.conversation_id WHERE i.id = ?",
+        )
+        .get(BigInt(id));
+      if (row !== null && row.chat_id === chatId) entry.controller.abort(new Error("chat_paused"));
+    }
+  }
+
   async stop(graceMilliseconds = 30_000): Promise<void> {
     this.#running = false;
     this.wake();
@@ -185,9 +205,11 @@ export class BucketScheduler {
         const budget = this.#chatBudget(latest.telegram_chat_id);
         const skipReason = budget === undefined
           ? "chat_removed"
-          : this.#reserveInvocation(latest.telegram_chat_id, budget.max_invocations_per_day, now)
-            ? undefined
-            : "invocation_budget";
+          : this.#isChatPaused(latest.chat_id)
+            ? "chat_paused"
+            : this.#reserveInvocation(latest.telegram_chat_id, budget.max_invocations_per_day, now)
+              ? undefined
+              : "invocation_budget";
         const created = skipReason === undefined
           ? this.#store.db
             .query("INSERT INTO buckets(conversation_id, state, kind, first_received_at, deadline_at, queued_at, created_at, updated_at) VALUES (?, 'queued', 'startup_catch_up', ?, ?, ?, ?, ?)")
@@ -221,6 +243,7 @@ export class BucketScheduler {
            FROM buckets b
            JOIN conversations v ON v.id = b.conversation_id
            WHERE b.state = 'collecting' AND b.deadline_at <= ? AND b.first_received_at >= ?
+             AND NOT EXISTS (SELECT 1 FROM chat_pause p WHERE p.chat_id = v.chat_id)
              AND NOT EXISTS (
                SELECT 1 FROM invocations i
                JOIN conversations v2 ON v2.id = i.conversation_id
@@ -277,11 +300,17 @@ export class BucketScheduler {
 
   #queueBucket(bucket: BucketRow, now: Date): bigint | undefined {
     const chat = this.#store.db
-      .query<{ telegram_chat_id: bigint }, [bigint]>(
-        "SELECT c.telegram_chat_id FROM conversations v JOIN chats c ON c.id = v.chat_id WHERE v.id = ?",
+      .query<{ telegram_chat_id: bigint; paused: bigint }, [bigint]>(
+        `SELECT c.telegram_chat_id,
+                EXISTS(SELECT 1 FROM chat_pause p WHERE p.chat_id = c.id) AS paused
+         FROM conversations v JOIN chats c ON c.id = v.chat_id WHERE v.id = ?`,
       )
       .get(bucket.conversation_id);
     if (chat === null) throw new Error(`Bucket ${bucket.id} has no chat`);
+    if (chat.paused === 1n) {
+      this.#markBucketSkipped(bucket.id, now, "chat_paused");
+      return undefined;
+    }
     const budget = this.#chatBudget(chat.telegram_chat_id);
     if (budget === undefined) {
       this.#markBucketSkipped(bucket.id, now, "chat_removed");

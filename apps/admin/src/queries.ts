@@ -5,6 +5,7 @@ import {
   getOverview,
   getSession,
   getUsage,
+  listBotAdmins,
   listInvocations,
   listMemories,
   listMemoryChats,
@@ -78,6 +79,11 @@ export function memoriesQuery(filters: ListFilters) {
 export const memoryChatsQuery = queryOptions({
   queryKey: ["memory-chats"],
   queryFn: listMemoryChats,
+});
+
+export const adminsQuery = queryOptions({
+  queryKey: ["admins"],
+  queryFn: listBotAdmins,
 });
 
 export function invocationQuery(id: string) {

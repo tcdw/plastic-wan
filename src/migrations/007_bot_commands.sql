@@ -1,0 +1,4 @@
+CREATE TABLE chat_pause (
+  chat_id INTEGER PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+  paused_at TEXT NOT NULL
+) STRICT;

@@ -75,6 +75,35 @@ describe("configuration", () => {
     await Bun.write(configPath, testConfigToml(directory).replace('api = "openai-responses"', 'api = "anthropic-messages"'));
     await expect(loadConfig(configPath)).rejects.toThrow("supports_developer_role requires an OpenAI API adapter");
   });
+
+  test("accepts configured telegram admin user IDs", async () => {
+    const { directory, configPath } = await fixture();
+    await Bun.write(
+      configPath,
+      testConfigToml(directory).replace("process_bot_messages = false", "process_bot_messages = false\nadmins = [42, 99]"),
+    );
+    const loaded = await loadConfig(configPath);
+    expect(loaded.config.telegram.admins).toEqual([42, 99]);
+  });
+
+  test("rejects invalid telegram admin user IDs", async () => {
+    const { directory, configPath } = await fixture();
+    await Bun.write(
+      configPath,
+      testConfigToml(directory).replace("process_bot_messages = false", "process_bot_messages = false\nadmins = [0]"),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
+    await Bun.write(
+      configPath,
+      testConfigToml(directory).replace("process_bot_messages = false", "process_bot_messages = false\nadmins = [99999999999999999]"),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow("Invalid Telegram admin user ID");
+    await Bun.write(
+      configPath,
+      testConfigToml(directory).replace("process_bot_messages = false", "process_bot_messages = false\nadmins = [42, 42]"),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
+  });
 });
 
 describe("secrets", () => {
@@ -92,7 +121,7 @@ describe("database", () => {
     const { config } = await loadConfig(configPath);
     const store = await SqliteStore.open(config);
     const version = store.db.query<{ version: bigint }, []>("SELECT MAX(version) AS version FROM schema_migrations").get();
-    expect(version?.version).toBe(6n);
+    expect(version?.version).toBe(8n);
     store.close();
 
     const backupPath = await backupDatabase(config);

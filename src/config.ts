@@ -161,6 +161,7 @@ export const ConfigSchema = Type.Object(
         process_bot_messages: Type.Boolean(),
         bucket_window_seconds: Type.Integer({ minimum: 1, maximum: 300 }),
         chats: Type.Array(ChatSchema, { minItems: 1 }),
+        admins: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }), { uniqueItems: true })),
         sticker_sets: Type.Optional(Type.Array(StickerSetSchema)),
       },
       Strict,
@@ -327,6 +328,11 @@ function validateSemantics(config: TomlConfig): void {
     if (chatIds.has(chat.id)) throw new Error(`Duplicate Telegram chat ID: ${chat.id}`);
     chatIds.add(chat.id);
     if (chat.timezone !== undefined) validateTimezone(chat.timezone, `chat ${chat.id} timezone`);
+  }
+  for (const adminId of config.telegram.admins ?? []) {
+    if (!Number.isSafeInteger(adminId) || adminId === 0) {
+      throw new Error(`Invalid Telegram admin user ID: ${adminId}`);
+    }
   }
   assertUnique(config.telegram.sticker_sets ?? [], (item) => item.alias, "sticker set alias");
   assertUnique(config.telegram.sticker_sets ?? [], (item) => item.name, "sticker set name");

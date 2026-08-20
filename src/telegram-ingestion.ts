@@ -1,4 +1,5 @@
 import type { Message, Update } from "grammy/types";
+import { parseBotCommand, type ParsedCommand } from "./bot-commands.ts";
 import type { RawConfig } from "./config.ts";
 import type { SqliteStore } from "./database.ts";
 
@@ -49,6 +50,7 @@ export interface IngestResult {
   readonly allowed: boolean;
   readonly messageId?: bigint;
   readonly bucketId?: bigint;
+  readonly command?: ParsedCommand;
 }
 
 export class TelegramIngestion {
@@ -56,11 +58,13 @@ export class TelegramIngestion {
   readonly #config: RawConfig;
   readonly #allowedChats = new Map<string, ChatAuthorization>();
   readonly #botId: bigint;
+  readonly #botUsername: string | null;
 
-  constructor(store: SqliteStore, config: RawConfig, bot: { readonly id: number }) {
+  constructor(store: SqliteStore, config: RawConfig, bot: { readonly id: number; readonly username?: string | null }) {
     this.#store = store;
     this.#config = config;
     this.#botId = BigInt(bot.id);
+    this.#botUsername = bot.username ?? null;
     for (const chat of config.telegram.chats) {
       this.#allowedChats.set(String(chat.id), {
         ...(chat.topic_ids === undefined
@@ -119,6 +123,10 @@ export class TelegramIngestion {
     const internalChatId = this.#upsertChat(chat, chatId, receivedAt);
     if (message === undefined) return { duplicate: false, allowed: true };
     const edited = update.edited_message !== undefined;
+    // Chat control commands are handled by the bot itself: they are audited
+    // but never stored as messages, so they cannot trigger or taint buckets.
+    const command = schedule && !edited ? parseBotCommand(message, this.#botUsername) : null;
+    if (command !== null) return { duplicate: false, allowed: true, command };
     const stored = this.#storeMessage(message, internalChatId, threadId, receivedAt, edited);
     if (stored === undefined) return { duplicate: false, allowed: true };
     let bucketId: bigint | undefined;
@@ -285,6 +293,12 @@ export class TelegramIngestion {
     return row.id;
   }
 
+  #isChatPaused(chatId: bigint): boolean {
+    return this.#store.db
+      .query<{ present: bigint }, [bigint]>("SELECT 1 AS present FROM chat_pause WHERE chat_id = ?")
+      .get(chatId) !== null;
+  }
+
   #upsertConversation(chatId: bigint, threadId: bigint, receivedAt: Date): bigint {
     this.#store.db
       .query("INSERT INTO conversations(chat_id, message_thread_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(chat_id, message_thread_id) DO UPDATE SET updated_at = excluded.updated_at")
@@ -297,6 +311,7 @@ export class TelegramIngestion {
   }
 
   #appendToBucket(chatId: bigint, threadId: bigint, message: StoredMessage, receivedAt: Date): bigint | undefined {
+    if (this.#isChatPaused(chatId)) return undefined;
     const conversation = this.#store.db
       .query<{ id: bigint }, [bigint, bigint]>("SELECT id FROM conversations WHERE chat_id = ? AND message_thread_id = ?")
       .get(chatId, threadId);

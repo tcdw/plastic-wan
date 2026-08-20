@@ -12,6 +12,7 @@ import { App as AntApp, Button, Card, Form, Input, Layout, Menu, Space, Typograp
 import { useState } from "react";
 import { ApiError, createFirstAdmin, login, logout, updateCredentials, type Credentials } from "./api.ts";
 import { queryState } from "./components.tsx";
+import { AdminsPage } from "./pages/admins.tsx";
 import { InvocationDetailPage, InvocationsPage } from "./pages/invocations.tsx";
 import { MemoriesPage } from "./pages/memories.tsx";
 import { MessageDetailPage, MessagesPage } from "./pages/messages.tsx";
@@ -24,6 +25,7 @@ const MENU_ITEMS = [
   { key: "/invocations", label: <Link to="/invocations">Tool sessions</Link> },
   { key: "/messages", label: <Link to="/messages">Messages</Link> },
   { key: "/memories", label: <Link to="/memories">Memories</Link> },
+  { key: "/admins", label: <Link to="/admins">Bot admins</Link> },
   { key: "/stickers", label: <Link to="/stickers">Bot sticker sets</Link> },
   { key: "/settings", label: <Link to="/settings">Settings</Link> },
 ];
@@ -227,6 +229,8 @@ const messagesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/mes
 
 const memoriesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/memories", component: MemoriesPage });
 
+const adminsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admins", component: AdminsPage });
+
 const messageDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/messages/$messageId",
@@ -244,6 +248,7 @@ export const routeTree = rootRoute.addChildren([
   invocationDetailRoute,
   messagesRoute,
   memoriesRoute,
+  adminsRoute,
   messageDetailRoute,
   settingsRoute,
   stickersRoute,

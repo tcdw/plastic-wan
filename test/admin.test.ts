@@ -402,3 +402,41 @@ function textUpdate(updateId: number, messageId: number, text: string): Update {
     },
   };
 }
+
+test("admins API lists, adds and removes bot admins", async () => {
+  const { store, server } = await fixture();
+  try {
+    const created = await server.handle(post("/api/auth/setup", { username: "owner", password: PASSWORD }));
+    const cookie = sessionCookie(created);
+
+    const unauthenticated = await server.handle(request("/api/admins"));
+    expect(unauthenticated.status).toBe(401);
+
+    const empty = await server.handle(request("/api/admins", { headers: { cookie } }));
+    expect(empty.status).toBe(200);
+    expect(await readJson(empty)).toEqual({ items: [] });
+
+    const invalid = await server.handle(post("/api/admins", { telegram_user_id: -5 }, cookie));
+    expect(invalid.status).toBe(400);
+    expect(await readJson(invalid)).toMatchObject({ error: "invalid_telegram_user_id" });
+
+    const added = await server.handle(post("/api/admins", { telegram_user_id: 42 }, cookie));
+    expect(added.status).toBe(200);
+    expect(await readJson(added)).toMatchObject({ telegram_user_id: "42", added_by: "admin-panel" });
+
+    const duplicate = await server.handle(post("/api/admins", { telegram_user_id: 42 }, cookie));
+    expect(duplicate.status).toBe(200);
+    expect((await readJson(duplicate)).telegram_user_id).toBe("42");
+
+    const list = await readJson((await server.handle(request("/api/admins", { headers: { cookie } }))));
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]).toMatchObject({ telegram_user_id: "42", display_name: "" });
+
+    const removed = await server.handle(request("/api/admins/42", { method: "DELETE", headers: { cookie } }));
+    expect(removed.status).toBe(200);
+    expect(await readJson(removed)).toEqual({ status: "ok" });
+    expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM bot_admins").get()?.count).toBe(0n);
+  } finally {
+    store.close();
+  }
+});

@@ -153,7 +153,7 @@ export class StickerService {
     return {
       name: "search_stickers",
       label: "Search approved stickers",
-      description: "Search visually indexed stickers from administrator-approved Telegram sticker sets. Returns invocation-scoped sticker_ref values usable by send.",
+      description: "Search visually indexed stickers from administrator-approved Telegram sticker sets. Returns stk_-prefixed sticker_ref values usable only by send, only within this invocation. Always call this before sending a sticker; the img_ image_ref values shown in the context are unrelated and cannot be sent.",
       parameters: SearchStickersSchema,
       executionMode: "sequential",
       execute: async (toolCallId, input) => {

@@ -66,7 +66,7 @@ export function createSendTool(environment: SendToolEnvironment): AgentTool<type
   return {
     name: "send",
     label: "Send to Telegram",
-    description: "Send one plain-text message or one previously searched sticker to this invocation's Telegram chat. Reply targets must be visible in this invocation.",
+      description: "Send one plain-text message or one sticker to this invocation's Telegram chat. For a sticker send, sticker_ref MUST be a stk_ value returned by search_stickers in THIS invocation; the img_ image_ref values shown in the context are for read_image only and will be rejected. Reply targets must be visible in this invocation.",
     parameters: SendInputSchema,
     executionMode: "sequential",
     execute: async (toolCallId, input, signal) => {

@@ -190,7 +190,7 @@ export class MediaService {
     return {
       name: "read_image",
       label: "Read Telegram image",
-      description: "Analyze one Photo, image Document, or Sticker referenced in this invocation. Accepts only an image_ref shown in the current Telegram context.",
+      description: "Analyze one Photo, image Document, or Sticker referenced in this invocation. Accepts only an img_ image_ref shown in the current context. These refs are for reading media here and cannot be sent as stickers; to send a sticker, call search_stickers first to obtain a stk_ sticker_ref.",
       parameters: ReadImageSchema,
       execute: async (toolCallId, input, signal) => {
         const mediaId = context.imageCapabilities.get(input.image_ref);

@@ -93,6 +93,7 @@ test("a fresh Agent publishes only through send and audits model usage", async (
   expect(registryRow?.tool_registry_json).toContain('"name":"send"');
   expect(registryRow?.tool_registry_json).toContain('"label":"Send to Telegram"');
   expect(registryRow?.tool_registry_json).toContain("Send one plain-text message");
+  expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM agent_messages WHERE role = 'harness_nudge'").get()?.count).toBe(0n);
   store.close();
 });
 
@@ -280,5 +281,71 @@ test("lets a text-only agent read a Telegram photo through read_image", async ()
     .get();
   const toolsJson = presented?.tools_json ?? null;
   expect(toolsJson === null ? null : JSON.parse(toolsJson)).toEqual(["send", "read_image"]);
+  store.close();
+});
+
+test("nudges the model once to use send when it drafts a private reply and never re-nudges", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "plasticwan-agent-nudge-"));
+  directories.push(directory);
+  const configPath = join(directory, "config.toml");
+  await writeTestConfig(directory, configPath);
+  const loaded = await loadConfig(configPath);
+  const store = await SqliteStore.open(loaded.config);
+  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const update: Update = {
+    update_id: 1,
+    message: {
+      message_id: 10,
+      date: 1_700_000_000,
+      chat: { id: 123456789, type: "private", first_name: "Owner" },
+      from: { id: 42, is_bot: false, first_name: "Alice" },
+      text: "hello",
+    },
+  };
+  const received = new Date("2026-08-15T00:00:00.000Z");
+  ingestion.ingest(update, received);
+  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({ state: "completed", reason: "done" }));
+  const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
+  if (invocationId === undefined) throw new Error("Expected a due invocation");
+
+  // Turn 1: a would-be reply drafted as private assistant text, no send call.
+  // Turn 2: after the nudge, the model still forgets send — proving no re-nudge.
+  let sawNudge = false;
+  const faux = fauxProvider({
+    provider: "agent",
+    models: [{ id: "agent-model", input: ["text", "image"], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  faux.setResponses([
+    fauxAssistantMessage("this is a long private reply that the model forgot to send via the send tool"),
+    (context) => {
+      const lastUser = [...context.messages].reverse().find((message) => message.role === "user");
+      const content = lastUser?.content;
+      const nudgeText = Array.isArray(content) ? (content.find((block) => block.type === "text")?.text ?? "") : "";
+      if (nudgeText.includes("call the send tool")) sawNudge = true;
+      return fauxAssistantMessage("another long private reply that still forgets to call send");
+    },
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const model = faux.getModel();
+  const registry: ModelRegistry = { models, mutableModels: models, agentModel: model, visionModel: model };
+  const api: TelegramSendApi = {
+    sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
+    sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
+  };
+  const runtime = new AgentRuntime({
+    store,
+    config: loaded.config,
+    registry,
+    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    telegramApi: api,
+    bot: { id: 999n, displayName: "Plastic Wan", username: "plasticwan" },
+  });
+  const outcome = await runtime.run(invocationId, new AbortController().signal);
+  expect(outcome).toEqual({ state: "completed", reason: "completed" });
+  expect(sawNudge).toBe(true);
+  expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM agent_messages WHERE role = 'harness_nudge'").get()?.count).toBe(1n);
+  expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM telegram_sends").get()?.count).toBe(0n);
+  expect(faux.state.callCount).toBe(2);
   store.close();
 });

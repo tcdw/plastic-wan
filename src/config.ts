@@ -188,6 +188,7 @@ export const ConfigSchema = Type.Object(
         context_stop_ratio: Type.Number({ exclusiveMinimum: 0, maximum: 0.8 }),
         history_messages: Type.Integer({ minimum: 1 }),
         memory_ttl_warning_days: Type.Optional(PositiveInteger),
+        send_nudge_enabled: Type.Optional(Type.Boolean()),
       },
       Strict,
     ),

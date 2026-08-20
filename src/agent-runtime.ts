@@ -45,6 +45,18 @@ export interface AgentRuntimeOptions {
   readonly modelGate?: KeyedSemaphore;
 }
 
+/**
+ * Safety net for models that draft a group-facing reply as ordinary assistant
+ * text and then stop without calling send. Ordinary assistant text is private
+ * and never published, so such a reply is silently lost. When the agent is
+ * about to stop after producing substantial private text without ever calling
+ * send, inject one harness-level reminder to use send. Fires at most once per
+ * invocation; if the model still does not send, we stop and let it stay silent.
+ */
+const SEND_NUDGE_MIN_TEXT_CHARS = 40;
+const SEND_NUDGE_TEXT =
+  "You produced a reply as ordinary assistant text. Ordinary assistant text is private and is never published to Telegram. If that text is meant for the chat, call the send tool to publish it now. You will not be reminded again.";
+
 export class AgentRuntime {
   readonly #store: SqliteStore;
   readonly #config: RawConfig;
@@ -142,6 +154,8 @@ export class AgentRuntime {
     let estimatedInputTokens = Math.ceil((context.systemPrompt.length + context.userPrompt.length + schemaCharacters) / 4);
     let closing = false;
     let modelBudgetBlocked = false;
+    let sendUsed = false;
+    let nudged = false;
     const agent = new Agent({
       initialState: {
         systemPrompt: context.systemPrompt,
@@ -188,11 +202,29 @@ export class AgentRuntime {
         this.#store.db.query("UPDATE invocations SET tool_calls_used = ? WHERE id = ?").run(BigInt(toolCalls), invocationId);
         return undefined;
       },
-      shouldStopAfterTurn: async () => {
+      shouldStopAfterTurn: async (turn) => {
         if (turns >= this.#config.agent.max_turns || closing) return true;
         const stopThreshold = Math.floor(model.contextWindow * this.#config.agent.context_stop_ratio);
-        return estimatedInputTokens + model.maxTokens >= model.contextWindow
-          && estimatedInputTokens >= stopThreshold;
+        if (estimatedInputTokens + model.maxTokens >= model.contextWindow && estimatedInputTokens >= stopThreshold) {
+          return true;
+        }
+        // Safety net: the agent is about to stop naturally. If it drafted a
+        // group-facing reply as private text and never called send, remind it
+        // once. Only when this turn produced no tool calls (a would-be final
+        // message), so we never interrupt an in-progress tool workflow.
+        if (this.#config.agent.send_nudge_enabled === true && !sendUsed && !nudged) {
+          const hasToolCalls = turn.message.content.some((entry) => entry.type === "toolCall");
+          const text = turn.message.content
+            .filter((entry) => entry.type === "text")
+            .map((entry) => entry.text)
+            .join("");
+          if (!hasToolCalls && text.length >= SEND_NUDGE_MIN_TEXT_CHARS) {
+            nudged = true;
+            agent.steer({ role: "user", content: [{ type: "text", text: SEND_NUDGE_TEXT }], timestamp: Date.now() });
+            this.#recordAgentMessage(invocationId, "harness_nudge", SEND_NUDGE_TEXT);
+          }
+        }
+        return false;
       },
       prepareNextTurnWithContext: async (turn) => {
         const stopThreshold = Math.floor(model.contextWindow * this.#config.agent.context_stop_ratio);
@@ -206,6 +238,9 @@ export class AgentRuntime {
       if (event.type === "turn_end") {
         turns += 1;
         this.#store.db.query("UPDATE invocations SET turns_used = ? WHERE id = ?").run(BigInt(turns), invocationId);
+      }
+      if (event.type === "tool_execution_end" && event.toolName === "send") {
+        sendUsed = true;
       }
       if (event.type !== "message_end") return;
       if (event.message.role === "assistant") {
@@ -300,7 +335,7 @@ export class AgentRuntime {
     return amount >= BigInt(chat.budget.max_tokens_per_day);
   }
 
-  #recordAgentMessage(invocationId: bigint, role: "assistant" | "tool_result", text: string): void {
+  #recordAgentMessage(invocationId: bigint, role: "assistant" | "tool_result" | "harness_nudge", text: string): void {
     const sequence = this.#store.db
       .query<{ value: bigint }, [bigint]>("SELECT COALESCE(MAX(sequence_no), 0) + 1 AS value FROM agent_messages WHERE invocation_id = ?")
       .get(invocationId)?.value ?? 1n;

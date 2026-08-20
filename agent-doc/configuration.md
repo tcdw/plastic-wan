@@ -151,6 +151,7 @@ cost = { input = 0, output = 0, cache_read = 0, cache_write = 0 }
 - `context_stop_ratio`: 大于 0 且不超过 0.8。
 - `history_messages`: 1–20。
 - `memory_ttl_warning_days`（可选，默认 30）：Agent 记忆剩余寿命超过该天数时，Admin Panel 显示 warning，提示管理员判断保留、删除或提升进 `agents.md`。系统不禁止长 TTL。
+- `send_nudge_enabled`（可选，默认 `false`）：开启后，当 agent 即将自然停止、本轮未调用任何工具且产生了足够长的普通 Assistant 文本，又从未调用过 `send` 时，注入一条 harness 级 user 消息提醒其用 `send` 发送面向群聊的文本。每次 Invocation 至多触发一次；触发与提醒文本记录在 `agent_messages` 中，role 为 `harness_nudge`。用于稳定性不足、偶尔把回复写成私文本却忘记调用 `send` 的模型。
 - `thinking_level`: `off|minimal|low|medium|high|xhigh`；Provider 仍可能限制具体模型支持级别。
 
 Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用目标模型在 provider 中声明的 `max_tokens`。Provider 注册的模型必须满足 `max_tokens ≤ context_window`，且 agent 模型必须支持 text。

@@ -59,6 +59,7 @@ timeout_seconds = 90
 max_concurrency = 4
 context_stop_ratio = 0.8
 history_messages = 20
+send_nudge_enabled = true
 
 [vision]
 provider = "vision"

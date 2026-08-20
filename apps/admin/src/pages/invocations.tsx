@@ -210,17 +210,22 @@ function ContextTimelineCard({
 }
 
 function AgentTimelineCard({ message }: { readonly message: AgentMessageEntry }): React.ReactElement {
-  const assistant = message.role === "assistant";
+  const isToolResult = message.role === "tool_result";
+  const meta = ({
+    assistant: { label: "Assistant private text", color: "gold", note: "Not published to Telegram" },
+    tool_result: { label: "Tool result", color: "purple", note: null },
+    harness_nudge: { label: "Harness nudge", color: "cyan", note: "Reminder to use send" },
+  } as const)[message.role] ?? { label: message.role, color: "default" as const, note: null };
   return (
     <Card
       size="small"
       title={(
         <Space size="small" wrap>
-          <Tag color={assistant ? "gold" : "purple"}>
-            {assistant ? "Assistant private text" : "Tool result"}
+          <Tag color={meta.color}>
+            {meta.label}
           </Tag>
-          {assistant ? (
-            <Typography.Text type="secondary">Not published to Telegram</Typography.Text>
+          {meta.note !== null ? (
+            <Typography.Text type="secondary">{meta.note}</Typography.Text>
           ) : null}
         </Space>
       )}
@@ -228,11 +233,7 @@ function AgentTimelineCard({ message }: { readonly message: AgentMessageEntry })
     >
       {message.text.length === 0 ? (
         <Typography.Text type="secondary">No text content</Typography.Text>
-      ) : assistant ? (
-        <Typography.Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-          {message.text}
-        </Typography.Paragraph>
-      ) : (
+      ) : isToolResult ? (
         <Collapse
           size="small"
           items={[
@@ -247,6 +248,10 @@ function AgentTimelineCard({ message }: { readonly message: AgentMessageEntry })
             },
           ]}
         />
+      ) : (
+        <Typography.Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {message.text}
+        </Typography.Paragraph>
       )}
     </Card>
   );
@@ -343,7 +348,7 @@ function SessionOverview({ invocation }: { readonly invocation: InvocationDetail
     events.push({
       at: message.created_at,
       order: message.sequence_no * 10 + 4,
-      color: message.role === "assistant" ? "gold" : "purple",
+      color: message.role === "assistant" ? "gold" : message.role === "harness_nudge" ? "cyan" : "purple",
       content: <AgentTimelineCard message={message} />,
     });
   });

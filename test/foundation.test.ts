@@ -130,7 +130,7 @@ describe("database", () => {
     const { config } = await loadConfig(configPath);
     const store = await SqliteStore.open(config);
     const version = store.db.query<{ version: bigint }, []>("SELECT MAX(version) AS version FROM schema_migrations").get();
-    expect(version?.version).toBe(8n);
+    expect(version?.version).toBe(9n);
     store.close();
 
     const backupPath = await backupDatabase(config);

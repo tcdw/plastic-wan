@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { stringify } from "smol-toml";
 import { loadConfig } from "../src/config.ts";
 import { SecretStore } from "../src/secrets.ts";
-import { writeTestConfig } from "./helpers.ts";
+import { testConfigToml, writeTestConfig } from "./helpers.ts";
 import {
   extractInputCapabilities,
   extractReasoningEffortOptions,
@@ -14,6 +14,7 @@ import {
 } from "../src/tui/models-dev.ts";
 import { fetchProviderModels, modelsEndpoint } from "../src/tui/provider-models.ts";
 import { filterSearchChoices } from "../src/tui/provider-wizard.ts";
+import { renderDoctorAgentPrompt } from "../src/doctor.ts";
 import { parseCli } from "../src/cli-options.ts";
 
 const directories: string[] = [];
@@ -171,5 +172,24 @@ describe("configure CLI option", () => {
     const options = parseCli(["configure", "--config", "dev-data/config.toml"]);
     expect(options.command).toBe("configure");
     expect(options.configPath).toBe("dev-data/config.toml");
+  });
+
+  test("accepts doctor agent prompt output option", () => {
+    const options = parseCli(["doctor", "--config", "dev-data/config.toml", "--output-agent-prompt"]);
+    expect(options.command).toBe("doctor");
+    expect(options.outputAgentPrompt).toBe(true);
+  });
+  test("renders the configured agent prompt templates", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "plasticwan-doctor-prompt-"));
+    directories.push(directory);
+    const configPath = join(directory, "config.toml");
+    await writeTestConfig(
+      directory,
+      configPath,
+      testConfigToml(directory),
+      "Using {{ agent.provider }}/{{ agent.model }} with {{ vision.model }}",
+    );
+    const loaded = await loadConfig(configPath);
+    expect(renderDoctorAgentPrompt(loaded.config)).toBe("Using agent/agent-model with vision-model");
   });
 });

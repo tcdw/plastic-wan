@@ -7,10 +7,11 @@ import type { Update } from "grammy/types";
 import { loadConfig } from "../src/config.ts";
 import { ContextBuilder } from "../src/context-builder.ts";
 import { SqliteStore } from "../src/database.ts";
-import { BucketScheduler } from "../src/scheduler.ts";
+import { MemoryStore } from "../src/memory.ts";
 import { createSendTool, type TelegramSendApi } from "../src/send-tool.ts";
+import { BucketScheduler } from "../src/scheduler.ts";
 import { TelegramIngestion } from "../src/telegram-ingestion.ts";
-import { writeTestConfig } from "./helpers.ts";
+import { testConfigToml, writeTestConfig } from "./helpers.ts";
 
 const directories: string[] = [];
 
@@ -79,6 +80,36 @@ describe("invocation context", () => {
       { section: "history", count: 20n },
       { section: "new", count: 1n },
     ]);
+    store.close();
+  });
+
+  test("renders agent templates from the effective model without templating memory", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "plasticwan-context-template-"));
+    directories.push(directory);
+    const configPath = join(directory, "config.toml");
+    await writeTestConfig(
+      directory,
+      configPath,
+      testConfigToml(directory),
+      "agent={{ agent.provider }}/{{ agent.model }} vision={{ vision.provider }}/{{ vision.model }}",
+      "chat={{ agent.model }}",
+    );
+    const loaded = await loadConfig(configPath);
+    const store = await SqliteStore.open(loaded.config);
+    const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({ state: "completed", reason: "done" }));
+    const memory = new MemoryStore(store.db);
+    const received = new Date("2026-08-15T00:00:00.000Z");
+    ingestion.ingest(update(1, 1, "hello"), received);
+    const invocationId = processOne(scheduler, new Date(received.getTime() + 15_000));
+    const conversation = store.db.query<{ conversation_id: bigint }, [bigint]>("SELECT conversation_id FROM invocations WHERE id = ?").get(invocationId);
+    if (conversation === null) throw new Error("Expected invocation conversation");
+    memory.add(conversation.conversation_id, "{{ agent.model }}", 86_400);
+    const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768, false, { provider: "runtime", model: "runtime-model" });
+    expect(context.systemPrompt).toContain("agent=runtime/runtime-model vision=vision/vision-model");
+    expect(context.systemPrompt).toContain("chat=runtime-model");
+    expect(context.systemPrompt).toContain("- mem_");
+    expect(context.systemPrompt).toContain("{{ agent.model }}");
     store.close();
   });
 });

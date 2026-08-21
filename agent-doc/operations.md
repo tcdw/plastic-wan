@@ -77,6 +77,14 @@ bun run src/cli.ts serve --config dev-data/config.toml
 bun run src/cli.ts doctor --config dev-data/config.toml
 ```
 
+如需查看配置中 Agent 系统 Prompt 的模板渲染结果：
+
+```powershell
+bun run src/cli.ts doctor --config dev-data/config.toml --output-agent-prompt
+```
+
+该选项仍会执行完整 Doctor 检查；成功 JSON 中增加 `agent_prompt` 字段。输出包含 Prompt 正文，但不会包含 Secret、Chat 记忆或 Chat-specific instructions。不要在共享日志中使用该选项。
+
 Doctor 执行真实检查，不是静态 lint：
 
 - 配置与 Secret 解析。

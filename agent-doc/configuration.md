@@ -141,9 +141,8 @@ cost = { input = 0, output = 0, cache_read = 0, cache_write = 0 }
 
 ## Agent 与 Vision
 
-`agent` 约束：
-
-- `system_prompt_file`: 指向全局系统提示的 Markdown 文件，路径相对配置文件目录，内容必须非空。
+- `system_prompt_file`: 指向全局系统提示的 Markdown 文件，路径相对配置文件目录，内容必须非空。系统提示和 Chat 的 `instructions_file` 支持 `{{ agent.provider }}`、`{{ agent.model }}`、`{{ vision.provider }}`、`{{ vision.model }}`、`{{ timezone }}` 模板变量；模板只执行严格白名单替换，未知或格式错误的表达式会拒绝配置。
+- 模板中的 `agent.provider` 与 `agent.model` 是当前 Invocation 实际使用的模型，因此 Admin Panel 或 `/model` 的运行时切换会反映到下一次会话；`vision.*` 始终来自配置。模板值只注入 Prompt，不会注入记忆；记忆内容按原文保留。
 - `max_turns`: 1–8。
 - `max_tool_calls`: 1–12。
 - `max_sends`: 1–6。

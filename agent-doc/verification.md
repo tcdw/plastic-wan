@@ -58,6 +58,14 @@ bun run src/cli.ts check-config --config dev-data/config.toml
 bun run src/cli.ts doctor --config dev-data/config.toml
 ```
 
+如需同时验证 Prompt 模板的渲染结果：
+
+```bash
+bun run src/cli.ts doctor --config dev-data/config.toml --output-agent-prompt
+```
+
+该模式仍执行完整外部依赖冒烟，并在成功 JSON 中输出 `agent_prompt`。Prompt 正文可能包含内部配置，不要转发到共享日志。
+
 这是外部依赖冒烟，覆盖：
 
 - SQLite/FTS/磁盘。

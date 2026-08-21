@@ -8,6 +8,7 @@ import sharp from "sharp";
 import Type from "typebox";
 import { AgentRuntime } from "./agent-runtime.ts";
 import { assertConfigPermissions, loadConfig } from "./config.ts";
+import { renderPromptTemplate, type PromptTemplateValues } from "./prompt-template.ts";
 import type { McpServerConfig, ProviderConfig, RawConfig, SecretRef } from "./config.ts";
 import { KeyedSemaphore } from "./concurrency.ts";
 import type { InvocationContext } from "./context-builder.ts";
@@ -19,19 +20,31 @@ import { createModelRegistry, type ModelRegistry } from "./providers.ts";
 import { SecretStore } from "./secrets.ts";
 import { StickerService } from "./stickers.ts";
 
-export async function runDoctor(configPath: string): Promise<void> {
+export async function runDoctor(configPath: string, outputAgentPrompt = false): Promise<void> {
   const loaded = await loadConfig(configPath);
   await assertConfigPermissions(loaded.configPath);
   const secrets = new SecretStore();
   try {
-    await runDoctorChecks(loaded.config, loaded.hash, secrets);
+    await runDoctorChecks(loaded.config, loaded.hash, secrets, outputAgentPrompt);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(secrets.redact(message));
   }
 }
-
-async function runDoctorChecks(config: RawConfig, configHash: string, secrets: SecretStore): Promise<void> {
+export function renderDoctorAgentPrompt(config: RawConfig): string {
+  const values: PromptTemplateValues = {
+    agent: { provider: config.agent.provider, model: config.agent.model },
+    vision: { provider: config.vision.provider, model: config.vision.model },
+    timezone: config.timezone,
+  };
+  return renderPromptTemplate(config.agent.system_prompt, values);
+}
+async function runDoctorChecks(
+  config: RawConfig,
+  configHash: string,
+  secrets: SecretStore,
+  outputAgentPrompt: boolean,
+): Promise<void> {
   await resolveAllSecrets(config.telegram.token, config.providers, config.mcp?.servers ?? [], secrets);
   await mkdir(config.data_dir, { recursive: true, mode: 0o700 });
   await mkdir(dirname(config.paths.database), { recursive: true, mode: 0o700 });
@@ -149,6 +162,7 @@ async function runDoctorChecks(config: RawConfig, configHash: string, secrets: S
       required_mcp: requiredConfig.mcp?.servers.length ?? 0,
       telegram_bot_id: String(me.id),
       config_hash: configHash,
+      ...(outputAgentPrompt ? { agent_prompt: renderDoctorAgentPrompt(config) } : {}),
     }));
   } finally {
     await mcp?.stop();

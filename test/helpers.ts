@@ -84,8 +84,14 @@ backups = ${path("backups")}
 `;
 }
 
-export async function writeTestConfig(directory: string, configPath: string, toml: string = testConfigToml(directory)): Promise<void> {
-  await Bun.write(join(directory, "agent-system-prompt.md"), "Participate safely.");
-  await Bun.write(join(directory, "chat-instructions.md"), "private");
+export async function writeTestConfig(
+  directory: string,
+  configPath: string,
+  toml: string = testConfigToml(directory),
+  systemPrompt = "Participate safely.",
+  chatInstructions = "private",
+): Promise<void> {
+  await Bun.write(join(directory, "agent-system-prompt.md"), systemPrompt);
+  await Bun.write(join(directory, "chat-instructions.md"), chatInstructions);
   await Bun.write(configPath, toml);
 }

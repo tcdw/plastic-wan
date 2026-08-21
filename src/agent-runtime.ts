@@ -107,6 +107,7 @@ export class AgentRuntime {
       0,
       model.maxTokens,
       model.input.includes("image"),
+      { provider: model.provider, model: model.id },
     );
     const deadline = Date.now() + this.#config.agent.timeout_seconds * 1000;
     const preliminarySend = createSendTool({
@@ -126,6 +127,7 @@ export class AgentRuntime {
       schemaCharacters,
       model.maxTokens,
       model.input.includes("image"),
+      { provider: model.provider, model: model.id },
     );
     const send = createSendTool({
       store: this.#store,

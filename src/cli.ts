@@ -21,7 +21,7 @@ try {
       break;
     }
     case "doctor":
-      await runDoctor(options.configPath);
+      await runDoctor(options.configPath, options.outputAgentPrompt);
       break;
     case "serve":
       await serve(options.configPath);

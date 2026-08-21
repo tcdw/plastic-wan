@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import Type, { type Static } from "typebox";
 import Compile from "typebox/compile";
+import { validatePromptTemplate } from "./prompt-template.ts";
 
 const Strict = { additionalProperties: false } as const;
 const PositiveInteger = Type.Integer({ minimum: 1 });
@@ -230,8 +231,6 @@ export const ConfigSchema = Type.Object(
 export type SecretRef = Static<typeof SecretRefSchema>;
 export type TomlConfig = Static<typeof ConfigSchema>;
 export type TomlChat = TomlConfig["telegram"]["chats"][number];
-// RawConfig is the resolved runtime shape: prompt text lives in the .md files
-// referenced by TomlConfig and is inlined before the rest of the app consumes it.
 export type RawConfig = Omit<TomlConfig, "agent" | "telegram"> & {
   agent: Omit<TomlConfig["agent"], "system_prompt_file"> & { system_prompt: string };
   telegram: Omit<TomlConfig["telegram"], "chats"> & {
@@ -282,11 +281,13 @@ async function resolvePrompts(toml: TomlConfig, directory: string): Promise<{ co
   const promptFiles: PromptFile[] = [];
   const systemPrompt = await readPromptFile(resolve(directory, toml.agent.system_prompt_file), "agent.system_prompt_file", promptFiles);
   if (systemPrompt.length === 0) throw new Error(`agent.system_prompt_file is empty: ${toml.agent.system_prompt_file}`);
+  validatePromptTemplate(systemPrompt, "agent.system_prompt_file");
   const chats: Array<Omit<TomlChat, "instructions_file"> & { instructions: string }> = [];
   for (const chat of toml.telegram.chats) {
     const instructions = chat.instructions_file === undefined
       ? ""
       : await readPromptFile(resolve(directory, chat.instructions_file), `chat ${chat.id} instructions_file`, promptFiles);
+    validatePromptTemplate(instructions, `chat ${chat.id} instructions_file`);
     const { instructions_file, ...rest } = chat;
     chats.push({ ...rest, instructions });
   }

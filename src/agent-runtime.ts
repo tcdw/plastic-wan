@@ -186,7 +186,7 @@ export class AgentRuntime {
               this.#finishModelCall(callId, context.chatId, message);
             },
             () => this.#failModelCall(callId, "stream_rejected"),
-          ).finally(release);
+          ).finally(release).catch(() => undefined);
           return stream;
         } catch (error) {
           release();
@@ -234,7 +234,7 @@ export class AgentRuntime {
         return { context: { ...turn.context, ...(sendOnly === undefined ? {} : { tools: sendOnly }) } };
       },
     });
-    agent.subscribe((event) => {
+    const unsubscribe = agent.subscribe((event) => {
       if (event.type === "turn_end") {
         turns += 1;
         this.#store.db.query("UPDATE invocations SET turns_used = ? WHERE id = ?").run(BigInt(turns), invocationId);
@@ -260,23 +260,30 @@ export class AgentRuntime {
     });
     const abortAgent = (): void => agent.abort();
     signal.addEventListener("abort", abortAgent, { once: true });
+    let outcome: InvocationOutcome;
     try {
       const directImages = await this.#directImageLoader?.(context, signal) ?? [];
       await agent.prompt(context.userPrompt, [...directImages]);
+      if (signal.aborted) {
+        const unknown = this.#store.db
+          .query<{ present: bigint }, [bigint]>(
+            "SELECT 1 AS present FROM tool_calls WHERE invocation_id = ? AND state = 'outcome_unknown' LIMIT 1",
+          )
+          .get(invocationId) !== null;
+        outcome = { state: unknown ? "outcome_unknown" : "aborted", reason: timeoutSignal.aborted ? "timeout" : "aborted" };
+      } else if (modelBudgetBlocked) {
+        outcome = { state: "failed", reason: "chat_token_budget" };
+      } else if (agent.state.errorMessage !== undefined) {
+        outcome = { state: "failed", reason: "model_error" };
+      } else {
+        outcome = { state: "completed", reason: closing ? "context_limit" : "completed" };
+      }
     } finally {
       signal.removeEventListener("abort", abortAgent);
+      unsubscribe();
+      agent.reset();
     }
-    if (signal.aborted) {
-      const unknown = this.#store.db
-        .query<{ present: bigint }, [bigint]>(
-          "SELECT 1 AS present FROM tool_calls WHERE invocation_id = ? AND state = 'outcome_unknown' LIMIT 1",
-        )
-        .get(invocationId) !== null;
-      return { state: unknown ? "outcome_unknown" : "aborted", reason: timeoutSignal.aborted ? "timeout" : "aborted" };
-    }
-    if (modelBudgetBlocked) return { state: "failed", reason: "chat_token_budget" };
-    if (agent.state.errorMessage !== undefined) return { state: "failed", reason: "model_error" };
-    return { state: "completed", reason: closing ? "context_limit" : "completed" };
+    return outcome!;
   }
 
   #startModelCall(invocationId: bigint, model: Model<Api>, tools: readonly string[]): bigint {

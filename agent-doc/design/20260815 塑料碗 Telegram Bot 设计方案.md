@@ -100,7 +100,7 @@ Bot 不应在收到每一条 Telegram Message 后立即调用 Agent。
 当一个 Chat 处于就绪状态，并收到第一条待处理消息时：
 
 1. 创建该 Topic/Conversation 的 Message Bucket；
-2. 等待一个 `telegram.bucket_window_seconds` 节拍，Phase 1 接受 1–300 的整数秒，示例值为 **15 秒**；
+2. 等待一个 `telegram.bucket_window_seconds` 节拍，接受 0–300 的整数秒，示例值为 **15 秒**；`0` 表示新消息无需额外等待；
 3. 等待期间的后续消息加入当前 Bucket，且不重置计时器；
 4. 节拍到达后，将整个 Bucket 一次性交给 Agent。
 

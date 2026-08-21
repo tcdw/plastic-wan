@@ -446,7 +446,7 @@ stateDiagram-v2
     Running --> Running: completed and a non-empty bucket reaches the pace
 ```
 
-- 节拍通过全局 `telegram.bucket_window_seconds` 配置为 1–300 的整数秒，不按 Chat 覆盖，按 Chat 串行。
+- 节拍通过全局 `telegram.bucket_window_seconds` 配置为 0–300 的整数秒，不按 Chat 覆盖，按 Chat 串行；`0` 仅取消新消息的额外等待，不创建空会话。
 - 空闲 Chat 的首次 deadline 为第一条 eligible human message 的 `received_at + bucket_window_seconds`；不同 Topic 的 Bucket 各自持有 deadline。
 - Chat 内任意 Invocation 运行期间，各 Topic 只收集一个下一 Bucket。下一启动时间为 `max(previous started_at + bucket_window_seconds, previous finished_at)`，按 Chat 计算。
 - 使用数据库驱动的单一调度器：查询最近 deadline，等待；新建更早 deadline 或 Invocation 结束时唤醒。

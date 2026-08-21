@@ -65,7 +65,7 @@ first_received_at = T
 first session      = T + telegram.bucket_window_seconds
 ```
 
-`telegram.bucket_window_seconds` 是全局配置，接受 1–300 的整数秒。**Agent 会话按 Chat 串行**，消息收集仍按 Conversation 隔离：
+`telegram.bucket_window_seconds` 是全局配置，接受 0–300 的整数秒；`0` 表示新消息可以立即触发，不表示持续轮询。**Agent 会话按 Chat 串行**，消息收集仍按 Conversation 隔离：
 
 1. 不同 Forum Topic 的消息各自进入自己的 `collecting` Bucket；Context 与 Reply 只包含本 Topic 内容，互不混入。
 2. 同一 Chat 同时最多一个 queued/running Invocation；会话运行期间任何 Topic 的新消息只进入自己的 Bucket，不修改当前 Invocation。

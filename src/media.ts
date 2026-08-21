@@ -83,9 +83,10 @@ export class TelegramMediaClient implements MediaDownloader {
     const contentLength = Number(response.headers.get("content-length"));
     if (Number.isFinite(contentLength) && contentLength > MAX_DOWNLOAD_BYTES) throw new Error("Telegram media exceeds 20 MB");
     const handle = await open(destination, "wx", 0o600);
+    const reader = response.body.getReader();
     let size = 0;
+    let completed = false;
     try {
-      const reader = response.body.getReader();
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -93,12 +94,13 @@ export class TelegramMediaClient implements MediaDownloader {
         if (size > MAX_DOWNLOAD_BYTES) throw new Error("Telegram media exceeds 20 MB");
         await handle.write(value);
       }
-    } catch (error) {
+      completed = true;
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
       await handle.close();
-      await unlink(destination).catch(() => undefined);
-      throw error;
+      if (!completed) await unlink(destination).catch(() => undefined);
     }
-    await handle.close();
   }
 }
 

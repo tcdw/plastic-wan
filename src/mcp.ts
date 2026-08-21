@@ -490,7 +490,8 @@ export class McpManager {
     server.reconnectTimer = setTimeout(() => {
       server.reconnectTimer = undefined;
       void (async () => {
-        const release = await server.semaphore.acquire(new AbortController().signal);
+        const reconnectSignal = AbortSignal.timeout(30_000);
+        const release = await server.semaphore.acquire(reconnectSignal);
         try {
           await this.#connect(server, false);
         } catch {
@@ -499,7 +500,10 @@ export class McpManager {
         } finally {
           release();
         }
-      })();
+      })().catch(() => {
+        this.#setState(server, "degraded", "reconnect_failed");
+        this.#scheduleReconnect(server);
+      });
     }, waitMs);
   }
 

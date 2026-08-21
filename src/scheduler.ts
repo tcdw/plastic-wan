@@ -17,6 +17,14 @@ interface ActiveInvocation {
   readonly promise: Promise<void>;
 }
 
+interface InvocationDiagnosticRow {
+  readonly telegram_chat_id: bigint;
+  readonly bucket_message_count: bigint;
+  readonly pending_bucket_count: bigint;
+  readonly chat_pending_bucket_count: bigint;
+  readonly previous_started_at: string | null;
+}
+
 interface BucketRow {
   readonly id: bigint;
   readonly conversation_id: bigint;
@@ -70,6 +78,7 @@ export class BucketScheduler {
   #running = false;
   #wakeResolver: (() => void) | undefined;
   #loopPromise: Promise<void> | undefined;
+  #lastForcedGcAt = 0;
 
   constructor(store: SqliteStore, config: RawConfig, configHash: string, handler: InvocationHandler) {
     this.#store = store;
@@ -470,6 +479,8 @@ export class BucketScheduler {
   }
 
   async #execute(invocation: InvocationRow, controller: AbortController): Promise<void> {
+    const executionStartedAt = performance.now();
+    this.#logInvocationDiagnostic("agent_invocation_start", invocation, this.#active.size + 1, null, null, null);
     let outcome: InvocationOutcome;
     try {
       outcome = await this.#handler(invocation.id, controller.signal);
@@ -479,41 +490,134 @@ export class BucketScheduler {
         reason: error instanceof Error ? error.name : "invocation_error",
       };
     }
-    let finishedAt: Date;
-    this.#store.transaction(() => {
-      finishedAt = new Date();
-      const nowIso = finishedAt.toISOString();
-      this.#store.db
-        .query("UPDATE invocations SET state = ?, completion_reason = ?, finished_at = ? WHERE id = ? AND state = 'running'")
-        .run(outcome.state, outcome.reason, nowIso, invocation.id);
-      this.#store.db
-        .query("UPDATE buckets SET state = ?, finished_at = ?, updated_at = ? WHERE id = ? AND state = 'running'")
-        .run(outcome.state, nowIso, nowIso, invocation.bucket_id);
-      const started = this.#store.db
-        .query<{ started_at: string }, [bigint]>("SELECT started_at FROM invocations WHERE id = ?")
-        .get(invocation.id);
-      if (started === null) throw new Error(`Invocation ${invocation.id} has no start time`);
-      const nextDeadline = new Date(
-        Math.max(
-          finishedAt.getTime(),
-          Date.parse(started.started_at) + this.#config.telegram.bucket_window_seconds * 1_000,
-        ),
-      ).toISOString();
-      const chat = this.#store.db
-        .query<{ chat_id: bigint }, [bigint]>("SELECT chat_id FROM conversations WHERE id = ?")
-        .get(invocation.conversation_id);
-      if (chat === null) throw new Error(`Invocation ${invocation.id} has no chat`);
-      this.#store.db
-        .query(
-          `UPDATE buckets SET deadline_at = ?, updated_at = ?
-           WHERE conversation_id IN (SELECT id FROM conversations WHERE chat_id = ?)
-             AND state = 'collecting' AND deadline_at < ?`,
+    const finishedAt = new Date();
+    let persisted = false;
+    try {
+      this.#store.transaction(() => {
+        const nowIso = finishedAt.toISOString();
+        this.#store.db
+          .query("UPDATE invocations SET state = ?, completion_reason = ?, finished_at = ? WHERE id = ? AND state = 'running'")
+          .run(outcome.state, outcome.reason, nowIso, invocation.id);
+        this.#store.db
+          .query("UPDATE buckets SET state = ?, finished_at = ?, updated_at = ? WHERE id = ? AND state = 'running'")
+          .run(outcome.state, nowIso, nowIso, invocation.bucket_id);
+        const started = this.#store.db
+          .query<{ started_at: string }, [bigint]>("SELECT started_at FROM invocations WHERE id = ?")
+          .get(invocation.id);
+        if (started === null) throw new Error(`Invocation ${invocation.id} has no start time`);
+        const nextDeadline = new Date(
+          Math.max(
+            finishedAt.getTime(),
+            Date.parse(started.started_at) + this.#config.telegram.bucket_window_seconds * 1_000,
+          ),
+        ).toISOString();
+        const chat = this.#store.db
+          .query<{ chat_id: bigint }, [bigint]>("SELECT chat_id FROM conversations WHERE id = ?")
+          .get(invocation.conversation_id);
+        if (chat === null) throw new Error(`Invocation ${invocation.id} has no chat`);
+        this.#store.db
+          .query(
+            `UPDATE buckets SET deadline_at = ?, updated_at = ?
+             WHERE conversation_id IN (SELECT id FROM conversations WHERE chat_id = ?)
+               AND state = 'collecting' AND deadline_at < ?`,
+          )
+          .run(nextDeadline, nowIso, chat.chat_id, nextDeadline);
+      });
+      persisted = true;
+    } finally {
+      this.#active.delete(invocation.id.toString());
+      if (persisted) this.processDue(finishedAt);
+      this.#logInvocationDiagnostic(
+        "agent_invocation_end",
+        invocation,
+        this.#active.size,
+        Math.round(performance.now() - executionStartedAt),
+        outcome,
+        persisted,
+      );
+      this.wake();
+    }
+  }
+
+  #logInvocationDiagnostic(
+    event: "agent_invocation_start" | "agent_invocation_end",
+    invocation: InvocationRow,
+    activeAgentSessions: number,
+    durationMs: number | null,
+    outcome: InvocationOutcome | null,
+    persisted: boolean | null,
+  ): void {
+    try {
+      const now = new Date();
+      const row = this.#store.db
+        .query<InvocationDiagnosticRow, [bigint, bigint, bigint]>(
+          `SELECT c.telegram_chat_id,
+                  (SELECT COUNT(*) FROM bucket_messages bm WHERE bm.bucket_id = ?) AS bucket_message_count,
+                  (SELECT COUNT(*) FROM buckets pb WHERE pb.state IN ('collecting', 'queued')) AS pending_bucket_count,
+                  (SELECT COUNT(*) FROM buckets pb
+                   JOIN conversations pv ON pv.id = pb.conversation_id
+                   WHERE pv.chat_id = v.chat_id AND pb.state IN ('collecting', 'queued')) AS chat_pending_bucket_count,
+                  (SELECT MAX(prior.started_at) FROM invocations prior
+                   JOIN conversations prior_v ON prior_v.id = prior.conversation_id
+                   WHERE prior_v.chat_id = v.chat_id AND prior.id < ? AND prior.started_at IS NOT NULL) AS previous_started_at
+           FROM conversations v
+           JOIN chats c ON c.id = v.chat_id
+           WHERE v.id = ?`,
         )
-        .run(nextDeadline, nowIso, chat.chat_id, nextDeadline);
-    });
-    this.#active.delete(invocation.id.toString());
-    this.processDue(finishedAt!);
-    this.wake();
+        .get(invocation.bucket_id, invocation.id, invocation.conversation_id);
+      if (row === null) throw new Error("invocation_conversation_missing");
+      const currentStartedAt = this.#store.db
+        .query<{ started_at: string | null }, [bigint]>("SELECT started_at FROM invocations WHERE id = ?")
+        .get(invocation.id)?.started_at ?? null;
+      const recentInvocations = this.#store.db
+        .query<{ count: bigint }, [string]>("SELECT COUNT(*) AS count FROM invocations WHERE started_at >= ?")
+        .get(new Date(now.getTime() - 60_000).toISOString())?.count ?? 0n;
+      const memory = process.memoryUsage();
+      let gcMemory: NodeJS.MemoryUsage | null = null;
+      if (event === "agent_invocation_end" && now.getTime() - this.#lastForcedGcAt >= 60_000) {
+        this.#lastForcedGcAt = now.getTime();
+        Bun.gc(true);
+        gcMemory = process.memoryUsage();
+      }
+      console.log(JSON.stringify({
+        event,
+        invocation_id: invocation.id.toString(),
+        session_id: invocation.id.toString(),
+        chat_id: row.telegram_chat_id.toString(),
+        bucket_message_count: Number(row.bucket_message_count),
+        pending_bucket_count: Number(row.pending_bucket_count),
+        chat_pending_bucket_count: Number(row.chat_pending_bucket_count),
+        active_agent_sessions: activeAgentSessions,
+        invocations_started_last_minute: Number(recentInvocations),
+        invocation_duration_ms: durationMs,
+        previous_invocation_gap_ms: currentStartedAt === null || row.previous_started_at === null
+          ? null
+          : Date.parse(currentStartedAt) - Date.parse(row.previous_started_at),
+        outcome_state: outcome?.state ?? null,
+        outcome_reason: outcome?.reason ?? null,
+        terminal_state_persisted: persisted,
+        rss_bytes: memory.rss,
+        heap_used_bytes: memory.heapUsed,
+        heap_total_bytes: memory.heapTotal,
+        external_bytes: memory.external,
+        array_buffers_bytes: memory.arrayBuffers,
+        forced_gc: gcMemory !== null,
+        gc_rss_bytes: gcMemory?.rss ?? null,
+        gc_heap_used_bytes: gcMemory?.heapUsed ?? null,
+        gc_heap_total_bytes: gcMemory?.heapTotal ?? null,
+        gc_external_bytes: gcMemory?.external ?? null,
+        gc_array_buffers_bytes: gcMemory?.arrayBuffers ?? null,
+        bun_version: Bun.version,
+        at: now.toISOString(),
+      }));
+    } catch (error) {
+      console.log(JSON.stringify({
+        event: "agent_invocation_diagnostic_failed",
+        invocation_id: invocation.id.toString(),
+        error: error instanceof Error ? error.name : "diagnostic_error",
+        at: new Date().toISOString(),
+      }));
+    }
   }
 
   #chatBudget(chatId: bigint): RawConfig["telegram"]["chats"][number]["budget"] | undefined {

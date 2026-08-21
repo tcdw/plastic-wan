@@ -283,13 +283,17 @@ export class StickerService {
     while (!signal.aborted) {
       if (await this.runOne(new Date(), signal)) continue;
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 60_000);
-        const wake = (): void => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
           clearTimeout(timer);
+          signal.removeEventListener("abort", finish);
           resolve();
         };
-        this.#wake = wake;
-        signal.addEventListener("abort", wake, { once: true });
+        const timer = setTimeout(finish, 60_000);
+        this.#wake = finish;
+        signal.addEventListener("abort", finish, { once: true });
       });
       this.#wake = undefined;
     }

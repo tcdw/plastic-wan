@@ -13,7 +13,7 @@ export class AsyncSemaphore {
   #active = 0;
   #sequence = 0;
 
-  constructor(limit: number) {
+  constructor(limit: number, private readonly onIdle?: (semaphore: AsyncSemaphore) => void) {
     if (!Number.isInteger(limit) || limit < 1) throw new Error("Semaphore limit must be a positive integer");
     this.#limit = limit;
   }
@@ -25,8 +25,14 @@ export class AsyncSemaphore {
       return Promise.resolve(() => this.#release());
     }
     return new Promise<() => void>((resolve, reject) => {
-      const onAbort = (): void => reject(new Error("Semaphore wait aborted"));
-      const waiter: Waiter = { resolve, reject, signal, onAbort, priority, sequence: this.#sequence };
+      let waiter: Waiter;
+      const onAbort = (): void => {
+        const index = this.#waiters.indexOf(waiter);
+        if (index >= 0) this.#waiters.splice(index, 1);
+        reject(new Error("Semaphore wait aborted"));
+        this.#notifyIdle();
+      };
+      waiter = { resolve, reject, signal, onAbort, priority, sequence: this.#sequence };
       this.#sequence += 1;
       signal.addEventListener("abort", onAbort, { once: true });
       this.#waiters.push(waiter);
@@ -43,6 +49,11 @@ export class AsyncSemaphore {
       return;
     }
     this.#active -= 1;
+    this.#notifyIdle();
+  }
+
+  #notifyIdle(): void {
+    if (this.#active === 0 && this.#waiters.length === 0) this.onIdle?.(this);
   }
 }
 
@@ -57,7 +68,9 @@ export class KeyedSemaphore {
   async acquire(key: string, signal: AbortSignal): Promise<() => void> {
     let semaphore = this.#semaphores.get(key);
     if (semaphore === undefined) {
-      semaphore = new AsyncSemaphore(this.#limit);
+      semaphore = new AsyncSemaphore(this.#limit, (idle) => {
+        if (this.#semaphores.get(key) === idle) this.#semaphores.delete(key);
+      });
       this.#semaphores.set(key, semaphore);
     }
     return semaphore.acquire(signal);

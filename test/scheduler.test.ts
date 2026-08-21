@@ -255,6 +255,76 @@ describe("bucket scheduler", () => {
     store.close();
   });
 
+  test("zero-second windows consume each next bucket once without idle retrigger or same-chat reentry", async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted!: () => void;
+    const firstStartedSignal = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    let secondStarted!: () => void;
+    const secondStartedSignal = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    let secondFinished!: () => void;
+    const secondFinishedSignal = new Promise<void>((resolve) => {
+      secondFinished = resolve;
+    });
+    const started: bigint[] = [];
+    let active = 0;
+    let maxActive = 0;
+    const { store, ingestion, scheduler } = await setup(
+      (toml) => toml.replace("bucket_window_seconds = 15", "bucket_window_seconds = 0"),
+      async (invocationId) => {
+        started.push(invocationId);
+        if (started.length === 1) firstStarted();
+        if (started.length === 2) secondStarted();
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        if (started.length === 1) await firstGate;
+        active -= 1;
+        if (started.length === 2) secondFinished();
+        return { state: "completed", reason: "done" };
+      },
+    );
+    try {
+      scheduler.start();
+      const received = new Date();
+      ingestion.ingest(textUpdate(1, 10, "first"), received);
+      scheduler.wake();
+      await firstStartedSignal;
+
+      const during = ingestion.ingest(textUpdate(2, 11, "during"), new Date());
+      scheduler.processDue();
+      expect(started).toHaveLength(1);
+      expect(maxActive).toBe(1);
+      expect(
+        store.db.query<{ state: string }, []>("SELECT state FROM buckets ORDER BY id DESC LIMIT 1").get()?.state,
+      ).toBe("collecting");
+
+      releaseFirst();
+      await secondStartedSignal;
+      expect(maxActive).toBe(1);
+      await secondFinishedSignal;
+      await scheduler.stop();
+      expect(scheduler.processDue()).toHaveLength(0);
+      expect(started).toHaveLength(2);
+      expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM invocations").get()?.count).toBe(2n);
+      expect(
+        store.db.query<{ count: bigint }, [bigint]>(
+          "SELECT COUNT(*) AS count FROM invocation_messages WHERE message_id = ? AND section = 'new'",
+        ).get(during.messageId!)?.count,
+      ).toBe(1n);
+      expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM buckets WHERE state IN ('collecting', 'queued', 'running')").get()?.count).toBe(0n);
+    } finally {
+      releaseFirst();
+      await scheduler.stop();
+      store.close();
+    }
+  });
+
   test("serializes agent sessions across forum topics of the same chat", async () => {
     const { store, ingestion, scheduler } = await setup((toml) => toml.replace("bucket_window_seconds = 15", "bucket_window_seconds = 6"));
     const start = new Date("2026-08-15T00:00:00.000Z");

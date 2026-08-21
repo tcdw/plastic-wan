@@ -43,10 +43,10 @@ describe("configuration", () => {
     await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
   });
 
-  test("rejects bucket windows outside one to three hundred seconds", async () => {
+  test("accepts zero-second bucket windows and rejects values above three hundred seconds", async () => {
     const { directory, configPath } = await fixture();
     await Bun.write(configPath, testConfigToml(directory).replace("bucket_window_seconds = 15", "bucket_window_seconds = 0"));
-    await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
+    expect((await loadConfig(configPath)).config.telegram.bucket_window_seconds).toBe(0);
     await Bun.write(configPath, testConfigToml(directory).replace("bucket_window_seconds = 15", "bucket_window_seconds = 301"));
     await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
   });

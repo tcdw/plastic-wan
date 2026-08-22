@@ -20,6 +20,7 @@
 | 本地启动、安装媒体依赖、部署或排障 | [operations.md](operations.md) |
 | 修改 Admin Panel 认证、审计 API 或前端 | [admin-panel.md](admin-panel.md) |
 | 规划 Admin 配置保存、备份与进程重启 | [config-admin-save-restart-plan.md](config-admin-save-restart-plan.md) |
+| 规划 Bun → Node.js 运行时迁移 | [bun-to-node-migration.md](bun-to-node-migration.md) |
 | 决定该运行哪些验证 | [verification.md](verification.md) |
 | 查 Phase 1 产品目标与验收范围 | [design/20260815 塑料碗 Telegram Bot 设计方案.md](design/20260815%20塑料碗%20Telegram%20Bot%20设计方案.md) |
 | 查原始技术设计、安全边界与状态机 | [design/20260815 塑料碗 Telegram Bot 技术设计.md](design/20260815%20塑料碗%20Telegram%20Bot%20技术设计.md) |

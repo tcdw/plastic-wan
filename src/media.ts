@@ -7,7 +7,7 @@ import sharp from "sharp";
 import Type, { type Static } from "typebox";
 import Compile from "typebox/compile";
 import type { RawConfig } from "./config.ts";
-import { AsyncSemaphore, KeyedSemaphore } from "./concurrency.ts";
+import { AsyncSemaphore, type KeyedSemaphore } from "./concurrency.ts";
 import type { DirectImage, InvocationContext } from "./context-builder.ts";
 import type { SqliteStore } from "./database.ts";
 import type { ModelRegistry } from "./providers.ts";

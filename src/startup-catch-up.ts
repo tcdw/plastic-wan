@@ -1,6 +1,6 @@
 import type { Update } from "grammy/types";
 import type { SqliteStore } from "./database.ts";
-import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from "./scheduler.ts";
+import { type BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from "./scheduler.ts";
 import type { TelegramIngestion } from "./telegram-ingestion.ts";
 
 interface GetUpdatesOptions {

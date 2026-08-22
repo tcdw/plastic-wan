@@ -14,7 +14,7 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { RawConfig } from "./config.ts";
-import { SecretStore } from "./secrets.ts";
+import type { SecretStore } from "./secrets.ts";
 
 const CUSTOM_ADAPTERS: Record<string, () => ProviderStreams> = {
   "openai-responses": openAIResponsesApi,

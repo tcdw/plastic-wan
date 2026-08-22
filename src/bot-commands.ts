@@ -2,7 +2,7 @@ import type { Message } from "grammy/types";
 import { isBotAdmin } from "./admin/admins.ts";
 import type { RawConfig } from "./config.ts";
 import type { SqliteStore } from "./database.ts";
-import { AgentModelSwitcher } from "./model-switch.ts";
+import type { AgentModelSwitcher } from "./model-switch.ts";
 import type { BucketScheduler } from "./scheduler.ts";
 
 export interface ParsedCommand {

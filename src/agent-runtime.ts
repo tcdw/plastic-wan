@@ -15,7 +15,7 @@ import { KeyedSemaphore } from "./concurrency.ts";
 import { ContextBuilder, type InvocationContext } from "./context-builder.ts";
 import type { SqliteStore } from "./database.ts";
 import type { ModelRegistry } from "./providers.ts";
-import { AgentModelSwitcher } from "./model-switch.ts";
+import type { AgentModelSwitcher } from "./model-switch.ts";
 import { createSendTool, type TelegramSendApi } from "./send-tool.ts";
 import type { InvocationOutcome } from "./scheduler.ts";
 

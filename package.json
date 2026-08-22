@@ -12,7 +12,9 @@
     "test": "bun test",
     "start": "bun run src/cli.ts serve",
     "admin:dev": "bun run --filter plasticwan-admin dev",
-    "admin:build": "bun run --filter plasticwan-admin build"
+    "admin:build": "bun run --filter plasticwan-admin build",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --write ."
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.2",
@@ -26,6 +28,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.10",
     "@types/bun": "1.3.14",
     "typescript": "5.9.3"
   }

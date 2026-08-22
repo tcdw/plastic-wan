@@ -1,7 +1,7 @@
 import Type from "typebox";
 import Compile from "typebox/compile";
 import type { SecretRef } from "../config.ts";
-import { SecretStore } from "../secrets.ts";
+import type { SecretStore } from "../secrets.ts";
 import type { ApiAdapter } from "./prompts.ts";
 
 const MAX_MODELS_RESPONSE_BYTES = 1_048_576;

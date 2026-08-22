@@ -54,7 +54,7 @@
 5. Snapshot 携带 `message_thread_id`。回复可见消息时，`send` 路由到该消息所属 Topic；不带 Reply 时路由到最新消息所属 Topic。
 6. 排空完成并原子清除启动状态后，才切换到常规按 Conversation 收集。
 
-当前 `dev-data/config.toml` 的 `agent.history_messages = 10`，因此每个群的启动追赶任务最多包含 10 条消息。
+当前 `dev-data/config.toml` 的 `agent.history_messages = 20`，因此每个群的启动追赶任务最多包含 20 条消息。
 
 ## 会话节拍与 Bucket
 
@@ -80,14 +80,16 @@ first session      = T + telegram.bucket_window_seconds
 
 `ContextBuilder` 生成：
 
-- `systemPrompt`：安全边界、全局 Prompt、私聊/群聊参与策略、Chat instructions、当前时间、记忆列表。
+- `systemPrompt`：安全边界、图片处理说明、全局 Prompt、私聊/群聊参与策略、Chat instructions、记忆列表、当前时间。
 - `userPrompt`：最近 history 与本 Bucket new messages。
 - `directImages`：当 `agent` 模型支持 image 时，选中消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容。
 - `visibleReplyMessageIds`：本次允许 Reply 的 Telegram Message ID。
 - `imageCapabilities`：Sticker 始终可用；当 `agent` 模型不支持 image 时也包含 Photo/图片 Document，供 `read_image` 使用。
 - `omittedNewMessages`：因 Context 上限省略的新消息数量。
 
-当前 Conversation 全部有效记忆按创建时间升序追加在 system prompt 末尾（`<memory_list>` 块）：固定 Prompt → 当前时间 → 记忆列表。新增记忆等价于列表末尾 append，不重排已有项，尽量保留 Provider prefix cache；TTL 到期与 `delete_memory` 只破坏删除位置之后的缓存前缀。
+当前 Conversation 全部有效记忆按创建时间升序注入（`<memory_list>` 块）：固定 Prompt → 记忆列表 → 当前时间。新增记忆等价于列表末尾 append，不重排已有项，尽量保留 Provider prefix cache；TTL 到期与 `delete_memory` 只破坏删除位置之后的缓存前缀。
+
+当前时间必须留在 system prompt 最末：它每次 Invocation 都变，放在记忆列表之前会让缓存前缀在时间戳处就断掉，记忆的 append-only 顺序也就白费了。
 
 私聊策略提示模型积极参与；群聊提示只在有明确价值时发言。它是行为偏好，不绕过 Tool 或预算授权。
 

@@ -145,8 +145,10 @@ export class ContextBuilder {
       participation,
       catchUp,
       renderPromptTemplate(chatConfig.instructions, templateValues),
-      `Current time in ${timezone}: ${currentTime}`,
       this.#memoryPrompt(identity.conversation_id),
+      // Current time changes on every invocation, so it must stay last: any part
+      // placed after it would never survive the provider prefix cache.
+      `Current time in ${timezone}: ${currentTime}`,
     ].filter((part) => part.length > 0).join("\n\n");
     const rows = this.#store.db
       .query<InvocationMessageRow, [bigint]>(

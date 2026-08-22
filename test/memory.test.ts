@@ -175,6 +175,11 @@ test("the system prompt injects active memories in creation order", async () => 
     expect(context.systemPrompt).toContain("100 characters");
     expect(context.systemPrompt).not.toContain("short note");
     expect(context.systemPrompt).not.toContain("other conversation note");
+    // The per-invocation timestamp must sit after the memory block; anything
+    // below it can never be covered by the provider prefix cache.
+    expect(context.systemPrompt.indexOf("Current time in ")).toBeGreaterThan(
+      context.systemPrompt.indexOf("</memory_list>"),
+    );
   } finally {
     store.close();
   }

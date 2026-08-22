@@ -21,7 +21,7 @@
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.2",
     "@earendil-works/pi-ai": "0.84.2",
-    "@inquirer/prompts": "^8.5.2",
+    "@inquirer/prompts": "^8.6.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "grammy": "1.45.1",
     "sharp": "0.35.3",

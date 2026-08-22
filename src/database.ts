@@ -1,7 +1,7 @@
-import { Database } from "bun:sqlite";
-import { chmod, mkdir, open, readFile, readdir, rename, unlink, type FileHandle } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import type { RawConfig } from "./config.ts";
+import { Database } from 'bun:sqlite';
+import { chmod, type FileHandle, mkdir, open, readdir, readFile, rename, unlink } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import type { RawConfig } from './config.ts';
 
 interface Migration {
   readonly version: number;
@@ -20,17 +20,18 @@ export class ServeLock {
 
   static async acquire(dataDir: string): Promise<ServeLock> {
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
-    const path = join(dataDir, "serve.lock");
+    const path = join(dataDir, 'serve.lock');
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const handle = await open(path, "wx", 0o600);
-        await handle.writeFile(`${process.pid}\n`, { encoding: "utf8" });
+        const handle = await open(path, 'wx', 0o600);
+        await handle.writeFile(`${process.pid}\n`, { encoding: 'utf8' });
         return new ServeLock(path, handle);
       } catch (error) {
-        const code = error instanceof Error && "code" in error ? error.code : undefined;
-        if (code !== "EEXIST" || attempt > 0) throw new Error(`Another serve process holds ${path}`);
-        const pid = Number.parseInt(await readFile(path, "utf8"), 10);
-        if (Number.isInteger(pid) && isProcessAlive(pid)) throw new Error(`Another serve process holds ${path} with PID ${pid}`);
+        const code = error instanceof Error && 'code' in error ? error.code : undefined;
+        if (code !== 'EEXIST' || attempt > 0) throw new Error(`Another serve process holds ${path}`);
+        const pid = Number.parseInt(await readFile(path, 'utf8'), 10);
+        if (Number.isInteger(pid) && isProcessAlive(pid))
+          throw new Error(`Another serve process holds ${path} with PID ${pid}`);
         await unlink(path);
       }
     }
@@ -40,8 +41,8 @@ export class ServeLock {
   async release(): Promise<void> {
     await this.#handle.close();
     await unlink(this.#path).catch((error: unknown) => {
-      const code = error instanceof Error && "code" in error ? error.code : undefined;
-      if (code !== "ENOENT") throw error;
+      const code = error instanceof Error && 'code' in error ? error.code : undefined;
+      if (code !== 'ENOENT') throw error;
     });
   }
 }
@@ -60,14 +61,14 @@ export class SqliteStore {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const existed = await Bun.file(path).exists();
     const database = new Database(path, { create: true, strict: true, safeIntegers: true });
-    database.exec("PRAGMA journal_mode = WAL;");
-    database.exec("PRAGMA synchronous = FULL;");
-    database.exec("PRAGMA foreign_keys = ON;");
-    database.exec("PRAGMA busy_timeout = 5000;");
+    database.exec('PRAGMA journal_mode = WAL;');
+    database.exec('PRAGMA synchronous = FULL;');
+    database.exec('PRAGMA foreign_keys = ON;');
+    database.exec('PRAGMA busy_timeout = 5000;');
     const store = new SqliteStore(path, database);
     try {
       if (migrate) await store.migrate(config, existed);
-      if (process.platform !== "win32") await chmod(path, 0o600);
+      if (process.platform !== 'win32') await chmod(path, 0o600);
       return store;
     } catch (error) {
       database.close();
@@ -76,7 +77,7 @@ export class SqliteStore {
   }
 
   close(): void {
-    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
     this.db.close();
   }
 
@@ -86,10 +87,10 @@ export class SqliteStore {
 
   private async migrate(config: RawConfig, databaseExisted: boolean): Promise<void> {
     const migrations = await loadMigrations();
-    const applied = this.hasTable("schema_migrations")
+    const applied = this.hasTable('schema_migrations')
       ? new Set(
           this.db
-            .query<{ version: bigint }, []>("SELECT version FROM schema_migrations ORDER BY version")
+            .query<{ version: bigint }, []>('SELECT version FROM schema_migrations ORDER BY version')
             .all()
             .map((row) => Number(row.version)),
         )
@@ -97,22 +98,24 @@ export class SqliteStore {
     const pending = migrations.filter((migration) => !applied.has(migration.version));
     if (pending.length === 0) return;
     if (databaseExisted) {
-      await createBackupFile(this.db, config.paths.backups, `pre-migration-${timestampForFile()}-${crypto.randomUUID()}.sqlite`);
+      await createBackupFile(
+        this.db,
+        config.paths.backups,
+        `pre-migration-${timestampForFile()}-${crypto.randomUUID()}.sqlite`,
+      );
     }
     for (const migration of pending) {
       this.transaction(() => {
         this.db.exec(migration.sql);
         this.db
-          .query("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)")
+          .query('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)')
           .run(BigInt(migration.version), new Date().toISOString());
       });
     }
   }
 
   private hasTable(name: string): boolean {
-    return this.db
-      .query("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(name) !== null;
+    return this.db.query("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== null;
   }
 }
 
@@ -124,12 +127,16 @@ export async function backupDatabase(config: RawConfig): Promise<string> {
     safeIntegers: true,
   });
   try {
-    source.exec("PRAGMA journal_mode = WAL;");
-    source.exec("PRAGMA synchronous = FULL;");
-    source.exec("PRAGMA foreign_keys = ON;");
-    source.exec("PRAGMA busy_timeout = 5000;");
+    source.exec('PRAGMA journal_mode = WAL;');
+    source.exec('PRAGMA synchronous = FULL;');
+    source.exec('PRAGMA foreign_keys = ON;');
+    source.exec('PRAGMA busy_timeout = 5000;');
     purgeExpiredData(source, config);
-    const path = await createBackupFile(source, config.paths.backups, `plasticwan-${timestampForFile()}-${crypto.randomUUID()}.sqlite`);
+    const path = await createBackupFile(
+      source,
+      config.paths.backups,
+      `plasticwan-${timestampForFile()}-${crypto.randomUUID()}.sqlite`,
+    );
     await rotateBackups(config.paths.backups, config.retention.backup_copies);
     return path;
   } finally {
@@ -139,10 +146,12 @@ export async function backupDatabase(config: RawConfig): Promise<string> {
 
 export function purgeExpiredData(database: Database, config: RawConfig, now = new Date()): void {
   const cutoff = new Date(now.getTime() - config.retention.online_days * 86_400_000).toISOString();
-  database.transaction(() => {
-    database.query("DELETE FROM memories WHERE expires_at <= ?").run(now.toISOString());
-    database.query("DELETE FROM telegram_updates WHERE received_at < ?").run(cutoff);
-    database.query(`
+  database
+    .transaction(() => {
+      database.query('DELETE FROM memories WHERE expires_at <= ?').run(now.toISOString());
+      database.query('DELETE FROM telegram_updates WHERE received_at < ?').run(cutoff);
+      database
+        .query(`
       DELETE FROM telegram_sends
       WHERE tool_call_id IN (
         SELECT tc.id
@@ -151,13 +160,17 @@ export function purgeExpiredData(database: Database, config: RawConfig, now = ne
         WHERE i.state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'skipped_budget')
           AND COALESCE(i.finished_at, i.created_at) < ?
       )
-    `).run(cutoff);
-    database.query(`
+    `)
+        .run(cutoff);
+      database
+        .query(`
       DELETE FROM invocations
       WHERE state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'skipped_budget')
         AND COALESCE(finished_at, created_at) < ?
-    `).run(cutoff);
-    database.query(`
+    `)
+        .run(cutoff);
+      database
+        .query(`
       UPDATE buckets
       SET merged_into_bucket_id = NULL
       WHERE merged_into_bucket_id IN (
@@ -165,35 +178,45 @@ export function purgeExpiredData(database: Database, config: RawConfig, now = ne
         WHERE state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'merged', 'expired', 'skipped_budget')
           AND COALESCE(finished_at, updated_at) < ?
       )
-    `).run(cutoff);
-    database.query(`
+    `)
+        .run(cutoff);
+      database
+        .query(`
       DELETE FROM buckets
       WHERE state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'merged', 'expired', 'skipped_budget')
         AND COALESCE(finished_at, updated_at) < ?
         AND NOT EXISTS (SELECT 1 FROM invocations i WHERE i.bucket_id = buckets.id)
-    `).run(cutoff);
-    database.query(`
+    `)
+        .run(cutoff);
+      database
+        .query(`
       DELETE FROM media
       WHERE revision_id IN (
         SELECT r.id FROM message_revisions r
         JOIN messages m ON m.id = r.message_id
         WHERE m.received_at < ?
       )
-    `).run(cutoff);
-    database.query(`
+    `)
+        .run(cutoff);
+      database
+        .query(`
       UPDATE messages
       SET current_revision_id = NULL
       WHERE received_at < ?
         AND NOT EXISTS (SELECT 1 FROM invocation_messages im WHERE im.message_id = messages.id)
         AND NOT EXISTS (SELECT 1 FROM bucket_messages bm WHERE bm.message_id = messages.id)
-    `).run(cutoff);
-    database.query(`
+    `)
+        .run(cutoff);
+      database
+        .query(`
       DELETE FROM messages
       WHERE received_at < ?
         AND NOT EXISTS (SELECT 1 FROM invocation_messages im WHERE im.message_id = messages.id)
         AND NOT EXISTS (SELECT 1 FROM bucket_messages bm WHERE bm.message_id = messages.id)
-    `).run(cutoff);
-    database.query(`
+    `)
+        .run(cutoff);
+      database
+        .query(`
       UPDATE message_revisions
       SET sender_id = NULL,
           text = NULL,
@@ -203,35 +226,45 @@ export function purgeExpiredData(database: Database, config: RawConfig, now = ne
           service_json = NULL,
           raw_fragment_json = '{}'
       WHERE message_id IN (SELECT id FROM messages WHERE received_at < ?)
-    `).run(cutoff);
-    database.query("DELETE FROM senders WHERE NOT EXISTS (SELECT 1 FROM message_revisions r WHERE r.sender_id = senders.id)").run();
-    database.query("DELETE FROM media_analyses WHERE kind = 'image' AND updated_at < ?").run(cutoff);
-    database.query("DELETE FROM model_calls WHERE invocation_id IS NULL AND state <> 'pending' AND created_at < ?").run(cutoff);
-    database.query("DELETE FROM daily_usage WHERE utc_date < ?").run(cutoff.slice(0, 10));
-  }).immediate();
+    `)
+        .run(cutoff);
+      database
+        .query(
+          'DELETE FROM senders WHERE NOT EXISTS (SELECT 1 FROM message_revisions r WHERE r.sender_id = senders.id)',
+        )
+        .run();
+      database.query("DELETE FROM media_analyses WHERE kind = 'image' AND updated_at < ?").run(cutoff);
+      database
+        .query("DELETE FROM model_calls WHERE invocation_id IS NULL AND state <> 'pending' AND created_at < ?")
+        .run(cutoff);
+      database.query('DELETE FROM daily_usage WHERE utc_date < ?').run(cutoff.slice(0, 10));
+    })
+    .immediate();
 }
 
 async function createBackupFile(database: Database, backupDir: string, filename: string): Promise<string> {
   await mkdir(backupDir, { recursive: true, mode: 0o700 });
   const finalPath = join(backupDir, filename);
   const temporaryPath = `${finalPath}.tmp-${crypto.randomUUID()}`;
-  database.query("VACUUM INTO ?").run(temporaryPath);
-  if (process.platform !== "win32") await chmod(temporaryPath, 0o600);
+  database.query('VACUUM INTO ?').run(temporaryPath);
+  if (process.platform !== 'win32') await chmod(temporaryPath, 0o600);
   await rename(temporaryPath, finalPath);
   return finalPath;
 }
 async function rotateBackups(backupDir: string, keep: number): Promise<void> {
   const entries = await readdir(backupDir, { withFileTypes: true });
   const files = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".sqlite"))
-    .map((entry) => ({ path: join(backupDir, entry.name), modified: Bun.file(join(backupDir, entry.name)).lastModified }))
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.sqlite'))
+    .map((entry) => ({
+      path: join(backupDir, entry.name),
+      modified: Bun.file(join(backupDir, entry.name)).lastModified,
+    }))
     .sort((left, right) => right.modified - left.modified);
   await Promise.all(files.slice(keep).map((file) => unlink(file.path)));
 }
 
-
 async function loadMigrations(): Promise<Migration[]> {
-  const directory = join(import.meta.dir, "migrations");
+  const directory = join(import.meta.dir, 'migrations');
   const names = (await readdir(directory)).filter((name) => /^\d{3}_[a-z0-9_]+\.sql$/.test(name)).sort();
   const migrations: Migration[] = [];
   for (const name of names) {
@@ -239,15 +272,18 @@ async function loadMigrations(): Promise<Migration[]> {
     migrations.push({ version, name, sql: await Bun.file(join(directory, name)).text() });
   }
   for (let index = 1; index < migrations.length; index += 1) {
-    if (migrations[index]!.version <= migrations[index - 1]!.version) {
-      throw new Error(`Migration versions are not strictly increasing near ${migrations[index]!.name}`);
+    const previous = migrations[index - 1];
+    const current = migrations[index];
+    if (previous === undefined || current === undefined) continue;
+    if (previous.version >= current.version) {
+      throw new Error(`Migration versions are not strictly increasing near ${current.name}`);
     }
   }
   return migrations;
 }
 
 function timestampForFile(): string {
-  return new Date().toISOString().replaceAll(":", "-");
+  return new Date().toISOString().replaceAll(':', '-');
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -255,7 +291,7 @@ function isProcessAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    const code = error instanceof Error && "code" in error ? error.code : undefined;
-    return code === "EPERM";
+    const code = error instanceof Error && 'code' in error ? error.code : undefined;
+    return code === 'EPERM';
   }
 }

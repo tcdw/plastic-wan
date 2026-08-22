@@ -1,19 +1,19 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
 
-const server = new McpServer({ name: "plasticwan-test", version: "1.0.0" });
+const server = new McpServer({ name: 'plasticwan-test', version: '1.0.0' });
 let calls = 0;
 server.registerTool(
-  "echo",
+  'echo',
   {
-    description: "Echo text with a server-side call count",
+    description: 'Echo text with a server-side call count',
     inputSchema: z.object({ text: z.string().min(1) }),
     annotations: { readOnlyHint: true },
   },
   ({ text }) => {
     calls += 1;
-    return { content: [{ type: "text", text: `${calls}:${text}` }] };
+    return { content: [{ type: 'text', text: `${calls}:${text}` }] };
   },
 );
 

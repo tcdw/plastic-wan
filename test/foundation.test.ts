@@ -1,12 +1,12 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { backupDatabase, SqliteStore } from "../src/database.ts";
-import { loadConfig } from "../src/config.ts";
-import { SecretStore } from "../src/secrets.ts";
-import { createModelRegistry } from "../src/providers.ts";
-import { testConfigToml, writeTestConfig } from "./helpers.ts";
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadConfig } from '../src/config.ts';
+import { backupDatabase, SqliteStore } from '../src/database.ts';
+import { createModelRegistry } from '../src/providers.ts';
+import { SecretStore } from '../src/secrets.ts';
+import { testConfigToml, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -15,121 +15,143 @@ afterEach(async () => {
 });
 
 async function fixture(): Promise<{ directory: string; configPath: string }> {
-  const directory = await mkdtemp(join(tmpdir(), "plasticwan-"));
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-'));
   directories.push(directory);
-  const configPath = join(directory, "config.toml");
+  const configPath = join(directory, 'config.toml');
   await writeTestConfig(directory, configPath);
   return { directory, configPath };
 }
 
-describe("configuration", () => {
-  test("accepts the complete version 1 contract", async () => {
+describe('configuration', () => {
+  test('accepts the complete version 1 contract', async () => {
     const { configPath } = await fixture();
     const loaded = await loadConfig(configPath);
     expect(loaded.config.agent.max_sends).toBe(6);
     expect(loaded.config.telegram.bucket_window_seconds).toBe(15);
     const agentProvider = loaded.config.providers.agent;
-    expect(agentProvider?.kind).toBe("custom");
-    if (agentProvider?.kind !== "custom") throw new Error("Expected the custom agent provider");
+    expect(agentProvider?.kind).toBe('custom');
+    if (agentProvider?.kind !== 'custom') throw new Error('Expected the custom agent provider');
     expect(agentProvider.models[0]?.compat?.supports_developer_role).toBe(false);
     const registry = await createModelRegistry(loaded.config, new SecretStore());
     expect(registry.agentModel.compat).toMatchObject({ supportsDeveloperRole: false });
     expect(loaded.hash).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  test("rejects unknown fields", async () => {
+  test('rejects unknown fields', async () => {
     const { directory, configPath } = await fixture();
     await Bun.write(configPath, `${testConfigToml(directory)}\nunknown = true\n`);
-    await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
   });
 
-  test("accepts zero-second bucket windows and rejects values above three hundred seconds", async () => {
+  test('accepts zero-second bucket windows and rejects values above three hundred seconds', async () => {
     const { directory, configPath } = await fixture();
-    await Bun.write(configPath, testConfigToml(directory).replace("bucket_window_seconds = 15", "bucket_window_seconds = 0"));
+    await Bun.write(
+      configPath,
+      testConfigToml(directory).replace('bucket_window_seconds = 15', 'bucket_window_seconds = 0'),
+    );
     expect((await loadConfig(configPath)).config.telegram.bucket_window_seconds).toBe(0);
-    await Bun.write(configPath, testConfigToml(directory).replace("bucket_window_seconds = 15", "bucket_window_seconds = 301"));
-    await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
+    await Bun.write(
+      configPath,
+      testConfigToml(directory).replace('bucket_window_seconds = 15', 'bucket_window_seconds = 301'),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
   });
 
-
-  test("accepts an agent model without image input", async () => {
+  test('accepts an agent model without image input', async () => {
     const { directory, configPath } = await fixture();
     const config = testConfigToml(directory).replace('input = ["text", "image"]', 'input = ["text"]');
     await Bun.write(configPath, config);
     const loaded = await loadConfig(configPath);
     const registry = await createModelRegistry(loaded.config, new SecretStore());
-    expect(registry.agentModel.input).toEqual(["text"]);
+    expect(registry.agentModel.input).toEqual(['text']);
   });
 
-  test("rejects a vision model without image input", async () => {
+  test('rejects a vision model without image input', async () => {
     const { directory, configPath } = await fixture();
     const config = testConfigToml(directory);
     const firstModel = config.indexOf('input = ["text", "image"]');
     const secondModel = config.indexOf('input = ["text", "image"]', firstModel + 1);
-    await Bun.write(configPath, `${config.slice(0, secondModel)}input = ["text"]${config.slice(secondModel + 'input = ["text", "image"]'.length)}`);
-    await expect(loadConfig(configPath)).rejects.toThrow("vision.model vision-model lacks image input capability");
+    await Bun.write(
+      configPath,
+      `${config.slice(0, secondModel)}input = ["text"]${config.slice(secondModel + 'input = ["text", "image"]'.length)}`,
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('vision.model vision-model lacks image input capability');
   });
 
-  test("rejects developer-role compatibility for an Anthropic adapter", async () => {
+  test('rejects developer-role compatibility for an Anthropic adapter', async () => {
     const { directory, configPath } = await fixture();
-    await Bun.write(configPath, testConfigToml(directory).replace('api = "openai-responses"', 'api = "anthropic-messages"'));
-    await expect(loadConfig(configPath)).rejects.toThrow("supports_developer_role requires an OpenAI API adapter");
+    await Bun.write(
+      configPath,
+      testConfigToml(directory).replace('api = "openai-responses"', 'api = "anthropic-messages"'),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('supports_developer_role requires an OpenAI API adapter');
   });
 
-  test("rejects a leftover max_output_tokens in the agent section", async () => {
+  test('rejects a leftover max_output_tokens in the agent section', async () => {
     const { directory, configPath } = await fixture();
     await Bun.write(
       configPath,
       testConfigToml(directory).replace('model = "agent-model"', 'model = "agent-model"\nmax_output_tokens = 4096'),
     );
-    await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
   });
 
-  test("accepts configured telegram admin user IDs", async () => {
+  test('accepts configured telegram admin user IDs', async () => {
     const { directory, configPath } = await fixture();
     await Bun.write(
       configPath,
-      testConfigToml(directory).replace("process_bot_messages = false", "process_bot_messages = false\nadmins = [42, 99]"),
+      testConfigToml(directory).replace(
+        'process_bot_messages = false',
+        'process_bot_messages = false\nadmins = [42, 99]',
+      ),
     );
     const loaded = await loadConfig(configPath);
     expect(loaded.config.telegram.admins).toEqual([42, 99]);
   });
 
-  test("rejects invalid telegram admin user IDs", async () => {
+  test('rejects invalid telegram admin user IDs', async () => {
     const { directory, configPath } = await fixture();
     await Bun.write(
       configPath,
-      testConfigToml(directory).replace("process_bot_messages = false", "process_bot_messages = false\nadmins = [0]"),
+      testConfigToml(directory).replace('process_bot_messages = false', 'process_bot_messages = false\nadmins = [0]'),
     );
-    await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
     await Bun.write(
       configPath,
-      testConfigToml(directory).replace("process_bot_messages = false", "process_bot_messages = false\nadmins = [99999999999999999]"),
+      testConfigToml(directory).replace(
+        'process_bot_messages = false',
+        'process_bot_messages = false\nadmins = [99999999999999999]',
+      ),
     );
-    await expect(loadConfig(configPath)).rejects.toThrow("Invalid Telegram admin user ID");
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid Telegram admin user ID');
     await Bun.write(
       configPath,
-      testConfigToml(directory).replace("process_bot_messages = false", "process_bot_messages = false\nadmins = [42, 42]"),
+      testConfigToml(directory).replace(
+        'process_bot_messages = false',
+        'process_bot_messages = false\nadmins = [42, 42]',
+      ),
     );
-    await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
   });
 });
 
-describe("secrets", () => {
-  test("removes one trailing newline and redacts exact values", async () => {
+describe('secrets', () => {
+  test('removes one trailing newline and redacts exact values', async () => {
     const store = new SecretStore();
-    const value = await store.resolve({ command: [process.execPath, "-e", "process.stdout.write('secret-value\\n')"] });
-    expect(value).toBe("secret-value");
-    expect(store.redact("failed secret-value request")).toBe("failed [REDACTED] request");
+    const value = await store.resolve({ command: [process.execPath, '-e', "process.stdout.write('secret-value\\n')"] });
+    expect(value).toBe('secret-value');
+    expect(store.redact('failed secret-value request')).toBe('failed [REDACTED] request');
   });
 });
 
-describe("database", () => {
-  test("applies migrations and creates a consistent backup", async () => {
+describe('database', () => {
+  test('applies migrations and creates a consistent backup', async () => {
     const { configPath } = await fixture();
     const { config } = await loadConfig(configPath);
     const store = await SqliteStore.open(config);
-    const version = store.db.query<{ version: bigint }, []>("SELECT MAX(version) AS version FROM schema_migrations").get();
+    const version = store.db
+      .query<{ version: bigint }, []>('SELECT MAX(version) AS version FROM schema_migrations')
+      .get();
     expect(version?.version).toBe(9n);
     store.close();
 

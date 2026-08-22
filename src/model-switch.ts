@@ -1,13 +1,13 @@
-import type { Api, Model, Models } from "@earendil-works/pi-ai";
-import type { RawConfig } from "./config.ts";
+import type { Api, Model, Models } from '@earendil-works/pi-ai';
+import type { RawConfig } from './config.ts';
 
 export class ModelSwitchError extends Error {
   constructor(
-    readonly code: "unknown_provider" | "unknown_model" | "not_text_capable",
+    readonly code: 'unknown_provider' | 'unknown_model' | 'not_text_capable',
     message: string,
   ) {
     super(message);
-    this.name = "ModelSwitchError";
+    this.name = 'ModelSwitchError';
   }
 }
 
@@ -52,7 +52,7 @@ export class AgentModelSwitcher {
     const options: AgentModelOption[] = [];
     for (const alias of Object.keys(this.#config.providers)) {
       for (const candidate of this.#models.getModels(alias)) {
-        if (!candidate.input.includes("text")) continue;
+        if (!candidate.input.includes('text')) continue;
         options.push({
           provider: alias,
           model: candidate.id,
@@ -84,14 +84,14 @@ export class AgentModelSwitcher {
 
   #option(provider: string, modelId: string): AgentModelOption {
     if (this.#config.providers[provider] === undefined) {
-      throw new ModelSwitchError("unknown_provider", `Provider ${provider} is not configured`);
+      throw new ModelSwitchError('unknown_provider', `Provider ${provider} is not configured`);
     }
     const found = this.#models.getModel(provider, modelId);
     if (found === undefined) {
-      throw new ModelSwitchError("unknown_model", `Model ${provider}/${modelId} is not registered`);
+      throw new ModelSwitchError('unknown_model', `Model ${provider}/${modelId} is not registered`);
     }
-    if (!found.input.includes("text")) {
-      throw new ModelSwitchError("not_text_capable", `Model ${provider}/${modelId} does not accept text input`);
+    if (!found.input.includes('text')) {
+      throw new ModelSwitchError('not_text_capable', `Model ${provider}/${modelId} does not accept text input`);
     }
     return {
       provider,

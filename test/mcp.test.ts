@@ -1,32 +1,34 @@
-import { afterAll, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { Update } from "grammy/types";
-import { loadConfig } from "../src/config.ts";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { z } from "zod";
-import { ContextBuilder } from "../src/context-builder.ts";
-import { SqliteStore } from "../src/database.ts";
-import { McpManager } from "../src/mcp.ts";
-import { BucketScheduler } from "../src/scheduler.ts";
-import { SecretStore } from "../src/secrets.ts";
-import { TelegramIngestion } from "../src/telegram-ingestion.ts";
-import { testConfigToml, writeTestConfig } from "./helpers.ts";
+import { afterAll, expect, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import type { Update } from 'grammy/types';
+import { z } from 'zod';
+import { loadConfig } from '../src/config.ts';
+import { ContextBuilder } from '../src/context-builder.ts';
+import { SqliteStore } from '../src/database.ts';
+import { McpManager } from '../src/mcp.ts';
+import { BucketScheduler } from '../src/scheduler.ts';
+import { SecretStore } from '../src/secrets.ts';
+import { TelegramIngestion } from '../src/telegram-ingestion.ts';
+import { testConfigToml, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
 afterAll(async () => {
   Bun.gc(true);
-  await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })));
+  await Promise.all(
+    directories.map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })),
+  );
 });
 
-test("stdio MCP discovery, result bounds, audit, and dual budget reservation", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "plasticwan-mcp-"));
+test('stdio MCP discovery, result bounds, audit, and dual budget reservation', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-mcp-'));
   directories.push(directory);
-  const configPath = join(directory, "config.toml");
-  const fixturePath = join(import.meta.dir, "fixtures", "mcp-server.ts");
+  const configPath = join(directory, 'config.toml');
+  const fixturePath = join(import.meta.dir, 'fixtures', 'mcp-server.ts');
   const mcpToml = `
 [mcp]
 [[mcp.servers]]
@@ -55,51 +57,58 @@ global_daily_calls = 2
       validatedNames = tools.map((tool) => tool.name);
     });
     await manager.start();
-    expect(validatedNames).toEqual(["local__echo"]);
-    expect(store.db.query<{ state: string }, []>("SELECT state FROM mcp_server_state WHERE alias = 'local'").get()?.state).toBe("ready");
+    expect(validatedNames).toEqual(['local__echo']);
+    expect(
+      store.db.query<{ state: string }, []>("SELECT state FROM mcp_server_state WHERE alias = 'local'").get()?.state,
+    ).toBe('ready');
 
     const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
-    const received = new Date("2026-08-15T00:00:00.000Z");
+    const received = new Date('2026-08-15T00:00:00.000Z');
     const update: Update = {
       update_id: 1,
       message: {
         message_id: 10,
         date: 1_700_000_000,
-        chat: { id: 123456789, type: "private", first_name: "Owner" },
-        from: { id: 42, is_bot: false, first_name: "Alice" },
-        text: "search",
+        chat: { id: 123456789, type: 'private', first_name: 'Owner' },
+        from: { id: 42, is_bot: false, first_name: 'Alice' },
+        text: 'search',
       },
     };
     ingestion.ingest(update, received);
-    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({ state: "completed", reason: "done" }));
+    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+      state: 'completed',
+      reason: 'done',
+    }));
     const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-    if (invocationId === undefined) throw new Error("Expected a due invocation");
+    if (invocationId === undefined) throw new Error('Expected a due invocation');
     const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
     const [tool] = manager.createTools(context, Date.now() + 30_000);
-    if (tool === undefined) throw new Error("MCP tool was not exposed");
+    if (tool === undefined) throw new Error('MCP tool was not exposed');
 
-    const result = await tool.execute("mcp-1", { text: "x".repeat(400) });
-    const text = result.content.find((entry) => entry.type === "text");
-    if (text === undefined || text.type !== "text") throw new Error("MCP result omitted text");
-    expect(text.text.endsWith("[tool result truncated]")).toBe(true);
+    const result = await tool.execute('mcp-1', { text: 'x'.repeat(400) });
+    const text = result.content.find((entry) => entry.type === 'text');
+    if (text === undefined || text.type !== 'text') throw new Error('MCP result omitted text');
+    expect(text.text.endsWith('[tool result truncated]')).toBe(true);
     expect(Buffer.byteLength(text.text)).toBeLessThanOrEqual(128);
 
-    await expect(tool.execute("mcp-2", { text: "blocked" })).rejects.toThrow("budget");
-    await expect(tool.execute("mcp-3", {})).rejects.toThrow("arguments");
+    await expect(tool.execute('mcp-2', { text: 'blocked' })).rejects.toThrow('budget');
+    await expect(tool.execute('mcp-3', {})).rejects.toThrow('arguments');
     const calls = store.db
-      .query<{ state: string; error_code: string | null }, []>("SELECT state, error_code FROM tool_calls ORDER BY id")
+      .query<{ state: string; error_code: string | null }, []>('SELECT state, error_code FROM tool_calls ORDER BY id')
       .all();
     expect(calls).toEqual([
-      { state: "success", error_code: null },
-      { state: "blocked_budget", error_code: "blocked_budget" },
-      { state: "error", error_code: "invalid_arguments" },
+      { state: 'success', error_code: null },
+      { state: 'blocked_budget', error_code: 'blocked_budget' },
+      { state: 'error', error_code: 'invalid_arguments' },
     ]);
     const usage = store.db
-      .query<{ scope: string; amount: bigint }, []>("SELECT scope, amount FROM daily_usage WHERE metric = 'tool_calls' ORDER BY scope")
+      .query<{ scope: string; amount: bigint }, []>(
+        "SELECT scope, amount FROM daily_usage WHERE metric = 'tool_calls' ORDER BY scope",
+      )
       .all();
     expect(usage).toEqual([
-      { scope: "mcp_chat", amount: 1n },
-      { scope: "mcp_global", amount: 1n },
+      { scope: 'mcp_chat', amount: 1n },
+      { scope: 'mcp_global', amount: 1n },
     ]);
   } finally {
     await manager.stop();
@@ -107,18 +116,18 @@ global_daily_calls = 2
   }
 });
 
-test("Streamable HTTP MCP preserves query parameters and static headers while rejecting redirects", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "plasticwan-mcp-http-"));
+test('Streamable HTTP MCP preserves query parameters and static headers while rejecting redirects', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-mcp-http-'));
   directories.push(directory);
-  const configPath = join(directory, "config.toml");
-  const server = new McpServer({ name: "plasticwan-http-test", version: "1.0.0" });
+  const configPath = join(directory, 'config.toml');
+  const server = new McpServer({ name: 'plasticwan-http-test', version: '1.0.0' });
   server.registerTool(
-    "lookup",
+    'lookup',
     {
-      description: "Return a keyed value",
+      description: 'Return a keyed value',
       inputSchema: z.object({ key: z.string().min(1) }),
     },
-    ({ key }) => ({ content: [{ type: "text", text: `value:${key}` }] }),
+    ({ key }) => ({ content: [{ type: 'text', text: `value:${key}` }] }),
   );
   const transport = new WebStandardStreamableHTTPServerTransport({
     enableJsonResponse: true,
@@ -126,12 +135,13 @@ test("Streamable HTTP MCP preserves query parameters and static headers while re
   });
   await server.connect(transport);
   const http = Bun.serve({
-    hostname: "127.0.0.1",
+    hostname: '127.0.0.1',
     port: 0,
     fetch: (request) => {
       const url = new URL(request.url);
-      if (url.searchParams.get("api_key") !== "public-key") return new Response("unauthorized", { status: 401 });
-      if (request.headers.get("authorization") !== "Bearer static-secret") return new Response("unauthorized", { status: 401 });
+      if (url.searchParams.get('api_key') !== 'public-key') return new Response('unauthorized', { status: 401 });
+      if (request.headers.get('authorization') !== 'Bearer static-secret')
+        return new Response('unauthorized', { status: 401 });
       return transport.handleRequest(request);
     },
   });
@@ -162,27 +172,33 @@ global_daily_calls = 2
   try {
     await manager.start();
     const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
-    const received = new Date("2026-08-15T00:00:00.000Z");
-    ingestion.ingest({
-      update_id: 1,
-      message: {
-        message_id: 10,
-        date: 1_700_000_000,
-        chat: { id: 123456789, type: "private", first_name: "Owner" },
-        from: { id: 42, is_bot: false, first_name: "Alice" },
-        text: "lookup",
+    const received = new Date('2026-08-15T00:00:00.000Z');
+    ingestion.ingest(
+      {
+        update_id: 1,
+        message: {
+          message_id: 10,
+          date: 1_700_000_000,
+          chat: { id: 123456789, type: 'private', first_name: 'Owner' },
+          from: { id: 42, is_bot: false, first_name: 'Alice' },
+          text: 'lookup',
+        },
       },
-    }, received);
-    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({ state: "completed", reason: "done" }));
+      received,
+    );
+    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+      state: 'completed',
+      reason: 'done',
+    }));
     const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-    if (invocationId === undefined) throw new Error("Expected a due invocation");
+    if (invocationId === undefined) throw new Error('Expected a due invocation');
     const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
     const [tool] = manager.createTools(context, Date.now() + 30_000);
-    if (tool === undefined) throw new Error("HTTP MCP tool was not exposed");
-    const result = await tool.execute("http-1", { key: "answer" });
-    const text = result.content.find((entry) => entry.type === "text");
-    if (text === undefined || text.type !== "text") throw new Error("HTTP MCP result omitted text");
-    expect(text.text).toContain("value:answer");
+    if (tool === undefined) throw new Error('HTTP MCP tool was not exposed');
+    const result = await tool.execute('http-1', { key: 'answer' });
+    const text = result.content.find((entry) => entry.type === 'text');
+    if (text === undefined || text.type !== 'text') throw new Error('HTTP MCP result omitted text');
+    expect(text.text).toContain('value:answer');
   } finally {
     await manager.stop();
     http.stop(true);
@@ -190,11 +206,11 @@ global_daily_calls = 2
     store.close();
   }
 
-  const redirectConfigPath = join(directory, "redirect.toml");
+  const redirectConfigPath = join(directory, 'redirect.toml');
   const redirect = Bun.serve({
-    hostname: "127.0.0.1",
+    hostname: '127.0.0.1',
     port: 0,
-    fetch: () => Response.redirect("http://127.0.0.1/", 302),
+    fetch: () => Response.redirect('http://127.0.0.1/', 302),
   });
   try {
     const redirectToml = mcpToml
@@ -206,12 +222,12 @@ global_daily_calls = 2
       ...redirectLoaded.config,
       paths: {
         ...redirectLoaded.config.paths,
-        database: join(directory, "redirect.sqlite"),
+        database: join(directory, 'redirect.sqlite'),
       },
     });
     const redirectManager = new McpManager(redirectStore, redirectLoaded.config, new SecretStore());
     try {
-      await expect(redirectManager.start()).rejects.toThrow("Required MCP server");
+      await expect(redirectManager.start()).rejects.toThrow('Required MCP server');
     } finally {
       await redirectManager.stop();
       redirectStore.close();

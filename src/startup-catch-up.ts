@@ -1,13 +1,13 @@
-import type { Update } from "grammy/types";
-import type { SqliteStore } from "./database.ts";
-import { type BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from "./scheduler.ts";
-import type { TelegramIngestion } from "./telegram-ingestion.ts";
+import type { Update } from 'grammy/types';
+import type { SqliteStore } from './database.ts';
+import { type BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from './scheduler.ts';
+import type { TelegramIngestion } from './telegram-ingestion.ts';
 
 interface GetUpdatesOptions {
   readonly offset?: number;
   readonly limit: number;
   readonly timeout: number;
-  readonly allowed_updates?: readonly Exclude<keyof Update, "update_id">[];
+  readonly allowed_updates?: readonly Exclude<keyof Update, 'update_id'>[];
 }
 
 export interface StartupCatchUpApi {
@@ -19,7 +19,7 @@ export interface StartupCatchUpOptions {
   readonly store: SqliteStore;
   readonly ingestion: TelegramIngestion;
   readonly scheduler: BucketScheduler;
-  readonly allowedUpdates: readonly Exclude<keyof Update, "update_id">[];
+  readonly allowedUpdates: readonly Exclude<keyof Update, 'update_id'>[];
   readonly signal?: AbortSignal;
   readonly now?: () => Date;
 }
@@ -35,13 +35,13 @@ export async function runStartupCatchUp(options: StartupCatchUpOptions): Promise
   const requestedStart = currentTime();
   const startedAt = options.store.transaction(() => {
     options.store.db
-      .query("INSERT INTO app_state(key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING")
+      .query('INSERT INTO app_state(key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING')
       .run(STARTUP_CATCH_UP_STATE_KEY, requestedStart.toISOString(), requestedStart.toISOString());
     const state = options.store.db
-      .query<{ value: string }, [string]>("SELECT value FROM app_state WHERE key = ?")
+      .query<{ value: string }, [string]>('SELECT value FROM app_state WHERE key = ?')
       .get(STARTUP_CATCH_UP_STATE_KEY);
     if (state === null || !Number.isFinite(Date.parse(state.value))) {
-      throw new Error("Startup catch-up state is missing or invalid");
+      throw new Error('Startup catch-up state is missing or invalid');
     }
     return new Date(state.value);
   });
@@ -65,7 +65,8 @@ export async function runStartupCatchUp(options: StartupCatchUpOptions): Promise
       updatesReceived += 1;
       if (result.messageId !== undefined && update.message !== undefined) storedMessages += 1;
     }
-    offset = updates.at(-1)!.update_id + 1;
+    const lastUpdate = updates.at(-1);
+    if (lastUpdate !== undefined) offset = lastUpdate.update_id + 1;
     firstRequest = false;
   }
 

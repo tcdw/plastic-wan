@@ -1,15 +1,15 @@
-import { randomUUID } from "node:crypto";
-import type { Database } from "bun:sqlite";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import Type, { type Static } from "typebox";
-import type { InvocationContext } from "./context-builder.ts";
+import type { Database } from 'bun:sqlite';
+import { randomUUID } from 'node:crypto';
+import type { AgentTool } from '@earendil-works/pi-agent-core';
+import Type, { type Static } from 'typebox';
+import type { InvocationContext } from './context-builder.ts';
 
 export const DEFAULT_MEMORY_TTL_SECONDS = 86_400;
 export const MEMORY_MAX_CONTENT_LENGTH = 150;
 export const MEMORY_TTL_MIN_SECONDS = 60;
 export const MEMORY_TTL_MAX_SECONDS = 157_680_000;
 export const DEFAULT_MEMORY_TTL_WARNING_DAYS = 30;
-export const MEMORY_ID_PATTERN = "^mem_[a-f0-9]{32}$";
+export const MEMORY_ID_PATTERN = '^mem_[a-f0-9]{32}$';
 
 export const AddMemoryInputSchema = Type.Object(
   {
@@ -61,7 +61,7 @@ function toRecord(row: MemoryRow): MemoryRecord {
 }
 
 export function newMemoryId(): string {
-  return `mem_${randomUUID().replaceAll("-", "")}`;
+  return `mem_${randomUUID().replaceAll('-', '')}`;
 }
 
 /**
@@ -92,7 +92,7 @@ export class MemoryStore {
   get(id: string): MemoryRecord | null {
     const row = this.#db
       .query<MemoryRow, [string]>(
-        "SELECT id, conversation_id, content, created_at, expires_at, updated_at FROM memories WHERE id = ?",
+        'SELECT id, conversation_id, content, created_at, expires_at, updated_at FROM memories WHERE id = ?',
       )
       .get(id);
     return row === null ? null : toRecord(row);
@@ -108,52 +108,58 @@ export class MemoryStore {
       expiresAt: new Date(now.getTime() + ttlSeconds * 1_000).toISOString(),
       updatedAt: timestamp,
     };
-    this.#db.transaction(() => {
-      this.#db.query("DELETE FROM memories WHERE expires_at <= ?").run(timestamp);
-      this.#db
-        .query("INSERT INTO memories(id, conversation_id, content, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
-        .run(record.id, conversationId, content, timestamp, record.expiresAt, timestamp);
-    }).immediate();
+    this.#db
+      .transaction(() => {
+        this.#db.query('DELETE FROM memories WHERE expires_at <= ?').run(timestamp);
+        this.#db
+          .query(
+            'INSERT INTO memories(id, conversation_id, content, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+          )
+          .run(record.id, conversationId, content, timestamp, record.expiresAt, timestamp);
+      })
+      .immediate();
     return record;
   }
 
   /** Deletes by id within one conversation. Idempotent: false when nothing was deleted. */
   remove(id: string, conversationId: bigint, now = new Date()): boolean {
-    return this.#db.transaction(() => {
-      this.#db.query("DELETE FROM memories WHERE expires_at <= ?").run(now.toISOString());
-      const result = this.#db
-        .query("DELETE FROM memories WHERE id = ? AND conversation_id = ?")
-        .run(id, conversationId);
-      return result.changes === 1;
-    }).immediate();
+    return this.#db
+      .transaction(() => {
+        this.#db.query('DELETE FROM memories WHERE expires_at <= ?').run(now.toISOString());
+        const result = this.#db
+          .query('DELETE FROM memories WHERE id = ? AND conversation_id = ?')
+          .run(id, conversationId);
+        return result.changes === 1;
+      })
+      .immediate();
   }
 
   update(id: string, changes: MemoryChanges, now = new Date()): MemoryRecord | null {
     const timestamp = now.toISOString();
-    const sets: string[] = ["updated_at = ?"];
+    const sets: string[] = ['updated_at = ?'];
     const parameters: (string | bigint)[] = [timestamp];
     if (changes.content !== undefined) {
-      sets.push("content = ?");
+      sets.push('content = ?');
       parameters.push(changes.content);
     }
     if (changes.expiresAt !== undefined) {
-      sets.push("expires_at = ?");
+      sets.push('expires_at = ?');
       parameters.push(changes.expiresAt);
     }
     parameters.push(id);
-    const result = this.#db.query(`UPDATE memories SET ${sets.join(", ")} WHERE id = ?`).run(...parameters);
+    const result = this.#db.query(`UPDATE memories SET ${sets.join(', ')} WHERE id = ?`).run(...parameters);
     if (result.changes === 0) return null;
     return this.get(id);
   }
 
   purgeExpired(now = new Date()): void {
-    this.#db.query("DELETE FROM memories WHERE expires_at <= ?").run(now.toISOString());
+    this.#db.query('DELETE FROM memories WHERE expires_at <= ?').run(now.toISOString());
   }
 
   recordToolCall(
     invocationId: bigint,
     toolCallId: string,
-    toolName: "add_memory" | "delete_memory",
+    toolName: 'add_memory' | 'delete_memory',
     argumentsJson: string,
     now: Date,
   ): bigint {
@@ -167,13 +173,13 @@ export class MemoryStore {
 
   finishToolCall(
     toolId: bigint,
-    state: "success" | "error",
+    state: 'success' | 'error',
     resultText: string | null,
     errorCode: string | null,
     now: Date,
   ): void {
     this.#db
-      .query("UPDATE tool_calls SET state = ?, result_text = ?, error_code = ?, finished_at = ? WHERE id = ?")
+      .query('UPDATE tool_calls SET state = ?, result_text = ?, error_code = ?, finished_at = ? WHERE id = ?')
       .run(state, resultText, errorCode, now.toISOString(), toolId);
   }
 }
@@ -192,29 +198,29 @@ function createAddMemoryTool(
   context: InvocationContext,
 ): AgentTool<typeof AddMemoryInputSchema, { id: string; expires_at: string }> {
   return {
-    name: "add_memory",
-    label: "Add memory",
-    description: "Save a short-term note for this conversation that persists across sessions. Keep notes under 100 characters; the hard limit is 150. The note expires after ttl_seconds (default 1 day). Use a long TTL only to nominate stable knowledge for human review.",
+    name: 'add_memory',
+    label: 'Add memory',
+    description:
+      'Save a short-term note for this conversation that persists across sessions. Keep notes under 100 characters; the hard limit is 150. The note expires after ttl_seconds (default 1 day). Use a long TTL only to nominate stable knowledge for human review.',
     parameters: AddMemoryInputSchema,
-    executionMode: "sequential",
+    executionMode: 'sequential',
     execute: async (toolCallId, input, _signal) => {
       const now = new Date();
-      const toolId = store.recordToolCall(
-        context.invocationId,
-        toolCallId,
-        "add_memory",
-        JSON.stringify(input),
-        now,
-      );
+      const toolId = store.recordToolCall(context.invocationId, toolCallId, 'add_memory', JSON.stringify(input), now);
       try {
-        const record = store.add(context.conversationId, input.content, input.ttl_seconds ?? DEFAULT_MEMORY_TTL_SECONDS, now);
-        store.finishToolCall(toolId, "success", `memory_id=${record.id} expires_at=${record.expiresAt}`, null, now);
+        const record = store.add(
+          context.conversationId,
+          input.content,
+          input.ttl_seconds ?? DEFAULT_MEMORY_TTL_SECONDS,
+          now,
+        );
+        store.finishToolCall(toolId, 'success', `memory_id=${record.id} expires_at=${record.expiresAt}`, null, now);
         return {
-          content: [{ type: "text", text: `Saved memory ${record.id}; it expires at ${record.expiresAt}` }],
+          content: [{ type: 'text', text: `Saved memory ${record.id}; it expires at ${record.expiresAt}` }],
           details: { id: record.id, expires_at: record.expiresAt },
         };
       } catch (error) {
-        store.finishToolCall(toolId, "error", null, "memory_error", now);
+        store.finishToolCall(toolId, 'error', null, 'memory_error', now);
         throw error;
       }
     },
@@ -226,30 +232,33 @@ function createDeleteMemoryTool(
   context: InvocationContext,
 ): AgentTool<typeof DeleteMemoryInputSchema, { id: string }> {
   return {
-    name: "delete_memory",
-    label: "Delete memory",
-    description: "Delete one of this conversation's memories by its id from the memory list. Deleting a note that is already gone or expired is a harmless no-op.",
+    name: 'delete_memory',
+    label: 'Delete memory',
+    description:
+      "Delete one of this conversation's memories by its id from the memory list. Deleting a note that is already gone or expired is a harmless no-op.",
     parameters: DeleteMemoryInputSchema,
-    executionMode: "sequential",
+    executionMode: 'sequential',
     execute: async (toolCallId, input, _signal) => {
       const now = new Date();
       const toolId = store.recordToolCall(
         context.invocationId,
         toolCallId,
-        "delete_memory",
+        'delete_memory',
         JSON.stringify(input),
         now,
       );
       try {
         const deleted = store.remove(input.id, context.conversationId, now);
         const result = deleted ? `memory_id=${input.id} deleted` : `memory_id=${input.id} absent`;
-        store.finishToolCall(toolId, "success", result, null, now);
+        store.finishToolCall(toolId, 'success', result, null, now);
         return {
-          content: [{ type: "text", text: deleted ? `Memory ${input.id} deleted` : `Memory ${input.id} was already gone` }],
+          content: [
+            { type: 'text', text: deleted ? `Memory ${input.id} deleted` : `Memory ${input.id} was already gone` },
+          ],
           details: { id: input.id },
         };
       } catch (error) {
-        store.finishToolCall(toolId, "error", null, "memory_error", now);
+        store.finishToolCall(toolId, 'error', null, 'memory_error', now);
         throw error;
       }
     },

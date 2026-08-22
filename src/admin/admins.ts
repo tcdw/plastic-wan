@@ -1,5 +1,5 @@
-import type { Database } from "bun:sqlite";
-import { AdminQueryError } from "./audit.ts";
+import type { Database } from 'bun:sqlite';
+import { AdminQueryError } from './audit.ts';
 
 export interface BotAdminItem {
   readonly telegram_user_id: string;
@@ -17,7 +17,7 @@ interface BotAdminRow {
   readonly updated_at: string;
 }
 
-const SELECT = "SELECT telegram_user_id, display_name, added_by, created_at, updated_at FROM bot_admins";
+const SELECT = 'SELECT telegram_user_id, display_name, added_by, created_at, updated_at FROM bot_admins';
 
 export function listBotAdmins(db: Database): readonly BotAdminItem[] {
   return db
@@ -27,9 +27,11 @@ export function listBotAdmins(db: Database): readonly BotAdminItem[] {
 }
 
 export function isBotAdmin(db: Database, telegramUserId: bigint): boolean {
-  return db
-    .query<{ present: bigint }, [bigint]>("SELECT 1 AS present FROM bot_admins WHERE telegram_user_id = ?")
-    .get(telegramUserId) !== null;
+  return (
+    db
+      .query<{ present: bigint }, [bigint]>('SELECT 1 AS present FROM bot_admins WHERE telegram_user_id = ?')
+      .get(telegramUserId) !== null
+  );
 }
 
 export function addBotAdmin(db: Database, telegramUserId: bigint, addedBy: string, now = new Date()): BotAdminItem {
@@ -39,15 +41,15 @@ export function addBotAdmin(db: Database, telegramUserId: bigint, addedBy: strin
   ).run(telegramUserId, addedBy, timestamp, timestamp);
   const row = db
     .query<BotAdminRow, [bigint]>(
-      "SELECT telegram_user_id, display_name, added_by, created_at, updated_at FROM bot_admins WHERE telegram_user_id = ?",
+      'SELECT telegram_user_id, display_name, added_by, created_at, updated_at FROM bot_admins WHERE telegram_user_id = ?',
     )
     .get(telegramUserId);
-  if (row === null) throw new Error("Bot admin row is missing after upsert");
+  if (row === null) throw new Error('Bot admin row is missing after upsert');
   return { ...row, telegram_user_id: row.telegram_user_id.toString() };
 }
 
 export function removeBotAdmin(db: Database, telegramUserId: bigint): boolean {
-  return db.query("DELETE FROM bot_admins WHERE telegram_user_id = ?").run(telegramUserId).changes > 0;
+  return db.query('DELETE FROM bot_admins WHERE telegram_user_id = ?').run(telegramUserId).changes > 0;
 }
 
 // Config-seeded admins guarantee the operator can always recover control; the
@@ -64,12 +66,13 @@ export function seedConfigAdmins(db: Database, adminIds: readonly number[], now 
   }).immediate();
 }
 
-export function parseAdminUserId(value: unknown, label = "telegram_user_id"): bigint {
-  const id = typeof value === "number"
-    ? value
-    : typeof value === "string" && /^\d{1,19}$/.test(value)
-      ? Number(value)
-      : Number.NaN;
+export function parseAdminUserId(value: unknown, label = 'telegram_user_id'): bigint {
+  const id =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^\d{1,19}$/.test(value)
+        ? Number(value)
+        : Number.NaN;
   if (!Number.isSafeInteger(id) || id <= 0) {
     throw new AdminQueryError(`invalid_${label}`, `${label} must be a positive integer`);
   }

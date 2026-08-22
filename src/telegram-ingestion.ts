@@ -1,12 +1,12 @@
-import type { Message, Update } from "grammy/types";
-import { parseBotCommand, type ParsedCommand } from "./bot-commands.ts";
-import type { RawConfig } from "./config.ts";
-import type { SqliteStore } from "./database.ts";
+import type { Message, Update } from 'grammy/types';
+import { type ParsedCommand, parseBotCommand } from './bot-commands.ts';
+import type { RawConfig } from './config.ts';
+import type { SqliteStore } from './database.ts';
 
 const IMAGE_MIME_TYPES: Record<string, true> = {
-  "image/jpeg": true,
-  "image/png": true,
-  "image/webp": true,
+  'image/jpeg': true,
+  'image/png': true,
+  'image/webp': true,
 };
 const SERVICE_KEYS: Record<string, true> = {
   new_chat_members: true,
@@ -89,21 +89,21 @@ export class TelegramIngestion {
     const chatId = chat === undefined ? undefined : BigInt(chat.id);
     const threadId = message?.message_thread_id === undefined ? 0n : BigInt(message.message_thread_id);
     const authorization = chatId === undefined ? undefined : this.#resolveAuthorization(chatId);
-    const topicAllowed = authorization !== undefined
-      && (authorization.topicIds === undefined || authorization.topicIds.has(threadId));
-    const allowed = chat !== undefined && chat.type !== "channel" && topicAllowed;
+    const topicAllowed =
+      authorization !== undefined && (authorization.topicIds === undefined || authorization.topicIds.has(threadId));
+    const allowed = chat !== undefined && chat.type !== 'channel' && topicAllowed;
     const rejectionReason = allowed
       ? null
       : chat === undefined
-        ? "unsupported_update"
-        : chat.type === "channel"
-          ? "channel"
+        ? 'unsupported_update'
+        : chat.type === 'channel'
+          ? 'channel'
           : authorization === undefined
-            ? "chat_not_allowed"
-            : "topic_not_allowed";
+            ? 'chat_not_allowed'
+            : 'topic_not_allowed';
     const inserted = this.#store.db
       .query(
-        "INSERT INTO telegram_updates(update_id, chat_id, chat_type, received_at, allowed, rejection_reason, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(update_id) DO NOTHING",
+        'INSERT INTO telegram_updates(update_id, chat_id, chat_type, received_at, allowed, rejection_reason, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(update_id) DO NOTHING',
       )
       .run(
         BigInt(update.update_id),
@@ -143,7 +143,7 @@ export class TelegramIngestion {
     const direct = this.#allowedChats.get(chatId.toString());
     if (direct !== undefined) return direct;
     const migration = this.#store.db
-      .query<{ old_chat_id: bigint }, [bigint]>("SELECT old_chat_id FROM chat_migrations WHERE new_chat_id = ?")
+      .query<{ old_chat_id: bigint }, [bigint]>('SELECT old_chat_id FROM chat_migrations WHERE new_chat_id = ?')
       .get(chatId);
     return migration === null ? undefined : this.#allowedChats.get(migration.old_chat_id.toString());
   }
@@ -152,29 +152,33 @@ export class TelegramIngestion {
     if (message === undefined) return;
     let oldChatId: bigint | undefined;
     let newChatId: bigint | undefined;
-    if ("migrate_to_chat_id" in message) {
+    if ('migrate_to_chat_id' in message) {
       oldChatId = BigInt(message.chat.id);
       newChatId = BigInt(message.migrate_to_chat_id);
-    } else if ("migrate_from_chat_id" in message) {
+    } else if ('migrate_from_chat_id' in message) {
       oldChatId = BigInt(message.migrate_from_chat_id);
       newChatId = BigInt(message.chat.id);
     }
     if (oldChatId === undefined || newChatId === undefined) return;
     this.#store.db
-      .query("INSERT INTO chat_migrations(old_chat_id, new_chat_id, received_at) VALUES (?, ?, ?) ON CONFLICT(old_chat_id) DO UPDATE SET new_chat_id = excluded.new_chat_id, received_at = excluded.received_at")
+      .query(
+        'INSERT INTO chat_migrations(old_chat_id, new_chat_id, received_at) VALUES (?, ?, ?) ON CONFLICT(old_chat_id) DO UPDATE SET new_chat_id = excluded.new_chat_id, received_at = excluded.received_at',
+      )
       .run(oldChatId, newChatId, receivedAt.toISOString());
   }
 
-  #upsertChat(chat: Message["chat"], chatId: bigint, receivedAt: Date): bigint {
-    const title = "title" in chat ? chat.title ?? null : null;
-    const username = "username" in chat ? chat.username ?? null : null;
+  #upsertChat(chat: Message['chat'], chatId: bigint, receivedAt: Date): bigint {
+    const title = 'title' in chat ? (chat.title ?? null) : null;
+    const username = 'username' in chat ? (chat.username ?? null) : null;
     this.#store.db
-      .query("INSERT INTO chats(telegram_chat_id, canonical_chat_id, type, title, username, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(telegram_chat_id) DO UPDATE SET type = excluded.type, title = excluded.title, username = excluded.username, updated_at = excluded.updated_at")
+      .query(
+        'INSERT INTO chats(telegram_chat_id, canonical_chat_id, type, title, username, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(telegram_chat_id) DO UPDATE SET type = excluded.type, title = excluded.title, username = excluded.username, updated_at = excluded.updated_at',
+      )
       .run(chatId, chatId, chat.type, title, username, receivedAt.toISOString());
     const row = this.#store.db
-      .query<{ id: bigint }, [bigint]>("SELECT id FROM chats WHERE telegram_chat_id = ?")
+      .query<{ id: bigint }, [bigint]>('SELECT id FROM chats WHERE telegram_chat_id = ?')
       .get(chatId);
-    if (row === null) throw new Error("Chat upsert did not return a row");
+    if (row === null) throw new Error('Chat upsert did not return a row');
     return row.id;
   }
 
@@ -194,14 +198,16 @@ export class TelegramIngestion {
     const telegramMessageId = BigInt(message.message_id);
     const existing = this.#store.db
       .query<{ id: bigint; revision_no: bigint }, [bigint, bigint]>(
-        "SELECT m.id, COALESCE(MAX(r.revision_no), 0) AS revision_no FROM messages m LEFT JOIN message_revisions r ON r.message_id = m.id WHERE m.chat_id = ? AND m.telegram_message_id = ? GROUP BY m.id",
+        'SELECT m.id, COALESCE(MAX(r.revision_no), 0) AS revision_no FROM messages m LEFT JOIN message_revisions r ON r.message_id = m.id WHERE m.chat_id = ? AND m.telegram_message_id = ? GROUP BY m.id',
       )
       .get(internalChatId, telegramMessageId);
     let messageId: bigint;
     let revisionNo: bigint;
     if (existing === null) {
       const created = this.#store.db
-        .query("INSERT INTO messages(conversation_id, chat_id, telegram_message_id, telegram_date, received_at) VALUES (?, ?, ?, ?, ?)")
+        .query(
+          'INSERT INTO messages(conversation_id, chat_id, telegram_message_id, telegram_date, received_at) VALUES (?, ?, ?, ?, ?)',
+        )
         .run(
           conversationId,
           internalChatId,
@@ -219,7 +225,7 @@ export class TelegramIngestion {
     const normalized = normalizeMessage(message, service);
     const revision = this.#store.db
       .query(
-        "INSERT INTO message_revisions(message_id, revision_no, sender_id, kind, text, caption, reply_to_message_id, reply_snapshot_json, forward_origin_json, media_group_id, service_json, created_at, raw_fragment_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        'INSERT INTO message_revisions(message_id, revision_no, sender_id, kind, text, caption, reply_to_message_id, reply_snapshot_json, forward_origin_json, media_group_id, service_json, created_at, raw_fragment_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         messageId,
@@ -237,10 +243,12 @@ export class TelegramIngestion {
         JSON.stringify(message),
       );
     const revisionId = revision.lastInsertRowid;
-    this.#store.db.query("UPDATE messages SET current_revision_id = ? WHERE id = ?").run(revisionId, messageId);
+    this.#store.db.query('UPDATE messages SET current_revision_id = ? WHERE id = ?').run(revisionId, messageId);
     for (const media of normalized.media) {
       this.#store.db
-        .query("INSERT INTO media(revision_id, kind, file_id, file_unique_id, mime_type, file_size, width, height, telegram_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .query(
+          'INSERT INTO media(revision_id, kind, file_id, file_unique_id, mime_type, file_size, width, height, telegram_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        )
         .run(
           revisionId,
           media.kind,
@@ -263,59 +271,69 @@ export class TelegramIngestion {
 
   #upsertSender(message: Message, receivedAt: Date): bigint | null {
     const senderChat = message.sender_chat;
-    let type: "user" | "sender_chat";
+    let type: 'user' | 'sender_chat';
     let telegramId: bigint;
     let displayName: string;
     let username: string | null;
     let isBot: boolean;
     if (senderChat !== undefined) {
-      type = "sender_chat";
+      type = 'sender_chat';
       telegramId = BigInt(senderChat.id);
       displayName = senderChat.title ?? senderChat.username ?? senderChat.id.toString();
       username = senderChat.username ?? null;
       isBot = false;
     } else if (message.from !== undefined) {
-      type = "user";
+      type = 'user';
       telegramId = BigInt(message.from.id);
-      displayName = [message.from.first_name, message.from.last_name].filter((part) => part !== undefined).join(" ");
+      displayName = [message.from.first_name, message.from.last_name].filter((part) => part !== undefined).join(' ');
       username = message.from.username ?? null;
       isBot = message.from.is_bot;
     } else {
       return null;
     }
     this.#store.db
-      .query("INSERT INTO senders(telegram_type, telegram_id, display_name, username, is_bot, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(telegram_type, telegram_id) DO UPDATE SET display_name = excluded.display_name, username = excluded.username, is_bot = excluded.is_bot, updated_at = excluded.updated_at")
+      .query(
+        'INSERT INTO senders(telegram_type, telegram_id, display_name, username, is_bot, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(telegram_type, telegram_id) DO UPDATE SET display_name = excluded.display_name, username = excluded.username, is_bot = excluded.is_bot, updated_at = excluded.updated_at',
+      )
       .run(type, telegramId, displayName, username, isBot ? 1n : 0n, receivedAt.toISOString());
     const row = this.#store.db
-      .query<{ id: bigint }, [string, bigint]>("SELECT id FROM senders WHERE telegram_type = ? AND telegram_id = ?")
+      .query<{ id: bigint }, [string, bigint]>('SELECT id FROM senders WHERE telegram_type = ? AND telegram_id = ?')
       .get(type, telegramId);
-    if (row === null) throw new Error("Sender upsert did not return a row");
+    if (row === null) throw new Error('Sender upsert did not return a row');
     return row.id;
   }
 
   #isChatPaused(chatId: bigint): boolean {
-    return this.#store.db
-      .query<{ present: bigint }, [bigint]>("SELECT 1 AS present FROM chat_pause WHERE chat_id = ?")
-      .get(chatId) !== null;
+    return (
+      this.#store.db
+        .query<{ present: bigint }, [bigint]>('SELECT 1 AS present FROM chat_pause WHERE chat_id = ?')
+        .get(chatId) !== null
+    );
   }
 
   #upsertConversation(chatId: bigint, threadId: bigint, receivedAt: Date): bigint {
     this.#store.db
-      .query("INSERT INTO conversations(chat_id, message_thread_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(chat_id, message_thread_id) DO UPDATE SET updated_at = excluded.updated_at")
+      .query(
+        'INSERT INTO conversations(chat_id, message_thread_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(chat_id, message_thread_id) DO UPDATE SET updated_at = excluded.updated_at',
+      )
       .run(chatId, threadId, receivedAt.toISOString(), receivedAt.toISOString());
     const row = this.#store.db
-      .query<{ id: bigint }, [bigint, bigint]>("SELECT id FROM conversations WHERE chat_id = ? AND message_thread_id = ?")
+      .query<{ id: bigint }, [bigint, bigint]>(
+        'SELECT id FROM conversations WHERE chat_id = ? AND message_thread_id = ?',
+      )
       .get(chatId, threadId);
-    if (row === null) throw new Error("Conversation upsert did not return a row");
+    if (row === null) throw new Error('Conversation upsert did not return a row');
     return row.id;
   }
 
   #appendToBucket(chatId: bigint, threadId: bigint, message: StoredMessage, receivedAt: Date): bigint | undefined {
     if (this.#isChatPaused(chatId)) return undefined;
     const conversation = this.#store.db
-      .query<{ id: bigint }, [bigint, bigint]>("SELECT id FROM conversations WHERE chat_id = ? AND message_thread_id = ?")
+      .query<{ id: bigint }, [bigint, bigint]>(
+        'SELECT id FROM conversations WHERE chat_id = ? AND message_thread_id = ?',
+      )
       .get(chatId, threadId);
-    if (conversation === null) throw new Error("Conversation missing while assigning bucket");
+    if (conversation === null) throw new Error('Conversation missing while assigning bucket');
     const collecting = this.#store.db
       .query<{ id: bigint }, [bigint]>("SELECT id FROM buckets WHERE conversation_id = ? AND state = 'collecting'")
       .get(conversation.id);
@@ -332,33 +350,39 @@ export class TelegramIngestion {
            ORDER BY i.id DESC LIMIT 1`,
         )
         .get(chatId);
-      const priorPaceAt = latestInvocation?.started_at === null || latestInvocation?.started_at === undefined
-        ? receivedAt.getTime()
-        : Date.parse(latestInvocation.started_at) + this.#config.telegram.bucket_window_seconds * 1_000;
-      const remainsOnPriorPace = latestInvocation?.state === "queued"
-        || latestInvocation?.state === "running"
-        || receivedAt.getTime() < priorPaceAt;
+      const priorPaceAt =
+        latestInvocation?.started_at === null || latestInvocation?.started_at === undefined
+          ? receivedAt.getTime()
+          : Date.parse(latestInvocation.started_at) + this.#config.telegram.bucket_window_seconds * 1_000;
+      const remainsOnPriorPace =
+        latestInvocation?.state === 'queued' ||
+        latestInvocation?.state === 'running' ||
+        receivedAt.getTime() < priorPaceAt;
       const deadline = remainsOnPriorPace
         ? Math.max(receivedAt.getTime(), priorPaceAt)
         : receivedAt.getTime() + this.#config.telegram.bucket_window_seconds * 1_000;
       const created = this.#store.db
-        .query("INSERT INTO buckets(conversation_id, state, first_received_at, deadline_at, created_at, updated_at) VALUES (?, 'collecting', ?, ?, ?, ?)")
+        .query(
+          "INSERT INTO buckets(conversation_id, state, first_received_at, deadline_at, created_at, updated_at) VALUES (?, 'collecting', ?, ?, ?, ?)",
+        )
         .run(conversation.id, now, new Date(deadline).toISOString(), now, now);
       bucketId = BigInt(created.lastInsertRowid);
     }
     const sequence = this.#store.db
-      .query<{ next_sequence: bigint }, [bigint]>("SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_sequence FROM bucket_messages WHERE bucket_id = ?")
+      .query<{ next_sequence: bigint }, [bigint]>(
+        'SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_sequence FROM bucket_messages WHERE bucket_id = ?',
+      )
       .get(bucketId);
-    if (sequence === null) throw new Error("Unable to allocate bucket sequence");
+    if (sequence === null) throw new Error('Unable to allocate bucket sequence');
     this.#store.db
-      .query("INSERT INTO bucket_messages(bucket_id, message_id, sequence_no, source_bucket_id) VALUES (?, ?, ?, ?)")
+      .query('INSERT INTO bucket_messages(bucket_id, message_id, sequence_no, source_bucket_id) VALUES (?, ?, ?, ?)')
       .run(bucketId, message.id, sequence.next_sequence, bucketId);
     return bucketId;
   }
 }
 
 interface NormalizedMedia {
-  readonly kind: "photo" | "document" | "sticker";
+  readonly kind: 'photo' | 'document' | 'sticker';
   readonly fileId: string;
   readonly fileUniqueId: string;
   readonly mimeType: string | null;
@@ -380,17 +404,17 @@ interface NormalizedMessage {
 
 function normalizeMessage(message: Message, service: boolean): NormalizedMessage {
   const media: NormalizedMedia[] = [];
-  let kind = service ? "service" : "unsupported";
-  if (message.text !== undefined) kind = "text";
+  let kind = service ? 'service' : 'unsupported';
+  if (message.text !== undefined) kind = 'text';
   if (message.photo !== undefined) {
-    kind = "photo";
+    kind = 'photo';
     const photo = message.photo.at(-1);
     if (photo !== undefined) {
       media.push({
-        kind: "photo",
+        kind: 'photo',
         fileId: photo.file_id,
         fileUniqueId: photo.file_unique_id,
-        mimeType: "image/jpeg",
+        mimeType: 'image/jpeg',
         fileSize: photo.file_size === undefined ? null : BigInt(photo.file_size),
         width: BigInt(photo.width),
         height: BigInt(photo.height),
@@ -400,15 +424,15 @@ function normalizeMessage(message: Message, service: boolean): NormalizedMessage
   }
   const document = message.document;
   if (
-    document !== undefined
-    && document.mime_type !== undefined
-    && document.mime_type in IMAGE_MIME_TYPES
-    && document.file_size !== undefined
-    && document.file_size <= MAX_IMAGE_DOCUMENT_BYTES
+    document !== undefined &&
+    document.mime_type !== undefined &&
+    document.mime_type in IMAGE_MIME_TYPES &&
+    document.file_size !== undefined &&
+    document.file_size <= MAX_IMAGE_DOCUMENT_BYTES
   ) {
-    kind = "document";
+    kind = 'document';
     media.push({
-      kind: "document",
+      kind: 'document',
       fileId: document.file_id,
       fileUniqueId: document.file_unique_id,
       mimeType: document.mime_type,
@@ -420,12 +444,12 @@ function normalizeMessage(message: Message, service: boolean): NormalizedMessage
   }
   const sticker = message.sticker;
   if (sticker !== undefined) {
-    kind = "sticker";
+    kind = 'sticker';
     media.push({
-      kind: "sticker",
+      kind: 'sticker',
       fileId: sticker.file_id,
       fileUniqueId: sticker.file_unique_id,
-      mimeType: sticker.is_video ? "video/webm" : sticker.is_animated ? "application/x-tgsticker" : "image/webp",
+      mimeType: sticker.is_video ? 'video/webm' : sticker.is_animated ? 'application/x-tgsticker' : 'image/webp',
       fileSize: sticker.file_size === undefined ? null : BigInt(sticker.file_size),
       width: BigInt(sticker.width),
       height: BigInt(sticker.height),
@@ -446,16 +470,20 @@ function normalizeMessage(message: Message, service: boolean): NormalizedMessage
 
 function compactReply(message: Message): Record<string, unknown> {
   const sender = message.sender_chat ?? message.from;
-  const senderName = sender === undefined
-    ? "unknown"
-    : "title" in sender
-      ? sender.title
-      : [sender.first_name, sender.last_name].filter((part) => part !== undefined).join(" ");
+  const senderName =
+    sender === undefined
+      ? 'unknown'
+      : 'title' in sender
+        ? sender.title
+        : [sender.first_name, sender.last_name].filter((part) => part !== undefined).join(' ');
   const content = message.text ?? message.caption;
   return {
     message_id: String(message.message_id),
     sender: senderName,
-    content: content === undefined ? `[${message.photo !== undefined ? "photo" : message.sticker !== undefined ? "sticker" : "message"}]` : content.slice(0, 500),
+    content:
+      content === undefined
+        ? `[${message.photo !== undefined ? 'photo' : message.sticker !== undefined ? 'sticker' : 'message'}]`
+        : content.slice(0, 500),
   };
 }
 

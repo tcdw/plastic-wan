@@ -13,13 +13,16 @@ export class AsyncSemaphore {
   #active = 0;
   #sequence = 0;
 
-  constructor(limit: number, private readonly onIdle?: (semaphore: AsyncSemaphore) => void) {
-    if (!Number.isInteger(limit) || limit < 1) throw new Error("Semaphore limit must be a positive integer");
+  constructor(
+    limit: number,
+    private readonly onIdle?: (semaphore: AsyncSemaphore) => void,
+  ) {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error('Semaphore limit must be a positive integer');
     this.#limit = limit;
   }
 
   acquire(signal: AbortSignal, priority = 0): Promise<() => void> {
-    if (signal.aborted) return Promise.reject(new Error("Semaphore wait aborted"));
+    if (signal.aborted) return Promise.reject(new Error('Semaphore wait aborted'));
     if (this.#active < this.#limit) {
       this.#active += 1;
       return Promise.resolve(() => this.#release());
@@ -29,21 +32,22 @@ export class AsyncSemaphore {
       const onAbort = (): void => {
         const index = this.#waiters.indexOf(waiter);
         if (index >= 0) this.#waiters.splice(index, 1);
-        reject(new Error("Semaphore wait aborted"));
+        reject(new Error('Semaphore wait aborted'));
         this.#notifyIdle();
       };
       waiter = { resolve, reject, signal, onAbort, priority, sequence: this.#sequence };
       this.#sequence += 1;
-      signal.addEventListener("abort", onAbort, { once: true });
+      signal.addEventListener('abort', onAbort, { once: true });
       this.#waiters.push(waiter);
       this.#waiters.sort((left, right) => left.priority - right.priority || left.sequence - right.sequence);
     });
   }
 
   #release(): void {
-    while (this.#waiters.length > 0) {
-      const waiter = this.#waiters.shift()!;
-      waiter.signal.removeEventListener("abort", waiter.onAbort);
+    while (true) {
+      const waiter = this.#waiters.shift();
+      if (waiter === undefined) break;
+      waiter.signal.removeEventListener('abort', waiter.onAbort);
       if (waiter.signal.aborted) continue;
       waiter.resolve(() => this.#release());
       return;

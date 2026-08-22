@@ -1,9 +1,9 @@
-import { join } from "node:path";
+import { join } from 'node:path';
 
 export function testConfigToml(directory: string): string {
-  const path = (name: string) => JSON.stringify(join(directory, name).replaceAll("\\", "/"));
+  const path = (name: string) => JSON.stringify(join(directory, name).replaceAll('\\', '/'));
   return `version = 1
-data_dir = ${path("data")}
+data_dir = ${path('data')}
 timezone = "UTC"
 
 [telegram]
@@ -78,9 +78,9 @@ online_days = 30
 backup_copies = 7
 
 [paths]
-database = ${path("plasticwan.sqlite")}
-media_cache = ${path("media")}
-backups = ${path("backups")}
+database = ${path('plasticwan.sqlite')}
+media_cache = ${path('media')}
+backups = ${path('backups')}
 `;
 }
 
@@ -88,10 +88,10 @@ export async function writeTestConfig(
   directory: string,
   configPath: string,
   toml: string = testConfigToml(directory),
-  systemPrompt = "Participate safely.",
-  chatInstructions = "private",
+  systemPrompt = 'Participate safely.',
+  chatInstructions = 'private',
 ): Promise<void> {
-  await Bun.write(join(directory, "agent-system-prompt.md"), systemPrompt);
-  await Bun.write(join(directory, "chat-instructions.md"), chatInstructions);
+  await Bun.write(join(directory, 'agent-system-prompt.md'), systemPrompt);
+  await Bun.write(join(directory, 'chat-instructions.md'), chatInstructions);
   await Bun.write(configPath, toml);
 }

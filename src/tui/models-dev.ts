@@ -1,6 +1,6 @@
-import { z } from "zod";
+import { z } from 'zod';
 
-export const MODELS_DEV_URL = "https://models.dev/api.json";
+export const MODELS_DEV_URL = 'https://models.dev/api.json';
 
 const ModelLimitSchema = z.object({
   context: z.number().optional(),
@@ -16,8 +16,8 @@ const ModelCostSchema = z.object({
 });
 
 const ModalitiesSchema = z.object({
-  input: z.array(z.string()).default(["text"]),
-  output: z.array(z.string()).default(["text"]),
+  input: z.array(z.string()).default(['text']),
+  output: z.array(z.string()).default(['text']),
 });
 
 const ReasoningOptionSchema = z.object({
@@ -31,7 +31,7 @@ const ModelSchema = z.object({
   description: z.string().optional(),
   reasoning: z.boolean().default(false),
   reasoning_options: z.array(ReasoningOptionSchema).optional(),
-  modalities: ModalitiesSchema.default({ input: ["text"], output: ["text"] }),
+  modalities: ModalitiesSchema.default({ input: ['text'], output: ['text'] }),
   limit: ModelLimitSchema.optional(),
   cost: ModelCostSchema.optional(),
 });
@@ -56,7 +56,7 @@ export interface FetchedCatalog {
 
 export async function fetchModelsDevCatalog(url = MODELS_DEV_URL): Promise<FetchedCatalog> {
   const response = await fetch(url, {
-    headers: { accept: "application/json" },
+    headers: { accept: 'application/json' },
   });
   if (!response.ok) {
     throw new Error(`models.dev returned ${response.status} ${response.statusText}`);
@@ -78,18 +78,18 @@ export function listModels(provider: ModelsDevProvider): ModelsDevModel[] {
   return Object.values(provider.models).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function extractInputCapabilities(model: ModelsDevModel): Array<"text" | "image"> {
-  const capabilities: Array<"text" | "image"> = [];
+export function extractInputCapabilities(model: ModelsDevModel): Array<'text' | 'image'> {
+  const capabilities: Array<'text' | 'image'> = [];
   const inputs = new Set(model.modalities.input);
-  if (inputs.has("text")) capabilities.push("text");
-  if (inputs.has("image")) capabilities.push("image");
-  if (capabilities.length === 0) capabilities.push("text");
+  if (inputs.has('text')) capabilities.push('text');
+  if (inputs.has('image')) capabilities.push('image');
+  if (capabilities.length === 0) capabilities.push('text');
   return capabilities;
 }
 
 export function extractReasoningEffortOptions(model: ModelsDevModel): string[] {
   for (const option of model.reasoning_options ?? []) {
-    if (option.type === "effort" && option.values !== undefined) {
+    if (option.type === 'effort' && option.values !== undefined) {
       return option.values.filter((value): value is string => value !== null);
     }
   }
@@ -99,7 +99,7 @@ export function extractReasoningEffortOptions(model: ModelsDevModel): string[] {
 export function toModelDefaults(model: ModelsDevModel): {
   name: string;
   reasoning: boolean;
-  input: Array<"text" | "image">;
+  input: Array<'text' | 'image'>;
   context_window: number;
   max_tokens: number;
   cost: { input: number; output: number; cache_read: number; cache_write: number };

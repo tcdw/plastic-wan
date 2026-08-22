@@ -1,24 +1,26 @@
-import { afterAll, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { Update } from "grammy/types";
-import { AdminServer } from "../src/admin/server.ts";
-import { loadConfig, type LoadedConfig } from "../src/config.ts";
-import { SqliteStore } from "../src/database.ts";
-import { AgentModelSwitcher } from "../src/model-switch.ts";
-import { createModelRegistry } from "../src/providers.ts";
-import { BucketScheduler } from "../src/scheduler.ts";
-import { SecretStore } from "../src/secrets.ts";
-import { TelegramIngestion } from "../src/telegram-ingestion.ts";
-import { testConfigToml, writeTestConfig } from "./helpers.ts";
+import { afterAll, expect, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { Update } from 'grammy/types';
+import { AdminServer } from '../src/admin/server.ts';
+import { type LoadedConfig, loadConfig } from '../src/config.ts';
+import { SqliteStore } from '../src/database.ts';
+import { AgentModelSwitcher } from '../src/model-switch.ts';
+import { createModelRegistry } from '../src/providers.ts';
+import { BucketScheduler } from '../src/scheduler.ts';
+import { SecretStore } from '../src/secrets.ts';
+import { TelegramIngestion } from '../src/telegram-ingestion.ts';
+import { testConfigToml, writeTestConfig } from './helpers.ts';
 
-const PASSWORD = "correct-horse-battery";
+const PASSWORD = 'correct-horse-battery';
 const directories: string[] = [];
 
 afterAll(async () => {
   Bun.gc(true);
-  await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })));
+  await Promise.all(
+    directories.map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })),
+  );
 });
 
 interface Fixture {
@@ -28,14 +30,15 @@ interface Fixture {
   readonly directory: string;
 }
 
-async function fixture(extra = ""): Promise<Fixture> {
-  const directory = await mkdtemp(join(tmpdir(), "plasticwan-admin-"));
+async function fixture(extra = ''): Promise<Fixture> {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-admin-'));
   directories.push(directory);
-  const configPath = join(directory, "config.toml");
-  const staticDir = join(directory, "bundle");
-  await Bun.write(join(staticDir, "index.html"), "<!doctype html><title>admin</title>");
-  await Bun.write(join(staticDir, "static", "app.js"), "console.log('admin');");
-  await writeTestConfig(directory,
+  const configPath = join(directory, 'config.toml');
+  const staticDir = join(directory, 'bundle');
+  await Bun.write(join(staticDir, 'index.html'), '<!doctype html><title>admin</title>');
+  await Bun.write(join(staticDir, 'static', 'app.js'), "console.log('admin');");
+  await writeTestConfig(
+    directory,
     configPath,
     `${testConfigToml(directory)}
 [admin]
@@ -43,7 +46,7 @@ enabled = true
 host = "127.0.0.1"
 port = 8899
 session_ttl_hours = 12
-static_dir = ${JSON.stringify(staticDir.replaceAll("\\", "/"))}
+static_dir = ${JSON.stringify(staticDir.replaceAll('\\', '/'))}
 ${extra}`,
   );
   const loaded = await loadConfig(configPath);
@@ -56,15 +59,15 @@ function request(path: string, init: RequestInit = {}): Request {
 }
 
 function post(path: string, body: unknown, cookie?: string): Request {
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (cookie !== undefined) headers["cookie"] = cookie;
-  return request(path, { method: "POST", headers, body: JSON.stringify(body) });
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (cookie !== undefined) headers.cookie = cookie;
+  return request(path, { method: 'POST', headers, body: JSON.stringify(body) });
 }
 
 function sessionCookie(response: Response): string {
-  const header = response.headers.get("set-cookie");
-  if (header === null) throw new Error("Expected a session cookie");
-  return header.slice(0, header.indexOf(";"));
+  const header = response.headers.get('set-cookie');
+  if (header === null) throw new Error('Expected a session cookie');
+  return header.slice(0, header.indexOf(';'));
 }
 
 // Audit payloads are asserted structurally, so a loose type keeps assertions readable.
@@ -72,274 +75,329 @@ async function readJson(response: Response): Promise<any> {
   return await response.json();
 }
 
-test("admin panel demands first-run setup, then authenticates and revokes sessions", async () => {
+test('admin panel demands first-run setup, then authenticates and revokes sessions', async () => {
   const { store, server } = await fixture();
   try {
-    const initial = await readJson((await server.handle(request("/api/auth/session"))));
+    const initial = await readJson(await server.handle(request('/api/auth/session')));
     expect(initial).toEqual({ setup_required: true, authenticated: false, username: null, expires_at: null });
 
-    const unauthenticated = await server.handle(request("/api/invocations"));
+    const unauthenticated = await server.handle(request('/api/invocations'));
     expect(unauthenticated.status).toBe(401);
-    expect(await readJson(unauthenticated)).toMatchObject({ error: "unauthenticated" });
+    expect(await readJson(unauthenticated)).toMatchObject({ error: 'unauthenticated' });
 
-    const weak = await server.handle(post("/api/auth/setup", { username: "owner", password: "short" }));
+    const weak = await server.handle(post('/api/auth/setup', { username: 'owner', password: 'short' }));
     expect(weak.status).toBe(400);
-    expect(await readJson(weak)).toMatchObject({ error: "invalid_password" });
-    expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM admin_users").get()?.count).toBe(0n);
+    expect(await readJson(weak)).toMatchObject({ error: 'invalid_password' });
+    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM admin_users').get()?.count).toBe(0n);
 
-    const created = await server.handle(post("/api/auth/setup", { username: "owner", password: PASSWORD }));
+    const created = await server.handle(post('/api/auth/setup', { username: 'owner', password: PASSWORD }));
     expect(created.status).toBe(200);
     const cookie = sessionCookie(created);
-    expect(created.headers.get("set-cookie")).toContain("HttpOnly");
-    expect(created.headers.get("set-cookie")).toContain("SameSite=Strict");
+    expect(created.headers.get('set-cookie')).toContain('HttpOnly');
+    expect(created.headers.get('set-cookie')).toContain('SameSite=Strict');
 
-    const repeat = await server.handle(post("/api/auth/setup", { username: "other", password: PASSWORD }));
+    const repeat = await server.handle(post('/api/auth/setup', { username: 'other', password: PASSWORD }));
     expect(repeat.status).toBe(409);
-    expect(await readJson(repeat)).toMatchObject({ error: "setup_complete" });
+    expect(await readJson(repeat)).toMatchObject({ error: 'setup_complete' });
 
-    const session = await readJson((await server.handle(request("/api/auth/session", { headers: { cookie } }))));
-    expect(session).toMatchObject({ setup_required: false, authenticated: true, username: "owner" });
+    const session = await readJson(await server.handle(request('/api/auth/session', { headers: { cookie } })));
+    expect(session).toMatchObject({ setup_required: false, authenticated: true, username: 'owner' });
 
-    const authorized = await server.handle(request("/api/invocations", { headers: { cookie } }));
+    const authorized = await server.handle(request('/api/invocations', { headers: { cookie } }));
     expect(authorized.status).toBe(200);
     expect(await readJson(authorized)).toEqual({ items: [], next_cursor: null });
 
-    expect((await server.handle(post("/api/auth/logout", {}, cookie))).status).toBe(200);
-    const afterLogout = await server.handle(request("/api/invocations", { headers: { cookie } }));
+    expect((await server.handle(post('/api/auth/logout', {}, cookie))).status).toBe(200);
+    const afterLogout = await server.handle(request('/api/invocations', { headers: { cookie } }));
     expect(afterLogout.status).toBe(401);
-    expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM admin_sessions").get()?.count).toBe(0n);
+    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM admin_sessions').get()?.count).toBe(0n);
   } finally {
     store.close();
   }
 });
 
-test("admin login persists only hashes and rejects invalid credentials", async () => {
+test('admin login persists only hashes and rejects invalid credentials', async () => {
   const { store, server } = await fixture();
   try {
-    const created = await server.handle(post("/api/auth/setup", { username: "owner", password: PASSWORD }));
+    const created = await server.handle(post('/api/auth/setup', { username: 'owner', password: PASSWORD }));
     const cookie = sessionCookie(created);
-    const token = cookie.slice(cookie.indexOf("=") + 1);
+    const token = cookie.slice(cookie.indexOf('=') + 1);
 
-    const stored = store.db.query<{ password_hash: string }, []>("SELECT password_hash FROM admin_users").get();
-    expect(stored?.password_hash).toStartWith("$argon2id$");
+    const stored = store.db.query<{ password_hash: string }, []>('SELECT password_hash FROM admin_users').get();
+    expect(stored?.password_hash).toStartWith('$argon2id$');
     expect(stored?.password_hash).not.toContain(PASSWORD);
-    const sessionRow = store.db.query<{ token_hash: string }, []>("SELECT token_hash FROM admin_sessions").get();
+    const sessionRow = store.db.query<{ token_hash: string }, []>('SELECT token_hash FROM admin_sessions').get();
     expect(sessionRow?.token_hash).toMatch(/^[a-f0-9]{64}$/);
     expect(sessionRow?.token_hash).not.toBe(token);
 
-    const wrongPassword = await server.handle(post("/api/auth/login", { username: "owner", password: "wrong-password-value" }));
+    const wrongPassword = await server.handle(
+      post('/api/auth/login', { username: 'owner', password: 'wrong-password-value' }),
+    );
     expect(wrongPassword.status).toBe(401);
-    expect(await readJson(wrongPassword)).toMatchObject({ error: "invalid_credentials" });
-    const unknownUser = await server.handle(post("/api/auth/login", { username: "ghost", password: PASSWORD }));
+    expect(await readJson(wrongPassword)).toMatchObject({ error: 'invalid_credentials' });
+    const unknownUser = await server.handle(post('/api/auth/login', { username: 'ghost', password: PASSWORD }));
     expect(unknownUser.status).toBe(401);
-    expect(await readJson(unknownUser)).toMatchObject({ error: "invalid_credentials" });
+    expect(await readJson(unknownUser)).toMatchObject({ error: 'invalid_credentials' });
 
-    const loggedIn = await server.handle(post("/api/auth/login", { username: "owner", password: PASSWORD }));
+    const loggedIn = await server.handle(post('/api/auth/login', { username: 'owner', password: PASSWORD }));
     expect(loggedIn.status).toBe(200);
     const second = sessionCookie(loggedIn);
     expect(second).not.toBe(cookie);
-    expect((await server.handle(request("/api/auth/session", { headers: { cookie: second } }))).status).toBe(200);
-    expect(store.db.query<{ last_login_at: string | null }, []>("SELECT last_login_at FROM admin_users").get()?.last_login_at).not.toBeNull();
+    expect((await server.handle(request('/api/auth/session', { headers: { cookie: second } }))).status).toBe(200);
+    expect(
+      store.db.query<{ last_login_at: string | null }, []>('SELECT last_login_at FROM admin_users').get()
+        ?.last_login_at,
+    ).not.toBeNull();
 
     const crossOrigin = await server.handle(
-      request("/api/auth/login", {
-        method: "POST",
-        headers: { "content-type": "application/json", origin: "http://evil.test" },
-        body: JSON.stringify({ username: "owner", password: PASSWORD }),
+      request('/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://evil.test' },
+        body: JSON.stringify({ username: 'owner', password: PASSWORD }),
       }),
     );
     expect(crossOrigin.status).toBe(403);
-    expect(await readJson(crossOrigin)).toMatchObject({ error: "bad_origin" });
+    expect(await readJson(crossOrigin)).toMatchObject({ error: 'bad_origin' });
   } finally {
     store.close();
   }
 });
 
-test("admin can change username and password from an authenticated session", async () => {
+test('admin can change username and password from an authenticated session', async () => {
   const { store, server } = await fixture();
   try {
-    const created = await server.handle(post("/api/auth/setup", { username: "owner", password: PASSWORD }));
+    const created = await server.handle(post('/api/auth/setup', { username: 'owner', password: PASSWORD }));
     const cookie = sessionCookie(created);
-    const otherLogin = await server.handle(post("/api/auth/login", { username: "owner", password: PASSWORD }));
+    const otherLogin = await server.handle(post('/api/auth/login', { username: 'owner', password: PASSWORD }));
     const otherCookie = sessionCookie(otherLogin);
     const updated = await server.handle(
-      post("/api/auth/credentials", { username: "new-owner", password: "new-correct-horse-battery" }, cookie),
+      post('/api/auth/credentials', { username: 'new-owner', password: 'new-correct-horse-battery' }, cookie),
     );
     expect(updated.status).toBe(200);
     const refreshedCookie = sessionCookie(updated);
     expect(refreshedCookie).not.toBe(cookie);
 
-    const currentSession = await readJson(await server.handle(request("/api/auth/session", { headers: { cookie: refreshedCookie } })));
-    expect(currentSession).toMatchObject({ authenticated: true, username: "new-owner" });
-    expect((await server.handle(request("/api/invocations", { headers: { cookie: otherCookie } }))).status).toBe(401);
-    expect((await server.handle(post("/api/auth/login", { username: "owner", password: PASSWORD }))).status).toBe(401);
-    expect((await server.handle(post("/api/auth/login", { username: "new-owner", password: "new-correct-horse-battery" }))).status).toBe(200);
+    const currentSession = await readJson(
+      await server.handle(request('/api/auth/session', { headers: { cookie: refreshedCookie } })),
+    );
+    expect(currentSession).toMatchObject({ authenticated: true, username: 'new-owner' });
+    expect((await server.handle(request('/api/invocations', { headers: { cookie: otherCookie } }))).status).toBe(401);
+    expect((await server.handle(post('/api/auth/login', { username: 'owner', password: PASSWORD }))).status).toBe(401);
+    expect(
+      (await server.handle(post('/api/auth/login', { username: 'new-owner', password: 'new-correct-horse-battery' })))
+        .status,
+    ).toBe(200);
 
-    const stored = store.db.query<{ username: string; password_hash: string }, []>("SELECT username, password_hash FROM admin_users").get();
-    expect(stored?.username).toBe("new-owner");
-    expect(stored?.password_hash).toStartWith("$argon2id$");
-    expect(stored?.password_hash).not.toContain("new-correct-horse-battery");
+    const stored = store.db
+      .query<{ username: string; password_hash: string }, []>('SELECT username, password_hash FROM admin_users')
+      .get();
+    expect(stored?.username).toBe('new-owner');
+    expect(stored?.password_hash).toStartWith('$argon2id$');
+    expect(stored?.password_hash).not.toContain('new-correct-horse-battery');
   } finally {
     store.close();
   }
 });
 
-test("audit routes expose tool sessions, messages and sticker cache", async () => {
+test('audit routes expose tool sessions, messages and sticker cache', async () => {
   const { store, server, loaded } = await fixture();
   try {
     const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
-    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({ state: "completed", reason: "done" }));
-    const received = new Date("2026-03-01T00:00:00.000Z");
-    ingestion.ingest(textUpdate(1, 10, "hello audit panel"), received);
+    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+      state: 'completed',
+      reason: 'done',
+    }));
+    const received = new Date('2026-03-01T00:00:00.000Z');
+    ingestion.ingest(textUpdate(1, 10, 'hello audit panel'), received);
     const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-    if (invocationId === undefined) throw new Error("Expected an invocation");
+    if (invocationId === undefined) throw new Error('Expected an invocation');
     const iso = received.toISOString();
     store.db
-      .query("UPDATE invocations SET state = 'completed', started_at = ?, finished_at = ?, completion_reason = 'done', turns_used = 1, tool_calls_used = 1, sends_used = 1, tool_registry_json = ? WHERE id = ?")
-      .run(received.toISOString(), received.toISOString(), JSON.stringify([
-        { name: "send", label: "Send to Telegram", description: "Send one plain-text message" },
-        { name: "add_memory", label: "Add memory", description: "Save a short-term note" },
-      ]), invocationId);
+      .query(
+        "UPDATE invocations SET state = 'completed', started_at = ?, finished_at = ?, completion_reason = 'done', turns_used = 1, tool_calls_used = 1, sends_used = 1, tool_registry_json = ? WHERE id = ?",
+      )
+      .run(
+        received.toISOString(),
+        received.toISOString(),
+        JSON.stringify([
+          { name: 'send', label: 'Send to Telegram', description: 'Send one plain-text message' },
+          { name: 'add_memory', label: 'Add memory', description: 'Save a short-term note' },
+        ]),
+        invocationId,
+      );
     store.db
-      .query("INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, result_text, state, side_effect, duration_ms, created_at, finished_at) VALUES (?, 'call-1', 'send', '{\"text\":\"hi\"}', 'sent', 'success', 1, 42, ?, ?)")
+      .query(
+        "INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, result_text, state, side_effect, duration_ms, created_at, finished_at) VALUES (?, 'call-1', 'send', '{\"text\":\"hi\"}', 'sent', 'success', 1, 42, ?, ?)",
+      )
       .run(invocationId, iso, iso);
     const toolRow = store.db.query<{ id: bigint }, []>("SELECT id FROM tool_calls WHERE tool_call_id = 'call-1'").get();
-    if (toolRow === null) throw new Error("Expected the tool call row");
+    if (toolRow === null) throw new Error('Expected the tool call row');
     store.db
-      .query("INSERT INTO telegram_sends(tool_call_id, conversation_id, kind, request_json, state, telegram_message_id, created_at, finished_at) VALUES (?, (SELECT conversation_id FROM invocations WHERE id = ?), 'text', '{\"text\":\"hi\"}', 'success', 555, ?, ?)")
+      .query(
+        "INSERT INTO telegram_sends(tool_call_id, conversation_id, kind, request_json, state, telegram_message_id, created_at, finished_at) VALUES (?, (SELECT conversation_id FROM invocations WHERE id = ?), 'text', '{\"text\":\"hi\"}', 'success', 555, ?, ?)",
+      )
       .run(toolRow.id, invocationId, iso, iso);
     store.db
-      .query("INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, input_tokens, output_tokens, total_tokens, cost, duration_ms, tools_json, created_at, finished_at) VALUES (?, 'agent', 'agent', 'agent-model', 1, 'success', 100, 20, 120, 0.5, 900, ?, ?, ?)")
-      .run(invocationId, JSON.stringify(["send", "add_memory"]), iso, iso);
+      .query(
+        "INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, input_tokens, output_tokens, total_tokens, cost, duration_ms, tools_json, created_at, finished_at) VALUES (?, 'agent', 'agent', 'agent-model', 1, 'success', 100, 20, 120, 0.5, 900, ?, ?, ?)",
+      )
+      .run(invocationId, JSON.stringify(['send', 'add_memory']), iso, iso);
     store.db
-      .query("INSERT INTO agent_messages(invocation_id, sequence_no, role, text, created_at) VALUES (?, 1, 'assistant', 'private reasoning', ?)")
+      .query(
+        "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, created_at) VALUES (?, 1, 'assistant', 'private reasoning', ?)",
+      )
       .run(invocationId, iso);
     store.db
-      .query("INSERT INTO sticker_sets(alias, telegram_name, title, configured, sync_state, last_synced_at, updated_at) VALUES ('cats', 'CatPack', 'Cat Pack', 1, 'success', ?, ?)")
+      .query(
+        "INSERT INTO sticker_sets(alias, telegram_name, title, configured, sync_state, last_synced_at, updated_at) VALUES ('cats', 'CatPack', 'Cat Pack', 1, 'success', ?, ?)",
+      )
       .run(iso, iso);
     store.db
-      .query("INSERT INTO media_analyses(file_unique_id, analysis_version, provider, model, prompt_version, kind, state, description, metadata_json, created_at, updated_at) VALUES ('uniq-1', 'v1', 'vision', 'vision-model', 1, 'sticker', 'success', 'a grinning cat', '{\"tags_en\":[\"cat\"]}', ?, ?)")
+      .query(
+        "INSERT INTO media_analyses(file_unique_id, analysis_version, provider, model, prompt_version, kind, state, description, metadata_json, created_at, updated_at) VALUES ('uniq-1', 'v1', 'vision', 'vision-model', 1, 'sticker', 'success', 'a grinning cat', '{\"tags_en\":[\"cat\"]}', ?, ?)",
+      )
       .run(iso, iso);
-    const analysis = store.db.query<{ id: bigint }, []>("SELECT id FROM media_analyses WHERE file_unique_id = 'uniq-1'").get();
-    if (analysis === null) throw new Error("Expected the analysis row");
+    const analysis = store.db
+      .query<{ id: bigint }, []>("SELECT id FROM media_analyses WHERE file_unique_id = 'uniq-1'")
+      .get();
+    if (analysis === null) throw new Error('Expected the analysis row');
     store.db
-      .query("INSERT INTO stickers(sticker_set_id, file_unique_id, file_id, emoji, format, active, current_analysis_id, index_state, updated_at) VALUES ((SELECT id FROM sticker_sets WHERE alias = 'cats'), 'uniq-1', 'file-1', '😺', 'static', 1, ?, 'success', ?)")
+      .query(
+        "INSERT INTO stickers(sticker_set_id, file_unique_id, file_id, emoji, format, active, current_analysis_id, index_state, updated_at) VALUES ((SELECT id FROM sticker_sets WHERE alias = 'cats'), 'uniq-1', 'file-1', '😺', 'static', 1, ?, 'success', ?)",
+      )
       .run(analysis.id, iso);
 
-    const cookie = sessionCookie(await server.handle(post("/api/auth/setup", { username: "owner", password: PASSWORD })));
+    const cookie = sessionCookie(
+      await server.handle(post('/api/auth/setup', { username: 'owner', password: PASSWORD })),
+    );
     const headers = { cookie };
 
-    const invocations = await readJson((await server.handle(request("/api/invocations", { headers }))));
+    const invocations = await readJson(await server.handle(request('/api/invocations', { headers })));
     expect(invocations.items).toHaveLength(1);
     expect(invocations.items[0]).toMatchObject({
       id: invocationId.toString(),
       tool_call_count: 1,
       total_tokens: 120,
-      chat: { telegram_chat_id: "123456789", type: "private" },
+      chat: { telegram_chat_id: '123456789', type: 'private' },
     });
 
-    const detail = await readJson((await server.handle(request(`/api/invocations/${invocationId}`, { headers }))));
-    expect(detail.tool_calls[0]).toMatchObject({ tool_name: "send", state: "success", side_effect: true, duration_ms: 42 });
+    const detail = await readJson(await server.handle(request(`/api/invocations/${invocationId}`, { headers })));
+    expect(detail.tool_calls[0]).toMatchObject({
+      tool_name: 'send',
+      state: 'success',
+      side_effect: true,
+      duration_ms: 42,
+    });
     expect(detail.tool_registry).toHaveLength(2);
-    expect(detail.tool_registry[0]).toMatchObject({ name: "send", label: "Send to Telegram" });
-    expect(detail.tool_registry[1]?.description).toBe("Save a short-term note");
-    expect(detail.model_calls[0]).toMatchObject({ provider: "agent", model: "agent-model", total_tokens: 120 });
-    expect(detail.model_calls[0].tools).toEqual(["send", "add_memory"]);
-    expect(detail.agent_messages[0]).toMatchObject({ role: "assistant", text: "private reasoning" });
-    expect(detail.telegram_sends[0]).toMatchObject({ kind: "text", state: "success", telegram_message_id: "555" });
-    expect(detail.context_messages.some((entry: { section: string }) => entry.section === "new")).toBe(true);
+    expect(detail.tool_registry[0]).toMatchObject({ name: 'send', label: 'Send to Telegram' });
+    expect(detail.tool_registry[1]?.description).toBe('Save a short-term note');
+    expect(detail.model_calls[0]).toMatchObject({ provider: 'agent', model: 'agent-model', total_tokens: 120 });
+    expect(detail.model_calls[0].tools).toEqual(['send', 'add_memory']);
+    expect(detail.agent_messages[0]).toMatchObject({ role: 'assistant', text: 'private reasoning' });
+    expect(detail.telegram_sends[0]).toMatchObject({ kind: 'text', state: 'success', telegram_message_id: '555' });
+    expect(detail.context_messages.some((entry: { section: string }) => entry.section === 'new')).toBe(true);
 
-    const missing = await server.handle(request("/api/invocations/999999", { headers }));
+    const missing = await server.handle(request('/api/invocations/999999', { headers }));
     expect(missing.status).toBe(404);
-    const badId = await server.handle(request("/api/invocations/not-a-number", { headers }));
+    const badId = await server.handle(request('/api/invocations/not-a-number', { headers }));
     expect(badId.status).toBe(400);
-    expect(await readJson(badId)).toMatchObject({ error: "invalid_id" });
+    expect(await readJson(badId)).toMatchObject({ error: 'invalid_id' });
 
-    const messages = await readJson((await server.handle(request("/api/messages?search=audit", { headers }))));
+    const messages = await readJson(await server.handle(request('/api/messages?search=audit', { headers })));
     expect(messages.items).toHaveLength(1);
-    expect(messages.items[0]).toMatchObject({ telegram_message_id: "10", text: "hello audit panel", revision_count: 1 });
-    const filteredOut = await readJson((await server.handle(request("/api/messages?search=absent-text", { headers }))));
+    expect(messages.items[0]).toMatchObject({
+      telegram_message_id: '10',
+      text: 'hello audit panel',
+      revision_count: 1,
+    });
+    const filteredOut = await readJson(await server.handle(request('/api/messages?search=absent-text', { headers })));
     expect(filteredOut.items).toHaveLength(0);
-    const messageDetail = await readJson((await server.handle(request(`/api/messages/${messages.items[0].id}`, { headers }))));
-    expect(messageDetail.revisions[0]).toMatchObject({ revision_no: 1, text: "hello audit panel" });
+    const messageDetail = await readJson(
+      await server.handle(request(`/api/messages/${messages.items[0].id}`, { headers })),
+    );
+    expect(messageDetail.revisions[0]).toMatchObject({ revision_no: 1, text: 'hello audit panel' });
 
-    const sets = await readJson((await server.handle(request("/api/sticker-sets", { headers }))));
-    expect(sets.items[0]).toMatchObject({ alias: "cats", sync_state: "success", sticker_count: 1, indexed_count: 1 });
-    const stickers = await readJson((await server.handle(request("/api/stickers?set=cats&state=success&search=grinning", { headers }))));
+    const sets = await readJson(await server.handle(request('/api/sticker-sets', { headers })));
+    expect(sets.items[0]).toMatchObject({ alias: 'cats', sync_state: 'success', sticker_count: 1, indexed_count: 1 });
+    const stickers = await readJson(
+      await server.handle(request('/api/stickers?set=cats&state=success&search=grinning', { headers })),
+    );
     expect(stickers.items).toHaveLength(1);
     expect(stickers.items[0]).toMatchObject({
-      set_alias: "cats",
-      file_unique_id: "uniq-1",
-      index_state: "success",
-      analysis: { provider: "vision", model: "vision-model", description: "a grinning cat", prompt_version: 1 },
+      set_alias: 'cats',
+      file_unique_id: 'uniq-1',
+      index_state: 'success',
+      analysis: { provider: 'vision', model: 'vision-model', description: 'a grinning cat', prompt_version: 1 },
     });
-    const otherSet = await readJson((await server.handle(request("/api/stickers?set=dogs", { headers }))));
+    const otherSet = await readJson(await server.handle(request('/api/stickers?set=dogs', { headers })));
     expect(otherSet.items).toHaveLength(0);
 
-    const overview = await readJson((await server.handle(request("/api/overview", { headers }))));
-    expect(overview.invocation_states).toContainEqual({ label: "completed", count: 1 });
-    expect(overview.top_tools).toContainEqual({ label: "send", count: 1 });
+    const overview = await readJson(await server.handle(request('/api/overview', { headers })));
+    expect(overview.invocation_states).toContainEqual({ label: 'completed', count: 1 });
+    expect(overview.top_tools).toContainEqual({ label: 'send', count: 1 });
     expect(overview.message_count).toBe(1);
     expect(overview.cached_analysis_count).toBe(1);
 
     const now = new Date().toISOString();
     store.db
-      .query("INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', '123456789', 'model_tokens', 500, ?)")
+      .query(
+        "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', '123456789', 'model_tokens', 500, ?)",
+      )
       .run(now.slice(0, 10), now);
 
-    const usage = await readJson((await server.handle(request("/api/usage?days=7", { headers }))));
+    const usage = await readJson(await server.handle(request('/api/usage?days=7', { headers })));
     expect(usage.days).toBe(7);
     expect(usage.series.length).toBe(7);
     const today = now.slice(0, 10);
     const todayEntry = usage.series.find((entry: { date: string }) => entry.date === today);
     expect(todayEntry).toMatchObject({ date: today, model_tokens: 500 });
 
-    const invalidDays = await server.handle(request("/api/usage?days=0", { headers }));
+    const invalidDays = await server.handle(request('/api/usage?days=0', { headers }));
     expect(invalidDays.status).toBe(400);
-    const tooManyDays = await server.handle(request("/api/usage?days=365", { headers }));
+    const tooManyDays = await server.handle(request('/api/usage?days=365', { headers }));
     expect(tooManyDays.status).toBe(400);
 
-    const rejectedLimit = await server.handle(request("/api/invocations?limit=500", { headers }));
+    const rejectedLimit = await server.handle(request('/api/invocations?limit=500', { headers }));
     expect(rejectedLimit.status).toBe(400);
-    expect(await readJson(rejectedLimit)).toMatchObject({ error: "invalid_limit" });
+    expect(await readJson(rejectedLimit)).toMatchObject({ error: 'invalid_limit' });
     const rejectedFilter = await server.handle(request("/api/stickers?state=success'%20OR%201=1", { headers }));
     expect(rejectedFilter.status).toBe(400);
-    expect(await readJson(rejectedFilter)).toMatchObject({ error: "invalid_state" });
-    const writeAttempt = await server.handle(post("/api/invocations", {}, cookie));
+    expect(await readJson(rejectedFilter)).toMatchObject({ error: 'invalid_state' });
+    const writeAttempt = await server.handle(post('/api/invocations', {}, cookie));
     expect(writeAttempt.status).toBe(405);
   } finally {
     store.close();
   }
 });
 
-test("admin static serving falls back to index.html and refuses traversal", async () => {
+test('admin static serving falls back to index.html and refuses traversal', async () => {
   const { store, server } = await fixture();
   try {
-    const index = await server.handle(request("/"));
+    const index = await server.handle(request('/'));
     expect(index.status).toBe(200);
-    expect(index.headers.get("content-type")).toBe("text/html; charset=utf-8");
-    expect(index.headers.get("content-security-policy")).toContain("default-src 'none'");
-    expect(await index.text()).toContain("<title>admin</title>");
+    expect(index.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(index.headers.get('content-security-policy')).toContain("default-src 'none'");
+    expect(await index.text()).toContain('<title>admin</title>');
 
-    const deepRoute = await server.handle(request("/invocations/42"));
+    const deepRoute = await server.handle(request('/invocations/42'));
     expect(deepRoute.status).toBe(200);
-    expect(await deepRoute.text()).toContain("<title>admin</title>");
+    expect(await deepRoute.text()).toContain('<title>admin</title>');
 
-    const script = await server.handle(request("/static/app.js"));
-    expect(script.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+    const script = await server.handle(request('/static/app.js'));
+    expect(script.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
 
-    const traversal = await server.handle(request("/../../config.toml"));
+    const traversal = await server.handle(request('/../../config.toml'));
     expect(traversal.status).toBe(200);
-    expect(await traversal.text()).not.toContain("telegram-secret");
+    expect(await traversal.text()).not.toContain('telegram-secret');
   } finally {
     store.close();
   }
 });
 
-test("admin config rejects a non-loopback bind host", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "plasticwan-admin-host-"));
+test('admin config rejects a non-loopback bind host', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-admin-host-'));
   directories.push(directory);
-  const configPath = join(directory, "config.toml");
+  const configPath = join(directory, 'config.toml');
   await Bun.write(
     configPath,
     `${testConfigToml(directory)}
@@ -350,20 +408,25 @@ port = 8899
 session_ttl_hours = 12
 `,
   );
-  await expect(loadConfig(configPath)).rejects.toThrow("admin.host must be a loopback address");
+  await expect(loadConfig(configPath)).rejects.toThrow('admin.host must be a loopback address');
 });
 
-test("admin can cancel all pending sessions", async () => {
+test('admin can cancel all pending sessions', async () => {
   const { store, server, loaded } = await fixture();
   try {
     const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
-    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({ state: "completed", reason: "done" }));
-    const received = new Date("2026-03-01T00:00:00.000Z");
-    ingestion.ingest(textUpdate(1, 10, "backlogged"), received);
+    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+      state: 'completed',
+      reason: 'done',
+    }));
+    const received = new Date('2026-03-01T00:00:00.000Z');
+    ingestion.ingest(textUpdate(1, 10, 'backlogged'), received);
     const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-    if (invocationId === undefined) throw new Error("Expected an invocation");
+    if (invocationId === undefined) throw new Error('Expected an invocation');
 
-    const cookie = sessionCookie(await server.handle(post("/api/auth/setup", { username: "owner", password: PASSWORD })));
+    const cookie = sessionCookie(
+      await server.handle(post('/api/auth/setup', { username: 'owner', password: PASSWORD })),
+    );
     const headers = { cookie };
 
     const beforeUsage = store.db
@@ -371,23 +434,25 @@ test("admin can cancel all pending sessions", async () => {
       .get();
     expect(beforeUsage?.amount).toBe(1n);
 
-    const canceled = await server.handle(post("/api/cancel-pending-sessions", {}, cookie));
+    const canceled = await server.handle(post('/api/cancel-pending-sessions', {}, cookie));
     expect(canceled.status).toBe(200);
     const body = await readJson(canceled);
     expect(body).toMatchObject({ canceled_buckets: 1, canceled_invocations: 1, refunded_invocations: 1 });
 
-    const bucketState = store.db.query<{ state: string }, []>("SELECT state FROM buckets").get()?.state;
-    expect(bucketState).toBe("expired");
-    const invocationState = store.db.query<{ state: string }, [bigint]>("SELECT state FROM invocations WHERE id = ?").get(invocationId)?.state;
-    expect(invocationState).toBe("aborted");
+    const bucketState = store.db.query<{ state: string }, []>('SELECT state FROM buckets').get()?.state;
+    expect(bucketState).toBe('expired');
+    const invocationState = store.db
+      .query<{ state: string }, [bigint]>('SELECT state FROM invocations WHERE id = ?')
+      .get(invocationId)?.state;
+    expect(invocationState).toBe('aborted');
 
     const afterUsage = store.db
       .query<{ amount: bigint }, []>("SELECT amount FROM daily_usage WHERE metric = 'agent_invocations'")
       .get();
     expect(afterUsage?.amount).toBe(0n);
 
-    const overview = await readJson((await server.handle(request("/api/overview", { headers }))));
-    expect(overview.invocation_states).toContainEqual({ label: "aborted", count: 1 });
+    const overview = await readJson(await server.handle(request('/api/overview', { headers })));
+    expect(overview.invocation_states).toContainEqual({ label: 'aborted', count: 1 });
   } finally {
     store.close();
   }
@@ -399,118 +464,128 @@ function textUpdate(updateId: number, messageId: number, text: string): Update {
     message: {
       message_id: messageId,
       date: 1_700_000_000 + messageId,
-      chat: { id: 123456789, type: "private", first_name: "Owner" },
-      from: { id: 42, is_bot: false, first_name: "Alice" },
+      chat: { id: 123456789, type: 'private', first_name: 'Owner' },
+      from: { id: 42, is_bot: false, first_name: 'Alice' },
       text,
     },
   };
 }
 
-test("admins API lists, adds and removes bot admins", async () => {
+test('admins API lists, adds and removes bot admins', async () => {
   const { store, server } = await fixture();
   try {
-    const created = await server.handle(post("/api/auth/setup", { username: "owner", password: PASSWORD }));
+    const created = await server.handle(post('/api/auth/setup', { username: 'owner', password: PASSWORD }));
     const cookie = sessionCookie(created);
 
-    const unauthenticated = await server.handle(request("/api/admins"));
+    const unauthenticated = await server.handle(request('/api/admins'));
     expect(unauthenticated.status).toBe(401);
 
-    const empty = await server.handle(request("/api/admins", { headers: { cookie } }));
+    const empty = await server.handle(request('/api/admins', { headers: { cookie } }));
     expect(empty.status).toBe(200);
     expect(await readJson(empty)).toEqual({ items: [] });
 
-    const invalid = await server.handle(post("/api/admins", { telegram_user_id: -5 }, cookie));
+    const invalid = await server.handle(post('/api/admins', { telegram_user_id: -5 }, cookie));
     expect(invalid.status).toBe(400);
-    expect(await readJson(invalid)).toMatchObject({ error: "invalid_telegram_user_id" });
+    expect(await readJson(invalid)).toMatchObject({ error: 'invalid_telegram_user_id' });
 
-    const added = await server.handle(post("/api/admins", { telegram_user_id: 42 }, cookie));
+    const added = await server.handle(post('/api/admins', { telegram_user_id: 42 }, cookie));
     expect(added.status).toBe(200);
-    expect(await readJson(added)).toMatchObject({ telegram_user_id: "42", added_by: "admin-panel" });
+    expect(await readJson(added)).toMatchObject({ telegram_user_id: '42', added_by: 'admin-panel' });
 
-    const duplicate = await server.handle(post("/api/admins", { telegram_user_id: 42 }, cookie));
+    const duplicate = await server.handle(post('/api/admins', { telegram_user_id: 42 }, cookie));
     expect(duplicate.status).toBe(200);
-    expect((await readJson(duplicate)).telegram_user_id).toBe("42");
+    expect((await readJson(duplicate)).telegram_user_id).toBe('42');
 
-    const list = await readJson((await server.handle(request("/api/admins", { headers: { cookie } }))));
+    const list = await readJson(await server.handle(request('/api/admins', { headers: { cookie } })));
     expect(list.items).toHaveLength(1);
-    expect(list.items[0]).toMatchObject({ telegram_user_id: "42", display_name: "" });
+    expect(list.items[0]).toMatchObject({ telegram_user_id: '42', display_name: '' });
 
-    const removed = await server.handle(request("/api/admins/42", { method: "DELETE", headers: { cookie } }));
+    const removed = await server.handle(request('/api/admins/42', { method: 'DELETE', headers: { cookie } }));
     expect(removed.status).toBe(200);
-    expect(await readJson(removed)).toEqual({ status: "ok" });
-    expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM bot_admins").get()?.count).toBe(0n);
+    expect(await readJson(removed)).toEqual({ status: 'ok' });
+    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM bot_admins').get()?.count).toBe(0n);
   } finally {
     store.close();
   }
 });
 
-test("model API lists, switches and resets the agent model", async () => {
+test('model API lists, switches and resets the agent model', async () => {
   const { store, loaded } = await fixture();
   const registry = await createModelRegistry(loaded.config, new SecretStore());
   const switcher = new AgentModelSwitcher(loaded.config, registry.models);
   const server = new AdminServer({ store, config: loaded.config, modelSwitcher: switcher });
   try {
-    const unauthenticated = await server.handle(request("/api/model"));
+    const unauthenticated = await server.handle(request('/api/model'));
     expect(unauthenticated.status).toBe(401);
 
-    const created = await server.handle(post("/api/auth/setup", { username: "owner", password: PASSWORD }));
+    const created = await server.handle(post('/api/auth/setup', { username: 'owner', password: PASSWORD }));
     const cookie = sessionCookie(created);
     const call = (init: RequestInit = {}): Request =>
-      request("/api/model", { ...init, headers: { ...init.headers, cookie } });
+      request('/api/model', { ...init, headers: { ...init.headers, cookie } });
 
-    const initial = await readJson((await server.handle(call())));
+    const initial = await readJson(await server.handle(call()));
     expect(initial.current).toMatchObject({
-      provider: "agent",
-      model: "agent-model",
-      name: "Agent Model",
+      provider: 'agent',
+      model: 'agent-model',
+      name: 'Agent Model',
       context_window: 200_000,
       max_tokens: 32_768,
     });
-    expect(initial.default).toEqual({ provider: "agent", model: "agent-model" });
+    expect(initial.default).toEqual({ provider: 'agent', model: 'agent-model' });
     expect(initial.options).toEqual([
-      { provider: "agent", model: "agent-model", name: "Agent Model" },
-      { provider: "vision", model: "vision-model", name: "Vision Model" },
+      { provider: 'agent', model: 'agent-model', name: 'Agent Model' },
+      { provider: 'vision', model: 'vision-model', name: 'Vision Model' },
     ]);
 
-    const switched = await readJson((await server.handle(call({
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ provider: "vision", model: "vision-model" }),
-    }))));
-    expect(switched.current).toMatchObject({ provider: "vision", model: "vision-model", max_tokens: 8_192 });
-    expect(switched.default).toEqual({ provider: "agent", model: "agent-model" });
+    const switched = await readJson(
+      await server.handle(
+        call({
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ provider: 'vision', model: 'vision-model' }),
+        }),
+      ),
+    );
+    expect(switched.current).toMatchObject({ provider: 'vision', model: 'vision-model', max_tokens: 8_192 });
+    expect(switched.default).toEqual({ provider: 'agent', model: 'agent-model' });
 
-    const malformed = await server.handle(call({
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ provider: "vision" }),
-    }));
+    const malformed = await server.handle(
+      call({
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'vision' }),
+      }),
+    );
     expect(malformed.status).toBe(400);
-    expect(await readJson(malformed)).toMatchObject({ error: "invalid_model_reference" });
+    expect(await readJson(malformed)).toMatchObject({ error: 'invalid_model_reference' });
 
-    const unknownProvider = await server.handle(call({
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ provider: "ghost", model: "agent-model" }),
-    }));
+    const unknownProvider = await server.handle(
+      call({
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'ghost', model: 'agent-model' }),
+      }),
+    );
     expect(unknownProvider.status).toBe(400);
-    expect(await readJson(unknownProvider)).toMatchObject({ error: "unknown_provider" });
+    expect(await readJson(unknownProvider)).toMatchObject({ error: 'unknown_provider' });
 
-    const unknownModel = await server.handle(call({
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ provider: "agent", model: "ghost-model" }),
-    }));
+    const unknownModel = await server.handle(
+      call({
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'agent', model: 'ghost-model' }),
+      }),
+    );
     expect(unknownModel.status).toBe(400);
-    expect(await readJson(unknownModel)).toMatchObject({ error: "unknown_model" });
+    expect(await readJson(unknownModel)).toMatchObject({ error: 'unknown_model' });
 
     // The failed switches must not change the effective model.
-    const afterFailures = await readJson((await server.handle(call())));
-    expect(afterFailures.current).toMatchObject({ provider: "vision", model: "vision-model" });
+    const afterFailures = await readJson(await server.handle(call()));
+    expect(afterFailures.current).toMatchObject({ provider: 'vision', model: 'vision-model' });
 
-    const reset = await readJson((await server.handle(call({ method: "DELETE" }))));
-    expect(reset.current).toMatchObject({ provider: "agent", model: "agent-model" });
-    expect(switcher.current()).toMatchObject({ provider: "agent", model: "agent-model" });
+    const reset = await readJson(await server.handle(call({ method: 'DELETE' })));
+    expect(reset.current).toMatchObject({ provider: 'agent', model: 'agent-model' });
+    expect(switcher.current()).toMatchObject({ provider: 'agent', model: 'agent-model' });
   } finally {
     store.close();
   }

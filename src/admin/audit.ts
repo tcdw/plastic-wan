@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from 'bun:sqlite';
 
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 25;
@@ -216,14 +216,14 @@ export function listInvocations(db: Database, query: ListQuery): Page<Record<str
   const limit = parseLimit(query.limit);
   const conditions: string[] = [];
   const parameters: Bindings = [];
-  appendCursor(conditions, parameters, "i.id", query.cursor);
+  appendCursor(conditions, parameters, 'i.id', query.cursor);
   if (query.state !== undefined && query.state !== null && query.state.length > 0) {
-    conditions.push("i.state = ?");
-    parameters.push(assertToken(query.state, "state"));
+    conditions.push('i.state = ?');
+    parameters.push(assertToken(query.state, 'state'));
   }
   if (query.chat !== undefined && query.chat !== null && query.chat.length > 0) {
-    conditions.push("ch.telegram_chat_id = ?");
-    parameters.push(parseId(query.chat, "chat"));
+    conditions.push('ch.telegram_chat_id = ?');
+    parameters.push(parseId(query.chat, 'chat'));
   }
   parameters.push(BigInt(limit + 1));
   const rows = db
@@ -265,12 +265,15 @@ export function listInvocations(db: Database, query: ListQuery): Page<Record<str
 
 export function getInvocation(db: Database, id: bigint): Record<string, unknown> | null {
   const invocation = db
-    .query<InvocationListRow & {
-      readonly prompt_version: bigint;
-      readonly tool_registry_hash: string | null;
-      readonly tool_registry_json: string | null;
-      readonly bucket_id: bigint;
-    }, [bigint]>(
+    .query<
+      InvocationListRow & {
+        readonly prompt_version: bigint;
+        readonly tool_registry_hash: string | null;
+        readonly tool_registry_json: string | null;
+        readonly bucket_id: bigint;
+      },
+      [bigint]
+    >(
       `SELECT i.id, i.state, i.created_at, i.started_at, i.finished_at, i.completion_reason, i.error_code,
               i.sends_used, i.tool_calls_used, i.turns_used, i.side_effect_started, i.config_hash,
               i.prompt_version, i.tool_registry_hash, i.tool_registry_json, i.bucket_id,
@@ -303,7 +306,7 @@ export function getInvocation(db: Database, id: bigint): Record<string, unknown>
     .all(id);
   const agentMessages = db
     .query<AgentMessageRow, [bigint]>(
-      "SELECT sequence_no, role, text, created_at FROM agent_messages WHERE invocation_id = ? ORDER BY sequence_no",
+      'SELECT sequence_no, role, text, created_at FROM agent_messages WHERE invocation_id = ? ORDER BY sequence_no',
     )
     .all(id);
   const sends = db
@@ -406,15 +409,15 @@ export function listMessages(db: Database, query: ListQuery): Page<Record<string
   const limit = parseLimit(query.limit);
   const conditions: string[] = [];
   const parameters: Bindings = [];
-  appendCursor(conditions, parameters, "m.id", query.cursor);
+  appendCursor(conditions, parameters, 'm.id', query.cursor);
   if (query.chat !== undefined && query.chat !== null && query.chat.length > 0) {
-    conditions.push("ch.telegram_chat_id = ?");
-    parameters.push(parseId(query.chat, "chat"));
+    conditions.push('ch.telegram_chat_id = ?');
+    parameters.push(parseId(query.chat, 'chat'));
   }
   if (query.search !== undefined && query.search !== null && query.search.length > 0) {
-    if (query.search.length > MAX_SEARCH_LENGTH) throw new AdminQueryError("invalid_search", "Search text is too long");
+    if (query.search.length > MAX_SEARCH_LENGTH) throw new AdminQueryError('invalid_search', 'Search text is too long');
     conditions.push("(r.text LIKE ? ESCAPE '\\' OR r.caption LIKE ? ESCAPE '\\')");
-    const like = `%${query.search.replace(/[\\%_]/g, "\\$&")}%`;
+    const like = `%${query.search.replace(/[\\%_]/g, '\\$&')}%`;
     parameters.push(like, like);
   }
   parameters.push(BigInt(limit + 1));
@@ -455,9 +458,10 @@ export function listMessages(db: Database, query: ListQuery): Page<Record<string
     caption: row.caption,
     reply_to_message_id: row.reply_to_message_id === null ? null : row.reply_to_message_id.toString(),
     media_group_id: row.media_group_id,
-    sender: row.sender_display_name === null
-      ? null
-      : { display_name: row.sender_display_name, username: row.sender_username, is_bot: row.sender_is_bot === 1n },
+    sender:
+      row.sender_display_name === null
+        ? null
+        : { display_name: row.sender_display_name, username: row.sender_username, is_bot: row.sender_is_bot === 1n },
     revision_count: Number(row.revision_count),
     media_count: Number(row.media_count),
   }));
@@ -528,9 +532,10 @@ export function getMessage(db: Database, id: bigint): Record<string, unknown> | 
       media_group_id: row.media_group_id,
       service_json: row.service_json,
       created_at: row.created_at,
-      sender: row.sender_display_name === null
-        ? null
-        : { display_name: row.sender_display_name, username: row.sender_username },
+      sender:
+        row.sender_display_name === null
+          ? null
+          : { display_name: row.sender_display_name, username: row.sender_username },
     })),
     media: media.map((row) => ({
       id: row.id.toString(),
@@ -581,19 +586,19 @@ export function listStickers(db: Database, query: ListQuery): Page<Record<string
   const limit = parseLimit(query.limit);
   const conditions: string[] = [];
   const parameters: Bindings = [];
-  appendCursor(conditions, parameters, "s.id", query.cursor);
+  appendCursor(conditions, parameters, 's.id', query.cursor);
   if (query.set !== undefined && query.set !== null && query.set.length > 0) {
-    conditions.push("ss.alias = ?");
-    parameters.push(assertToken(query.set, "set"));
+    conditions.push('ss.alias = ?');
+    parameters.push(assertToken(query.set, 'set'));
   }
   if (query.state !== undefined && query.state !== null && query.state.length > 0) {
-    conditions.push("s.index_state = ?");
-    parameters.push(assertToken(query.state, "state"));
+    conditions.push('s.index_state = ?');
+    parameters.push(assertToken(query.state, 'state'));
   }
   if (query.search !== undefined && query.search !== null && query.search.length > 0) {
-    if (query.search.length > MAX_SEARCH_LENGTH) throw new AdminQueryError("invalid_search", "Search text is too long");
+    if (query.search.length > MAX_SEARCH_LENGTH) throw new AdminQueryError('invalid_search', 'Search text is too long');
     conditions.push("(ma.description LIKE ? ESCAPE '\\' OR s.emoji LIKE ? ESCAPE '\\')");
-    const like = `%${query.search.replace(/[\\%_]/g, "\\$&")}%`;
+    const like = `%${query.search.replace(/[\\%_]/g, '\\$&')}%`;
     parameters.push(like, like);
   }
   parameters.push(BigInt(limit + 1));
@@ -622,43 +627,44 @@ export function listStickers(db: Database, query: ListQuery): Page<Record<string
     failure_count: Number(row.failure_count),
     next_retry_at: row.next_retry_at,
     updated_at: row.updated_at,
-    analysis: row.analysis_id === null
-      ? null
-      : {
-          id: row.analysis_id.toString(),
-          state: row.analysis_state,
-          analysis_version: row.analysis_version,
-          provider: row.provider,
-          model: row.model,
-          prompt_version: row.prompt_version === null ? null : Number(row.prompt_version),
-          description: row.description,
-          metadata_json: row.metadata_json,
-          updated_at: row.analysis_updated_at,
-        },
+    analysis:
+      row.analysis_id === null
+        ? null
+        : {
+            id: row.analysis_id.toString(),
+            state: row.analysis_state,
+            analysis_version: row.analysis_version,
+            provider: row.provider,
+            model: row.model,
+            prompt_version: row.prompt_version === null ? null : Number(row.prompt_version),
+            description: row.description,
+            metadata_json: row.metadata_json,
+            updated_at: row.analysis_updated_at,
+          },
   }));
 }
 
 export function overview(db: Database, now = new Date()): Record<string, unknown> {
   const today = now.toISOString().slice(0, 10);
   const invocationStates = db
-    .query<CountRow, []>("SELECT state AS label, COUNT(*) AS count FROM invocations GROUP BY state ORDER BY state")
+    .query<CountRow, []>('SELECT state AS label, COUNT(*) AS count FROM invocations GROUP BY state ORDER BY state')
     .all();
   const stickerStates = db
     .query<CountRow, []>(
-      "SELECT index_state AS label, COUNT(*) AS count FROM stickers WHERE active = 1 GROUP BY index_state ORDER BY index_state",
+      'SELECT index_state AS label, COUNT(*) AS count FROM stickers WHERE active = 1 GROUP BY index_state ORDER BY index_state',
     )
     .all();
   const toolNames = db
     .query<CountRow, []>(
-      "SELECT tool_name AS label, COUNT(*) AS count FROM tool_calls GROUP BY tool_name ORDER BY count DESC LIMIT 10",
+      'SELECT tool_name AS label, COUNT(*) AS count FROM tool_calls GROUP BY tool_name ORDER BY count DESC LIMIT 10',
     )
     .all();
   const usage = db
     .query<{ resource: string; metric: string; scope: string; amount: bigint }, [string]>(
-      "SELECT resource, metric, scope, amount FROM daily_usage WHERE utc_date = ? ORDER BY resource, metric, scope",
+      'SELECT resource, metric, scope, amount FROM daily_usage WHERE utc_date = ? ORDER BY resource, metric, scope',
     )
     .all(today);
-  const messageCount = db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM messages").get();
+  const messageCount = db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get();
   const analysisCount = db
     .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM media_analyses WHERE state = 'success'")
     .get();
@@ -708,13 +714,18 @@ function page<Row extends { readonly id: bigint }, Item>(
 }
 
 function where(conditions: readonly string[]): string {
-  return conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")}`;
+  return conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`;
 }
 
-function appendCursor(conditions: string[], parameters: Bindings, column: string, cursor: string | null | undefined): void {
+function appendCursor(
+  conditions: string[],
+  parameters: Bindings,
+  column: string,
+  cursor: string | null | undefined,
+): void {
   if (cursor === undefined || cursor === null || cursor.length === 0) return;
   conditions.push(`${column} < ?`);
-  parameters.push(parseId(cursor, "cursor"));
+  parameters.push(parseId(cursor, 'cursor'));
 }
 
 export function parseId(value: string, label: string): bigint {
@@ -724,14 +735,16 @@ export function parseId(value: string, label: string): bigint {
 
 export function parseLimit(value: string | null | undefined): number {
   if (value === undefined || value === null || value.length === 0) return DEFAULT_PAGE_SIZE;
-  if (!/^\d{1,3}$/.test(value)) throw new AdminQueryError("invalid_limit", "limit must be a positive integer");
+  if (!/^\d{1,3}$/.test(value)) throw new AdminQueryError('invalid_limit', 'limit must be a positive integer');
   const limit = Number.parseInt(value, 10);
-  if (limit < 1 || limit > MAX_PAGE_SIZE) throw new AdminQueryError("invalid_limit", `limit must be between 1 and ${MAX_PAGE_SIZE}`);
+  if (limit < 1 || limit > MAX_PAGE_SIZE)
+    throw new AdminQueryError('invalid_limit', `limit must be between 1 and ${MAX_PAGE_SIZE}`);
   return limit;
 }
 
 function assertToken(value: string, label: string): string {
-  if (!/^[A-Za-z0-9._-]{1,64}$/.test(value)) throw new AdminQueryError(`invalid_${label}`, `${label} filter is invalid`);
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(value))
+    throw new AdminQueryError(`invalid_${label}`, `${label} filter is invalid`);
   return value;
 }
 
@@ -740,28 +753,32 @@ function parseStringArray(json: string | null): string[] | null {
   if (json === null) return null;
   try {
     const parsed: unknown = JSON.parse(json);
-    if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) return null;
+    if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === 'string')) return null;
     return parsed;
   } catch {
     return null;
   }
 }
 
-function parseToolRegistry(json: string | null): readonly { name: string; label: string; description: string }[] | null {
+function parseToolRegistry(
+  json: string | null,
+): readonly { name: string; label: string; description: string }[] | null {
   if (json === null) return null;
   try {
     const parsed: unknown = JSON.parse(json);
     if (!Array.isArray(parsed)) return null;
     const entries = parsed.map((entry): { name: string; label: string; description: string } | null => {
-      if (typeof entry !== "object" || entry === null) return null;
+      if (typeof entry !== 'object' || entry === null) return null;
       const record = entry as Record<string, unknown>;
-      const name = record["name"];
-      const label = record["label"];
-      const description = record["description"];
-      if (typeof name !== "string" || typeof label !== "string" || typeof description !== "string") return null;
+      const name = record.name;
+      const label = record.label;
+      const description = record.description;
+      if (typeof name !== 'string' || typeof label !== 'string' || typeof description !== 'string') return null;
       return { name, label, description };
     });
-    const valid = entries.filter((entry): entry is { name: string; label: string; description: string } => entry !== null);
+    const valid = entries.filter(
+      (entry): entry is { name: string; label: string; description: string } => entry !== null,
+    );
     if (valid.length !== entries.length) return null;
     return valid;
   } catch {

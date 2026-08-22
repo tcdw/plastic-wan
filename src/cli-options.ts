@@ -1,4 +1,4 @@
-export type Command = "serve" | "check-config" | "doctor" | "backup" | "configure";
+export type Command = 'serve' | 'check-config' | 'doctor' | 'backup' | 'configure';
 
 export interface CliOptions {
   readonly command: Command;
@@ -8,7 +8,7 @@ export interface CliOptions {
 
 const COMMANDS: Record<Command, true> = {
   serve: true,
-  "check-config": true,
+  'check-config': true,
   doctor: true,
   backup: true,
   configure: true,
@@ -21,13 +21,13 @@ export function parseCli(argv: readonly string[]): CliOptions {
   let outputAgentPrompt = false;
   for (let index = 0; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
-    if (argument === "--output-agent-prompt" && commandValue === "doctor" && !outputAgentPrompt) {
+    if (argument === '--output-agent-prompt' && commandValue === 'doctor' && !outputAgentPrompt) {
       outputAgentPrompt = true;
       continue;
     }
-    if (argument !== "--config" || configPath !== undefined) throw new Error(usage());
+    if (argument !== '--config' || configPath !== undefined) throw new Error(usage());
     configPath = argumentsList[index + 1];
-    if (configPath === undefined || configPath.startsWith("--")) throw new Error(usage());
+    if (configPath === undefined || configPath.startsWith('--')) throw new Error(usage());
     index += 1;
   }
   if (configPath === undefined) throw new Error(usage());
@@ -39,5 +39,5 @@ function isCommand(value: string): value is Command {
 }
 
 export function usage(): string {
-  return "Usage: plasticwan <serve|check-config|doctor|backup|configure> --config <path> [--output-agent-prompt]";
+  return 'Usage: plasticwan <serve|check-config|doctor|backup|configure> --config <path> [--output-agent-prompt]';
 }

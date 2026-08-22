@@ -6,7 +6,9 @@
   "bin": {
     "plasticwan": "./src/cli.ts"
   },
-  "workspaces": ["apps/*"],
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
     "check": "tsc --noEmit && bun run --filter plasticwan-admin check",
     "test": "bun test",

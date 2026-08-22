@@ -1,17 +1,16 @@
-import { input, select, confirm, search } from "@inquirer/prompts";
-import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import type { SecretRef, TomlConfig } from "../config.ts";
-import { SecretStore } from "../secrets.ts";
+import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
+import { confirm, input, search, select } from '@inquirer/prompts';
+import type { SecretRef, TomlConfig } from '../config.ts';
+import { SecretStore } from '../secrets.ts';
 import {
   fetchModelsDevCatalog,
-  listProviders as listModelsDevProviders,
-  listModels as listModelsDevModels,
   findModel,
-  toModelDefaults,
+  listModels as listModelsDevModels,
+  listProviders as listModelsDevProviders,
   type ModelsDevCatalog,
   type ModelsDevModel,
-} from "./models-dev.ts";
-import { fetchProviderModels, modelsEndpoint, type DiscoveredProviderModel } from "./provider-models.ts";
+  toModelDefaults,
+} from './models-dev.ts';
 import {
   promptApiAdapter,
   promptBoolean,
@@ -20,18 +19,19 @@ import {
   promptPositiveInteger,
   promptSecretRef,
   promptString,
-} from "./prompts.ts";
+} from './prompts.ts';
+import { type DiscoveredProviderModel, fetchProviderModels, modelsEndpoint } from './provider-models.ts';
 
-type ApiAdapter = "openai-responses" | "openai-completions" | "anthropic-messages";
+type ApiAdapter = 'openai-responses' | 'openai-completions' | 'anthropic-messages';
 
 type BuiltinProviderConfig = {
-  kind: "builtin";
+  kind: 'builtin';
   provider: string;
   api_key: SecretRef;
 };
 
 type CustomProviderConfig = {
-  kind: "custom";
+  kind: 'custom';
   base_url: string;
   api: ApiAdapter;
   api_key: SecretRef;
@@ -45,20 +45,20 @@ type ModelConfig = {
   id: string;
   name?: string;
   reasoning: boolean;
-  input: Array<"text" | "image">;
+  input: Array<'text' | 'image'>;
   context_window: number;
   max_tokens: number;
   cost: { input: number; output: number; cache_read: number; cache_write: number };
 };
 
-type ProviderAction = "add" | "edit" | "delete" | "back";
-type ModelAction = "add" | "discover" | "edit" | "delete" | "back";
-type ProviderKind = "builtin" | "custom";
-type AddProviderKindAction = ProviderKind | "back" | "cancel";
-type BuiltinProviderField = "provider" | "api_key" | "save" | "back";
-type CustomProviderDraftField = "base_url" | "api" | "api_key" | "headers" | "discover" | "models" | "save" | "back";
-type CustomProviderField = "base_url" | "api" | "api_key" | "headers" | "models" | "cancel";
-type ModelField = "name" | "reasoning" | "input" | "context_window" | "max_tokens" | "cost" | "cancel";
+type ProviderAction = 'add' | 'edit' | 'delete' | 'back';
+type ModelAction = 'add' | 'discover' | 'edit' | 'delete' | 'back';
+type ProviderKind = 'builtin' | 'custom';
+type AddProviderKindAction = ProviderKind | 'back' | 'cancel';
+type BuiltinProviderField = 'provider' | 'api_key' | 'save' | 'back';
+type CustomProviderDraftField = 'base_url' | 'api' | 'api_key' | 'headers' | 'discover' | 'models' | 'save' | 'back';
+type CustomProviderField = 'base_url' | 'api' | 'api_key' | 'headers' | 'models' | 'cancel';
+type ModelField = 'name' | 'reasoning' | 'input' | 'context_window' | 'max_tokens' | 'cost' | 'cancel';
 
 type SearchChoice<Value> = {
   readonly value: Value;
@@ -71,16 +71,16 @@ export async function runProviderWizard(config: TomlConfig): Promise<TomlConfig>
   let exit = false;
   while (!exit) {
     const choices: { value: ProviderAction; name: string }[] = [
-      { value: "add", name: "Add provider" },
-      { value: "edit", name: "Edit provider" },
+      { value: 'add', name: 'Add provider' },
+      { value: 'edit', name: 'Edit provider' },
     ];
     if (Object.keys(providers).length > 0) {
-      choices.push({ value: "delete", name: "Delete provider" });
+      choices.push({ value: 'delete', name: 'Delete provider' });
     }
-    choices.push({ value: "back", name: "Back to main menu" });
-    const action = await select<ProviderAction>({ message: "Configure providers", choices });
+    choices.push({ value: 'back', name: 'Back to main menu' });
+    const action = await select<ProviderAction>({ message: 'Configure providers', choices });
     switch (action) {
-      case "add": {
+      case 'add': {
         const provider = await addProvider();
         if (provider !== undefined) {
           const config = provider.config as ProviderConfig;
@@ -88,7 +88,7 @@ export async function runProviderWizard(config: TomlConfig): Promise<TomlConfig>
         }
         break;
       }
-      case "edit": {
+      case 'edit': {
         const alias = await selectProviderAlias(providers);
         if (alias !== undefined) {
           const toEdit = providers[alias] as ProviderConfig;
@@ -99,7 +99,7 @@ export async function runProviderWizard(config: TomlConfig): Promise<TomlConfig>
         }
         break;
       }
-      case "delete": {
+      case 'delete': {
         const alias = await selectProviderAlias(providers);
         if (alias !== undefined && (await confirm({ message: `Delete provider "${alias}"?` }))) {
           const { [alias]: _, ...rest } = providers;
@@ -107,20 +107,19 @@ export async function runProviderWizard(config: TomlConfig): Promise<TomlConfig>
         }
         break;
       }
-      case "back":
       default:
         exit = true;
         break;
     }
   }
-  return { ...config, providers: providers as TomlConfig["providers"] };
+  return { ...config, providers: providers as TomlConfig['providers'] };
 }
 
 async function selectProviderAlias(providers: Record<string, ProviderConfig>): Promise<string | undefined> {
   const aliases = Object.keys(providers);
   if (aliases.length === 0) return undefined;
   return searchChoice(
-    "Select provider",
+    'Select provider',
     aliases.map((alias) => ({
       value: alias,
       name: describeProvider(alias, providers[alias] as ProviderConfig),
@@ -129,33 +128,31 @@ async function selectProviderAlias(providers: Record<string, ProviderConfig>): P
 }
 
 function describeProvider(alias: string, provider: ProviderConfig): string {
-  if (provider.kind === "builtin") return `${alias} (built-in: ${provider.provider})`;
+  if (provider.kind === 'builtin') return `${alias} (built-in: ${provider.provider})`;
   return `${alias} (custom: ${provider.api})`;
 }
 
 async function addProvider(): Promise<{ alias: string; config: ProviderConfig } | undefined> {
-  let alias = "";
+  let alias = '';
   aliasStep: while (true) {
     alias = await input({
-      message: "Provider alias",
-      ...(alias === "" ? {} : { default: alias }),
-      validate: (value) => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value) || "Invalid alias",
+      message: 'Provider alias',
+      ...(alias === '' ? {} : { default: alias }),
+      validate: (value) => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value) || 'Invalid alias',
     });
     while (true) {
       const kind = await select<AddProviderKindAction>({
-        message: "Provider kind",
+        message: 'Provider kind',
         choices: [
-          { value: "builtin", name: "Built-in provider (uses Pi AI model catalog)" },
-          { value: "custom", name: "Custom provider (OpenAI/Anthropic-compatible endpoint)" },
-          { value: "back", name: "Back to provider alias" },
-          { value: "cancel", name: "Cancel adding provider" },
+          { value: 'builtin', name: 'Built-in provider (uses Pi AI model catalog)' },
+          { value: 'custom', name: 'Custom provider (OpenAI/Anthropic-compatible endpoint)' },
+          { value: 'back', name: 'Back to provider alias' },
+          { value: 'cancel', name: 'Cancel adding provider' },
         ],
       });
-      if (kind === "back") continue aliasStep;
-      if (kind === "cancel") return undefined;
-      const config = kind === "builtin"
-        ? await configureBuiltinProvider()
-        : await configureCustomProvider();
+      if (kind === 'back') continue aliasStep;
+      if (kind === 'cancel') return undefined;
+      const config = kind === 'builtin' ? await configureBuiltinProvider() : await configureCustomProvider();
       if (config !== undefined) return { alias, config };
     }
   }
@@ -167,22 +164,25 @@ async function configureBuiltinProvider(): Promise<ProviderConfig | undefined> {
   let apiKey: SecretRef | undefined;
   while (true) {
     const action = await select<BuiltinProviderField>({
-      message: "Add built-in provider",
+      message: 'Add built-in provider',
       choices: [
-        { value: "provider", name: `Built-in provider: ${providerId ?? "not set"}` },
-        { value: "api_key", name: `API key: ${apiKey === undefined ? "not set" : "configured"}` },
+        { value: 'provider', name: `Built-in provider: ${providerId ?? 'not set'}` },
+        { value: 'api_key', name: `API key: ${apiKey === undefined ? 'not set' : 'configured'}` },
         {
-          value: "save",
-          name: "Add provider",
-          disabled: providerId === undefined || apiKey === undefined ? "Select a provider and configure its API key first" : false,
+          value: 'save',
+          name: 'Add provider',
+          disabled:
+            providerId === undefined || apiKey === undefined
+              ? 'Select a provider and configure its API key first'
+              : false,
         },
-        { value: "back", name: "Back to provider kind" },
+        { value: 'back', name: 'Back to provider kind' },
       ],
     });
     switch (action) {
-      case "provider": {
+      case 'provider': {
         const selected = await searchChoice(
-          "Built-in provider",
+          'Built-in provider',
           providers.map((provider) => ({
             value: provider.id,
             name: `${provider.name} (${provider.id})`,
@@ -191,15 +191,14 @@ async function configureBuiltinProvider(): Promise<ProviderConfig | undefined> {
         providerId = selected;
         break;
       }
-      case "api_key":
-        apiKey = await promptSecretRef("API key");
+      case 'api_key':
+        apiKey = await promptSecretRef('API key');
         break;
-      case "save":
+      case 'save':
         if (providerId !== undefined && apiKey !== undefined) {
-          return { kind: "builtin", provider: providerId, api_key: apiKey };
+          return { kind: 'builtin', provider: providerId, api_key: apiKey };
         }
         break;
-      case "back":
       default:
         return undefined;
     }
@@ -217,59 +216,59 @@ async function configureCustomProvider(): Promise<ProviderConfig | undefined> {
     const readyToDiscover = baseUrl !== undefined && api !== undefined && apiKey !== undefined;
     const readyToSave = readyToDiscover && models.length > 0;
     const action = await select<CustomProviderDraftField>({
-      message: "Add custom provider",
+      message: 'Add custom provider',
       choices: [
-        { value: "base_url", name: `Base URL: ${baseUrl ?? "not set"}` },
-        { value: "api", name: `API adapter: ${api ?? "not set"}` },
-        { value: "api_key", name: `API key: ${apiKey === undefined ? "not set" : "configured"}` },
-        { value: "headers", name: `Custom headers (${Object.keys(headers).length})` },
+        { value: 'base_url', name: `Base URL: ${baseUrl ?? 'not set'}` },
+        { value: 'api', name: `API adapter: ${api ?? 'not set'}` },
+        { value: 'api_key', name: `API key: ${apiKey === undefined ? 'not set' : 'configured'}` },
+        { value: 'headers', name: `Custom headers (${Object.keys(headers).length})` },
         {
-          value: "discover",
-          name: `Fetch models from ${baseUrl === undefined ? "the provider /models endpoint" : `${baseUrl.replace(/\/+$/, "")}/models`}`,
-          disabled: readyToDiscover ? false : "Configure the Base URL, API adapter, and API key first",
+          value: 'discover',
+          name: `Fetch models from ${baseUrl === undefined ? 'the provider /models endpoint' : `${baseUrl.replace(/\/+$/, '')}/models`}`,
+          disabled: readyToDiscover ? false : 'Configure the Base URL, API adapter, and API key first',
         },
-        { value: "models", name: `Models (${models.length}; ${discoveredModels.length} fetched)` },
+        { value: 'models', name: `Models (${models.length}; ${discoveredModels.length} fetched)` },
         {
-          value: "save",
-          name: "Add provider",
-          disabled: readyToSave ? false : "Configure the endpoint, API key, and at least one model first",
+          value: 'save',
+          name: 'Add provider',
+          disabled: readyToSave ? false : 'Configure the endpoint, API key, and at least one model first',
         },
-        { value: "back", name: "Back to provider kind" },
+        { value: 'back', name: 'Back to provider kind' },
       ],
     });
     switch (action) {
-      case "base_url":
+      case 'base_url':
         baseUrl = await input({
-          message: "Base URL",
+          message: 'Base URL',
           ...(baseUrl === undefined ? {} : { default: baseUrl }),
           validate: validateBaseUrl,
         });
         discoveredModels = [];
         break;
-      case "api":
+      case 'api':
         api = await promptApiAdapter();
         discoveredModels = [];
         break;
-      case "api_key":
-        apiKey = await promptSecretRef("API key");
+      case 'api_key':
+        apiKey = await promptSecretRef('API key');
         discoveredModels = [];
         break;
-      case "headers":
+      case 'headers':
         headers = await editHeaders(headers);
         discoveredModels = [];
         break;
-      case "discover":
+      case 'discover':
         if (baseUrl !== undefined && api !== undefined && apiKey !== undefined) {
           discoveredModels = await discoverCustomProviderModels({ baseUrl, api, apiKey, headers });
         }
         break;
-      case "models":
+      case 'models':
         models = await runModelWizard(models, discoveredModels);
         break;
-      case "save":
+      case 'save':
         if (baseUrl !== undefined && api !== undefined && apiKey !== undefined && models.length > 0) {
           return {
-            kind: "custom",
+            kind: 'custom',
             base_url: baseUrl,
             api,
             api_key: apiKey,
@@ -278,7 +277,6 @@ async function configureCustomProvider(): Promise<ProviderConfig | undefined> {
           };
         }
         break;
-      case "back":
       default:
         return undefined;
     }
@@ -286,46 +284,45 @@ async function configureCustomProvider(): Promise<ProviderConfig | undefined> {
 }
 
 async function editProvider(provider: ProviderConfig): Promise<ProviderConfig | undefined> {
-  if (provider.kind === "builtin") {
-    const apiKey = await promptSecretRef("API key");
+  if (provider.kind === 'builtin') {
+    const apiKey = await promptSecretRef('API key');
     return { ...provider, api_key: apiKey };
   }
   let updated: ProviderConfig = { ...provider };
   const action = await select<CustomProviderField>({
-    message: "Edit custom provider",
+    message: 'Edit custom provider',
     choices: [
-      { value: "base_url", name: `Base URL: ${updated.base_url}` },
-      { value: "api", name: `API adapter: ${updated.api}` },
-      { value: "api_key", name: "API key" },
-      { value: "headers", name: `Custom headers (${Object.keys(updated.headers ?? {}).length})` },
-      { value: "models", name: `Models (${updated.models.length})` },
-      { value: "cancel", name: "Cancel" },
+      { value: 'base_url', name: `Base URL: ${updated.base_url}` },
+      { value: 'api', name: `API adapter: ${updated.api}` },
+      { value: 'api_key', name: 'API key' },
+      { value: 'headers', name: `Custom headers (${Object.keys(updated.headers ?? {}).length})` },
+      { value: 'models', name: `Models (${updated.models.length})` },
+      { value: 'cancel', name: 'Cancel' },
     ],
   });
   switch (action) {
-    case "base_url": {
-      const baseUrl = await promptString("Base URL", updated.base_url);
+    case 'base_url': {
+      const baseUrl = await promptString('Base URL', updated.base_url);
       updated = { ...updated, base_url: baseUrl };
       break;
     }
-    case "api": {
+    case 'api': {
       const api = await promptApiAdapter();
       updated = { ...updated, api };
       break;
     }
-    case "api_key": {
-      updated = { ...updated, api_key: await promptSecretRef("API key") };
+    case 'api_key': {
+      updated = { ...updated, api_key: await promptSecretRef('API key') };
       break;
     }
-    case "headers": {
+    case 'headers': {
       updated = { ...updated, headers: await editHeaders(updated.headers ?? {}) };
       break;
     }
-    case "models": {
+    case 'models': {
       updated = { ...updated, models: await runModelWizard(updated.models) };
       break;
     }
-    case "cancel":
     default:
       return undefined;
   }
@@ -334,20 +331,20 @@ async function editProvider(provider: ProviderConfig): Promise<ProviderConfig | 
 
 async function editHeaders(headers: Record<string, SecretRef>): Promise<Record<string, SecretRef>> {
   const choices: { value: string; name: string }[] = [
-    { value: "__add", name: "Add header" },
+    { value: '__add', name: 'Add header' },
     ...Object.entries(headers).map(([name]) => ({ value: name, name: `Edit "${name}"` })),
     ...Object.entries(headers).map(([name]) => ({ value: `__delete:${name}`, name: `Delete "${name}"` })),
-    { value: "__back", name: "Done" },
+    { value: '__back', name: 'Done' },
   ];
-  const action = await select<string>({ message: "Custom headers", choices });
-  if (action === "__back") return headers;
-  if (action === "__add") {
-    const name = await input({ message: "Header name", validate: (value) => value.trim().length > 0 || "Required" });
+  const action = await select<string>({ message: 'Custom headers', choices });
+  if (action === '__back') return headers;
+  if (action === '__add') {
+    const name = await input({ message: 'Header name', validate: (value) => value.trim().length > 0 || 'Required' });
     const value = await promptSecretRef(`Value for "${name}"`, false);
     return { ...headers, [name]: value };
   }
-  if (action.startsWith("__delete:")) {
-    const name = action.slice("__delete:".length);
+  if (action.startsWith('__delete:')) {
+    const name = action.slice('__delete:'.length);
     const { [name]: _, ...rest } = headers;
     return rest;
   }
@@ -364,18 +361,18 @@ async function runModelWizard(
   while (!exit) {
     const configuredIds = new Set(current.map((model) => model.id));
     const availableDiscoveredModels = discoveredModels.filter((model) => !configuredIds.has(model.id));
-    const choices: { value: ModelAction; name: string }[] = [{ value: "add", name: "Add model ID manually" }];
+    const choices: { value: ModelAction; name: string }[] = [{ value: 'add', name: 'Add model ID manually' }];
     if (availableDiscoveredModels.length > 0) {
-      choices.push({ value: "discover", name: `Add fetched model (${availableDiscoveredModels.length} available)` });
+      choices.push({ value: 'discover', name: `Add fetched model (${availableDiscoveredModels.length} available)` });
     }
     if (current.length > 0) {
-      choices.push({ value: "edit", name: "Edit model" });
-      choices.push({ value: "delete", name: "Delete model" });
+      choices.push({ value: 'edit', name: 'Edit model' });
+      choices.push({ value: 'delete', name: 'Delete model' });
     }
-    choices.push({ value: "back", name: "Done" });
+    choices.push({ value: 'back', name: 'Done' });
     const action = await select<ModelAction>({ message: `Models (${current.length})`, choices });
     switch (action) {
-      case "add": {
+      case 'add': {
         const model = await addModel();
         if (model !== undefined) {
           if (configuredIds.has(model.id)) {
@@ -386,9 +383,9 @@ async function runModelWizard(
         }
         break;
       }
-      case "discover": {
+      case 'discover': {
         const discovered = await searchChoice(
-          "Fetched model",
+          'Fetched model',
           availableDiscoveredModels.map((model) => ({
             value: model,
             name: model.name === undefined ? model.id : `${model.name} (${model.id})`,
@@ -398,7 +395,7 @@ async function runModelWizard(
         if (model !== undefined) current = [...current, model];
         break;
       }
-      case "edit": {
+      case 'edit': {
         const index = await selectModelIndex(current);
         const toEdit = index !== undefined ? current[index] : undefined;
         if (toEdit !== undefined) {
@@ -407,7 +404,7 @@ async function runModelWizard(
         }
         break;
       }
-      case "delete": {
+      case 'delete': {
         const index = await selectModelIndex(current);
         const toDelete = index !== undefined ? current[index] : undefined;
         if (toDelete !== undefined && (await confirm({ message: `Delete model "${toDelete.id}"?` }))) {
@@ -415,7 +412,6 @@ async function runModelWizard(
         }
         break;
       }
-      case "back":
       default:
         exit = true;
         break;
@@ -426,22 +422,26 @@ async function runModelWizard(
 
 async function selectModelIndex(models: ModelConfig[]): Promise<number | undefined> {
   return searchChoice(
-    "Select model",
+    'Select model',
     models.map((model, i) => ({ value: i, name: `${model.id} (${model.name ?? model.id})` })),
   );
 }
 
 async function addModel(initialId?: string): Promise<ModelConfig | undefined> {
-  const id = initialId ?? (await input({
-    message: "Model ID",
-    validate: (value) => value.trim().length > 0 || "Required",
-  })).trim();
-  const useModelsDev = await confirm({ message: "Look up model metadata from models.dev?", default: true });
+  const id =
+    initialId ??
+    (
+      await input({
+        message: 'Model ID',
+        validate: (value) => value.trim().length > 0 || 'Required',
+      })
+    ).trim();
+  const useModelsDev = await confirm({ message: 'Look up model metadata from models.dev?', default: true });
   let defaults:
     | {
         name: string;
         reasoning: boolean;
-        input: Array<"text" | "image">;
+        input: Array<'text' | 'image'>;
         context_window: number;
         max_tokens: number;
         cost: { input: number; output: number; cache_read: number; cache_write: number };
@@ -450,19 +450,22 @@ async function addModel(initialId?: string): Promise<ModelConfig | undefined> {
   if (useModelsDev) {
     defaults = await lookupModelDefaults(id);
   }
-  const name = (await promptString("Display name (optional)", defaults?.name ?? id, false)) || id;
-  const reasoning = await promptBoolean("Supports reasoning", defaults?.reasoning ?? false);
-  const capabilities = await promptInputCapabilities(defaults?.input ?? ["text"]);
-  const contextWindow = await promptPositiveInteger("Context window (tokens)", defaults?.context_window ?? 128000);
-  const maxTokens = await promptPositiveInteger("Max output tokens", defaults?.max_tokens ?? 4096);
+  const name = (await promptString('Display name (optional)', defaults?.name ?? id, false)) || id;
+  const reasoning = await promptBoolean('Supports reasoning', defaults?.reasoning ?? false);
+  const capabilities = await promptInputCapabilities(defaults?.input ?? ['text']);
+  const contextWindow = await promptPositiveInteger('Context window (tokens)', defaults?.context_window ?? 128000);
+  const maxTokens = await promptPositiveInteger('Max output tokens', defaults?.max_tokens ?? 4096);
   if (maxTokens > contextWindow) {
-    console.error("Max output tokens cannot exceed context window");
+    console.error('Max output tokens cannot exceed context window');
     return undefined;
   }
-  const costInput = await promptNonNegativeNumber("Input cost per 1M tokens", defaults?.cost.input ?? 0);
-  const costOutput = await promptNonNegativeNumber("Output cost per 1M tokens", defaults?.cost.output ?? 0);
-  const costCacheRead = await promptNonNegativeNumber("Cache read cost per 1M tokens", defaults?.cost.cache_read ?? 0);
-  const costCacheWrite = await promptNonNegativeNumber("Cache write cost per 1M tokens", defaults?.cost.cache_write ?? 0);
+  const costInput = await promptNonNegativeNumber('Input cost per 1M tokens', defaults?.cost.input ?? 0);
+  const costOutput = await promptNonNegativeNumber('Output cost per 1M tokens', defaults?.cost.output ?? 0);
+  const costCacheRead = await promptNonNegativeNumber('Cache read cost per 1M tokens', defaults?.cost.cache_read ?? 0);
+  const costCacheWrite = await promptNonNegativeNumber(
+    'Cache write cost per 1M tokens',
+    defaults?.cost.cache_write ?? 0,
+  );
   return {
     id,
     name,
@@ -478,48 +481,50 @@ async function editModel(model: ModelConfig): Promise<ModelConfig | undefined> {
   const action = await select<ModelField>({
     message: `Edit model ${model.id}`,
     choices: [
-      { value: "name", name: `Name: ${model.name ?? model.id}` },
-      { value: "reasoning", name: `Reasoning: ${model.reasoning}` },
-      { value: "input", name: `Input: ${model.input.join(", ")}` },
-      { value: "context_window", name: `Context window: ${model.context_window}` },
-      { value: "max_tokens", name: `Max output tokens: ${model.max_tokens}` },
-      { value: "cost", name: "Cost" },
-      { value: "cancel", name: "Cancel" },
+      { value: 'name', name: `Name: ${model.name ?? model.id}` },
+      { value: 'reasoning', name: `Reasoning: ${model.reasoning}` },
+      { value: 'input', name: `Input: ${model.input.join(', ')}` },
+      { value: 'context_window', name: `Context window: ${model.context_window}` },
+      { value: 'max_tokens', name: `Max output tokens: ${model.max_tokens}` },
+      { value: 'cost', name: 'Cost' },
+      { value: 'cancel', name: 'Cancel' },
     ],
   });
   switch (action) {
-    case "name": {
-      const name = await promptString("Display name", model.name ?? model.id);
+    case 'name': {
+      const name = await promptString('Display name', model.name ?? model.id);
       return { ...model, name };
     }
-    case "reasoning": {
-      const reasoning = await promptBoolean("Supports reasoning", model.reasoning);
+    case 'reasoning': {
+      const reasoning = await promptBoolean('Supports reasoning', model.reasoning);
       return { ...model, reasoning };
     }
-    case "input": {
+    case 'input': {
       const capabilities = await promptInputCapabilities(model.input);
       return { ...model, input: capabilities };
     }
-    case "context_window": {
-      const contextWindow = await promptPositiveInteger("Context window", model.context_window);
+    case 'context_window': {
+      const contextWindow = await promptPositiveInteger('Context window', model.context_window);
       return { ...model, context_window: contextWindow };
     }
-    case "max_tokens": {
-      const maxTokens = await promptPositiveInteger("Max output tokens", model.max_tokens);
+    case 'max_tokens': {
+      const maxTokens = await promptPositiveInteger('Max output tokens', model.max_tokens);
       if (maxTokens > model.context_window) {
-        console.error("Max output tokens cannot exceed context window");
+        console.error('Max output tokens cannot exceed context window');
         return model;
       }
       return { ...model, max_tokens: maxTokens };
     }
-    case "cost": {
-      const inputCost = await promptNonNegativeNumber("Input cost", model.cost.input);
-      const outputCost = await promptNonNegativeNumber("Output cost", model.cost.output);
-      const cacheRead = await promptNonNegativeNumber("Cache read cost", model.cost.cache_read);
-      const cacheWrite = await promptNonNegativeNumber("Cache write cost", model.cost.cache_write);
-      return { ...model, cost: { input: inputCost, output: outputCost, cache_read: cacheRead, cache_write: cacheWrite } };
+    case 'cost': {
+      const inputCost = await promptNonNegativeNumber('Input cost', model.cost.input);
+      const outputCost = await promptNonNegativeNumber('Output cost', model.cost.output);
+      const cacheRead = await promptNonNegativeNumber('Cache read cost', model.cost.cache_read);
+      const cacheWrite = await promptNonNegativeNumber('Cache write cost', model.cost.cache_write);
+      return {
+        ...model,
+        cost: { input: inputCost, output: outputCost, cache_read: cacheRead, cache_write: cacheWrite },
+      };
     }
-    case "cancel":
     default:
       return undefined;
   }
@@ -529,7 +534,7 @@ async function lookupModelDefaults(id: string): Promise<
   | {
       name: string;
       reasoning: boolean;
-      input: Array<"text" | "image">;
+      input: Array<'text' | 'image'>;
       context_window: number;
       max_tokens: number;
       cost: { input: number; output: number; cache_read: number; cache_write: number };
@@ -546,7 +551,7 @@ async function lookupModelDefaults(id: string): Promise<
   }
   const providers = listModelsDevProviders(catalog);
   const providerId = await searchChoice(
-    "models.dev provider",
+    'models.dev provider',
     providers.map((provider) => ({ value: provider.id, name: `${provider.name} (${provider.id})` })),
   );
   const provider = providers.find((p) => p.id === providerId);
@@ -576,7 +581,9 @@ async function discoverCustomProviderModels(config: {
   const secrets = new SecretStore();
   try {
     const models = await fetchProviderModels(config, secrets);
-    console.log(`Fetched ${models.length} model${models.length === 1 ? "" : "s"} from ${modelsEndpoint(config.baseUrl)}`);
+    console.log(
+      `Fetched ${models.length} model${models.length === 1 ? '' : 's'} from ${modelsEndpoint(config.baseUrl)}`,
+    );
     return models;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -590,7 +597,7 @@ function validateBaseUrl(value: string): true | string {
     modelsEndpoint(value);
     return true;
   } catch {
-    return "Must be an HTTP(S) URL without credentials, query, or fragment";
+    return 'Must be an HTTP(S) URL without credentials, query, or fragment';
   }
 }
 
@@ -598,10 +605,15 @@ export function filterSearchChoices<Value>(
   choices: readonly SearchChoice<Value>[],
   term: string | undefined,
 ): readonly SearchChoice<Value>[] {
-  const tokens = term?.trim().toLocaleLowerCase().split(/\s+/).filter((token) => token.length > 0) ?? [];
+  const tokens =
+    term
+      ?.trim()
+      .toLocaleLowerCase()
+      .split(/\s+/)
+      .filter((token) => token.length > 0) ?? [];
   if (tokens.length === 0) return choices;
   return choices.filter((choice) => {
-    const searchable = `${choice.name} ${choice.description ?? ""}`.toLocaleLowerCase();
+    const searchable = `${choice.name} ${choice.description ?? ''}`.toLocaleLowerCase();
     return tokens.every((token) => searchable.includes(token));
   });
 }

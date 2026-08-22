@@ -1,21 +1,18 @@
-import { createHash } from "node:crypto";
-import { stat } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import Type, { type Static } from "typebox";
-import Compile from "typebox/compile";
-import { validatePromptTemplate } from "./prompt-template.ts";
+import { createHash } from 'node:crypto';
+import { stat } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import Type, { type Static } from 'typebox';
+import Compile from 'typebox/compile';
+import { validatePromptTemplate } from './prompt-template.ts';
 
 const Strict = { additionalProperties: false } as const;
 const PositiveInteger = Type.Integer({ minimum: 1 });
 const NonNegativeNumber = Type.Number({ minimum: 0 });
-const ADMIN_HOSTS = ["127.0.0.1", "::1", "localhost"];
+const ADMIN_HOSTS = ['127.0.0.1', '::1', 'localhost'];
 const SecretRefSchema = Type.Union([
   Type.String({ minLength: 1 }),
-  Type.Object({ env: Type.String({ pattern: "^[A-Za-z_][A-Za-z0-9_]*$" }) }, Strict),
-  Type.Object(
-    { command: Type.Array(Type.String(), { minItems: 1 }) },
-    Strict,
-  ),
+  Type.Object({ env: Type.String({ pattern: '^[A-Za-z_][A-Za-z0-9_]*$' }) }, Strict),
+  Type.Object({ command: Type.Array(Type.String(), { minItems: 1 }) }, Strict),
 ]);
 const CostSchema = Type.Object(
   {
@@ -38,7 +35,7 @@ const ModelSchema = Type.Object(
     name: Type.Optional(Type.String({ minLength: 1 })),
     reasoning: Type.Boolean(),
     compat: Type.Optional(ModelCompatSchema),
-    input: Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]), {
+    input: Type.Array(Type.Union([Type.Literal('text'), Type.Literal('image')]), {
       minItems: 1,
       uniqueItems: true,
     }),
@@ -50,7 +47,7 @@ const ModelSchema = Type.Object(
 );
 const BuiltinProviderSchema = Type.Object(
   {
-    kind: Type.Literal("builtin"),
+    kind: Type.Literal('builtin'),
     provider: Type.String({ minLength: 1 }),
     api_key: SecretRefSchema,
   },
@@ -58,12 +55,12 @@ const BuiltinProviderSchema = Type.Object(
 );
 const CustomProviderSchema = Type.Object(
   {
-    kind: Type.Literal("custom"),
+    kind: Type.Literal('custom'),
     base_url: Type.String({ minLength: 1 }),
     api: Type.Union([
-      Type.Literal("openai-responses"),
-      Type.Literal("openai-completions"),
-      Type.Literal("anthropic-messages"),
+      Type.Literal('openai-responses'),
+      Type.Literal('openai-completions'),
+      Type.Literal('anthropic-messages'),
     ]),
     api_key: SecretRefSchema,
     headers: Type.Optional(Type.Record(Type.String({ minLength: 1 }), SecretRefSchema)),
@@ -90,7 +87,7 @@ const ChatSchema = Type.Object(
 );
 const StickerSetSchema = Type.Object(
   {
-    alias: Type.String({ pattern: "^[A-Za-z][A-Za-z0-9_-]{0,63}$" }),
+    alias: Type.String({ pattern: '^[A-Za-z][A-Za-z0-9_-]{0,63}$' }),
     name: Type.String({ minLength: 1 }),
   },
   Strict,
@@ -105,14 +102,11 @@ const ToolPolicySchema = Type.Object({ name: Type.String({ minLength: 1 }), ...T
 const DefaultToolPolicySchema = Type.Object(ToolPolicyFields, Strict);
 const StdioMcpSchema = Type.Object(
   {
-    alias: Type.String({ pattern: "^[A-Za-z][A-Za-z0-9_-]{0,63}$" }),
-    transport: Type.Literal("stdio"),
+    alias: Type.String({ pattern: '^[A-Za-z][A-Za-z0-9_-]{0,63}$' }),
+    transport: Type.Literal('stdio'),
     command: Type.Array(Type.String(), { minItems: 1 }),
     required: Type.Boolean(),
-    tools: Type.Union([
-      Type.Literal("*"),
-      Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
-    ]),
+    tools: Type.Union([Type.Literal('*'), Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true })]),
     payload_max_bytes: Type.Integer({ minimum: 1, maximum: 1_048_576 }),
     result_max_bytes: Type.Integer({ minimum: 1, maximum: 32_768 }),
     env: Type.Optional(Type.Record(Type.String({ minLength: 1 }), SecretRefSchema)),
@@ -123,15 +117,12 @@ const StdioMcpSchema = Type.Object(
 );
 const HttpMcpSchema = Type.Object(
   {
-    alias: Type.String({ pattern: "^[A-Za-z][A-Za-z0-9_-]{0,63}$" }),
-    transport: Type.Literal("streamable_http"),
+    alias: Type.String({ pattern: '^[A-Za-z][A-Za-z0-9_-]{0,63}$' }),
+    transport: Type.Literal('streamable_http'),
     url: Type.String({ minLength: 1 }),
     follow_redirects: Type.Literal(false),
     required: Type.Boolean(),
-    tools: Type.Union([
-      Type.Literal("*"),
-      Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
-    ]),
+    tools: Type.Union([Type.Literal('*'), Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true })]),
     payload_max_bytes: Type.Integer({ minimum: 1, maximum: 1_048_576 }),
     result_max_bytes: Type.Integer({ minimum: 1, maximum: 32_768 }),
     headers: Type.Optional(Type.Record(Type.String({ minLength: 1 }), SecretRefSchema)),
@@ -173,12 +164,12 @@ export const ConfigSchema = Type.Object(
         provider: Type.String({ minLength: 1 }),
         model: Type.String({ minLength: 1 }),
         thinking_level: Type.Union([
-          Type.Literal("off"),
-          Type.Literal("minimal"),
-          Type.Literal("low"),
-          Type.Literal("medium"),
-          Type.Literal("high"),
-          Type.Literal("xhigh"),
+          Type.Literal('off'),
+          Type.Literal('minimal'),
+          Type.Literal('low'),
+          Type.Literal('medium'),
+          Type.Literal('high'),
+          Type.Literal('xhigh'),
         ]),
         system_prompt_file: Type.String({ minLength: 1 }),
         max_turns: Type.Integer({ minimum: 1, maximum: 8 }),
@@ -201,17 +192,11 @@ export const ConfigSchema = Type.Object(
         max_concurrency: PositiveInteger,
         background_sticker_concurrency: Type.Literal(1),
         prompt_version: PositiveInteger,
-        daily_budget: Type.Object(
-          { max_tokens: PositiveInteger, max_images: PositiveInteger },
-          Strict,
-        ),
+        daily_budget: Type.Object({ max_tokens: PositiveInteger, max_images: PositiveInteger }, Strict),
       },
       Strict,
     ),
-    retention: Type.Object(
-      { online_days: PositiveInteger, backup_copies: PositiveInteger },
-      Strict,
-    ),
+    retention: Type.Object({ online_days: PositiveInteger, backup_copies: PositiveInteger }, Strict),
     paths: Type.Object(
       {
         database: Type.String({ minLength: 1 }),
@@ -220,9 +205,7 @@ export const ConfigSchema = Type.Object(
       },
       Strict,
     ),
-    mcp: Type.Optional(
-      Type.Object({ servers: Type.Array(Type.Union([StdioMcpSchema, HttpMcpSchema])) }, Strict),
-    ),
+    mcp: Type.Optional(Type.Object({ servers: Type.Array(Type.Union([StdioMcpSchema, HttpMcpSchema])) }, Strict)),
     admin: Type.Optional(AdminSchema),
   },
   Strict,
@@ -230,15 +213,15 @@ export const ConfigSchema = Type.Object(
 
 export type SecretRef = Static<typeof SecretRefSchema>;
 export type TomlConfig = Static<typeof ConfigSchema>;
-export type TomlChat = TomlConfig["telegram"]["chats"][number];
-export type RawConfig = Omit<TomlConfig, "agent" | "telegram"> & {
-  agent: Omit<TomlConfig["agent"], "system_prompt_file"> & { system_prompt: string };
-  telegram: Omit<TomlConfig["telegram"], "chats"> & {
-    chats: Array<Omit<TomlChat, "instructions_file"> & { instructions: string }>;
+export type TomlChat = TomlConfig['telegram']['chats'][number];
+export type RawConfig = Omit<TomlConfig, 'agent' | 'telegram'> & {
+  agent: Omit<TomlConfig['agent'], 'system_prompt_file'> & { system_prompt: string };
+  telegram: Omit<TomlConfig['telegram'], 'chats'> & {
+    chats: Array<Omit<TomlChat, 'instructions_file'> & { instructions: string }>;
   };
 };
-export type ProviderConfig = RawConfig["providers"][string];
-export type McpServerConfig = NonNullable<RawConfig["mcp"]>["servers"][number];
+export type ProviderConfig = RawConfig['providers'][string];
+export type McpServerConfig = NonNullable<RawConfig['mcp']>['servers'][number];
 
 export interface LoadedConfig {
   readonly config: RawConfig;
@@ -259,34 +242,47 @@ export async function loadConfig(path: string): Promise<LoadedConfig> {
     throw new Error(`Invalid TOML: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!validator.Check(parsed)) {
-    const details = validator.Errors(parsed)
+    const details = validator
+      .Errors(parsed)
       .slice(0, 10)
-      .map((error) => `${error.instancePath || "/"}: ${error.message}`)
-      .join("; ");
+      .map((error) => `${error.instancePath || '/'}: ${error.message}`)
+      .join('; ');
     throw new Error(`Invalid config: ${details}`);
   }
   validateSemantics(parsed);
   const { config, promptFiles } = await resolvePrompts(parsed, dirname(configPath));
-  const hash = createHash("sha256");
+  const hash = createHash('sha256');
   hash.update(text);
-  for (const file of promptFiles) hash.update("\u0000" + file.content);
-  return { config, toml: parsed, configPath, hash: hash.digest("hex") };
+  for (const file of promptFiles) hash.update(`\u0000${file.content}`);
+  return { config, toml: parsed, configPath, hash: hash.digest('hex') };
 }
 
 interface PromptFile {
   readonly content: string;
 }
 
-async function resolvePrompts(toml: TomlConfig, directory: string): Promise<{ config: RawConfig; promptFiles: PromptFile[] }> {
+async function resolvePrompts(
+  toml: TomlConfig,
+  directory: string,
+): Promise<{ config: RawConfig; promptFiles: PromptFile[] }> {
   const promptFiles: PromptFile[] = [];
-  const systemPrompt = await readPromptFile(resolve(directory, toml.agent.system_prompt_file), "agent.system_prompt_file", promptFiles);
+  const systemPrompt = await readPromptFile(
+    resolve(directory, toml.agent.system_prompt_file),
+    'agent.system_prompt_file',
+    promptFiles,
+  );
   if (systemPrompt.length === 0) throw new Error(`agent.system_prompt_file is empty: ${toml.agent.system_prompt_file}`);
-  validatePromptTemplate(systemPrompt, "agent.system_prompt_file");
-  const chats: Array<Omit<TomlChat, "instructions_file"> & { instructions: string }> = [];
+  validatePromptTemplate(systemPrompt, 'agent.system_prompt_file');
+  const chats: Array<Omit<TomlChat, 'instructions_file'> & { instructions: string }> = [];
   for (const chat of toml.telegram.chats) {
-    const instructions = chat.instructions_file === undefined
-      ? ""
-      : await readPromptFile(resolve(directory, chat.instructions_file), `chat ${chat.id} instructions_file`, promptFiles);
+    const instructions =
+      chat.instructions_file === undefined
+        ? ''
+        : await readPromptFile(
+            resolve(directory, chat.instructions_file),
+            `chat ${chat.id} instructions_file`,
+            promptFiles,
+          );
     validatePromptTemplate(instructions, `chat ${chat.id} instructions_file`);
     const { instructions_file, ...rest } = chat;
     chats.push({ ...rest, instructions });
@@ -314,15 +310,16 @@ async function readPromptFile(path: string, label: string, sink: PromptFile[]): 
 }
 
 export async function assertConfigPermissions(configPath: string): Promise<void> {
-  if (process.platform === "win32") return;
+  if (process.platform === 'win32') return;
   const file = await stat(configPath);
-  const parent = await stat(resolve(configPath, ".."));
+  const parent = await stat(resolve(configPath, '..'));
   if ((file.mode & 0o777) !== 0o600) throw new Error(`Config must have mode 0600: ${configPath}`);
-  if ((parent.mode & 0o777) !== 0o700) throw new Error(`Config parent must have mode 0700: ${resolve(configPath, "..")}`);
+  if ((parent.mode & 0o777) !== 0o700)
+    throw new Error(`Config parent must have mode 0700: ${resolve(configPath, '..')}`);
 }
 
 function validateSemantics(config: TomlConfig): void {
-  validateTimezone(config.timezone, "timezone");
+  validateTimezone(config.timezone, 'timezone');
   const chatIds = new Set<number>();
   for (const chat of config.telegram.chats) {
     if (!Number.isSafeInteger(chat.id) || chat.id === 0) throw new Error(`Invalid Telegram chat ID: ${chat.id}`);
@@ -335,43 +332,44 @@ function validateSemantics(config: TomlConfig): void {
       throw new Error(`Invalid Telegram admin user ID: ${adminId}`);
     }
   }
-  assertUnique(config.telegram.sticker_sets ?? [], (item) => item.alias, "sticker set alias");
-  assertUnique(config.telegram.sticker_sets ?? [], (item) => item.name, "sticker set name");
+  assertUnique(config.telegram.sticker_sets ?? [], (item) => item.alias, 'sticker set alias');
+  assertUnique(config.telegram.sticker_sets ?? [], (item) => item.name, 'sticker set name');
   const providerAliases = new Set(Object.keys(config.providers));
-  validateModelReference(config, config.agent.provider, config.agent.model, "agent", ["text"]);
-  validateModelReference(config, config.vision.provider, config.vision.model, "vision", ["image"]);
+  validateModelReference(config, config.agent.provider, config.agent.model, 'agent', ['text']);
+  validateModelReference(config, config.vision.provider, config.vision.model, 'vision', ['image']);
   if (!providerAliases.has(config.agent.provider) || !providerAliases.has(config.vision.provider)) {
-    throw new Error("Agent and vision providers must reference configured aliases");
+    throw new Error('Agent and vision providers must reference configured aliases');
   }
   for (const [alias, provider] of Object.entries(config.providers)) {
-    if (provider.kind === "custom") {
+    if (provider.kind === 'custom') {
       validateEndpoint(provider.base_url, `provider ${alias} base_url`);
       assertUnique(provider.models, (model) => model.id, `provider ${alias} model ID`);
       for (const model of provider.models) {
         if (model.max_tokens > model.context_window) {
           throw new Error(`Provider ${alias} model ${model.id} max_tokens exceeds context_window`);
         }
-        if (model.compat !== undefined && provider.api === "anthropic-messages") {
+        if (model.compat !== undefined && provider.api === 'anthropic-messages') {
           throw new Error(`Provider ${alias} model ${model.id} supports_developer_role requires an OpenAI API adapter`);
         }
       }
     }
   }
   const servers = config.mcp?.servers ?? [];
-  assertUnique(servers, (server) => server.alias, "MCP server alias");
+  assertUnique(servers, (server) => server.alias, 'MCP server alias');
   for (const server of servers) {
-    if (server.transport === "streamable_http") {
+    if (server.transport === 'streamable_http') {
       validateEndpoint(server.url, `MCP server ${server.alias} URL`, { allowQuery: true });
     }
-    if (server.tools === "*" && server.default_tool_policy === undefined) {
+    if (server.tools === '*' && server.default_tool_policy === undefined) {
       throw new Error(`MCP server ${server.alias} wildcard tools require default_tool_policy`);
     }
     const policies = server.tool_policies ?? [];
     assertUnique(policies, (policy) => policy.name, `MCP server ${server.alias} tool policy`);
-    if (server.tools !== "*") {
+    if (server.tools !== '*') {
       const allowed = new Set(server.tools);
       for (const policy of policies) {
-        if (!allowed.has(policy.name)) throw new Error(`MCP server ${server.alias} policy references unlisted tool ${policy.name}`);
+        if (!allowed.has(policy.name))
+          throw new Error(`MCP server ${server.alias} policy references unlisted tool ${policy.name}`);
       }
       for (const tool of server.tools) {
         if (!policies.some((policy) => policy.name === tool)) {
@@ -381,7 +379,9 @@ function validateSemantics(config: TomlConfig): void {
     }
   }
   if (config.admin !== undefined && !ADMIN_HOSTS.includes(config.admin.host)) {
-    throw new Error(`admin.host must be a loopback address (${ADMIN_HOSTS.join(", ")}); place a reverse proxy in front for remote access`);
+    throw new Error(
+      `admin.host must be a loopback address (${ADMIN_HOSTS.join(', ')}); place a reverse proxy in front for remote access`,
+    );
   }
 }
 
@@ -390,25 +390,22 @@ function validateModelReference(
   providerAlias: string,
   modelId: string,
   role: string,
-  requiredInputs: readonly ("text" | "image")[],
+  requiredInputs: readonly ('text' | 'image')[],
 ): void {
   const provider = config.providers[providerAlias];
   if (provider === undefined) throw new Error(`${role}.provider references unknown alias ${providerAlias}`);
-  if (provider.kind === "builtin") return;
+  if (provider.kind === 'builtin') return;
   const model = provider.models.find((candidate) => candidate.id === modelId);
   if (model === undefined) throw new Error(`${role}.model ${modelId} is absent from provider ${providerAlias}`);
   for (const requiredInput of requiredInputs) {
-    if (!model.input.includes(requiredInput)) throw new Error(`${role}.model ${modelId} lacks ${requiredInput} input capability`);
+    if (!model.input.includes(requiredInput))
+      throw new Error(`${role}.model ${modelId} lacks ${requiredInput} input capability`);
   }
   const configuredMax = config.vision.max_output_tokens;
   if (configuredMax > model.max_tokens) throw new Error(`vision.max_output_tokens exceeds model ${modelId} max_tokens`);
 }
 
-function validateEndpoint(
-  value: string,
-  label: string,
-  options: { allowQuery?: boolean } = {},
-): void {
+function validateEndpoint(value: string, label: string, options: { allowQuery?: boolean } = {}): void {
   let url: URL;
   try {
     url = new URL(value);
@@ -416,15 +413,21 @@ function validateEndpoint(
     throw new Error(`${label} must be an absolute URL`);
   }
   const invalidQuery = !options.allowQuery && url.search.length > 0;
-  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || invalidQuery || url.hash) {
-    const forbiddenParts = options.allowQuery ? "credentials or fragment" : "credentials, query, or fragment";
+  if (
+    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+    url.username ||
+    url.password ||
+    invalidQuery ||
+    url.hash
+  ) {
+    const forbiddenParts = options.allowQuery ? 'credentials or fragment' : 'credentials, query, or fragment';
     throw new Error(`${label} must be an HTTP(S) URL without ${forbiddenParts}`);
   }
 }
 
 function validateTimezone(value: string, label: string): void {
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format();
   } catch {
     throw new Error(`Invalid ${label}: ${value}`);
   }

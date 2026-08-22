@@ -1,13 +1,16 @@
-import { join, resolve, sep } from "node:path";
-import type { Server } from "bun";
-import type { RawConfig } from "../config.ts";
-import type { SqliteStore } from "../database.ts";
-import type { BucketScheduler } from "../scheduler.ts";
-import { AdminAuth, AdminAuthError, type AdminCredentials } from "./auth.ts";
+import { join, resolve, sep } from 'node:path';
+import type { Server } from 'bun';
+import type { RawConfig } from '../config.ts';
+import type { SqliteStore } from '../database.ts';
+import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from '../memory.ts';
+import { type AgentModelOption, type AgentModelSwitcher, ModelSwitchError } from '../model-switch.ts';
+import type { BucketScheduler } from '../scheduler.ts';
+import { addBotAdmin, listBotAdmins, parseAdminUserId, removeBotAdmin } from './admins.ts';
 import {
   AdminQueryError,
   getInvocation,
   getMessage,
+  type ListQuery,
   listInvocations,
   listMessages,
   listStickerSets,
@@ -15,8 +18,8 @@ import {
   overview,
   parseId,
   usage,
-  type ListQuery,
-} from "./audit.ts";
+} from './audit.ts';
+import { AdminAuth, AdminAuthError, type AdminCredentials } from './auth.ts';
 import {
   createMemory,
   deleteMemory,
@@ -26,39 +29,36 @@ import {
   parseMemoryId,
   parseUpdateMemoryBody,
   updateMemory,
-} from "./memory-admin.ts";
-import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from "../memory.ts";
-import { cancelPendingSessions } from "./operations.ts";
-import { addBotAdmin, listBotAdmins, parseAdminUserId, removeBotAdmin } from "./admins.ts";
-import { ModelSwitchError, type AgentModelSwitcher, type AgentModelOption } from "../model-switch.ts";
+} from './memory-admin.ts';
+import { cancelPendingSessions } from './operations.ts';
 
-const SESSION_COOKIE = "plasticwan_admin";
+const SESSION_COOKIE = 'plasticwan_admin';
 const MAX_BODY_BYTES = 8_192;
 const SECURITY_HEADERS: Record<string, string> = {
-  "x-content-type-options": "nosniff",
-  "referrer-policy": "no-referrer",
-  "x-frame-options": "DENY",
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'x-frame-options': 'DENY',
 };
 const CONTENT_SECURITY_POLICY =
   "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const CONTENT_TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".ico": "image/vnd.microsoft.icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".map": "application/json; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8",
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.ico': 'image/vnd.microsoft.icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
-export type AdminConfig = NonNullable<RawConfig["admin"]>;
+export type AdminConfig = NonNullable<RawConfig['admin']>;
 
 export interface AdminServerOptions {
   readonly store: SqliteStore;
@@ -80,19 +80,19 @@ export class AdminServer {
 
   constructor(options: AdminServerOptions) {
     const admin = options.config.admin;
-    if (admin === undefined) throw new Error("Admin panel is not configured");
+    if (admin === undefined) throw new Error('Admin panel is not configured');
     this.#store = options.store;
     this.#config = options.config;
     this.#admin = admin;
     this.#auth = new AdminAuth(options.store.db, admin.session_ttl_hours);
     this.#scheduler = options.scheduler;
     this.#modelSwitcher = options.modelSwitcher;
-    this.#staticDir = resolve(admin.static_dir ?? join(import.meta.dir, "..", "..", "apps", "admin", "dist"));
+    this.#staticDir = resolve(admin.static_dir ?? join(import.meta.dir, '..', '..', 'apps', 'admin', 'dist'));
     this.#memoryWarningDays = options.config.agent.memory_ttl_warning_days ?? DEFAULT_MEMORY_TTL_WARNING_DAYS;
   }
 
   start(): { readonly hostname: string; readonly port: number } {
-    if (this.#server !== undefined) throw new Error("Admin server is already listening");
+    if (this.#server !== undefined) throw new Error('Admin server is already listening');
     this.#auth.purgeExpired();
     const server = Bun.serve({
       hostname: this.#admin.host,
@@ -113,37 +113,44 @@ export class AdminServer {
 
   async handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const segments = url.pathname.split("/").filter((segment) => segment.length > 0);
+    const segments = url.pathname.split('/').filter((segment) => segment.length > 0);
     try {
-      if (segments[0] === "api") return await this.#api(request, url, segments.slice(1));
+      if (segments[0] === 'api') return await this.#api(request, url, segments.slice(1));
       return await this.#staticAsset(request, segments);
     } catch (error) {
       if (error instanceof AdminAuthError || error instanceof AdminQueryError || error instanceof ModelSwitchError) {
         const status = error instanceof ModelSwitchError ? 400 : error.status;
         return json({ error: error.code, message: error.message }, status);
       }
-      console.error(JSON.stringify({
-        event: "admin_request_failed",
-        path: url.pathname,
-        error: error instanceof Error ? error.message : String(error),
-        at: new Date().toISOString(),
-      }));
-      return json({ error: "internal_error", message: "Admin request failed" }, 500);
+      console.error(
+        JSON.stringify({
+          event: 'admin_request_failed',
+          path: url.pathname,
+          error: error instanceof Error ? error.message : String(error),
+          at: new Date().toISOString(),
+        }),
+      );
+      return json({ error: 'internal_error', message: 'Admin request failed' }, 500);
     }
   }
 
   async #api(request: Request, url: URL, segments: readonly string[]): Promise<Response> {
-    if (request.method !== "GET" && request.method !== "POST" && request.method !== "PUT" && request.method !== "DELETE") {
-      return json({ error: "method_not_allowed", message: "Unsupported method" }, 405);
+    if (
+      request.method !== 'GET' &&
+      request.method !== 'POST' &&
+      request.method !== 'PUT' &&
+      request.method !== 'DELETE'
+    ) {
+      return json({ error: 'method_not_allowed', message: 'Unsupported method' }, 405);
     }
-    if (request.method === "POST" || request.method === "PUT" || request.method === "DELETE") {
-      const origin = request.headers.get("origin");
+    if (request.method === 'POST' || request.method === 'PUT' || request.method === 'DELETE') {
+      const origin = request.headers.get('origin');
       if (origin !== null && new URL(origin).host !== url.host) {
-        return json({ error: "bad_origin", message: "Cross-origin admin requests are rejected" }, 403);
+        return json({ error: 'bad_origin', message: 'Cross-origin admin requests are rejected' }, 403);
       }
     }
-    const route = segments.join("/");
-    if (route === "auth/session" && request.method === "GET") {
+    const route = segments.join('/');
+    if (route === 'auth/session' && request.method === 'GET') {
       const session = this.#auth.authenticate(readCookie(request, SESSION_COOKIE));
       return json({
         setup_required: this.#auth.setupRequired(),
@@ -152,119 +159,123 @@ export class AdminServer {
         expires_at: session?.expiresAt ?? null,
       });
     }
-    if (route === "auth/setup" && request.method === "POST") {
+    if (route === 'auth/setup' && request.method === 'POST') {
       const token = await this.#auth.createFirstUser(await readCredentials(request));
-      return json({ status: "ok" }, 200, this.#sessionCookie(token));
+      return json({ status: 'ok' }, 200, this.#sessionCookie(token));
     }
-    if (route === "auth/login" && request.method === "POST") {
-      const clientKey = request.headers.get("x-forwarded-for") ?? "local";
+    if (route === 'auth/login' && request.method === 'POST') {
+      const clientKey = request.headers.get('x-forwarded-for') ?? 'local';
       const token = await this.#auth.login(await readCredentials(request), new Date(), clientKey);
-      return json({ status: "ok" }, 200, this.#sessionCookie(token));
+      return json({ status: 'ok' }, 200, this.#sessionCookie(token));
     }
-    if (route === "auth/logout" && request.method === "POST") {
+    if (route === 'auth/logout' && request.method === 'POST') {
       this.#auth.logout(readCookie(request, SESSION_COOKIE));
-      return json({ status: "ok" }, 200, `${SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+      return json({ status: 'ok' }, 200, `${SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
     }
     const session = this.#auth.authenticate(readCookie(request, SESSION_COOKIE));
-    if (session === null) return json({ error: "unauthenticated", message: "Admin session is required" }, 401);
-    if (route === "auth/credentials" && request.method === "POST") {
+    if (session === null) return json({ error: 'unauthenticated', message: 'Admin session is required' }, 401);
+    if (route === 'auth/credentials' && request.method === 'POST') {
       const token = await this.#auth.changeCredentials(session.userId, await readCredentials(request));
-      return json({ status: "ok" }, 200, this.#sessionCookie(token));
+      return json({ status: 'ok' }, 200, this.#sessionCookie(token));
     }
-    if (route === "cancel-pending-sessions" && request.method === "POST") {
+    if (route === 'cancel-pending-sessions' && request.method === 'POST') {
       const result = cancelPendingSessions(this.#store.db, new Date());
       this.#scheduler?.wake();
       return json(result);
     }
     const database = this.#store.db;
     const query: ListQuery = {
-      limit: url.searchParams.get("limit"),
-      cursor: url.searchParams.get("cursor"),
-      state: url.searchParams.get("state"),
-      chat: url.searchParams.get("chat"),
-      set: url.searchParams.get("set"),
-      search: url.searchParams.get("search"),
+      limit: url.searchParams.get('limit'),
+      cursor: url.searchParams.get('cursor'),
+      state: url.searchParams.get('state'),
+      chat: url.searchParams.get('chat'),
+      set: url.searchParams.get('set'),
+      search: url.searchParams.get('search'),
     };
-    if (route === "memories" && request.method === "GET") {
+    if (route === 'memories' && request.method === 'GET') {
       return json(listMemories(database, query, this.#memoryWarningDays));
     }
-    if (route === "memories" && request.method === "POST") {
+    if (route === 'memories' && request.method === 'POST') {
       const body = parseCreateMemoryBody(await readJsonObject(request));
       return json(createMemory(database, body, this.#memoryWarningDays));
     }
-    if (route === "memories/chats" && request.method === "GET") {
+    if (route === 'memories/chats' && request.method === 'GET') {
       return json({ items: listMemoryChats(database) });
     }
-    if (segments[0] === "memories" && segments.length === 2) {
-      if (segments[1] === "chats") {
-        return json({ error: "method_not_allowed", message: "Memories chat options are read-only" }, 405);
+    if (segments[0] === 'memories' && segments.length === 2) {
+      if (segments[1] === 'chats') {
+        return json({ error: 'method_not_allowed', message: 'Memories chat options are read-only' }, 405);
       }
-      const id = parseMemoryId(segments[1] ?? "");
-      if (request.method === "PUT") {
+      const id = parseMemoryId(segments[1] ?? '');
+      if (request.method === 'PUT') {
         const body = parseUpdateMemoryBody(await readJsonObject(request));
         return json(updateMemory(database, id, body, this.#memoryWarningDays));
       }
-      if (request.method === "DELETE") {
+      if (request.method === 'DELETE') {
         deleteMemory(database, id);
-        return json({ status: "ok" });
+        return json({ status: 'ok' });
       }
     }
-    if (route === "admins" && request.method === "GET") {
+    if (route === 'admins' && request.method === 'GET') {
       return json({ items: listBotAdmins(database) });
     }
-    if (route === "admins" && request.method === "POST") {
+    if (route === 'admins' && request.method === 'POST') {
       const body = await readJsonObject(request);
-      return json(addBotAdmin(database, parseAdminUserId(body.telegram_user_id), "admin-panel"));
+      return json(addBotAdmin(database, parseAdminUserId(body.telegram_user_id), 'admin-panel'));
     }
-    if (segments[0] === "admins" && segments.length === 2 && request.method === "DELETE") {
-      removeBotAdmin(database, parseAdminUserId(segments[1] ?? "", "admin_id"));
-      return json({ status: "ok" });
+    if (segments[0] === 'admins' && segments.length === 2 && request.method === 'DELETE') {
+      removeBotAdmin(database, parseAdminUserId(segments[1] ?? '', 'admin_id'));
+      return json({ status: 'ok' });
     }
-    if (route === "model") {
+    if (route === 'model') {
       const switcher = this.#modelSwitcher;
       if (switcher === undefined) {
-        return json({ error: "model_switch_unavailable", message: "Runtime model switching is not wired" }, 503);
+        return json({ error: 'model_switch_unavailable', message: 'Runtime model switching is not wired' }, 503);
       }
-      if (request.method === "GET") {
+      if (request.method === 'GET') {
         return json(this.#modelState(switcher, switcher.current()));
       }
-      if (request.method === "PUT") {
+      if (request.method === 'PUT') {
         const body = await readJsonObject(request);
-        if (typeof body.provider !== "string" || typeof body.model !== "string") {
-          return json({ error: "invalid_model_reference", message: "provider and model must be strings" }, 400);
+        if (typeof body.provider !== 'string' || typeof body.model !== 'string') {
+          return json({ error: 'invalid_model_reference', message: 'provider and model must be strings' }, 400);
         }
         return json(this.#modelState(switcher, switcher.switch(body.provider, body.model)));
       }
-      if (request.method === "DELETE") {
+      if (request.method === 'DELETE') {
         return json(this.#modelState(switcher, switcher.reset()));
       }
     }
-    if (request.method !== "GET") return json({ error: "method_not_allowed", message: "Audit routes are read-only" }, 405);
-    if (route === "overview") return json(overview(database));
-    if (route === "usage") {
-      const daysParam = url.searchParams.get("days");
+    if (request.method !== 'GET')
+      return json({ error: 'method_not_allowed', message: 'Audit routes are read-only' }, 405);
+    if (route === 'overview') return json(overview(database));
+    if (route === 'usage') {
+      const daysParam = url.searchParams.get('days');
       const days = daysParam === null ? 7 : Number.parseInt(daysParam, 10);
       if (!Number.isInteger(days) || days < 1 || days > 90) {
-        return json({ error: "invalid_days", message: "days must be an integer between 1 and 90" }, 400);
+        return json({ error: 'invalid_days', message: 'days must be an integer between 1 and 90' }, 400);
       }
       return json(usage(database, days));
     }
-    if (route === "invocations") return json(listInvocations(database, query));
-    if (segments[0] === "invocations" && segments.length === 2) {
-      const found = getInvocation(database, parseId(segments[1] ?? "", "id"));
-      return found === null ? json({ error: "not_found", message: "Invocation does not exist" }, 404) : json(found);
+    if (route === 'invocations') return json(listInvocations(database, query));
+    if (segments[0] === 'invocations' && segments.length === 2) {
+      const found = getInvocation(database, parseId(segments[1] ?? '', 'id'));
+      return found === null ? json({ error: 'not_found', message: 'Invocation does not exist' }, 404) : json(found);
     }
-    if (route === "messages") return json(listMessages(database, query));
-    if (segments[0] === "messages" && segments.length === 2) {
-      const found = getMessage(database, parseId(segments[1] ?? "", "id"));
-      return found === null ? json({ error: "not_found", message: "Message does not exist" }, 404) : json(found);
+    if (route === 'messages') return json(listMessages(database, query));
+    if (segments[0] === 'messages' && segments.length === 2) {
+      const found = getMessage(database, parseId(segments[1] ?? '', 'id'));
+      return found === null ? json({ error: 'not_found', message: 'Message does not exist' }, 404) : json(found);
     }
-    if (route === "sticker-sets") return json({ items: listStickerSets(database) });
-    if (route === "stickers") return json(listStickers(database, query));
-    return json({ error: "not_found", message: "Unknown admin API route" }, 404);
+    if (route === 'sticker-sets') return json({ items: listStickerSets(database) });
+    if (route === 'stickers') return json(listStickers(database, query));
+    return json({ error: 'not_found', message: 'Unknown admin API route' }, 404);
   }
 
-  #modelState(switcher: AgentModelSwitcher, current: AgentModelOption): {
+  #modelState(
+    switcher: AgentModelSwitcher,
+    current: AgentModelOption,
+  ): {
     readonly current: {
       readonly provider: string;
       readonly model: string;
@@ -293,21 +304,24 @@ export class AdminServer {
   }
 
   async #staticAsset(request: Request, segments: readonly string[]): Promise<Response> {
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      return json({ error: "method_not_allowed", message: "Only GET and HEAD are supported" }, 405);
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return json({ error: 'method_not_allowed', message: 'Only GET and HEAD are supported' }, 405);
     }
-    const relative = segments.length === 0 ? "index.html" : segments.join("/");
+    const relative = segments.length === 0 ? 'index.html' : segments.join('/');
     const candidate = resolve(this.#staticDir, relative);
     if (candidate !== this.#staticDir && !candidate.startsWith(this.#staticDir + sep)) {
-      return json({ error: "not_found", message: "Asset does not exist" }, 404);
+      return json({ error: 'not_found', message: 'Asset does not exist' }, 404);
     }
     const direct = Bun.file(candidate);
     if (await direct.exists()) return asset(direct, candidate);
-    const indexPath = join(this.#staticDir, "index.html");
+    const indexPath = join(this.#staticDir, 'index.html');
     const index = Bun.file(indexPath);
     if (await index.exists()) return asset(index, indexPath);
     return json(
-      { error: "admin_bundle_missing", message: `Admin bundle is absent: ${this.#staticDir}. Run bun run admin:build.` },
+      {
+        error: 'admin_bundle_missing',
+        message: `Admin bundle is absent: ${this.#staticDir}. Run bun run admin:build.`,
+      },
       503,
     );
   }
@@ -319,60 +333,64 @@ export class AdminServer {
 }
 
 function json(body: unknown, status = 200, cookie?: string): Response {
-  const headers = new Headers({ ...SECURITY_HEADERS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-  if (cookie !== undefined) headers.set("set-cookie", cookie);
+  const headers = new Headers({
+    ...SECURITY_HEADERS,
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  });
+  if (cookie !== undefined) headers.set('set-cookie', cookie);
   return new Response(JSON.stringify(body), { status, headers });
 }
 
 function asset(file: Bun.BunFile, path: string): Response {
-  const extension = path.slice(path.lastIndexOf("."));
-  const isHtml = extension === ".html";
+  const extension = path.slice(path.lastIndexOf('.'));
+  const isHtml = extension === '.html';
   const headers = new Headers({
     ...SECURITY_HEADERS,
-    "content-type": CONTENT_TYPES[extension] ?? "application/octet-stream",
-    "content-security-policy": CONTENT_SECURITY_POLICY,
-    "cache-control": isHtml ? "no-store" : "public, max-age=3600",
+    'content-type': CONTENT_TYPES[extension] ?? 'application/octet-stream',
+    'content-security-policy': CONTENT_SECURITY_POLICY,
+    'cache-control': isHtml ? 'no-store' : 'public, max-age=3600',
   });
   return new Response(file, { headers });
 }
 
 function readCookie(request: Request, name: string): string {
-  const header = request.headers.get("cookie");
-  if (header === null) return "";
-  for (const part of header.split(";")) {
-    const separator = part.indexOf("=");
+  const header = request.headers.get('cookie');
+  if (header === null) return '';
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=');
     if (separator < 0) continue;
     if (part.slice(0, separator).trim() !== name) continue;
     return part.slice(separator + 1).trim();
   }
-  return "";
+  return '';
 }
 
 async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
-  const declared = request.headers.get("content-length");
+  const declared = request.headers.get('content-length');
   if (declared !== null && Number(declared) > MAX_BODY_BYTES) {
-    throw new AdminAuthError(413, "body_too_large", "Request body is too large");
+    throw new AdminAuthError(413, 'body_too_large', 'Request body is too large');
   }
   const text = await request.text();
-  if (text.length > MAX_BODY_BYTES) throw new AdminAuthError(413, "body_too_large", "Request body is too large");
+  if (text.length > MAX_BODY_BYTES) throw new AdminAuthError(413, 'body_too_large', 'Request body is too large');
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new AdminAuthError(400, "invalid_body", "Request body must be JSON");
+    throw new AdminAuthError(400, 'invalid_body', 'Request body must be JSON');
   }
-  if (typeof parsed !== "object" || parsed === null) {
-    throw new AdminAuthError(400, "invalid_body", "Request body must be a JSON object");
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new AdminAuthError(400, 'invalid_body', 'Request body must be a JSON object');
   }
   return parsed as Record<string, unknown>;
 }
 
 async function readCredentials(request: Request): Promise<AdminCredentials> {
   const record = await readJsonObject(request);
-  const username = record["username"];
-  const password = record["password"];
-  if (typeof username !== "string" || typeof password !== "string") {
-    throw new AdminAuthError(400, "invalid_body", "username and password must be strings");
+  const username = record.username;
+  const password = record.password;
+  if (typeof username !== 'string' || typeof password !== 'string') {
+    throw new AdminAuthError(400, 'invalid_body', 'username and password must be strings');
   }
   return { username, password };
 }

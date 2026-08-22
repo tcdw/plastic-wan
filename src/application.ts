@@ -1,24 +1,24 @@
-import { Bot, type Context } from "grammy";
-import { AdminServer } from "./admin/server.ts";
-import { seedConfigAdmins } from "./admin/admins.ts";
-import { AgentRuntime } from "./agent-runtime.ts";
-import { BOT_COMMANDS, BotCommandService, registerBotCommands, type ParsedCommand } from "./bot-commands.ts";
-import { assertConfigPermissions, loadConfig } from "./config.ts";
-import { KeyedSemaphore } from "./concurrency.ts";
-import type { InvocationContext } from "./context-builder.ts";
-import { ServeLock, SqliteStore } from "./database.ts";
-import { SecretStore } from "./secrets.ts";
-import { MediaService, TelegramMediaClient } from "./media.ts";
-import { createMemoryTools, MemoryStore } from "./memory.ts";
-import { McpManager } from "./mcp.ts";
-import { AgentModelSwitcher } from "./model-switch.ts";
-import { createModelRegistry } from "./providers.ts";
-import { BucketScheduler } from "./scheduler.ts";
-import { StickerService } from "./stickers.ts";
-import { TelegramIngestion } from "./telegram-ingestion.ts";
-import { runStartupCatchUp } from "./startup-catch-up.ts";
+import { Bot, type Context } from 'grammy';
+import { seedConfigAdmins } from './admin/admins.ts';
+import { AdminServer } from './admin/server.ts';
+import { AgentRuntime } from './agent-runtime.ts';
+import { BOT_COMMANDS, BotCommandService, type ParsedCommand, registerBotCommands } from './bot-commands.ts';
+import { KeyedSemaphore } from './concurrency.ts';
+import { assertConfigPermissions, loadConfig } from './config.ts';
+import type { InvocationContext } from './context-builder.ts';
+import { ServeLock, SqliteStore } from './database.ts';
+import { McpManager } from './mcp.ts';
+import { MediaService, TelegramMediaClient } from './media.ts';
+import { createMemoryTools, MemoryStore } from './memory.ts';
+import { AgentModelSwitcher } from './model-switch.ts';
+import { createModelRegistry } from './providers.ts';
+import { BucketScheduler } from './scheduler.ts';
+import { SecretStore } from './secrets.ts';
+import { runStartupCatchUp } from './startup-catch-up.ts';
+import { StickerService } from './stickers.ts';
+import { TelegramIngestion } from './telegram-ingestion.ts';
 
-const ALLOWED_UPDATES = ["message", "edited_message", "my_chat_member"] as const;
+const ALLOWED_UPDATES = ['message', 'edited_message', 'my_chat_member'] as const;
 
 export async function serve(configPath: string): Promise<void> {
   const loaded = await loadConfig(configPath);
@@ -36,8 +36,8 @@ export async function serve(configPath: string): Promise<void> {
   const shutdown = (): void => {
     if (shuttingDown) return;
     shuttingDown = true;
-    logEvent("shutdown_requested");
-    startupCatchUpController?.abort(new Error("shutdown"));
+    logEvent('shutdown_requested');
+    startupCatchUpController?.abort(new Error('shutdown'));
     // Unblock bot.start() so the finally block below runs the full cleanup.
     // grammY's stop() also fires a best-effort offset-confirming getUpdates;
     // swallow its rejection so it can never become an unhandled promise
@@ -45,8 +45,8 @@ export async function serve(configPath: string): Promise<void> {
     // unhandled rejections).
     void bot?.stop().catch(() => undefined);
   };
-  process.once("SIGTERM", shutdown);
-  process.once("SIGINT", shutdown);
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
   try {
     const token = await secrets.resolve(loaded.config.telegram.token);
     lock = await ServeLock.acquire(loaded.config.data_dir);
@@ -58,17 +58,17 @@ export async function serve(configPath: string): Promise<void> {
     const me = await bot.api.getMe();
     try {
       await registerBotCommands(bot.api);
-      logEvent("commands_registered", { commands: BOT_COMMANDS.map((entry) => entry.command).join(",") });
+      logEvent('commands_registered', { commands: BOT_COMMANDS.map((entry) => entry.command).join(',') });
     } catch (error) {
       // Registration is convenience only: command parsing works without the
       // Telegram menu, so a failed setMyCommands must not block startup.
-      logEvent("command_registration_failed", {
+      logEvent('command_registration_failed', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    const initialized = store.db
-      .query<{ value: string }, []>("SELECT value FROM app_state WHERE key = 'telegram_initialized'")
-      .get() !== null;
+    const initialized =
+      store.db.query<{ value: string }, []>("SELECT value FROM app_state WHERE key = 'telegram_initialized'").get() !==
+      null;
     await bot.api.deleteWebhook({ drop_pending_updates: !initialized });
     if (!initialized) {
       store.db
@@ -99,7 +99,7 @@ export async function serve(configPath: string): Promise<void> {
       telegramApi: bot.api,
       bot: {
         id: BigInt(me.id),
-        displayName: [me.first_name, me.last_name].filter((part) => part !== undefined).join(" "),
+        displayName: [me.first_name, me.last_name].filter((part) => part !== undefined).join(' '),
         username: me.username ?? null,
       },
       modelGate,
@@ -111,7 +111,9 @@ export async function serve(configPath: string): Promise<void> {
         ...mcpManager.createTools(context, deadline),
       ],
     });
-    const startedScheduler = new BucketScheduler(store, loaded.config, loaded.hash, (invocationId, signal) => runtime.run(invocationId, signal));
+    const startedScheduler = new BucketScheduler(store, loaded.config, loaded.hash, (invocationId, signal) =>
+      runtime.run(invocationId, signal),
+    );
     scheduler = startedScheduler;
     const commands = new BotCommandService(store, loaded.config, startedScheduler, modelSwitcher);
     const preview: InvocationContext = {
@@ -119,19 +121,21 @@ export async function serve(configPath: string): Promise<void> {
       conversationId: 0n,
       chatId: 0n,
       threadId: 0n,
-      systemPrompt: "",
-      userPrompt: "",
+      systemPrompt: '',
+      userPrompt: '',
       imageCapabilities: new Map(),
       directImages: [],
       replyTargets: new Map(),
       omittedNewMessages: 0,
     };
-    mcpManager.setRegistryValidator((mcpTools) => runtime.validateAdditionalTools(preview, [
-      media.createReadImageTool(preview, Number.MAX_SAFE_INTEGER),
-      stickerService.createSearchTool(preview, new Map()),
-      ...createMemoryTools(memoryStore, preview),
-      ...mcpTools,
-    ]));
+    mcpManager.setRegistryValidator((mcpTools) =>
+      runtime.validateAdditionalTools(preview, [
+        media.createReadImageTool(preview, Number.MAX_SAFE_INTEGER),
+        stickerService.createSearchTool(preview, new Map()),
+        ...createMemoryTools(memoryStore, preview),
+        ...mcpTools,
+      ]),
+    );
     const catchUpController = new AbortController();
     startupCatchUpController = catchUpController;
     const catchUp = await runStartupCatchUp({
@@ -143,7 +147,7 @@ export async function serve(configPath: string): Promise<void> {
       signal: catchUpController.signal,
     });
     startupCatchUpController = undefined;
-    logEvent("startup_catch_up_completed", {
+    logEvent('startup_catch_up_completed', {
       updates: catchUp.updates,
       stored_messages: catchUp.storedMessages,
       invocations: catchUp.invocationIds.length,
@@ -154,7 +158,7 @@ export async function serve(configPath: string): Promise<void> {
       const adminServer = new AdminServer({ store, config: loaded.config, scheduler: startedScheduler, modelSwitcher });
       admin = adminServer;
       const listening = adminServer.start();
-      logEvent("admin_started", { host: listening.hostname, port: listening.port });
+      logEvent('admin_started', { host: listening.hostname, port: listening.port });
     }
     bot.use(async (context) => {
       const result = ingestion.ingest(context.update);
@@ -163,14 +167,14 @@ export async function serve(configPath: string): Promise<void> {
       }
       startedScheduler.wake();
     });
-    logEvent("serve_started", { bot_id: String(me.id), config_hash: loaded.hash });
+    logEvent('serve_started', { bot_id: String(me.id), config_hash: loaded.hash });
     await bot.start({ allowed_updates: [...ALLOWED_UPDATES] });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(secrets.redact(message));
   } finally {
-    process.off("SIGTERM", shutdown);
-    process.off("SIGINT", shutdown);
+    process.off('SIGTERM', shutdown);
+    process.off('SIGINT', shutdown);
     await admin?.stop();
     await scheduler?.stop(30_000);
     await stickers?.stop();
@@ -188,18 +192,19 @@ async function replyToCommand(context: Context, commands: BotCommandService, com
   const message = context.update.message;
   if (message === undefined) return;
   const chatId = message.chat.id;
-  const sender = message.from === undefined
-    ? null
-    : {
-        id: BigInt(message.from.id),
-        name: [message.from.first_name, message.from.last_name].filter((part) => part !== undefined).join(" "),
-        username: message.from.username ?? null,
-      };
+  const sender =
+    message.from === undefined
+      ? null
+      : {
+          id: BigInt(message.from.id),
+          name: [message.from.first_name, message.from.last_name].filter((part) => part !== undefined).join(' '),
+          username: message.from.username ?? null,
+        };
   let text: string;
   try {
     text = commands.run(command, BigInt(chatId), sender);
   } catch (error) {
-    logEvent("command_failed", {
+    logEvent('command_failed', {
       command: command.name,
       chat_id: String(chatId),
       error: error instanceof Error ? error.message : String(error),
@@ -211,9 +216,9 @@ async function replyToCommand(context: Context, commands: BotCommandService, com
       ...(message.message_thread_id === undefined ? {} : { message_thread_id: message.message_thread_id }),
       reply_parameters: { message_id: message.message_id },
     });
-    logEvent("command_reply_sent", { command: command.name, chat_id: String(chatId) });
+    logEvent('command_reply_sent', { command: command.name, chat_id: String(chatId) });
   } catch (error) {
-    logEvent("command_reply_failed", {
+    logEvent('command_reply_failed', {
       command: command.name,
       chat_id: String(chatId),
       error: error instanceof Error ? error.message : String(error),

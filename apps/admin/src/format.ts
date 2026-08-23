@@ -1,4 +1,3 @@
-import dayjs from "dayjs";
 
 const STATE_COLORS: Record<string, string> = {
   completed: "green",
@@ -18,10 +17,20 @@ const STATE_COLORS: Record<string, string> = {
   expired: "default",
 };
 
+const TIME_FORMAT = new Intl.DateTimeFormat("sv-SE", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
 export function formatTime(value: string | null): string {
   if (value === null || value.length === 0) return "—";
-  const parsed = dayjs(value);
-  return parsed.isValid() ? parsed.format("YYYY-MM-DD HH:mm:ss") : value;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : TIME_FORMAT.format(date);
 }
 
 export function formatNumber(value: number | null): string {

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
+import { parse as parseToml } from 'smol-toml';
 import { dirname, resolve } from 'node:path';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
@@ -234,10 +235,10 @@ const validator = Compile(ConfigSchema);
 
 export async function loadConfig(path: string): Promise<LoadedConfig> {
   const configPath = resolve(path);
-  const text = await Bun.file(configPath).text();
+  const text = await readFile(configPath, 'utf8');
   let parsed: unknown;
   try {
-    parsed = Bun.TOML.parse(text);
+    parsed = parseToml(text);
   } catch (error) {
     throw new Error(`Invalid TOML: ${error instanceof Error ? error.message : String(error)}`);
   }

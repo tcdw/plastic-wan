@@ -258,18 +258,29 @@ describe('bot command service', () => {
     store.close();
   });
 
-  test("status reports model, thinking effort and today's token usage", async () => {
-    const { store, ingestion, commands } = await setup();
+  test("status reports model, thinking effort and today's split token usage", async () => {
+    const { store, ingestion, scheduler, commands } = await setup();
     ingestion.ingest(textUpdate(1, 10, 'hello'), FIXED_NOW);
     store.db
       .query(
         "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', 1234, ?)",
       )
       .run(FIXED_NOW.toISOString().slice(0, 10), '123456789', FIXED_NOW.toISOString());
+    const [invocationId] = scheduler.processDue(new Date(FIXED_NOW.getTime() + 15_000));
+    if (invocationId === undefined) {
+      throw new Error('Expected queued invocation');
+    }
+    store.db
+      .query(
+        "INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens, created_at, finished_at) VALUES (?, 'agent', 'agent', 'agent-model', 1, 'success', 500, 200, 400, 134, 1234, ?, ?)",
+      )
+      .run(invocationId, FIXED_NOW.toISOString(), FIXED_NOW.toISOString());
     const status = commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW);
     expect(status).toContain('agent / agent-model');
-    expect(status).toContain('thinking effort: low');
-    expect(status).toContain('1234 / 300000');
+    expect(status).toContain('思考强度: low');
+    expect(status).toContain(
+      '今日 token 用量: 1234 / 300000\n读取: 500\n写入: 200\n缓存读取: 400\n缓存写入: 134',
+    );
     expect(status).not.toContain('已暂停');
     commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
     expect(commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain('已暂停');

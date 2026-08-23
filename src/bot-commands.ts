@@ -214,13 +214,31 @@ export class BotCommandService {
       throw new Error(`Chat ${telegramChatId} is not configured`);
     }
     const date = now.toISOString().slice(0, 10);
+    const chatId = this.#internalChatId(telegramChatId);
     const tokens =
       this.#store.db
         .query<{ amount: bigint }, [string, string]>(
           "SELECT amount FROM daily_usage WHERE utc_date = ? AND scope = 'chat' AND resource = ? AND metric = 'model_tokens'",
         )
         .get(date, telegramChatId.toString())?.amount ?? 0n;
-    const chatId = this.#internalChatId(telegramChatId);
+    const tokenBreakdown =
+      chatId === null
+        ? null
+        : this.#store.db
+            .query<
+              { readTokens: bigint; writeTokens: bigint; cacheReadTokens: bigint; cacheWriteTokens: bigint },
+              [bigint, string]
+            >(
+              `SELECT COALESCE(SUM(model_calls.input_tokens), 0) AS readTokens,
+                      COALESCE(SUM(model_calls.output_tokens), 0) AS writeTokens,
+                      COALESCE(SUM(model_calls.cache_read_tokens), 0) AS cacheReadTokens,
+                      COALESCE(SUM(model_calls.cache_write_tokens), 0) AS cacheWriteTokens
+               FROM model_calls
+               JOIN invocations ON invocations.id = model_calls.invocation_id
+               WHERE invocations.conversation_id IN (SELECT id FROM conversations WHERE chat_id = ?)
+                 AND substr(model_calls.finished_at, 1, 10) = ?`,
+            )
+            .get(chatId, date);
     const paused =
       chatId !== null &&
       this.#store.db
@@ -232,8 +250,12 @@ export class BotCommandService {
     };
     const lines = [
       `当前模型: ${effective.provider} / ${effective.model}`,
-      `thinking effort: ${this.#config.agent.thinking_level}`,
+      `思考强度: ${this.#config.agent.thinking_level}`,
       `今日 token 用量: ${tokens} / ${chat.budget.max_tokens_per_day}`,
+      `读取: ${tokenBreakdown?.readTokens ?? 0n}`,
+      `写入: ${tokenBreakdown?.writeTokens ?? 0n}`,
+      `缓存读取: ${tokenBreakdown?.cacheReadTokens ?? 0n}`,
+      `缓存写入: ${tokenBreakdown?.cacheWriteTokens ?? 0n}`,
     ];
     if (paused) {
       lines.push('互动: 已暂停');

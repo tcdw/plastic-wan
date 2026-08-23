@@ -142,6 +142,7 @@ async function runDoctorChecks(
     const media = new MediaService({
       store,
       config,
+      secrets,
       registry,
       mediaClient: new TelegramMediaClient(bot.api, telegramToken),
       modelGate,
@@ -152,6 +153,7 @@ async function runDoctorChecks(
     const runtime = new AgentRuntime({
       store,
       config,
+      secrets,
       registry,
       modelSwitcher: new AgentModelSwitcher(config, registry.models),
       telegramApi: bot.api,

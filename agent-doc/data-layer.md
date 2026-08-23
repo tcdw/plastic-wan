@@ -69,7 +69,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 | 表 | 用途 |
 | --- | --- |
-| `model_calls` | Provider/Model、角色、Token、成本、耗时、错误码和每次请求附带的工具名（`tools_json`） |
+| `model_calls` | Provider/Model、角色、Token、成本、耗时、错误码、经 `SecretStore` 脱敏的完整错误详情和每次请求附带的工具名（`tools_json`） |
 | `tool_calls` | Tool 参数、结果、状态、副作用标记和错误码 |
 | `telegram_sends` | 文本/Sticker 发送请求、Telegram 结果和未知结果 |
 | `daily_usage` | Chat/全局资源预算计数 |

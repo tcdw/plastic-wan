@@ -11,6 +11,7 @@ import type { RawConfig } from './config.ts';
 import type { DirectImage, InvocationContext } from './context-builder.ts';
 import { finishToolCall, rejectToolCall, startToolCall, type SqliteStore } from './database.ts';
 import type { ModelRegistry } from './providers.ts';
+import type { SecretStore } from './secrets.ts';
 import { pickEnv, readBoundedOutput } from './subprocess.ts';
 
 const ReadImageSchema = Type.Object({ image_ref: Type.String({ minLength: 1 }) }, { additionalProperties: false });
@@ -127,6 +128,7 @@ export interface StickerIndexAnalysis {
 export interface MediaServiceOptions {
   readonly store: SqliteStore;
   readonly config: RawConfig;
+  readonly secrets: SecretStore;
   readonly registry: ModelRegistry;
   readonly mediaClient: MediaDownloader;
   readonly modelGate: KeyedSemaphore;
@@ -135,6 +137,7 @@ export interface MediaServiceOptions {
 export class MediaService {
   readonly #store: SqliteStore;
   readonly #config: RawConfig;
+  readonly #secrets: SecretStore;
   readonly #models: Models;
   readonly #model: Model<Api>;
   readonly #mediaClient: MediaDownloader;
@@ -144,6 +147,7 @@ export class MediaService {
 
   constructor(options: MediaServiceOptions) {
     this.#store = options.store;
+    this.#secrets = options.secrets;
     this.#config = options.config;
     this.#models = options.registry.models;
     this.#model = options.registry.visionModel;
@@ -429,7 +433,7 @@ export class MediaService {
           );
           this.#finishVisionCall(callId, scope, response);
         } catch (error) {
-          this.#failVisionCall(callId, signal.aborted ? 'vision_timeout' : 'vision_model_error');
+          this.#failVisionCall(callId, signal.aborted ? 'vision_timeout' : 'vision_model_error', error);
           throw error;
         }
         if (response.stopReason === 'error' || response.stopReason === 'aborted')
@@ -509,7 +513,7 @@ export class MediaService {
       const usage = message.usage;
       this.#store.db
         .query(
-          'UPDATE model_calls SET state = ?, input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_write_tokens = ?, total_tokens = ?, cost = ?, finished_at = ? WHERE id = ?',
+          'UPDATE model_calls SET state = ?, input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_write_tokens = ?, total_tokens = ?, cost = ?, error_code = ?, error_detail = ?, finished_at = ? WHERE id = ?',
         )
         .run(
           message.stopReason === 'error' || message.stopReason === 'aborted' ? 'error' : 'success',
@@ -519,6 +523,12 @@ export class MediaService {
           BigInt(usage.cacheWrite),
           BigInt(usage.totalTokens),
           usage.cost.total,
+          message.stopReason === 'error'
+            ? 'vision_model_error'
+            : message.stopReason === 'aborted'
+              ? 'vision_timeout'
+              : null,
+          message.errorMessage === undefined ? null : this.#secrets.redact(message.errorMessage),
           now,
           callId,
         );
@@ -538,10 +548,10 @@ export class MediaService {
     });
   }
 
-  #failVisionCall(callId: bigint, code: string): void {
+  #failVisionCall(callId: bigint, code: string, error: unknown): void {
     this.#store.db
-      .query("UPDATE model_calls SET state = 'error', error_code = ?, finished_at = ? WHERE id = ?")
-      .run(code, new Date().toISOString(), callId);
+      .query("UPDATE model_calls SET state = 'error', error_code = ?, error_detail = ?, finished_at = ? WHERE id = ?")
+      .run(code, this.#secrets.redactError(error), new Date().toISOString(), callId);
   }
 
   #chatTokenBudgetReached(chatId: bigint): boolean {

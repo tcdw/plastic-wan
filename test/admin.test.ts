@@ -239,7 +239,7 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
       .run(toolRow.id, invocationId, iso, iso);
     store.db
       .query(
-        "INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, input_tokens, output_tokens, total_tokens, cost, duration_ms, tools_json, created_at, finished_at) VALUES (?, 'agent', 'agent', 'agent-model', 1, 'success', 100, 20, 120, 0.5, 900, ?, ?, ?)",
+        "INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, input_tokens, output_tokens, total_tokens, cost, duration_ms, error_code, error_detail, tools_json, created_at, finished_at) VALUES (?, 'agent', 'agent', 'agent-model', 1, 'error', 100, 20, 120, 0.5, 900, 'model_error', 'status=500\nbody={\"error\":\"upstream exploded\"}', ?, ?, ?)",
       )
       .run(invocationId, JSON.stringify(['send', 'add_memory']), iso, iso);
     store.db
@@ -291,7 +291,14 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
     expect(detail.tool_registry).toHaveLength(2);
     expect(detail.tool_registry[0]).toMatchObject({ name: 'send', label: 'Send to Telegram' });
     expect(detail.tool_registry[1]?.description).toBe('Save a short-term note');
-    expect(detail.model_calls[0]).toMatchObject({ provider: 'agent', model: 'agent-model', total_tokens: 120 });
+    expect(detail.model_calls[0]).toMatchObject({
+      provider: 'agent',
+      model: 'agent-model',
+      state: 'error',
+      total_tokens: 120,
+      error_code: 'model_error',
+      error_detail: 'status=500\nbody={"error":"upstream exploded"}',
+    });
     expect(detail.model_calls[0].tools).toEqual(['send', 'add_memory']);
     expect(detail.agent_messages[0]).toMatchObject({ role: 'assistant', text: 'private reasoning' });
     expect(detail.telegram_sends[0]).toMatchObject({ kind: 'text', state: 'success', telegram_message_id: '555' });

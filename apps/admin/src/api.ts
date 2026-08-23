@@ -77,6 +77,7 @@ export interface ModelCallEntry {
   readonly cost: number | null;
   readonly duration_ms: number | null;
   readonly error_code: string | null;
+  readonly error_detail: string | null;
   readonly created_at: string;
   readonly finished_at: string | null;
   readonly tools: readonly string[] | null;

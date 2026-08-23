@@ -80,6 +80,7 @@ export async function serve(configPath: string): Promise<void> {
     const media = new MediaService({
       store,
       config: loaded.config,
+      secrets,
       registry,
       mediaClient: new TelegramMediaClient(bot.api, token),
       modelGate,
@@ -94,6 +95,7 @@ export async function serve(configPath: string): Promise<void> {
     const runtime = new AgentRuntime({
       store,
       config: loaded.config,
+      secrets,
       registry,
       modelSwitcher,
       telegramApi: bot.api,

@@ -11,6 +11,7 @@ import { ContextBuilder } from '../src/context-builder.ts';
 import { SqliteStore } from '../src/database.ts';
 import { createLottieCommand, type MediaDownloader, MediaService } from '../src/media.ts';
 import type { ModelRegistry } from '../src/providers.ts';
+import { SecretStore } from '../src/secrets.ts';
 import { BucketScheduler } from '../src/scheduler.ts';
 import { TelegramIngestion } from '../src/telegram-ingestion.ts';
 import { writeTestConfig } from './helpers.ts';
@@ -105,6 +106,7 @@ test('read_image normalizes once and reuses the 30-day description cache', async
   const media = new MediaService({
     store,
     config: loaded.config,
+    secrets: new SecretStore(),
     registry,
     mediaClient: downloader,
     modelGate: new KeyedSemaphore(),

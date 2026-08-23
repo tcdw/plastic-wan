@@ -283,6 +283,23 @@ function ModelTimelineCard({ model }: { readonly model: ModelCallEntry }): React
           <Typography.Text type="danger">Error {model.error_code}</Typography.Text>
         )}
       </Space>
+      {model.error_detail === null ? null : (
+        <Collapse
+          size="small"
+          style={{ marginTop: 12 }}
+          items={[
+            {
+              key: "error-detail",
+              label: "View full model error details",
+              children: (
+                <Typography.Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                  {model.error_detail}
+                </Typography.Paragraph>
+              ),
+            },
+          ]}
+        />
+      )}
     </Card>
   );
 }
@@ -620,6 +637,14 @@ export function InvocationDetailPage({ id }: { readonly id: string }): React.Rea
                   size="small"
                   pagination={false}
                   dataSource={[...data.model_calls]}
+                  expandable={{
+                    rowExpandable: (row) => row.error_detail !== null,
+                    expandedRowRender: (row) => (
+                      <Typography.Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        {row.error_detail}
+                      </Typography.Paragraph>
+                    ),
+                  }}
                   columns={[
                     { title: "Role", dataIndex: "role", key: "role" },
                     { title: "Provider", dataIndex: "provider", key: "provider" },

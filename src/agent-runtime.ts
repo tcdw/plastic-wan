@@ -17,6 +17,7 @@ import { type SqliteStore, resolveChatConfig } from './database.ts';
 import type { AgentModelSwitcher } from './model-switch.ts';
 import type { ModelRegistry } from './providers.ts';
 import type { InvocationOutcome } from './scheduler.ts';
+import type { SecretStore } from './secrets.ts';
 import { createSendTool, type TelegramSendApi } from './send-tool.ts';
 
 export interface ToolRuntimeState {
@@ -33,6 +34,7 @@ export type DirectImageLoader = (context: InvocationContext, signal: AbortSignal
 export interface AgentRuntimeOptions {
   readonly store: SqliteStore;
   readonly config: RawConfig;
+  readonly secrets: SecretStore;
   readonly registry: ModelRegistry;
   readonly modelSwitcher: AgentModelSwitcher;
   readonly telegramApi: TelegramSendApi;
@@ -57,6 +59,7 @@ const SEND_NUDGE_TEXT =
 export class AgentRuntime {
   readonly #store: SqliteStore;
   readonly #config: RawConfig;
+  readonly #secrets: SecretStore;
   readonly #models: Models;
   readonly #model: Model<Api>;
   readonly #modelSwitcher: AgentModelSwitcher;
@@ -69,6 +72,7 @@ export class AgentRuntime {
 
   constructor(options: AgentRuntimeOptions) {
     this.#store = options.store;
+    this.#secrets = options.secrets;
     this.#config = options.config;
     this.#models = options.registry.models;
     this.#model = options.registry.agentModel;
@@ -191,15 +195,15 @@ export class AgentRuntime {
                 estimatedInputTokens = Math.max(estimatedInputTokens, message.usage.input);
                 this.#finishModelCall(callId, context.chatId, message);
               },
-              () => this.#failModelCall(callId, 'stream_rejected'),
+              (error) => this.#failModelCall(callId, 'stream_rejected', error),
             )
             .finally(release)
             .catch(() => undefined);
           return stream;
         } catch (error) {
           release();
-          this.#failModelCall(callId, 'model_setup_error');
-          return errorStream(model, error instanceof Error ? error.name : 'model_setup_error');
+          this.#failModelCall(callId, 'model_setup_error', error);
+          return errorStream(model, this.#secrets.redactError(error));
         }
       },
       toolExecution: 'sequential',
@@ -317,7 +321,7 @@ export class AgentRuntime {
       const now = new Date().toISOString();
       this.#store.db
         .query(
-          'UPDATE model_calls SET state = ?, input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_write_tokens = ?, total_tokens = ?, cost = ?, finished_at = ? WHERE id = ?',
+          'UPDATE model_calls SET state = ?, input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_write_tokens = ?, total_tokens = ?, cost = ?, error_code = ?, error_detail = ?, finished_at = ? WHERE id = ?',
         )
         .run(
           message.stopReason === 'error' || message.stopReason === 'aborted' ? 'error' : 'success',
@@ -327,6 +331,12 @@ export class AgentRuntime {
           BigInt(usage.cacheWrite),
           BigInt(usage.totalTokens),
           usage.cost.total,
+          message.stopReason === 'error'
+            ? 'model_error'
+            : message.stopReason === 'aborted'
+              ? 'model_aborted'
+              : null,
+          message.errorMessage === undefined ? null : this.#secrets.redact(message.errorMessage),
           now,
           callId,
         );
@@ -338,13 +348,14 @@ export class AgentRuntime {
     });
   }
 
-  #failModelCall(callId: bigint, errorCode: string): void {
+  #failModelCall(callId: bigint, errorCode: string, error: unknown): void {
     this.#store.db
       .query(
-        "UPDATE model_calls SET state = 'error', error_code = ?, finished_at = ? WHERE id = ? AND state = 'pending'",
+        "UPDATE model_calls SET state = 'error', error_code = ?, error_detail = ?, finished_at = ? WHERE id = ? AND state = 'pending'",
       )
-      .run(errorCode, new Date().toISOString(), callId);
+      .run(errorCode, this.#secrets.redactError(error), new Date().toISOString(), callId);
   }
+
 
   #tokenBudgetReached(chatId: bigint): boolean {
     const chat = resolveChatConfig(this.#config, this.#store.db, chatId);
@@ -373,6 +384,7 @@ export class AgentRuntime {
       .run(invocationId, sequence, role, text, new Date().toISOString());
   }
 }
+
 
 function validateToolRegistry(tools: readonly AgentTool[], contextWindow: number): void {
   if (tools.length > 64) throw new Error(`Tool registry has ${tools.length} tools; maximum is 64`);

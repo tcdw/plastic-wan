@@ -12,6 +12,7 @@ import { SqliteStore } from '../src/database.ts';
 import { type MediaDownloader, MediaService } from '../src/media.ts';
 import { AgentModelSwitcher } from '../src/model-switch.ts';
 import type { ModelRegistry } from '../src/providers.ts';
+import { SecretStore } from '../src/secrets.ts';
 import { BucketScheduler } from '../src/scheduler.ts';
 import type { TelegramSendApi } from '../src/send-tool.ts';
 import { TelegramIngestion } from '../src/telegram-ingestion.ts';
@@ -73,6 +74,7 @@ test('a fresh Agent publishes only through send and audits model usage', async (
   const runtime = new AgentRuntime({
     store,
     config: loaded.config,
+    secrets: new SecretStore(),
     registry,
     modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
     telegramApi: api,
@@ -113,6 +115,78 @@ test('a fresh Agent publishes only through send and audits model usage', async (
       .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM agent_messages WHERE role = 'harness_nudge'")
       .get()?.count,
   ).toBe(0n);
+  store.close();
+});
+
+test('audits complete redacted model error details', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-error-'));
+  directories.push(directory);
+  const configPath = join(directory, 'config.toml');
+  await writeTestConfig(directory, configPath);
+  const loaded = await loadConfig(configPath);
+  const store = await SqliteStore.open(loaded.config);
+  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const received = new Date('2026-08-15T00:00:00.000Z');
+  ingestion.ingest(
+    {
+      update_id: 2,
+      message: {
+        message_id: 11,
+        date: 1_700_000_000,
+        chat: { id: 123456789, type: 'private', first_name: 'Owner' },
+        from: { id: 42, is_bot: false, first_name: 'Alice' },
+        text: 'trigger a model error',
+      },
+    },
+    received,
+  );
+  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    state: 'completed',
+    reason: 'done',
+  }));
+  const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
+  if (invocationId === undefined) throw new Error('Expected a due invocation');
+
+  const errorDetail = 'Provider request failed with telegram-secret\nstatus=500\nbody={"error":"upstream exploded"}';
+  const faux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  faux.setResponses([fauxAssistantMessage('', { stopReason: 'error', errorMessage: errorDetail })]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const model = faux.getModel();
+  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const secrets = new SecretStore();
+  await secrets.resolve(loaded.config.telegram.token);
+  const runtime = new AgentRuntime({
+    store,
+    config: loaded.config,
+    secrets,
+    registry,
+    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    telegramApi: {
+      sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
+      sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
+    },
+    bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+  });
+
+  expect(await runtime.run(invocationId, new AbortController().signal)).toEqual({
+    state: 'failed',
+    reason: 'model_error',
+  });
+  expect(
+    store.db
+      .query<{ state: string; error_code: string | null; error_detail: string | null }, []>(
+        'SELECT state, error_code, error_detail FROM model_calls',
+      )
+      .get(),
+  ).toEqual({
+    state: 'error',
+    error_code: 'model_error',
+    error_detail: errorDetail.replace('telegram-secret', '[REDACTED]'),
+  });
   store.close();
 });
 
@@ -192,6 +266,7 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
   const media = new MediaService({
     store,
     config: loaded.config,
+    secrets: new SecretStore(),
     registry,
     mediaClient: downloader,
     modelGate: new KeyedSemaphore(),
@@ -203,6 +278,7 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
   const runtime = new AgentRuntime({
     store,
     config: loaded.config,
+    secrets: new SecretStore(),
     registry,
     modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
     telegramApi: api,
@@ -290,6 +366,7 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
   const media = new MediaService({
     store,
     config: loaded.config,
+    secrets: new SecretStore(),
     registry,
     mediaClient: {
       download: async (fileId, destination, signal) => {
@@ -303,6 +380,7 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
   const runtime = new AgentRuntime({
     store,
     config: loaded.config,
+    secrets: new SecretStore(),
     registry,
     modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
     telegramApi: {
@@ -395,6 +473,7 @@ test('nudges the model once to use send when it drafts a private reply and never
   const runtime = new AgentRuntime({
     store,
     config: loaded.config,
+    secrets: new SecretStore(),
     registry,
     modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
     telegramApi: api,

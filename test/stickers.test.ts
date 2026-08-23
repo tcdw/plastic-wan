@@ -11,6 +11,7 @@ import { ContextBuilder } from '../src/context-builder.ts';
 import { SqliteStore } from '../src/database.ts';
 import { type MediaDownloader, MediaService } from '../src/media.ts';
 import type { ModelRegistry } from '../src/providers.ts';
+import { SecretStore } from '../src/secrets.ts';
 import { BucketScheduler } from '../src/scheduler.ts';
 import { createSendTool, type TelegramSendApi } from '../src/send-tool.ts';
 import { StickerService } from '../src/stickers.ts';
@@ -75,6 +76,7 @@ name = "CatSet"
   const media = new MediaService({
     store,
     config: loaded.config,
+    secrets: new SecretStore(),
     registry,
     mediaClient: downloader,
     modelGate: new KeyedSemaphore(),

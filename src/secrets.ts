@@ -28,6 +28,23 @@ export class SecretStore {
     for (const value of this.#values) redacted = redacted.replaceAll(value, '[REDACTED]');
     return redacted;
   }
+
+  redactError(error: unknown): string {
+    return this.redact(formatErrorDetail(error));
+  }
+}
+
+function formatErrorDetail(error: unknown): string {
+  if (error instanceof Error) {
+    const detail = error.stack ?? `${error.name}: ${error.message}`;
+    return error.cause === undefined ? detail : `${detail}\nCaused by: ${formatErrorDetail(error.cause)}`;
+  }
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error) ?? String(error);
+  } catch {
+    return String(error);
+  }
 }
 
 async function resolveCommand(argv: readonly string[]): Promise<string> {

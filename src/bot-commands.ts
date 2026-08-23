@@ -2,7 +2,7 @@ import type { Message } from 'grammy/types';
 import { isBotAdmin } from './admin/admins.ts';
 import type { RawConfig } from './config.ts';
 import type { SqliteStore } from './database.ts';
-import type { AgentModelSwitcher } from './model-switch.ts';
+import type { AgentModelOption, AgentModelSwitcher } from './model-switch.ts';
 import type { BucketScheduler } from './scheduler.ts';
 
 export interface ParsedCommand {
@@ -18,6 +18,7 @@ export interface CommandSender {
 
 const COMMAND_NAMES = new Set<ParsedCommand['name']>(['pause', 'resume', 'status', 'model']);
 const DENIED_REPLY = '该命令仅对本 Bot 的管理员可用。';
+const MODEL_PAGE_SIZE = 20;
 
 export interface BotCommandRegistration {
   readonly command: string;
@@ -58,8 +59,6 @@ export function parseBotCommand(message: Message, botUsername: string | null): P
   const mention = separator === -1 ? null : token.slice(separator + 1).toLowerCase();
   if (mention !== null && mention !== botUsername?.toLowerCase()) return null;
   if (!COMMAND_NAMES.has(name as ParsedCommand['name'])) return null;
-  // /model takes an optional argument (index or "reset"); the other commands
-  // ignore any trailing text.
   if (name !== 'model') return { name: name as ParsedCommand['name'] };
   const argument = message.text.slice(entity.offset + entity.length).trim();
   return argument.length === 0 ? { name: 'model' } : { name: 'model', argument };
@@ -142,29 +141,46 @@ export class BotCommandService {
   #modelSwitch(argument: string | undefined): string {
     const switcher = this.#modelSwitcher;
     if (switcher === undefined) return '运行时模型切换不可用。';
-    if (argument === undefined) return this.#modelMenu(switcher);
+    if (argument === undefined) return this.#modelMenu(switcher, 1, switcher.list());
     if (argument === 'reset') {
       const current = switcher.reset();
       return `已恢复 config.toml 默认模型: ${current.provider} / ${current.model}。`;
     }
     const options = switcher.list();
+    const pageMatch = /^page\s+(\d+)$/.exec(argument);
+    if (pageMatch !== null) {
+      const page = Number.parseInt(pageMatch[1] ?? '', 10);
+      const pageCount = Math.max(1, Math.ceil(options.length / MODEL_PAGE_SIZE));
+      if (!Number.isSafeInteger(page) || page < 1 || page > pageCount) {
+        return `无效页码。${this.#modelMenu(switcher, 1, options)}`;
+      }
+      return this.#modelMenu(switcher, page, options);
+    }
     const index = /^\d+$/.test(argument) ? Number.parseInt(argument, 10) : NaN;
     if (!Number.isInteger(index) || index < 1 || index > options.length) {
-      return `无效序号。${this.#modelMenu(switcher)}`;
+      return `无效序号。${this.#modelMenu(switcher, 1, options)}`;
     }
     const option = options[index - 1];
-    if (option === undefined) return `无效序号。${this.#modelMenu(switcher)}`;
+    if (option === undefined) return `无效序号。${this.#modelMenu(switcher, 1, options)}`;
     const current = switcher.switch(option.provider, option.model);
     return `已切换: ${current.provider} / ${current.model}，将在下一次 agent session 生效。`;
   }
 
-  #modelMenu(switcher: AgentModelSwitcher): string {
+  #modelMenu(switcher: AgentModelSwitcher, page: number, options: readonly AgentModelOption[]): string {
     const current = switcher.current();
-    const lines = [`当前模型: ${current.provider} / ${current.model}`, '可用模型:'];
-    switcher.list().forEach((option, index) => {
+    const pageCount = Math.max(1, Math.ceil(options.length / MODEL_PAGE_SIZE));
+    const start = (page - 1) * MODEL_PAGE_SIZE;
+    const end = Math.min(start + MODEL_PAGE_SIZE, options.length);
+    const lines = [
+      `当前模型: ${current.provider} / ${current.model}`,
+      `可用模型（第 ${page}/${pageCount} 页，共 ${options.length} 条）:`,
+    ];
+    for (let index = start; index < end; index += 1) {
+      const option = options[index];
+      if (option === undefined) break;
       lines.push(`${index + 1}. ${option.provider} / ${option.model}（${option.name}）`);
-    });
-    lines.push('使用 /model 序号 切换，/model reset 恢复默认');
+    }
+    lines.push('使用 /model 序号 切换，/model page 页码 翻页，/model reset 恢复默认');
     return lines.join('\n');
   }
 

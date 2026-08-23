@@ -116,6 +116,10 @@ describe('parseBotCommand', () => {
       name: 'model',
       argument: '2',
     });
+    expect(parseBotCommand(message(commandUpdate(1, 1, '/model page 2').message), BOT_USERNAME)).toEqual({
+      name: 'model',
+      argument: 'page 2',
+    });
     expect(parseBotCommand(message(commandUpdate(1, 1, '/Model reset').message), BOT_USERNAME)).toEqual({
       name: 'model',
       argument: 'reset',
@@ -281,12 +285,32 @@ describe('bot command service', () => {
   });
 
   describe('model command', () => {
-    async function commandSetup(): Promise<{
+    function manyModelTransform(count: number): (toml: string) => string {
+      const models = Array.from(
+        { length: count },
+        (_, index) => `[[providers.agent.models]]
+id = "agent-extra-${index + 1}"
+name = "Agent Extra ${index + 1}"
+reasoning = false
+input = ["text"]
+context_window = 128000
+max_tokens = 8192
+cost = { input = 1, output = 2, cache_read = 0.1, cache_write = 1 }`,
+      ).join('\n\n');
+      return (toml) =>
+        toml
+          .replace('process_bot_messages = false', 'process_bot_messages = false\nadmins = [42]')
+          .replace('\n[providers.vision]', `\n\n${models}\n\n[providers.vision]`);
+    }
+
+    async function commandSetup(
+      transform?: (toml: string) => string,
+    ): Promise<{
       store: SqliteStore;
       commands: BotCommandService;
       switcher: AgentModelSwitcher;
     }> {
-      const { store, loaded, scheduler } = await setup();
+      const { store, loaded, scheduler } = await setup(transform);
       const registry = await createModelRegistry(loaded.config, new SecretStore());
       const switcher = new AgentModelSwitcher(loaded.config, registry.models);
       const commands = new BotCommandService(store, loaded.config, scheduler, switcher);
@@ -304,13 +328,56 @@ describe('bot command service', () => {
       store.close();
     });
 
-    test('without an argument lists the current model and switchable options', async () => {
+    test('without an argument lists the first page of switchable options', async () => {
       const { store, commands } = await commandSetup();
       const reply = commands.run({ name: 'model' }, 123456789n, ALICE, FIXED_NOW);
       expect(reply).toContain('当前模型: agent / agent-model');
+      expect(reply).toContain('可用模型（第 1/1 页，共 2 条）:');
       expect(reply).toContain('1. agent / agent-model（Agent Model）');
       expect(reply).toContain('2. vision / vision-model（Vision Model）');
-      expect(reply).toContain('使用 /model 序号 切换，/model reset 恢复默认');
+      expect(reply).toContain('使用 /model 序号 切换，/model page 页码 翻页，/model reset 恢复默认');
+      store.close();
+    });
+
+    test('paginates model options by global index in pages of 20', async () => {
+      const { store, commands } = await commandSetup(manyModelTransform(40));
+      const firstPage = commands.run({ name: 'model' }, 123456789n, ALICE, FIXED_NOW).split('\n');
+      expect(firstPage).toContain('可用模型（第 1/3 页，共 42 条）:');
+      expect(firstPage).toContain('1. agent / agent-model（Agent Model）');
+      expect(firstPage).toContain('20. agent / agent-extra-19（Agent Extra 19）');
+      expect(firstPage.some((line) => line.startsWith('21. '))).toBeFalse();
+
+      const secondPage = commands.run({ name: 'model', argument: 'page 2' }, 123456789n, ALICE, FIXED_NOW).split('\n');
+      expect(secondPage).toContain('可用模型（第 2/3 页，共 42 条）:');
+      expect(secondPage).toContain('21. agent / agent-extra-20（Agent Extra 20）');
+      expect(secondPage).toContain('40. agent / agent-extra-39（Agent Extra 39）');
+      expect(secondPage.filter((line) => /^\d+\. /.test(line))).toHaveLength(20);
+
+      const thirdPage = commands.run({ name: 'model', argument: 'page 3' }, 123456789n, ALICE, FIXED_NOW).split('\n');
+      expect(thirdPage).toContain('可用模型（第 3/3 页，共 42 条）:');
+      expect(thirdPage).toContain('41. agent / agent-extra-40（Agent Extra 40）');
+      expect(thirdPage).toContain('42. vision / vision-model（Vision Model）');
+      expect(thirdPage.filter((line) => /^\d+\. /.test(line))).toHaveLength(2);
+      store.close();
+    });
+
+    test('keeps a numeric argument as a global model selection', async () => {
+      const { store, commands, switcher } = await commandSetup(manyModelTransform(40));
+      expect(commands.run({ name: 'model', argument: '21' }, 123456789n, ALICE, FIXED_NOW)).toBe(
+        '已切换: agent / agent-extra-20，将在下一次 agent session 生效。',
+      );
+      expect(switcher.current()).toMatchObject({ provider: 'agent', model: 'agent-extra-20' });
+      store.close();
+    });
+
+    test('rejects pages outside the available range without changing the model', async () => {
+      const { store, commands, switcher } = await commandSetup(manyModelTransform(40));
+      for (const argument of ['page 0', 'page 4', 'page 999999999999999999999999999999999999999']) {
+        const reply = commands.run({ name: 'model', argument }, 123456789n, ALICE, FIXED_NOW);
+        expect(reply).toStartWith('无效页码。');
+        expect(reply).toContain('可用模型（第 1/3 页，共 42 条）:');
+        expect(switcher.current()).toMatchObject({ provider: 'agent', model: 'agent-model' });
+      }
       store.close();
     });
 

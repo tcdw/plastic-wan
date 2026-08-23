@@ -120,7 +120,7 @@ describe('configuration', () => {
       configPath,
       testConfigToml(directory).replace(
         'process_bot_messages = false',
-        'process_bot_messages = false\nadmins = [99999999999999999]',
+        'process_bot_messages = false\nadmins = [9007199254740992.0]',
       ),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid Telegram admin user ID');

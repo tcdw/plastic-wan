@@ -237,9 +237,10 @@ test('admin panel manages memories with chat filter and long-TTL warnings', asyn
   await writeTestConfig(
     directory,
     configPath,
-    `${testConfigToml(directory)}
-[agent]
-memory_ttl_warning_days = 2
+    `${testConfigToml(directory).replace(
+      'history_messages = 20',
+      'history_messages = 20\nmemory_ttl_warning_days = 2',
+    )}
 
 [admin]
 enabled = true

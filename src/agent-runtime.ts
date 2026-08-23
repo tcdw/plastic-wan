@@ -19,6 +19,13 @@ import type { ModelRegistry } from './providers.ts';
 import type { InvocationOutcome } from './scheduler.ts';
 import type { SecretStore } from './secrets.ts';
 import { createSendTool, type TelegramSendApi } from './send-tool.ts';
+import {
+  activeSleepUntil,
+  createZzzTool,
+  isLowDailyTokenBudget,
+  readDailyTokenBudget,
+  type DailyTokenBudget,
+} from './sleep.ts';
 
 export interface ToolRuntimeState {
   readonly stickerCapabilities: Map<string, string>;
@@ -111,6 +118,24 @@ export class AgentRuntime {
       { provider: model.provider, model: model.id },
     );
     const deadline = Date.now() + this.#config.agent.timeout_seconds * 1000;
+    let sleepRequested = false;
+    const zzz = createZzzTool({
+      db: this.#store.db,
+      invocationId,
+      chatId: provisionalContext.chatId,
+      onSleep: () => {
+        sleepRequested = true;
+      },
+    });
+    const chat = resolveChatConfig(this.#config, this.#store.db, provisionalContext.chatId);
+    if (chat === undefined) throw new Error(`Invocation ${invocationId} chat is no longer configured`);
+    const initialBudget = readDailyTokenBudget(
+      this.#store.db,
+      provisionalContext.chatId,
+      chat.budget.max_tokens_per_day,
+    );
+    let zzzExposed = isLowDailyTokenBudget(initialBudget);
+    if (zzzExposed) this.#logZzzExposure(invocationId, provisionalContext.chatId, initialBudget);
     const preliminarySend = createSendTool({
       store: this.#store,
       api: this.#telegramApi,
@@ -120,7 +145,11 @@ export class AgentRuntime {
       deadline,
       bot: this.#bot,
     });
-    const preliminaryTools = [preliminarySend, ...(this.#additionalTools?.(provisionalContext, state, deadline) ?? [])];
+    const preliminaryTools = [
+      preliminarySend,
+      ...(this.#additionalTools?.(provisionalContext, state, deadline) ?? []),
+      ...(zzzExposed ? [zzz] : []),
+    ];
     const schemaCharacters = preliminaryTools.reduce(
       (total, tool) => total + JSON.stringify(tool.parameters).length,
       0,
@@ -142,17 +171,13 @@ export class AgentRuntime {
       deadline,
       bot: this.#bot,
     });
-    const tools = [send, ...(this.#additionalTools?.(context, state, deadline) ?? [])];
+    const tools = [
+      send,
+      ...(this.#additionalTools?.(context, state, deadline) ?? []),
+      ...(zzzExposed ? [zzz] : []),
+    ];
     validateToolRegistry(tools, model.contextWindow);
-    const toolRegistryHash = createHash('sha256')
-      .update(tools.map((tool) => `${tool.name}:${JSON.stringify(tool.parameters)}`).join('\n'))
-      .digest('hex');
-    // Auditable snapshot of exactly what the model could see: name, label and
-    // description are the tool surface the provider serializes into every request.
-    const toolRegistry = tools.map((tool) => ({ name: tool.name, label: tool.label, description: tool.description }));
-    this.#store.db
-      .query('UPDATE invocations SET tool_registry_hash = ?, tool_registry_json = ? WHERE id = ?')
-      .run(toolRegistryHash, JSON.stringify(toolRegistry), invocationId);
+    this.#recordToolRegistry(invocationId, tools);
     const timeoutSignal = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
     const signal = AbortSignal.any([schedulerSignal, timeoutSignal]);
     let turns = 0;
@@ -208,7 +233,18 @@ export class AgentRuntime {
       },
       toolExecution: 'sequential',
       maxRetryDelayMs: Math.max(0, deadline - Date.now()),
-      beforeToolCall: async () => {
+      beforeToolCall: async ({ toolCall }) => {
+        if (toolCall.name !== 'zzz' && (sleepRequested || activeSleepUntil(this.#store.db) !== null)) {
+          return { block: true, reason: 'The bot is sleeping', terminate: true };
+        }
+        if (
+          toolCall.name === 'zzz' &&
+          !isLowDailyTokenBudget(
+            readDailyTokenBudget(this.#store.db, context.chatId, chat.budget.max_tokens_per_day),
+          )
+        ) {
+          return { block: true, reason: 'You are no longer sleepy' };
+        }
         toolCalls += 1;
         if (toolCalls > this.#config.agent.max_tool_calls)
           return { block: true, reason: 'Invocation tool-call limit reached', terminate: true };
@@ -218,6 +254,7 @@ export class AgentRuntime {
         return undefined;
       },
       shouldStopAfterTurn: async (turn) => {
+        if (sleepRequested || activeSleepUntil(this.#store.db) !== null) return true;
         if (turns >= this.#config.agent.max_turns || closing) return true;
         const stopThreshold = Math.floor(model.contextWindow * this.#config.agent.context_stop_ratio);
         if (estimatedInputTokens + model.maxTokens >= model.contextWindow && estimatedInputTokens >= stopThreshold) {
@@ -242,11 +279,32 @@ export class AgentRuntime {
         return false;
       },
       prepareNextTurnWithContext: async (turn) => {
+        let nextTools = turn.context.tools;
+        let toolsChanged = false;
+        const budget = readDailyTokenBudget(this.#store.db, context.chatId, chat.budget.max_tokens_per_day);
+        const shouldExposeZzz = isLowDailyTokenBudget(budget);
+        if (shouldExposeZzz !== zzzExposed) {
+          zzzExposed = shouldExposeZzz;
+          nextTools = shouldExposeZzz
+            ? [...(nextTools ?? tools), zzz]
+            : (nextTools ?? tools).filter((tool) => tool.name !== 'zzz');
+          validateToolRegistry(nextTools, model.contextWindow);
+          this.#recordToolRegistry(invocationId, nextTools);
+          if (shouldExposeZzz) {
+            this.#logZzzExposure(invocationId, context.chatId, budget);
+            estimatedInputTokens += Math.ceil(JSON.stringify(zzz.parameters).length / 4);
+          }
+          toolsChanged = true;
+        }
         const stopThreshold = Math.floor(model.contextWindow * this.#config.agent.context_stop_ratio);
-        if (estimatedInputTokens < stopThreshold) return undefined;
+        if (estimatedInputTokens < stopThreshold) {
+          return toolsChanged && nextTools !== undefined
+            ? { context: { ...turn.context, tools: nextTools } }
+            : undefined;
+        }
         closing = true;
-        const sendOnly = turn.context.tools?.filter((tool) => tool.name === 'send');
-        return { context: { ...turn.context, ...(sendOnly === undefined ? {} : { tools: sendOnly }) } };
+        const closingTools = nextTools?.filter((tool) => tool.name === 'send' || tool.name === 'zzz');
+        return { context: { ...turn.context, ...(closingTools === undefined ? {} : { tools: closingTools }) } };
       },
     });
     const unsubscribe = agent.subscribe((event) => {
@@ -304,6 +362,37 @@ export class AgentRuntime {
     }
     if (outcome === undefined) throw new Error('Agent run ended without an outcome');
     return outcome;
+  }
+
+  #recordToolRegistry(invocationId: bigint, tools: readonly AgentTool[]): void {
+    const toolRegistryHash = createHash('sha256')
+      .update(tools.map((tool) => `${tool.name}:${JSON.stringify(tool.parameters)}`).join('\n'))
+      .digest('hex');
+    const toolRegistry = tools.map((tool) => ({ name: tool.name, label: tool.label, description: tool.description }));
+    this.#store.db
+      .query('UPDATE invocations SET tool_registry_hash = ?, tool_registry_json = ? WHERE id = ?')
+      .run(toolRegistryHash, JSON.stringify(toolRegistry), invocationId);
+  }
+
+  #logZzzExposure(invocationId: bigint, chatId: bigint, budget: DailyTokenBudget): void {
+    console.log(
+      JSON.stringify({
+        event: 'agent_low_token_budget',
+        invocation_id: invocationId.toString(),
+        chat_id: chatId.toString(),
+        used_tokens: budget.usedTokens.toString(),
+        max_tokens: budget.maxTokens.toString(),
+        at: new Date().toISOString(),
+      }),
+    );
+    console.log(
+      JSON.stringify({
+        event: 'zzz_tool_exposed',
+        invocation_id: invocationId.toString(),
+        chat_id: chatId.toString(),
+        at: new Date().toISOString(),
+      }),
+    );
   }
 
   #startModelCall(invocationId: bigint, model: Model<Api>, tools: readonly string[]): bigint {

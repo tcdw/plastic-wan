@@ -1,5 +1,6 @@
 import type { RawConfig } from './config.ts';
 import { type SqliteStore, isChatPaused, resolveChatConfig } from './database.ts';
+import { activeSleepUntil } from './sleep.ts';
 
 const RECOVERY_MAX_AGE_MS = 5 * 60_000;
 export const STARTUP_CATCH_UP_STATE_KEY = 'telegram_startup_catch_up';
@@ -36,6 +37,11 @@ interface InvocationRow {
   readonly bucket_id: bigint;
   readonly conversation_id: bigint;
 }
+interface SleepingInvocationRow extends InvocationRow {
+  readonly telegram_chat_id: bigint;
+  readonly created_at: string;
+}
+
 
 interface MessageSnapshotRow {
   readonly message_id: bigint;
@@ -166,6 +172,7 @@ export class BucketScheduler {
   }
 
   finishStartupCatchUp(startedAt: Date, now = new Date()): bigint[] {
+    const sleepUntil = activeSleepUntil(this.#store.db, now);
     return this.#store.transaction(() => {
       const state = this.#store.db
         .query<{ value: string }, [string]>('SELECT value FROM app_state WHERE key = ?')
@@ -219,9 +226,11 @@ export class BucketScheduler {
             ? 'chat_removed'
             : isChatPaused(this.#store.db, latest.chat_id)
               ? 'chat_paused'
-              : this.#reserveInvocation(latest.telegram_chat_id, budget.max_invocations_per_day, now)
-                ? undefined
-                : 'invocation_budget';
+              : sleepUntil !== null
+                ? 'sleeping'
+                : this.#reserveInvocation(latest.telegram_chat_id, budget.max_invocations_per_day, now)
+                  ? undefined
+                  : 'invocation_budget';
         const created =
           skipReason === undefined
             ? this.#store.db
@@ -243,6 +252,9 @@ export class BucketScheduler {
                   timestamp,
                 );
         const bucketId = BigInt(created.lastInsertRowid);
+        if (skipReason === 'sleeping' && sleepUntil !== null) {
+          this.#logSleepingSkip(latest.telegram_chat_id, bucketId, null, sleepUntil);
+        }
         for (const [sequence, message] of messages.entries()) {
           this.#store.db
             .query(
@@ -263,6 +275,7 @@ export class BucketScheduler {
   }
 
   processDue(now = new Date()): bigint[] {
+    const sleepUntil = activeSleepUntil(this.#store.db, now);
     return this.#store.transaction(() => {
       const due = this.#store.db
         .query<BucketRow, [string, string]>(
@@ -281,7 +294,7 @@ export class BucketScheduler {
         .all(now.toISOString(), new Date(now.getTime() - RECOVERY_MAX_AGE_MS).toISOString());
       const invocations: bigint[] = [];
       for (const bucket of due) {
-        const invocationId = this.#queueBucket(bucket, now);
+        const invocationId = this.#queueBucket(bucket, now, sleepUntil);
         if (invocationId !== undefined) invocations.push(invocationId);
       }
       return invocations;
@@ -325,7 +338,7 @@ export class BucketScheduler {
     return Math.max(0, Math.min(60_000, Date.parse(row.deadline_at) - Date.now()));
   }
 
-  #queueBucket(bucket: BucketRow, now: Date): bigint | undefined {
+  #queueBucket(bucket: BucketRow, now: Date, sleepUntil: string | null): bigint | undefined {
     const chat = this.#store.db
       .query<{ telegram_chat_id: bigint; paused: bigint }, [bigint]>(
         `SELECT c.telegram_chat_id,
@@ -341,6 +354,11 @@ export class BucketScheduler {
     const budget = resolveChatConfig(this.#config, this.#store.db, chat.telegram_chat_id)?.budget;
     if (budget === undefined) {
       this.#markBucketSkipped(bucket.id, now, 'chat_removed');
+      return undefined;
+    }
+    if (sleepUntil !== null) {
+      this.#markBucketSkipped(bucket.id, now, 'sleeping');
+      this.#logSleepingSkip(chat.telegram_chat_id, bucket.id, null, sleepUntil);
       return undefined;
     }
     if (!this.#reserveInvocation(chat.telegram_chat_id, budget.max_invocations_per_day, now)) {
@@ -474,6 +492,11 @@ export class BucketScheduler {
   }
 
   #launchQueued(): void {
+    const sleepUntil = activeSleepUntil(this.#store.db);
+    if (sleepUntil !== null) {
+      this.#skipQueuedInvocations(sleepUntil, new Date());
+      return;
+    }
     while (this.#running && this.#active.size < this.#config.agent.max_concurrency) {
       const invocation = this.#store.transaction(() => {
         const candidate = this.#store.db
@@ -505,6 +528,58 @@ export class BucketScheduler {
       const promise = this.#execute(invocation, controller);
       this.#active.set(invocation.id.toString(), { controller, promise });
     }
+  }
+
+  #skipQueuedInvocations(sleepUntil: string, now: Date): void {
+    const queued = this.#store.transaction(() => {
+      const rows = this.#store.db
+        .query<SleepingInvocationRow, []>(
+          `SELECT i.id, i.bucket_id, i.conversation_id, i.created_at, c.telegram_chat_id
+           FROM invocations i
+           JOIN conversations v ON v.id = i.conversation_id
+           JOIN chats c ON c.id = v.chat_id
+           WHERE i.state = 'queued'
+           ORDER BY i.id`,
+        )
+        .all();
+      for (const invocation of rows) {
+        const nowIso = now.toISOString();
+        this.#store.db
+          .query(
+            "UPDATE invocations SET state = 'skipped_budget', completion_reason = 'sleeping', finished_at = ? WHERE id = ? AND state = 'queued'",
+          )
+          .run(nowIso, invocation.id);
+        this.#store.db
+          .query(
+            "UPDATE buckets SET state = 'skipped_budget', error_code = 'sleeping', finished_at = ?, updated_at = ? WHERE id = ?",
+          )
+          .run(nowIso, nowIso, invocation.bucket_id);
+        this.#store.db
+          .query(
+            `UPDATE daily_usage
+             SET amount = MAX(0, amount - 1), updated_at = ?
+             WHERE utc_date = ? AND scope = 'chat' AND resource = ? AND metric = 'agent_invocations'`,
+          )
+          .run(nowIso, invocation.created_at.slice(0, 10), invocation.telegram_chat_id.toString());
+      }
+      return rows;
+    });
+    for (const invocation of queued) {
+      this.#logSleepingSkip(invocation.telegram_chat_id, invocation.bucket_id, invocation.id, sleepUntil);
+    }
+  }
+
+  #logSleepingSkip(chatId: bigint, bucketId: bigint, invocationId: bigint | null, sleepUntil: string): void {
+    console.log(
+      JSON.stringify({
+        event: 'agent_session_skipped_sleeping',
+        chat_id: chatId.toString(),
+        bucket_id: bucketId.toString(),
+        invocation_id: invocationId?.toString() ?? null,
+        sleep_until: sleepUntil,
+        at: new Date().toISOString(),
+      }),
+    );
   }
 
   async #execute(invocation: InvocationRow, controller: AbortController): Promise<void> {

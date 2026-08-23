@@ -1,6 +1,20 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Card, Col, message, Popconfirm, Row, Statistic, Table, Tabs, Typography } from "antd";
+import {
+  Button,
+  Card,
+  Col,
+  Descriptions,
+  message,
+  Popconfirm,
+  Row,
+  Space,
+  Statistic,
+  Table,
+  Tabs,
+  Tag,
+  Typography,
+} from "antd";
 import type { CancelPendingResult, LabelCount, UsageEntry } from "../api.ts";
 import { cancelPendingSessions } from "../api.ts";
 import { queryState, StateTag } from "../components.tsx";
@@ -106,6 +120,39 @@ export function OverviewPage(): React.ReactNode {
                 </Button>
               </Popconfirm>
             </div>
+          </Card>
+        </Col>
+        <Col span={16}>
+          <Card title="Bot status" size="small">
+            <Descriptions column={1} size="small">
+              <Descriptions.Item label="Sleep">
+                <Space size="small" wrap>
+                  <Tag color={data.runtime_status.sleeping ? "purple" : "green"}>
+                    {data.runtime_status.sleeping ? "sleeping" : "awake"}
+                  </Tag>
+                  {data.runtime_status.sleep_until === null ? null : (
+                    <Typography.Text type="secondary">
+                      until {formatTime(data.runtime_status.sleep_until)}
+                    </Typography.Text>
+                  )}
+                </Space>
+              </Descriptions.Item>
+              <Descriptions.Item label="Administrator pauses">
+                {data.runtime_status.paused_chats.length === 0 ? (
+                  <Tag color="green">none</Tag>
+                ) : (
+                  <Space size={[4, 4]} wrap>
+                    {data.runtime_status.paused_chats.map((chat) => (
+                      <Tag color="orange" key={chat.telegram_chat_id}>
+                        {chat.title ?? (chat.username === null ? chat.telegram_chat_id : `@${chat.username}`)}
+                        {" · since "}
+                        {formatTime(chat.paused_at)}
+                      </Tag>
+                    ))}
+                  </Space>
+                )}
+              </Descriptions.Item>
+            </Descriptions>
           </Card>
         </Col>
       </Row>

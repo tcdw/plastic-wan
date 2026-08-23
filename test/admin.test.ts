@@ -10,6 +10,7 @@ import { AgentModelSwitcher } from '../src/model-switch.ts';
 import { createModelRegistry } from '../src/providers.ts';
 import { BucketScheduler } from '../src/scheduler.ts';
 import { SecretStore } from '../src/secrets.ts';
+import { enterSleep } from '../src/sleep.ts';
 import { TelegramIngestion } from '../src/telegram-ingestion.ts';
 import { testConfigToml, writeTestConfig } from './helpers.ts';
 
@@ -339,11 +340,29 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
     const otherSet = await readJson(await server.handle(request('/api/stickers?set=dogs', { headers })));
     expect(otherSet.items).toHaveLength(0);
 
+    const chat = store.db.query<{ id: bigint }, []>('SELECT id FROM chats WHERE telegram_chat_id = 123456789').get();
+    if (chat === null) throw new Error('Expected the chat row');
+    store.db.query('INSERT INTO chat_pause(chat_id, paused_at) VALUES (?, ?)').run(chat.id, iso);
+    const sleeping = enterSleep(store.db);
+
     const overview = await readJson(await server.handle(request('/api/overview', { headers })));
     expect(overview.invocation_states).toContainEqual({ label: 'completed', count: 1 });
     expect(overview.top_tools).toContainEqual({ label: 'send', count: 1 });
     expect(overview.message_count).toBe(1);
     expect(overview.cached_analysis_count).toBe(1);
+    expect(overview.runtime_status).toEqual({
+      sleeping: true,
+      sleep_until: sleeping.sleepUntil,
+      paused_chats: [
+        {
+          telegram_chat_id: '123456789',
+          type: 'private',
+          title: null,
+          username: null,
+          paused_at: iso,
+        },
+      ],
+    });
 
     const now = new Date().toISOString();
     store.db

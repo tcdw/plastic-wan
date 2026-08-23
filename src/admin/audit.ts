@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite';
+import { storedSleepUntil } from '../sleep.ts';
 
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 25;
@@ -32,6 +33,14 @@ export class AdminQueryError extends Error {
     this.code = code;
     this.status = status;
   }
+}
+
+interface PausedChatRow {
+  readonly telegram_chat_id: bigint;
+  readonly type: string;
+  readonly title: string | null;
+  readonly username: string | null;
+  readonly paused_at: string;
 }
 
 interface InvocationListRow {
@@ -657,6 +666,15 @@ export function overview(db: Database, now = new Date()): Record<string, unknown
       'SELECT resource, metric, scope, amount FROM daily_usage WHERE utc_date = ? ORDER BY resource, metric, scope',
     )
     .all(today);
+  const storedSleep = storedSleepUntil(db);
+  const sleepUntil = storedSleep !== null && storedSleep > now.toISOString() ? storedSleep : null;
+  const pausedChats = db
+    .query<PausedChatRow, []>(
+      `SELECT c.telegram_chat_id, c.type, c.title, c.username, p.paused_at
+       FROM chat_pause p JOIN chats c ON c.id = p.chat_id
+       ORDER BY p.paused_at, c.telegram_chat_id`,
+    )
+    .all();
   const messageCount = db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get();
   const analysisCount = db
     .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM media_analyses WHERE state = 'success'")
@@ -672,6 +690,17 @@ export function overview(db: Database, now = new Date()): Record<string, unknown
       scope: row.scope,
       amount: Number(row.amount),
     })),
+    runtime_status: {
+      sleeping: sleepUntil !== null,
+      sleep_until: sleepUntil,
+      paused_chats: pausedChats.map((row) => ({
+        telegram_chat_id: row.telegram_chat_id.toString(),
+        type: row.type,
+        title: row.title,
+        username: row.username,
+        paused_at: row.paused_at,
+      })),
+    },
     message_count: Number(messageCount?.count ?? 0n),
     cached_analysis_count: Number(analysisCount?.count ?? 0n),
   };

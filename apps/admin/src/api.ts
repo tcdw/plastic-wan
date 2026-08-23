@@ -321,12 +321,27 @@ export interface CancelPendingResult {
   readonly refunded_invocations: number;
 }
 
+export interface PausedChat {
+  readonly telegram_chat_id: string;
+  readonly type: string;
+  readonly title: string | null;
+  readonly username: string | null;
+  readonly paused_at: string;
+}
+
+export interface RuntimeStatus {
+  readonly sleeping: boolean;
+  readonly sleep_until: string | null;
+  readonly paused_chats: readonly PausedChat[];
+}
+
 export interface Overview {
   readonly generated_at: string;
   readonly invocation_states: readonly LabelCount[];
   readonly sticker_index_states: readonly LabelCount[];
   readonly top_tools: readonly LabelCount[];
   readonly daily_usage: readonly UsageEntry[];
+  readonly runtime_status: RuntimeStatus;
   readonly message_count: number;
   readonly cached_analysis_count: number;
 }

@@ -63,16 +63,11 @@ export class AsyncSemaphore {
 
 export class KeyedSemaphore {
   readonly #semaphores = new Map<string, AsyncSemaphore>();
-  readonly #limit: number;
-
-  constructor(limit = 1) {
-    this.#limit = limit;
-  }
 
   async acquire(key: string, signal: AbortSignal): Promise<() => void> {
     let semaphore = this.#semaphores.get(key);
     if (semaphore === undefined) {
-      semaphore = new AsyncSemaphore(this.#limit, (idle) => {
+      semaphore = new AsyncSemaphore(1, (idle) => {
         if (this.#semaphores.get(key) === idle) this.#semaphores.delete(key);
       });
       this.#semaphores.set(key, semaphore);

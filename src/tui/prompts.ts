@@ -1,4 +1,4 @@
-import { checkbox, confirm, input, select } from '@inquirer/prompts';
+import { checkbox, input, select } from '@inquirer/prompts';
 import type { SecretRef } from '../config.ts';
 
 export type ApiAdapter = 'openai-responses' | 'openai-completions' | 'anthropic-messages';
@@ -63,10 +63,6 @@ export async function promptApiAdapter(message = 'API adapter'): Promise<ApiAdap
       name: API_ADAPTER_LABELS[value],
     })),
   });
-}
-
-export async function promptBoolean(message: string, initial = false): Promise<boolean> {
-  return confirm({ message, default: initial });
 }
 
 export async function promptInputCapabilities(

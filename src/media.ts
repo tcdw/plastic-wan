@@ -9,7 +9,7 @@ import Compile from 'typebox/compile';
 import { AsyncSemaphore, type KeyedSemaphore } from './concurrency.ts';
 import type { RawConfig } from './config.ts';
 import type { DirectImage, InvocationContext } from './context-builder.ts';
-import type { SqliteStore } from './database.ts';
+import { finishToolCall, rejectToolCall, startToolCall, type SqliteStore } from './database.ts';
 import type { ModelRegistry } from './providers.ts';
 import { pickEnv, readBoundedOutput } from './subprocess.ts';
 
@@ -202,10 +202,18 @@ export class MediaService {
       execute: async (toolCallId, input, signal) => {
         const mediaId = context.imageCapabilities.get(input.image_ref);
         if (mediaId === undefined) {
-          this.#recordRejectedTool(context.invocationId, toolCallId, input, 'image_ref_not_authorized');
+          rejectToolCall(
+            this.#store.db,
+            context.invocationId,
+            toolCallId,
+            'read_image',
+            JSON.stringify(input),
+            false,
+            'image_ref_not_authorized',
+          );
           throw new Error('image_ref is not visible in this invocation');
         }
-        const toolId = this.#startToolCall(context.invocationId, toolCallId, input);
+        const toolId = startToolCall(this.#store.db, context.invocationId, toolCallId, 'read_image', JSON.stringify(input), false);
         const timeout = Math.max(1, Math.min(30_000, invocationDeadline - Date.now()));
         const combinedSignal =
           signal === undefined ? AbortSignal.timeout(timeout) : AbortSignal.any([signal, AbortSignal.timeout(timeout)]);
@@ -236,14 +244,14 @@ export class MediaService {
             );
             cacheHit = false;
           }
-          this.#finishToolCall(toolId, 'success', description, null);
+          finishToolCall(this.#store.db, toolId, 'success', description, null);
           return {
             content: [{ type: 'text', text: description }],
             details: { cached: cacheHit },
           };
         } catch (_error) {
           const code = combinedSignal.aborted ? 'vision_timeout' : 'vision_error';
-          this.#finishToolCall(toolId, 'error', null, code);
+          finishToolCall(this.#store.db, toolId, 'error', null, code);
           throw new Error(code === 'vision_timeout' ? 'Image analysis timed out' : 'Image analysis failed');
         }
       },
@@ -477,30 +485,6 @@ export class MediaService {
     } finally {
       await rm(temporaryDirectory, { recursive: true, force: true });
     }
-  }
-
-  #startToolCall(invocationId: bigint, toolCallId: string, input: unknown): bigint {
-    const created = this.#store.db
-      .query(
-        "INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, state, side_effect, created_at) VALUES (?, ?, 'read_image', ?, 'pending', 0, ?)",
-      )
-      .run(invocationId, toolCallId, JSON.stringify(input), new Date().toISOString());
-    return BigInt(created.lastInsertRowid);
-  }
-
-  #recordRejectedTool(invocationId: bigint, toolCallId: string, input: unknown, code: string): void {
-    const now = new Date().toISOString();
-    this.#store.db
-      .query(
-        "INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, state, side_effect, error_code, created_at, finished_at) VALUES (?, ?, 'read_image', ?, 'error', 0, ?, ?, ?)",
-      )
-      .run(invocationId, toolCallId, JSON.stringify(input), code, now, now);
-  }
-
-  #finishToolCall(toolId: bigint, state: 'success' | 'error', result: string | null, errorCode: string | null): void {
-    this.#store.db
-      .query('UPDATE tool_calls SET state = ?, result_text = ?, error_code = ?, finished_at = ? WHERE id = ?')
-      .run(state, result, errorCode, new Date().toISOString(), toolId);
   }
 
   #startVisionCall(scope: AnalysisScope, analysisId: bigint): bigint {

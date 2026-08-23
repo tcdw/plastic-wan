@@ -1,18 +1,18 @@
-export type Command = 'serve' | 'check-config' | 'doctor' | 'backup' | 'configure';
+type Command = 'serve' | 'check-config' | 'doctor' | 'backup' | 'configure';
 
-export interface CliOptions {
+interface CliOptions {
   readonly command: Command;
   readonly configPath: string;
   readonly outputAgentPrompt: boolean;
 }
 
-const COMMANDS: Record<Command, true> = {
-  serve: true,
-  'check-config': true,
-  doctor: true,
-  backup: true,
-  configure: true,
-};
+const COMMANDS: readonly string[] = [
+  'serve',
+  'check-config',
+  'doctor',
+  'backup',
+  'configure',
+];
 
 export function parseCli(argv: readonly string[]): CliOptions {
   const [commandValue, ...argumentsList] = argv;
@@ -35,9 +35,9 @@ export function parseCli(argv: readonly string[]): CliOptions {
 }
 
 function isCommand(value: string): value is Command {
-  return value in COMMANDS;
+  return COMMANDS.includes(value);
 }
 
-export function usage(): string {
+function usage(): string {
   return 'Usage: plasticwan <serve|check-config|doctor|backup|configure> --config <path> [--output-agent-prompt]';
 }

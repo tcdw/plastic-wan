@@ -18,7 +18,7 @@ import Compile from 'typebox/compile';
 import { AsyncSemaphore } from './concurrency.ts';
 import type { McpServerConfig, RawConfig, SecretRef } from './config.ts';
 import { type InvocationContext, previewContext } from './context-builder.ts';
-import type { SqliteStore } from './database.ts';
+import { finishToolCall, rejectToolCall, type SqliteStore } from './database.ts';
 import type { SecretStore } from './secrets.ts';
 
 const ARGUMENT_MAX_BYTES = 32_768;
@@ -358,7 +358,10 @@ export class McpManager {
     if (started.blocked) throw new Error('MCP tool daily call budget reached');
     const server = this.#servers.get(definition.serverAlias);
     if (server === undefined) {
-      this.#finishToolCall(started.auditId, 'error', null, 'server_unconfigured', performance.now());
+      finishToolCall(this.#store.db, started.auditId, 'error', null, 'server_unconfigured', {
+        startedAt: performance.now(),
+        pendingOnly: true,
+      });
       throw new Error('MCP server is not configured');
     }
     const startedAt = performance.now();
@@ -366,7 +369,10 @@ export class McpManager {
     try {
       release = await server.semaphore.acquire(outerSignal ?? new AbortController().signal);
     } catch {
-      this.#finishToolCall(started.auditId, 'error', null, 'aborted_before_request', startedAt);
+      finishToolCall(this.#store.db, started.auditId, 'error', null, 'aborted_before_request', {
+        startedAt,
+        pendingOnly: true,
+      });
       throw new Error('MCP tool call aborted before request');
     }
     try {
@@ -384,10 +390,10 @@ export class McpManager {
       }
       const text = truncateUtf8(JSON.stringify(result), definition.resultMaxBytes);
       if ('isError' in result && result.isError === true) {
-        this.#finishToolCall(started.auditId, 'error', text, 'mcp_tool_error', startedAt);
+        finishToolCall(this.#store.db, started.auditId, 'error', text, 'mcp_tool_error', { startedAt, pendingOnly: true });
         throw new KnownToolError(text);
       }
-      this.#finishToolCall(started.auditId, 'success', text, null, startedAt);
+      finishToolCall(this.#store.db, started.auditId, 'success', text, null, { startedAt, pendingOnly: true });
       return {
         content: [{ type: 'text', text }],
         details: { server: definition.serverAlias, tool: definition.originalName },
@@ -399,7 +405,7 @@ export class McpManager {
         error.code !== ErrorCode.ConnectionClosed &&
         error.code !== ErrorCode.RequestTimeout;
       const state = known ? 'error' : 'outcome_unknown';
-      this.#finishToolCall(started.auditId, state, null, classifyMcpError(error), startedAt);
+      finishToolCall(this.#store.db, started.auditId, state, null, classifyMcpError(error), { startedAt, pendingOnly: true });
       if (!known) {
         this.#setState(server, 'degraded', classifyMcpError(error));
         this.#scheduleReconnect(server);
@@ -472,43 +478,15 @@ export class McpManager {
     input: unknown,
     errorCode: string,
   ): void {
-    const now = new Date().toISOString();
-    const argumentsJson = safeJson(input, ARGUMENT_MAX_BYTES);
-    this.#store.db
-      .query(
-        "INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, state, side_effect, error_code, created_at, finished_at) VALUES (?, ?, ?, ?, 'error', ?, ?, ?, ?)",
-      )
-      .run(
-        invocationId,
-        toolCallId,
-        definition.exposedName,
-        argumentsJson,
-        definition.policy.readOnly ? 0 : 1,
-        errorCode,
-        now,
-        now,
-      );
-  }
-
-  #finishToolCall(
-    auditId: bigint,
-    state: 'success' | 'error' | 'outcome_unknown',
-    result: string | null,
-    errorCode: string | null,
-    startedAt: number,
-  ): void {
-    this.#store.db
-      .query(
-        "UPDATE tool_calls SET state = ?, result_text = ?, error_code = ?, duration_ms = ?, finished_at = ? WHERE id = ? AND state = 'pending'",
-      )
-      .run(
-        state,
-        result,
-        errorCode,
-        BigInt(Math.max(0, Math.round(performance.now() - startedAt))),
-        new Date().toISOString(),
-        auditId,
-      );
+    rejectToolCall(
+      this.#store.db,
+      invocationId,
+      toolCallId,
+      definition.exposedName,
+      safeJson(input, ARGUMENT_MAX_BYTES),
+      !definition.policy.readOnly,
+      errorCode,
+    );
   }
 
   #usage(date: string, scope: string, resource: string): bigint {

@@ -1,7 +1,7 @@
 import { confirm, select } from '@inquirer/prompts';
+import { stringify } from 'smol-toml';
 import { loadConfig, type TomlConfig } from '../config.ts';
 import { runProviderWizard } from './provider-wizard.ts';
-import { readConfigToml, writeConfigToml } from './toml.ts';
 
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 
@@ -16,7 +16,8 @@ export async function runConfigure(configPath: string): Promise<void> {
   try {
     const loaded = await loadConfig(configPath);
     config = loaded.toml;
-    originalToml = await readConfigToml(configPath);
+    const file = Bun.file(configPath);
+    originalToml = (await file.exists()) ? await file.text() : "";
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Failed to load config: ${message}`);
@@ -64,7 +65,7 @@ export async function runConfigure(configPath: string): Promise<void> {
 
 async function saveConfig(path: string, config: TomlConfig, originalToml: string): Promise<boolean> {
   try {
-    await writeConfigToml(path, config);
+    await Bun.write(path, stringify(config as Record<string, unknown>));
     const loaded = await loadConfig(path);
     console.log(`Config saved and validated. Hash: ${loaded.hash}`);
     return true;

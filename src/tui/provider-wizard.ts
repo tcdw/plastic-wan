@@ -13,7 +13,7 @@ import {
 } from './models-dev.ts';
 import {
   promptApiAdapter,
-  promptBoolean,
+  type ApiAdapter,
   promptInputCapabilities,
   promptNonNegativeNumber,
   promptPositiveInteger,
@@ -21,8 +21,6 @@ import {
   promptString,
 } from './prompts.ts';
 import { type DiscoveredProviderModel, fetchProviderModels, modelsEndpoint } from './provider-models.ts';
-
-type ApiAdapter = 'openai-responses' | 'openai-completions' | 'anthropic-messages';
 
 type BuiltinProviderConfig = {
   kind: 'builtin';
@@ -451,7 +449,7 @@ async function addModel(initialId?: string): Promise<ModelConfig | undefined> {
     defaults = await lookupModelDefaults(id);
   }
   const name = (await promptString('Display name (optional)', defaults?.name ?? id, false)) || id;
-  const reasoning = await promptBoolean('Supports reasoning', defaults?.reasoning ?? false);
+  const reasoning = await confirm({ message: 'Supports reasoning', default: defaults?.reasoning ?? false });
   const capabilities = await promptInputCapabilities(defaults?.input ?? ['text']);
   const contextWindow = await promptPositiveInteger('Context window (tokens)', defaults?.context_window ?? 128000);
   const maxTokens = await promptPositiveInteger('Max output tokens', defaults?.max_tokens ?? 4096);
@@ -496,7 +494,7 @@ async function editModel(model: ModelConfig): Promise<ModelConfig | undefined> {
       return { ...model, name };
     }
     case 'reasoning': {
-      const reasoning = await promptBoolean('Supports reasoning', model.reasoning);
+      const reasoning = await confirm({ message: 'Supports reasoning', default: model.reasoning });
       return { ...model, reasoning };
     }
     case 'input': {

@@ -263,6 +263,67 @@ export function isChatPaused(db: Database, chatId: bigint): boolean {
   );
 }
 
+export type ToolCallFinishState = "success" | "error" | "outcome_unknown";
+
+/** Inserts the pending audit row for a starting tool call and returns its rowid. */
+export function startToolCall(
+  db: Database,
+  invocationId: bigint,
+  toolCallId: string,
+  toolName: string,
+  argumentsJson: string,
+  sideEffect: boolean,
+  now = new Date(),
+): bigint {
+  const created = db
+    .query(
+      "INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, state, side_effect, created_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+    )
+    .run(invocationId, toolCallId, toolName, argumentsJson, sideEffect ? 1 : 0, now.toISOString());
+  return BigInt(created.lastInsertRowid);
+}
+
+/** Inserts the already-failed audit row for a call rejected before execution started. */
+export function rejectToolCall(
+  db: Database,
+  invocationId: bigint,
+  toolCallId: string,
+  toolName: string,
+  argumentsJson: string,
+  sideEffect: boolean,
+  errorCode: string,
+  now = new Date(),
+): void {
+  const at = now.toISOString();
+  db.query(
+    "INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, state, side_effect, error_code, created_at, finished_at) VALUES (?, ?, ?, ?, 'error', ?, ?, ?, ?)",
+  ).run(invocationId, toolCallId, toolName, argumentsJson, sideEffect ? 1 : 0, errorCode, at, at);
+}
+
+/**
+ * Marks a pending tool_calls row finished. Pass startedAt (a performance.now() timestamp)
+ * to also record duration_ms; pendingOnly keeps rows that were already closed untouched.
+ */
+export function finishToolCall(
+  db: Database,
+  auditId: bigint,
+  state: ToolCallFinishState,
+  resultText: string | null,
+  errorCode: string | null,
+  options: { startedAt?: number; pendingOnly?: boolean; now?: Date } = {},
+): void {
+  let sql = "UPDATE tool_calls SET state = ?, result_text = ?, error_code = ?";
+  if (options.startedAt !== undefined) sql += ", duration_ms = ?";
+  sql += ", finished_at = ? WHERE id = ?";
+  if (options.pendingOnly === true) sql += " AND state = 'pending'";
+  const values: (string | bigint | null)[] = [state, resultText, errorCode];
+  if (options.startedAt !== undefined) {
+    values.push(BigInt(Math.max(0, Math.round(performance.now() - options.startedAt))));
+  }
+  values.push((options.now ?? new Date()).toISOString(), auditId);
+  db.query(sql).run(...values);
+}
+
 async function createBackupFile(database: Database, backupDir: string, filename: string): Promise<string> {
   await mkdir(backupDir, { recursive: true, mode: 0o700 });
   const finalPath = join(backupDir, filename);

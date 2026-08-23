@@ -4,7 +4,7 @@ import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import type { RawConfig } from './config.ts';
 import type { InvocationContext } from './context-builder.ts';
-import type { SqliteStore } from './database.ts';
+import { finishToolCall, startToolCall, type SqliteStore } from './database.ts';
 import type { MediaService, StickerIndexAnalysis } from './media.ts';
 
 const StickerSetResponseSchema = Type.Object(
@@ -179,7 +179,7 @@ export class StickerService {
       executionMode: 'sequential',
       execute: async (toolCallId, input) => {
         const started = performance.now();
-        const toolId = this.#startSearchCall(context.invocationId, toolCallId, input);
+        const toolId = startToolCall(this.#store.db, context.invocationId, toolCallId, 'search_stickers', JSON.stringify(input), false);
         try {
           const setId =
             input.set === undefined
@@ -195,10 +195,10 @@ export class StickerService {
             return { sticker_ref: stickerRef, description: row.description, emoji: row.emoji };
           });
           const resultText = JSON.stringify(results);
-          this.#finishSearchCall(toolId, 'success', resultText, null, started);
+          finishToolCall(this.#store.db, toolId, 'success', resultText, null, { startedAt: started });
           return { content: [{ type: 'text', text: resultText }], details: { count: results.length } };
         } catch (error) {
-          this.#finishSearchCall(toolId, 'error', null, 'sticker_search_error', started);
+          finishToolCall(this.#store.db, toolId, 'error', null, 'sticker_search_error', { startedAt: started });
           throw new Error(error instanceof Error ? error.message : 'Sticker search failed');
         }
       },
@@ -283,29 +283,6 @@ export class StickerService {
         `SELECT s.id, s.file_id, s.emoji, ma.description ${from} WHERE s.active = 1 AND st.configured = 1 ${filter} AND ss.description LIKE ? ESCAPE '\\' ORDER BY s.id LIMIT ?`,
       )
       .all(...prefix, like, BigInt(limit));
-  }
-
-  #startSearchCall(invocationId: bigint, toolCallId: string, input: unknown): bigint {
-    const created = this.#store.db
-      .query(
-        "INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, state, side_effect, created_at) VALUES (?, ?, 'search_stickers', ?, 'pending', 0, ?)",
-      )
-      .run(invocationId, toolCallId, JSON.stringify(input), new Date().toISOString());
-    return BigInt(created.lastInsertRowid);
-  }
-
-  #finishSearchCall(
-    toolId: bigint,
-    state: 'success' | 'error',
-    result: string | null,
-    errorCode: string | null,
-    started: number,
-  ): void {
-    this.#store.db
-      .query(
-        'UPDATE tool_calls SET state = ?, result_text = ?, error_code = ?, duration_ms = ?, finished_at = ? WHERE id = ?',
-      )
-      .run(state, result, errorCode, BigInt(Math.round(performance.now() - started)), new Date().toISOString(), toolId);
   }
 
   async #loop(signal: AbortSignal): Promise<void> {

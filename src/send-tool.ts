@@ -7,7 +7,7 @@ import type { SqliteStore } from './database.ts';
 
 export const SendInputSchema = Type.Object(
   {
-    kind: Type.Enum({ text: 'text', sticker: 'sticker' }),
+    kind: Type.Optional(Type.Enum({ text: 'text', sticker: 'sticker' })),
     text: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
     sticker_ref: Type.Optional(Type.String({ minLength: 1 })),
     reply_to_message_id: Type.Optional(Type.String({ pattern: '^[1-9][0-9]*$' })),
@@ -20,10 +20,12 @@ export type SendToolInput =
   | { readonly kind: 'sticker'; readonly sticker_ref: string; readonly reply_to_message_id?: string };
 
 function narrowSendInput(input: Static<typeof SendInputSchema>): SendToolInput | undefined {
-  const field = input.kind === 'text' ? ('text' as const) : ('sticker_ref' as const);
+  const kind = input.kind ?? (input.text !== undefined && input.sticker_ref === undefined ? 'text' : undefined);
+  if (kind === undefined) return undefined;
+  const field = kind === 'text' ? ('text' as const) : ('sticker_ref' as const);
   if (input[field] === undefined) return undefined;
   const reply = input.reply_to_message_id === undefined ? {} : { reply_to_message_id: input.reply_to_message_id };
-  return { kind: input.kind, [field]: input[field], ...reply } as SendToolInput;
+  return { kind, [field]: input[field], ...reply } as SendToolInput;
 }
 
 interface TelegramSendResponse {
@@ -68,7 +70,7 @@ export function createSendTool(
     name: 'send',
     label: 'Send to Telegram',
     description:
-      "Send one plain-text message or one sticker to this invocation's Telegram chat. For a sticker send, sticker_ref MUST be a stk_ value returned by search_stickers in THIS invocation; the img_ image_ref values shown in the context are for read_image only and will be rejected. Reply targets must be visible in this invocation.",
+      "Send one plain-text message or one sticker to this invocation's Telegram chat. For plain text, kind may be omitted when text is the only content field. For a sticker send, kind MUST be sticker and sticker_ref MUST be a stk_ value returned by search_stickers in THIS invocation; the img_ image_ref values shown in the context are for read_image only and will be rejected. Reply targets must be visible in this invocation.",
     parameters: SendInputSchema,
     executionMode: 'sequential',
     execute: async (toolCallId, input, signal) => {

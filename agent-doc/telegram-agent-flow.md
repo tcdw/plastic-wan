@@ -126,7 +126,7 @@ Context
 
 `send` 是唯一 Telegram 输出边界，支持：
 
-- 纯文本。
+- 纯文本；只提供 `text`（以及可选的 `reply_to_message_id`）时，`kind` 默认为 `text`。
 - 配置允许且当前 capability 授权的 Sticker。
 - 可选 Reply，但目标 Message ID 必须在当前 `visibleReplyMessageIds`。
 

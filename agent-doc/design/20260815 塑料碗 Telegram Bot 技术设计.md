@@ -556,12 +556,12 @@ Bot 不发送 typing action，不对连续发送增加人为延迟。
 
 ### 9.1 `send`
 
-参数使用 discriminated union：
+参数使用联合类型，`kind` 区分发送类型：
 
 ```ts
 type SendInput =
   | {
-      kind: "text";
+      kind?: "text";
       text: string;
       reply_to_message_id?: string;
     }
@@ -574,6 +574,7 @@ type SendInput =
 
 规则：
 
+- 仅提供 `text`（以及可选的 `reply_to_message_id`）时，`kind` 默认为 `"text"`；Sticker 仍必须显式指定 `kind: "sticker"`；
 - text 为纯文本，不设置 Telegram `parse_mode`；
 - text 必须满足 Telegram 单条长度限制，超长返回 Tool Error，不截断、不拆分；
 - `reply_to_message_id` 必须来自当前 Conversation 的可见 Context；

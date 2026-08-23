@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HttpError } from 'grammy';
 import type { Update } from 'grammy/types';
+import { Compile } from 'typebox/compile';
 import { loadConfig } from '../src/config.ts';
 import { ContextBuilder } from '../src/context-builder.ts';
 import { SqliteStore } from '../src/database.ts';
@@ -149,7 +150,8 @@ describe('send tool', () => {
       deadline: Date.now() + 30_000,
       bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     });
-    await tool.execute('call-1', { kind: 'text', text: 'world', reply_to_message_id: '10' });
+    expect(Compile(tool.parameters).Check({ text: 'world', reply_to_message_id: '10' })).toBe(true);
+    await tool.execute('call-1', { text: 'world', reply_to_message_id: '10' });
     const audit = store.db
       .query<{ tool_state: string; send_state: string; sent_by_bot: bigint; text: string }, []>(
         'SELECT tc.state AS tool_state, ts.state AS send_state, m.sent_by_bot, r.text FROM tool_calls tc JOIN telegram_sends ts ON ts.tool_call_id = tc.id JOIN messages m ON m.telegram_message_id = ts.telegram_message_id JOIN message_revisions r ON r.id = m.current_revision_id',

@@ -47,8 +47,12 @@ export async function fetchProviderModels(
   }
   const apiKey = await secrets.resolve(config.apiKey);
   if (config.api === 'anthropic-messages') {
-    if (!headers.has('x-api-key')) headers.set('x-api-key', apiKey);
-    if (!headers.has('anthropic-version')) headers.set('anthropic-version', '2023-06-01');
+    if (!headers.has('x-api-key')) {
+      headers.set('x-api-key', apiKey);
+    }
+    if (!headers.has('anthropic-version')) {
+      headers.set('anthropic-version', '2023-06-01');
+    }
   } else if (!headers.has('authorization')) {
     headers.set('authorization', `Bearer ${apiKey}`);
   }
@@ -95,7 +99,9 @@ async function readJsonResponse(response: Response): Promise<unknown> {
   if (Number.isFinite(declaredLength) && declaredLength > MAX_MODELS_RESPONSE_BYTES) {
     throw new Error(`Models endpoint response exceeds ${MAX_MODELS_RESPONSE_BYTES} bytes`);
   }
-  if (response.body === null) throw new Error('Models endpoint returned an empty response');
+  if (response.body === null) {
+    throw new Error('Models endpoint returned an empty response');
+  }
   const text = await response.text();
   if (new Blob([text]).size > MAX_MODELS_RESPONSE_BYTES) {
     throw new Error(`Models endpoint response exceeds ${MAX_MODELS_RESPONSE_BYTES} bytes`);

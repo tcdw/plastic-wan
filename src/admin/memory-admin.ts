@@ -136,7 +136,9 @@ export function createMemory(
   const id = newMemoryId();
   db.transaction(() => {
     const chat = db.query<{ id: bigint }, [bigint]>('SELECT id FROM chats WHERE telegram_chat_id = ?').get(body.chatId);
-    if (chat === null) throw new AdminQueryError('chat_not_found', 'This chat has not been seen by the bot', 404);
+    if (chat === null) {
+      throw new AdminQueryError('chat_not_found', 'This chat has not been seen by the bot', 404);
+    }
     const existing = db
       .query<{ id: bigint }, [bigint, number]>(
         'SELECT id FROM conversations WHERE chat_id = ? AND message_thread_id = ?',
@@ -177,17 +179,23 @@ export function updateMemory(
   }
   parameters.push(id);
   const updated = db.query(`UPDATE memories SET ${sets.join(', ')} WHERE id = ?`).run(...parameters).changes;
-  if (updated === 0) throw new AdminQueryError('not_found', 'Memory does not exist', 404);
+  if (updated === 0) {
+    throw new AdminQueryError('not_found', 'Memory does not exist', 404);
+  }
   return getItem(db, id, timestamp, warningDays, now);
 }
 
 export function deleteMemory(db: Database, id: string): void {
   const result = db.query('DELETE FROM memories WHERE id = ?').run(id);
-  if (result.changes === 0) throw new AdminQueryError('not_found', 'Memory does not exist', 404);
+  if (result.changes === 0) {
+    throw new AdminQueryError('not_found', 'Memory does not exist', 404);
+  }
 }
 
 export function parseMemoryId(value: string): string {
-  if (!new RegExp(MEMORY_ID_PATTERN).test(value)) throw new AdminQueryError('invalid_id', 'id must be a memory id');
+  if (!new RegExp(MEMORY_ID_PATTERN).test(value)) {
+    throw new AdminQueryError('invalid_id', 'id must be a memory id');
+  }
   return value;
 }
 
@@ -220,7 +228,9 @@ export function parseUpdateMemoryBody(value: unknown): UpdateMemoryBody {
     body.content = content;
   }
   const ttlSeconds = parseTtlSeconds(record.ttl_seconds);
-  if (ttlSeconds !== undefined) body.ttlSeconds = ttlSeconds;
+  if (ttlSeconds !== undefined) {
+    body.ttlSeconds = ttlSeconds;
+  }
   if (body.content === undefined && body.ttlSeconds === undefined) {
     throw new AdminQueryError('invalid_body', 'At least one of content or ttl_seconds is required');
   }
@@ -228,13 +238,16 @@ export function parseUpdateMemoryBody(value: unknown): UpdateMemoryBody {
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null)
+  if (typeof value !== 'object' || value === null) {
     throw new AdminQueryError('invalid_body', 'Request body must be a JSON object');
+  }
   return value as Record<string, unknown>;
 }
 
 function parseThreadId(value: unknown): number {
-  if (value === undefined) return 0;
+  if (value === undefined) {
+    return 0;
+  }
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 1_000_000) {
     throw new AdminQueryError('invalid_thread_id', 'message_thread_id must be an integer between 0 and 1000000');
   }
@@ -242,7 +255,9 @@ function parseThreadId(value: unknown): number {
 }
 
 function parseTtlSeconds(value: unknown): number | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined) {
+    return undefined;
+  }
   if (
     typeof value !== 'number' ||
     !Number.isInteger(value) ||
@@ -259,7 +274,9 @@ function parseTtlSeconds(value: unknown): number | undefined {
 
 function getItem(db: Database, id: string, nowIso: string, warningDays: number, now: Date): MemoryAdminItem {
   const row = db.query<MemoryListRow, [string]>(`${MEMORY_LIST_SELECT} WHERE m.id = ?`).get(id);
-  if (row === null) throw new Error('Memory row vanished after write');
+  if (row === null) {
+    throw new Error('Memory row vanished after write');
+  }
   const warningIso = new Date(now.getTime() + warningDays * 86_400_000).toISOString();
   return toItem(row, nowIso, warningIso);
 }

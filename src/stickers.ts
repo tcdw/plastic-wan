@@ -99,7 +99,9 @@ export class StickerService {
     for (const set of configured) {
       try {
         const response = await this.#api.getStickerSet(set.name);
-        if (!stickerSetValidator.Check(response)) throw new Error('Telegram getStickerSet response is invalid');
+        if (!stickerSetValidator.Check(response)) {
+          throw new Error('Telegram getStickerSet response is invalid');
+        }
         this.#store.transaction(() => this.#applyStickerSet(set.alias, response));
       } catch {
         this.#store.db
@@ -112,7 +114,9 @@ export class StickerService {
   }
 
   start(): void {
-    if (this.#controller !== undefined) throw new Error('Sticker worker is already running');
+    if (this.#controller !== undefined) {
+      throw new Error('Sticker worker is already running');
+    }
     this.#controller = new AbortController();
     this.#loopPromise = this.#loop(this.#controller.signal);
   }
@@ -136,7 +140,9 @@ export class StickerService {
          ORDER BY s.id LIMIT 1`,
       )
       .get(now.toISOString());
-    if (sticker === null) return false;
+    if (sticker === null) {
+      return false;
+    }
     this.#store.db
       .query("UPDATE stickers SET index_state = 'running', updated_at = ? WHERE id = ?")
       .run(now.toISOString(), sticker.id);
@@ -179,7 +185,14 @@ export class StickerService {
       executionMode: 'sequential',
       execute: async (toolCallId, input) => {
         const started = performance.now();
-        const toolId = startToolCall(this.#store.db, context.invocationId, toolCallId, 'search_stickers', JSON.stringify(input), false);
+        const toolId = startToolCall(
+          this.#store.db,
+          context.invocationId,
+          toolCallId,
+          'search_stickers',
+          JSON.stringify(input),
+          false,
+        );
         try {
           const setId =
             input.set === undefined
@@ -187,7 +200,9 @@ export class StickerService {
               : this.#store.db
                   .query<{ id: bigint }, [string]>('SELECT id FROM sticker_sets WHERE alias = ? AND configured = 1')
                   .get(input.set)?.id;
-          if (input.set !== undefined && setId === undefined) throw new Error('Unknown or disabled sticker set alias');
+          if (input.set !== undefined && setId === undefined) {
+            throw new Error('Unknown or disabled sticker set alias');
+          }
           const rows = this.#search(input.query, setId, input.limit ?? 5);
           const results = rows.map((row) => {
             const stickerRef = `stk_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -210,7 +225,9 @@ export class StickerService {
     const set = this.#store.db
       .query<{ id: bigint }, [string]>('SELECT id FROM sticker_sets WHERE alias = ?')
       .get(alias);
-    if (set === null) throw new Error('Configured sticker set row is missing');
+    if (set === null) {
+      throw new Error('Configured sticker set row is missing');
+    }
     this.#store.db.query('UPDATE stickers SET active = 0 WHERE sticker_set_id = ?').run(set.id);
     for (const sticker of response.stickers) {
       const format = sticker.is_video ? 'video' : sticker.is_animated ? 'animated' : 'static';
@@ -287,11 +304,15 @@ export class StickerService {
 
   async #loop(signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
-      if (await this.runOne(new Date(), signal)) continue;
+      if (await this.runOne(new Date(), signal)) {
+        continue;
+      }
       await new Promise<void>((resolve) => {
         let settled = false;
         const finish = (): void => {
-          if (settled) return;
+          if (settled) {
+            return;
+          }
           settled = true;
           clearTimeout(timer);
           signal.removeEventListener('abort', finish);

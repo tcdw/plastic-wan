@@ -221,7 +221,9 @@ describe('bot command service', () => {
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'hello'), start);
     const [invocationId] = scheduler.processDue(new Date(start.getTime() + 15_000));
-    if (invocationId === undefined) throw new Error('Expected queued invocation');
+    if (invocationId === undefined) {
+      throw new Error('Expected queued invocation');
+    }
     expect(store.db.query<{ state: string }, []>('SELECT state FROM invocations').get()?.state).toBe('queued');
 
     const reply = commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
@@ -303,9 +305,7 @@ cost = { input = 1, output = 2, cache_read = 0.1, cache_write = 1 }`,
           .replace('\n[providers.vision]', `\n\n${models}\n\n[providers.vision]`);
     }
 
-    async function commandSetup(
-      transform?: (toml: string) => string,
-    ): Promise<{
+    async function commandSetup(transform?: (toml: string) => string): Promise<{
       store: SqliteStore;
       commands: BotCommandService;
       switcher: AgentModelSwitcher;
@@ -431,7 +431,9 @@ cost = { input = 1, output = 2, cache_read = 0.1, cache_write = 1 }`,
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'hello'), start);
     const [invocationId] = scheduler.processDue(new Date(start.getTime() + 15_000));
-    if (invocationId === undefined) throw new Error('Expected queued invocation');
+    if (invocationId === undefined) {
+      throw new Error('Expected queued invocation');
+    }
     const mallory: CommandSender = { id: 99n, name: 'Mallory', username: 'mallory' };
     expect(commands.run({ name: 'pause' }, 123456789n, mallory, FIXED_NOW)).toBe('该命令仅对本 Bot 的管理员可用。');
     expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM chat_pause').get()?.count).toBe(0n);
@@ -572,8 +574,9 @@ describe('scheduler pause enforcement', () => {
       .run(new Date(start.getTime() - 1_000).toISOString());
     const waitForState = async (state: string): Promise<void> => {
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        if (store.db.query<{ state: string }, []>('SELECT state FROM invocations LIMIT 1').get()?.state === state)
+        if (store.db.query<{ state: string }, []>('SELECT state FROM invocations LIMIT 1').get()?.state === state) {
           return;
+        }
         await Bun.sleep(10);
       }
       throw new Error(`Invocation never reached ${state}`);

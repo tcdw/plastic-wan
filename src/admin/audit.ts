@@ -301,7 +301,9 @@ export function getInvocation(db: Database, id: bigint): Record<string, unknown>
        WHERE i.id = ?`,
     )
     .get(id);
-  if (invocation === null) return null;
+  if (invocation === null) {
+    return null;
+  }
   const toolCalls = db
     .query<ToolCallRow, [bigint]>(
       `SELECT id, tool_call_id, tool_name, arguments_json, result_text, state, side_effect, error_code,
@@ -441,16 +443,16 @@ export function listMessages(db: Database, query: ListQuery): Page<Record<string
     parameters.push(parseId(query.chat, 'chat'));
   }
   if (query.search !== undefined && query.search !== null && query.search.length > 0) {
-    if (query.search.length > MAX_SEARCH_LENGTH) throw new AdminQueryError('invalid_search', 'Search text is too long');
+    if (query.search.length > MAX_SEARCH_LENGTH) {
+      throw new AdminQueryError('invalid_search', 'Search text is too long');
+    }
     conditions.push("(r.text LIKE ? ESCAPE '\\' OR r.caption LIKE ? ESCAPE '\\')");
     const like = `%${query.search.replace(/[\\%_]/g, '\\$&')}%`;
     parameters.push(like, like);
   }
   parameters.push(BigInt(limit + 1));
   const rows = db
-    .query<MessageListRow, Bindings>(
-      `${MESSAGE_SELECT} ${where(conditions)} ORDER BY m.id DESC LIMIT ?`,
-    )
+    .query<MessageListRow, Bindings>(`${MESSAGE_SELECT} ${where(conditions)} ORDER BY m.id DESC LIMIT ?`)
     .all(...parameters);
   return page(rows, limit, (row) => ({
     id: row.id.toString(),
@@ -481,12 +483,10 @@ export function listMessages(db: Database, query: ListQuery): Page<Record<string
 }
 
 export function getMessage(db: Database, id: bigint): Record<string, unknown> | null {
-  const message = db
-    .query<MessageListRow, [bigint]>(
-      `${MESSAGE_SELECT} WHERE m.id = ?`,
-    )
-    .get(id);
-  if (message === null) return null;
+  const message = db.query<MessageListRow, [bigint]>(`${MESSAGE_SELECT} WHERE m.id = ?`).get(id);
+  if (message === null) {
+    return null;
+  }
   const revisions = db
     .query<RevisionRow, [bigint]>(
       `SELECT r.id, r.revision_no, r.kind, r.text, r.caption, r.reply_to_message_id, r.reply_snapshot_json,
@@ -598,7 +598,9 @@ export function listStickers(db: Database, query: ListQuery): Page<Record<string
     parameters.push(assertToken(query.state, 'state'));
   }
   if (query.search !== undefined && query.search !== null && query.search.length > 0) {
-    if (query.search.length > MAX_SEARCH_LENGTH) throw new AdminQueryError('invalid_search', 'Search text is too long');
+    if (query.search.length > MAX_SEARCH_LENGTH) {
+      throw new AdminQueryError('invalid_search', 'Search text is too long');
+    }
     conditions.push("(ma.description LIKE ? ESCAPE '\\' OR s.emoji LIKE ? ESCAPE '\\')");
     const like = `%${query.search.replace(/[\\%_]/g, '\\$&')}%`;
     parameters.push(like, like);
@@ -745,37 +747,51 @@ function appendCursor(
   column: string,
   cursor: string | null | undefined,
 ): void {
-  if (cursor === undefined || cursor === null || cursor.length === 0) return;
+  if (cursor === undefined || cursor === null || cursor.length === 0) {
+    return;
+  }
   conditions.push(`${column} < ?`);
   parameters.push(parseId(cursor, 'cursor'));
 }
 
 export function parseId(value: string, label: string): bigint {
-  if (!/^-?\d{1,19}$/.test(value)) throw new AdminQueryError(`invalid_${label}`, `${label} must be an integer`);
+  if (!/^-?\d{1,19}$/.test(value)) {
+    throw new AdminQueryError(`invalid_${label}`, `${label} must be an integer`);
+  }
   return BigInt(value);
 }
 
 export function parseLimit(value: string | null | undefined): number {
-  if (value === undefined || value === null || value.length === 0) return DEFAULT_PAGE_SIZE;
-  if (!/^\d{1,3}$/.test(value)) throw new AdminQueryError('invalid_limit', 'limit must be a positive integer');
+  if (value === undefined || value === null || value.length === 0) {
+    return DEFAULT_PAGE_SIZE;
+  }
+  if (!/^\d{1,3}$/.test(value)) {
+    throw new AdminQueryError('invalid_limit', 'limit must be a positive integer');
+  }
   const limit = Number.parseInt(value, 10);
-  if (limit < 1 || limit > MAX_PAGE_SIZE)
+  if (limit < 1 || limit > MAX_PAGE_SIZE) {
     throw new AdminQueryError('invalid_limit', `limit must be between 1 and ${MAX_PAGE_SIZE}`);
+  }
   return limit;
 }
 
 function assertToken(value: string, label: string): string {
-  if (!/^[A-Za-z0-9._-]{1,64}$/.test(value))
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(value)) {
     throw new AdminQueryError(`invalid_${label}`, `${label} filter is invalid`);
+  }
   return value;
 }
 
 /** Stored JSON is untrusted; only accept a well-formed array of strings. */
 function parseStringArray(json: string | null): string[] | null {
-  if (json === null) return null;
+  if (json === null) {
+    return null;
+  }
   try {
     const parsed: unknown = JSON.parse(json);
-    if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === 'string')) return null;
+    if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === 'string')) {
+      return null;
+    }
     return parsed;
   } catch {
     return null;
@@ -785,23 +801,33 @@ function parseStringArray(json: string | null): string[] | null {
 function parseToolRegistry(
   json: string | null,
 ): readonly { name: string; label: string; description: string }[] | null {
-  if (json === null) return null;
+  if (json === null) {
+    return null;
+  }
   try {
     const parsed: unknown = JSON.parse(json);
-    if (!Array.isArray(parsed)) return null;
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
     const entries = parsed.map((entry): { name: string; label: string; description: string } | null => {
-      if (typeof entry !== 'object' || entry === null) return null;
+      if (typeof entry !== 'object' || entry === null) {
+        return null;
+      }
       const record = entry as Record<string, unknown>;
       const name = record.name;
       const label = record.label;
       const description = record.description;
-      if (typeof name !== 'string' || typeof label !== 'string' || typeof description !== 'string') return null;
+      if (typeof name !== 'string' || typeof label !== 'string' || typeof description !== 'string') {
+        return null;
+      }
       return { name, label, description };
     });
     const valid = entries.filter(
       (entry): entry is { name: string; label: string; description: string } => entry !== null,
     );
-    if (valid.length !== entries.length) return null;
+    if (valid.length !== entries.length) {
+      return null;
+    }
     return valid;
   } catch {
     return null;
@@ -845,10 +871,14 @@ export function usage(db: Database, days: number, now = new Date()): UsageSeries
     )
     .all(firstDate.toISOString().slice(0, 10), today.toISOString().slice(0, 10));
   const byDate = new Map<string, UsagePoint>();
-  for (const point of result) byDate.set(point.date, point);
+  for (const point of result) {
+    byDate.set(point.date, point);
+  }
   for (const row of rows) {
     const point = byDate.get(row.utc_date);
-    if (point === undefined) continue;
+    if (point === undefined) {
+      continue;
+    }
     byDate.set(row.utc_date, { ...point, [row.metric]: Number(row.total) });
   }
   return { days, series: Array.from(byDate.values()) };

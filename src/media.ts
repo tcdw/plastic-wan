@@ -69,7 +69,9 @@ export class TelegramMediaClient implements MediaDownloader {
 
   async download(fileId: string, destination: string, signal: AbortSignal): Promise<void> {
     const file = await this.#api.getFile(fileId);
-    if (file.file_path === undefined) throw new Error('Telegram getFile response omitted file_path');
+    if (file.file_path === undefined) {
+      throw new Error('Telegram getFile response omitted file_path');
+    }
     const encodedPath = file.file_path
       .split('/')
       .map((part) => encodeURIComponent(part))
@@ -78,11 +80,13 @@ export class TelegramMediaClient implements MediaDownloader {
       signal,
       redirect: 'error',
     });
-    if (!response.ok || response.body === null)
+    if (!response.ok || response.body === null) {
       throw new Error(`Telegram media download failed with status ${response.status}`);
+    }
     const contentLength = Number(response.headers.get('content-length'));
-    if (Number.isFinite(contentLength) && contentLength > MAX_DOWNLOAD_BYTES)
+    if (Number.isFinite(contentLength) && contentLength > MAX_DOWNLOAD_BYTES) {
       throw new Error('Telegram media exceeds 20 MB');
+    }
     const handle = await open(destination, 'wx', 0o600);
     const reader = response.body.getReader();
     let size = 0;
@@ -90,9 +94,13 @@ export class TelegramMediaClient implements MediaDownloader {
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          break;
+        }
         size += value.byteLength;
-        if (size > MAX_DOWNLOAD_BYTES) throw new Error('Telegram media exceeds 20 MB');
+        if (size > MAX_DOWNLOAD_BYTES) {
+          throw new Error('Telegram media exceeds 20 MB');
+        }
         await handle.write(value);
       }
       completed = true;
@@ -100,7 +108,9 @@ export class TelegramMediaClient implements MediaDownloader {
       await reader.cancel().catch(() => undefined);
       reader.releaseLock();
       await handle.close();
-      if (!completed) await unlink(destination).catch(() => undefined);
+      if (!completed) {
+        await unlink(destination).catch(() => undefined);
+      }
     }
   }
 }
@@ -157,10 +167,14 @@ export class MediaService {
   }
 
   async loadDirectImages(images: readonly DirectImage[], signal: AbortSignal): Promise<ImageContent[]> {
-    if (images.length === 0) return [];
+    if (images.length === 0) {
+      return [];
+    }
     await mkdir(this.#config.paths.media_cache, { recursive: true, mode: 0o700 });
     const temporaryDirectory = await mkdtemp(join(this.#config.paths.media_cache, 'direct-'));
-    if (process.platform !== 'win32') await chmod(temporaryDirectory, 0o700);
+    if (process.platform !== 'win32') {
+      await chmod(temporaryDirectory, 0o700);
+    }
     try {
       const content: ImageContent[] = [];
       for (const [index, image] of images.entries()) {
@@ -169,7 +183,9 @@ export class MediaService {
             'SELECT id, kind, file_id, file_unique_id, mime_type, file_size, telegram_json FROM media WHERE id = ?',
           )
           .get(image.mediaId);
-        if (media === null || media.kind === 'sticker') throw new Error('Direct image is unavailable');
+        if (media === null || media.kind === 'sticker') {
+          throw new Error('Direct image is unavailable');
+        }
         if (media.file_size !== null && media.file_size > BigInt(MAX_DOWNLOAD_BYTES)) {
           throw new Error('Telegram media exceeds 20 MB');
         }
@@ -217,7 +233,14 @@ export class MediaService {
           );
           throw new Error('image_ref is not visible in this invocation');
         }
-        const toolId = startToolCall(this.#store.db, context.invocationId, toolCallId, 'read_image', JSON.stringify(input), false);
+        const toolId = startToolCall(
+          this.#store.db,
+          context.invocationId,
+          toolCallId,
+          'read_image',
+          JSON.stringify(input),
+          false,
+        );
         const timeout = Math.max(1, Math.min(30_000, invocationDeadline - Date.now()));
         const combinedSignal =
           signal === undefined ? AbortSignal.timeout(timeout) : AbortSignal.any([signal, AbortSignal.timeout(timeout)]);
@@ -227,7 +250,9 @@ export class MediaService {
               'SELECT id, kind, file_id, file_unique_id, mime_type, file_size, telegram_json FROM media WHERE id = ?',
             )
             .get(mediaId);
-          if (media === null) throw new Error('Referenced media no longer exists');
+          if (media === null) {
+            throw new Error('Referenced media no longer exists');
+          }
           const version = `${this.#model.provider}/${this.#model.id}/prompt-${this.#config.vision.prompt_version}`;
           const cached = this.#store.db
             .query<{ description: string }, [string, string, string]>(
@@ -275,7 +300,9 @@ export class MediaService {
         [bigint]
       >('SELECT id, file_unique_id, file_id, format, thumbnail_json FROM stickers WHERE id = ? AND active = 1')
       .get(stickerId);
-    if (sticker === null) throw new Error('Sticker is no longer active');
+    if (sticker === null) {
+      throw new Error('Sticker is no longer active');
+    }
     let thumbnail: unknown;
     if (sticker.thumbnail_json !== null) {
       try {
@@ -289,7 +316,9 @@ export class MediaService {
       is_animated: sticker.format === 'animated',
       ...(thumbnail === undefined ? {} : { thumbnail }),
     };
-    if (!stickerTelegramValidator.Check(telegram)) throw new Error('Stored sticker metadata does not match its schema');
+    if (!stickerTelegramValidator.Check(telegram)) {
+      throw new Error('Stored sticker metadata does not match its schema');
+    }
     const media: MediaRow = {
       id: sticker.id,
       kind: 'sticker',
@@ -311,7 +340,9 @@ export class MediaService {
       )
       .get(media.file_unique_id, version);
     if (analysis === null) {
-      if (!this.#reserveStickerImage()) throw new Error('Sticker vision daily budget reached');
+      if (!this.#reserveStickerImage()) {
+        throw new Error('Sticker vision daily budget reached');
+      }
       await this.#analyzeDeduplicated(media, version, { kind: 'sticker_index' }, signal);
       analysis = this.#store.db
         .query<{ id: bigint; description: string; metadata_json: string }, [string, string]>(
@@ -319,7 +350,9 @@ export class MediaService {
         )
         .get(media.file_unique_id, version);
     }
-    if (analysis === null) throw new Error('Sticker analysis was not persisted');
+    if (analysis === null) {
+      throw new Error('Sticker analysis was not persisted');
+    }
     let metadata: unknown;
     try {
       metadata = JSON.parse(analysis.metadata_json);
@@ -345,20 +378,26 @@ export class MediaService {
   ): Promise<string> {
     const key = `${media.file_unique_id}\u0000${version}`;
     const existing = this.#inflight.get(key);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      return existing;
+    }
     const pending = this.#analyze(media, version, scope, signal).finally(() => this.#inflight.delete(key));
     this.#inflight.set(key, pending);
     return pending;
   }
 
   async #analyze(media: MediaRow, version: string, scope: AnalysisScope, signal: AbortSignal): Promise<string> {
-    if (media.file_size !== null && media.file_size > BigInt(MAX_DOWNLOAD_BYTES))
+    if (media.file_size !== null && media.file_size > BigInt(MAX_DOWNLOAD_BYTES)) {
       throw new Error('Telegram media exceeds 20 MB');
-    if (scope.kind === 'chat' && this.#chatTokenBudgetReached(scope.chatId))
+    }
+    if (scope.kind === 'chat' && this.#chatTokenBudgetReached(scope.chatId)) {
       throw new Error('Chat token budget reached');
+    }
     await mkdir(this.#config.paths.media_cache, { recursive: true, mode: 0o700 });
     const temporaryDirectory = await mkdtemp(join(this.#config.paths.media_cache, 'analysis-'));
-    if (process.platform !== 'win32') await chmod(temporaryDirectory, 0o700);
+    if (process.platform !== 'win32') {
+      await chmod(temporaryDirectory, 0o700);
+    }
     const inputPath = join(temporaryDirectory, 'input');
     let analysisId: bigint | undefined;
     try {
@@ -382,7 +421,9 @@ export class MediaService {
           'SELECT id FROM media_analyses WHERE file_unique_id = ? AND analysis_version = ?',
         )
         .get(media.file_unique_id, version);
-      if (analysis === null) throw new Error('Media analysis upsert failed');
+      if (analysis === null) {
+        throw new Error('Media analysis upsert failed');
+      }
       analysisId = analysis.id;
       const normalized = await prepareMediaImage(media, inputPath, temporaryDirectory, this.#mediaClient, signal);
       const releaseVision = await this.#visionSemaphore.acquire(signal, scope.kind === 'sticker_index' ? 1 : 0);
@@ -436,8 +477,9 @@ export class MediaService {
           this.#failVisionCall(callId, signal.aborted ? 'vision_timeout' : 'vision_model_error', error);
           throw error;
         }
-        if (response.stopReason === 'error' || response.stopReason === 'aborted')
+        if (response.stopReason === 'error' || response.stopReason === 'aborted') {
           throw new Error('Vision model failed');
+        }
         let analyzed: { description: string; metadata: StickerAnalysis | null };
         if (media.kind === 'sticker') {
           const toolCall = response.content.find((entry) => entry.type === 'toolCall');
@@ -451,7 +493,9 @@ export class MediaService {
             .map((entry) => entry.text)
             .join('')
             .trim();
-          if (description.length === 0) throw new Error('Vision model returned no description');
+          if (description.length === 0) {
+            throw new Error('Vision model returned no description');
+          }
           analyzed = { description, metadata: null };
         }
         const expiresAt =
@@ -564,7 +608,9 @@ export class MediaService {
         chat = this.#config.telegram.chats.find((candidate) => BigInt(candidate.id) === migration.old_chat_id);
       }
     }
-    if (chat === undefined) return true;
+    if (chat === undefined) {
+      return true;
+    }
     const now = new Date().toISOString();
     const used =
       this.#store.db
@@ -585,7 +631,9 @@ export class MediaService {
         )
         .all(date);
       const usage: Record<string, bigint> = {};
-      for (const row of rows) usage[row.metric] = row.amount;
+      for (const row of rows) {
+        usage[row.metric] = row.amount;
+      }
       if (
         (usage.vision_images ?? 0n) >= BigInt(this.#config.vision.daily_budget.max_images) ||
         (usage.vision_tokens ?? 0n) >= BigInt(this.#config.vision.daily_budget.max_tokens)
@@ -626,14 +674,18 @@ async function prepareMediaImage(
   } catch {
     throw new Error('Stored sticker metadata is invalid JSON');
   }
-  if (!stickerTelegramValidator.Check(telegram)) throw new Error('Stored sticker metadata does not match its schema');
+  if (!stickerTelegramValidator.Check(telegram)) {
+    throw new Error('Stored sticker metadata does not match its schema');
+  }
   if (telegram.thumbnail !== undefined) {
     const thumbnailPath = join(directory, 'thumbnail');
     await downloader.download(telegram.thumbnail.file_id, thumbnailPath, signal);
     return normalizeImage(thumbnailPath, directory);
   }
   await downloader.download(media.file_id, inputPath, signal);
-  if (!telegram.is_video && !telegram.is_animated) return normalizeImage(inputPath, directory);
+  if (!telegram.is_video && !telegram.is_animated) {
+    return normalizeImage(inputPath, directory);
+  }
   if (telegram.is_video) {
     const outputPath = join(directory, 'representative.png');
     const durationText = await runExternal(
@@ -651,7 +703,9 @@ async function prepareMediaImage(
       signal,
     );
     const duration = Number.parseFloat(durationText.trim());
-    if (!Number.isFinite(duration) || duration <= 0) throw new Error('ffprobe returned an invalid sticker duration');
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new Error('ffprobe returned an invalid sticker duration');
+    }
     await runExternal(
       ['ffmpeg', '-v', 'error', '-ss', String(duration / 2), '-i', inputPath, '-frames:v', '1', outputPath],
       false,
@@ -676,12 +730,16 @@ async function prepareMediaImage(
 }
 
 function parseStickerAnalysis(value: unknown): { description: string; metadata: StickerAnalysis } {
-  if (!stickerAnalysisValidator.Check(value)) throw new Error('Vision model returned an invalid sticker analysis');
+  if (!stickerAnalysisValidator.Check(value)) {
+    throw new Error('Vision model returned an invalid sticker analysis');
+  }
   return { description: value.description_zh, metadata: value };
 }
 
 export function createLottieCommand(argumentsList: readonly string[]): string[] {
-  if (process.platform !== 'win32') return ['lottie_convert.py', ...argumentsList];
+  if (process.platform !== 'win32') {
+    return ['lottie_convert.py', ...argumentsList];
+  }
   const runner =
     "import os, runpy, sysconfig; runpy.run_path(os.path.join(sysconfig.get_path('scripts'), 'lottie_convert.py'), run_name='__main__')";
   return ['python', '-c', runner, ...argumentsList];
@@ -705,13 +763,17 @@ async function runExternal(argv: readonly string[], captureOutput: boolean, sign
     const output =
       captureOutput && processHandle.stdout instanceof ReadableStream
         ? await readBoundedOutput(processHandle.stdout, 65_536, () => {
-          processHandle.kill();
-          return new Error('Media command output exceeds 64 KiB');
-        })
+            processHandle.kill();
+            return new Error('Media command output exceeds 64 KiB');
+          })
         : '';
     const exitCode = await processHandle.exited;
-    if (signal.aborted) throw new Error('Media command aborted');
-    if (exitCode !== 0) throw new Error(`${argv[0]} failed with exit code ${exitCode}`);
+    if (signal.aborted) {
+      throw new Error('Media command aborted');
+    }
+    if (exitCode !== 0) {
+      throw new Error(`${argv[0]} failed with exit code ${exitCode}`);
+    }
     return output;
   } finally {
     clearTimeout(timeout);
@@ -721,14 +783,20 @@ async function runExternal(argv: readonly string[], captureOutput: boolean, sign
 
 async function normalizeImage(inputPath: string, directory: string): Promise<NormalizedImage> {
   const input = Buffer.from(await Bun.file(inputPath).arrayBuffer());
-  if (input.byteLength > MAX_DOWNLOAD_BYTES) throw new Error('Image input exceeds 20 MB');
+  if (input.byteLength > MAX_DOWNLOAD_BYTES) {
+    throw new Error('Image input exceeds 20 MB');
+  }
   const source = sharp(input, { failOn: 'error', limitInputPixels: MAX_DECODED_PIXELS });
   const metadata = await source.metadata();
-  if (metadata.format === undefined || !(metadata.format in ALLOWED_IMAGE_FORMATS))
+  if (metadata.format === undefined || !(metadata.format in ALLOWED_IMAGE_FORMATS)) {
     throw new Error('Unsupported image format');
-  if (metadata.width === undefined || metadata.height === undefined)
+  }
+  if (metadata.width === undefined || metadata.height === undefined) {
     throw new Error('Image dimensions are unavailable');
-  if (metadata.width * metadata.height > MAX_DECODED_PIXELS) throw new Error('Decoded image exceeds pixel limit');
+  }
+  if (metadata.width * metadata.height > MAX_DECODED_PIXELS) {
+    throw new Error('Decoded image exceeds pixel limit');
+  }
   const transparent = metadata.hasAlpha === true;
   const outputPath = join(directory, transparent ? 'normalized.png' : 'normalized.jpg');
   const pipeline = source.rotate().resize({
@@ -740,9 +808,13 @@ async function normalizeImage(inputPath: string, directory: string): Promise<Nor
   const output = transparent
     ? await pipeline.png().toBuffer({ resolveWithObject: true })
     : await pipeline.jpeg({ quality: 85, mozjpeg: true }).toBuffer({ resolveWithObject: true });
-  if (output.data.byteLength > MAX_NORMALIZED_BYTES) throw new Error('Normalized image exceeds output limit');
+  if (output.data.byteLength > MAX_NORMALIZED_BYTES) {
+    throw new Error('Normalized image exceeds output limit');
+  }
   await Bun.write(outputPath, output.data);
-  if (process.platform !== 'win32') await chmod(outputPath, 0o600);
+  if (process.platform !== 'win32') {
+    await chmod(outputPath, 0o600);
+  }
   return {
     path: outputPath,
     mimeType: transparent ? 'image/png' : 'image/jpeg',

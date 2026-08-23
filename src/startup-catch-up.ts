@@ -59,14 +59,20 @@ export async function runStartupCatchUp(options: StartupCatchUpOptions): Promise
     };
     options.signal?.throwIfAborted();
     const updates = await options.api.getUpdates(request);
-    if (updates.length === 0) break;
+    if (updates.length === 0) {
+      break;
+    }
     for (const update of updates) {
       const result = options.ingestion.ingestCatchUp(update, currentTime());
       updatesReceived += 1;
-      if (result.messageId !== undefined && update.message !== undefined) storedMessages += 1;
+      if (result.messageId !== undefined && update.message !== undefined) {
+        storedMessages += 1;
+      }
     }
     const lastUpdate = updates.at(-1);
-    if (lastUpdate !== undefined) offset = lastUpdate.update_id + 1;
+    if (lastUpdate !== undefined) {
+      offset = lastUpdate.update_id + 1;
+    }
     firstRequest = false;
   }
 

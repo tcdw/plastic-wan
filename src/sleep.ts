@@ -40,15 +40,22 @@ export function isLowDailyTokenBudget(budget: DailyTokenBudget): boolean {
 }
 
 export function storedSleepUntil(db: Database): string | null {
-  return db.query<{ value: string }, [string]>('SELECT value FROM app_state WHERE key = ?').get(SLEEP_STATE_KEY)?.value ?? null;
+  return (
+    db.query<{ value: string }, [string]>('SELECT value FROM app_state WHERE key = ?').get(SLEEP_STATE_KEY)?.value ??
+    null
+  );
 }
 
 export function activeSleepUntil(db: Database, now = new Date()): string | null {
   return db
     .transaction(() => {
       const sleepUntil = storedSleepUntil(db);
-      if (sleepUntil === null) return null;
-      if (sleepUntil > now.toISOString()) return sleepUntil;
+      if (sleepUntil === null) {
+        return null;
+      }
+      if (sleepUntil > now.toISOString()) {
+        return sleepUntil;
+      }
       const deleted = db.query('DELETE FROM app_state WHERE key = ? AND value = ?').run(SLEEP_STATE_KEY, sleepUntil);
       if (deleted.changes === 1) {
         console.log(
@@ -63,7 +70,9 @@ export function activeSleepUntil(db: Database, now = new Date()): string | null 
 export function enterSleep(db: Database, now = new Date()): SleepTransition {
   return db
     .transaction(() => {
-      const current = db.query<{ value: string }, [string]>('SELECT value FROM app_state WHERE key = ?').get(SLEEP_STATE_KEY);
+      const current = db
+        .query<{ value: string }, [string]>('SELECT value FROM app_state WHERE key = ?')
+        .get(SLEEP_STATE_KEY);
       if (current !== null && current.value > now.toISOString()) {
         return { sleepUntil: current.value, entered: false };
       }
@@ -92,7 +101,15 @@ export function createZzzTool(options: {
     executionMode: 'sequential',
     execute: async (toolCallId, input) => {
       const now = new Date();
-      const auditId = startToolCall(options.db, options.invocationId, toolCallId, 'zzz', JSON.stringify(input), true, now);
+      const auditId = startToolCall(
+        options.db,
+        options.invocationId,
+        toolCallId,
+        'zzz',
+        JSON.stringify(input),
+        true,
+        now,
+      );
       console.log(
         JSON.stringify({
           event: 'zzz_called',

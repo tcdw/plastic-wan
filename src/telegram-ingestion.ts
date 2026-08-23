@@ -34,7 +34,6 @@ const SERVICE_KEYS: Record<string, true> = {
 };
 const MAX_IMAGE_DOCUMENT_BYTES = 20 * 1024 * 1024;
 
-
 interface StoredMessage {
   readonly id: bigint;
   readonly revisionId: bigint;
@@ -107,21 +106,33 @@ export class TelegramIngestion {
         rejectionReason,
         allowed ? JSON.stringify(update) : null,
       );
-    if (inserted.changes === 0) return {};
-    if (!allowed || chat === undefined || chatId === undefined || topics === null) return {};
+    if (inserted.changes === 0) {
+      return {};
+    }
+    if (!allowed || chat === undefined || chatId === undefined || topics === null) {
+      return {};
+    }
 
     this.#recordMigration(message, receivedAt);
     const internalChatId = this.#upsertChat(chat, chatId, receivedAt);
-    if (message === undefined) return {};
+    if (message === undefined) {
+      return {};
+    }
     const edited = update.edited_message !== undefined;
     // Chat control commands are handled by the bot itself: they are audited
     // but never stored as messages, so they cannot trigger or taint buckets.
     const command = schedule && !edited ? parseBotCommand(message, this.#botUsername) : null;
-    if (command !== null) return { command };
+    if (command !== null) {
+      return { command };
+    }
     const stored = this.#storeMessage(message, internalChatId, threadId, receivedAt, edited);
-    if (stored === undefined) return {};
+    if (stored === undefined) {
+      return {};
+    }
     let bucketId: bigint | undefined;
-    if (!edited && schedule) bucketId = this.#appendToBucket(internalChatId, threadId, stored, receivedAt);
+    if (!edited && schedule) {
+      bucketId = this.#appendToBucket(internalChatId, threadId, stored, receivedAt);
+    }
     return {
       messageId: stored.id,
       ...(bucketId === undefined ? {} : { bucketId }),
@@ -130,17 +141,23 @@ export class TelegramIngestion {
 
   /** `null` when the chat is not allowed; `undefined` when allowed for all topics. */
   #topicsFor(chatId: bigint): ReadonlySet<bigint> | undefined | null {
-    if (this.#allowedChats.has(chatId.toString())) return this.#allowedChats.get(chatId.toString());
+    if (this.#allowedChats.has(chatId.toString())) {
+      return this.#allowedChats.get(chatId.toString());
+    }
     const migration = this.#store.db
       .query<{ old_chat_id: bigint }, [bigint]>('SELECT old_chat_id FROM chat_migrations WHERE new_chat_id = ?')
       .get(chatId);
-    if (migration === null) return null;
+    if (migration === null) {
+      return null;
+    }
     const migrated = migration.old_chat_id.toString();
     return this.#allowedChats.has(migrated) ? this.#allowedChats.get(migrated) : null;
   }
 
   #recordMigration(message: Message | undefined, receivedAt: Date): void {
-    if (message === undefined) return;
+    if (message === undefined) {
+      return;
+    }
     let oldChatId: bigint | undefined;
     let newChatId: bigint | undefined;
     if ('migrate_to_chat_id' in message) {
@@ -150,7 +167,9 @@ export class TelegramIngestion {
       oldChatId = BigInt(message.migrate_from_chat_id);
       newChatId = BigInt(message.chat.id);
     }
-    if (oldChatId === undefined || newChatId === undefined) return;
+    if (oldChatId === undefined || newChatId === undefined) {
+      return;
+    }
     this.#store.db
       .query(
         'INSERT INTO chat_migrations(old_chat_id, new_chat_id, received_at) VALUES (?, ?, ?) ON CONFLICT(old_chat_id) DO UPDATE SET new_chat_id = excluded.new_chat_id, received_at = excluded.received_at',
@@ -169,7 +188,9 @@ export class TelegramIngestion {
     const row = this.#store.db
       .query<{ id: bigint }, [bigint]>('SELECT id FROM chats WHERE telegram_chat_id = ?')
       .get(chatId);
-    if (row === null) throw new Error('Chat upsert did not return a row');
+    if (row === null) {
+      throw new Error('Chat upsert did not return a row');
+    }
     return row.id;
   }
 
@@ -184,7 +205,9 @@ export class TelegramIngestion {
     const fromBot = message.from?.is_bot === true;
     const ownMessage = message.from !== undefined && BigInt(message.from.id) === this.#botId;
     const service = isServiceMessage(message);
-    if (ownMessage || (fromBot && !this.#config.telegram.process_bot_messages)) return undefined;
+    if (ownMessage || (fromBot && !this.#config.telegram.process_bot_messages)) {
+      return undefined;
+    }
     const conversationId = this.#upsertConversation(internalChatId, threadId, receivedAt);
     const telegramMessageId = BigInt(message.message_id);
     const existing = this.#store.db
@@ -210,7 +233,9 @@ export class TelegramIngestion {
       revisionNo = 1n;
     } else {
       messageId = existing.id;
-      if (!edited) return undefined;
+      if (!edited) {
+        return undefined;
+      }
       revisionNo = existing.revision_no + 1n;
     }
     const normalized = normalizeMessage(message, service);
@@ -290,7 +315,9 @@ export class TelegramIngestion {
     const row = this.#store.db
       .query<{ id: bigint }, [string, bigint]>('SELECT id FROM senders WHERE telegram_type = ? AND telegram_id = ?')
       .get(type, telegramId);
-    if (row === null) throw new Error('Sender upsert did not return a row');
+    if (row === null) {
+      throw new Error('Sender upsert did not return a row');
+    }
     return row.id;
   }
 
@@ -305,25 +332,35 @@ export class TelegramIngestion {
         'SELECT id FROM conversations WHERE chat_id = ? AND message_thread_id = ?',
       )
       .get(chatId, threadId);
-    if (row === null) throw new Error('Conversation upsert did not return a row');
+    if (row === null) {
+      throw new Error('Conversation upsert did not return a row');
+    }
     return row.id;
   }
 
   #appendToBucket(chatId: bigint, threadId: bigint, message: StoredMessage, receivedAt: Date): bigint | undefined {
-    if (isChatPaused(this.#store.db, chatId)) return undefined;
+    if (isChatPaused(this.#store.db, chatId)) {
+      return undefined;
+    }
     const conversation = this.#store.db
       .query<{ id: bigint }, [bigint, bigint]>(
         'SELECT id FROM conversations WHERE chat_id = ? AND message_thread_id = ?',
       )
       .get(chatId, threadId);
-    if (conversation === null) throw new Error('Conversation missing while assigning bucket');
+    if (conversation === null) {
+      throw new Error('Conversation missing while assigning bucket');
+    }
     const collecting = this.#store.db
       .query<{ id: bigint }, [bigint]>("SELECT id FROM buckets WHERE conversation_id = ? AND state = 'collecting'")
       .get(conversation.id);
-    if (message.companionOnly && collecting === null) return undefined;
+    if (message.companionOnly && collecting === null) {
+      return undefined;
+    }
     let bucketId = collecting?.id;
     if (bucketId === undefined) {
-      if (!message.eligibleHuman) return undefined;
+      if (!message.eligibleHuman) {
+        return undefined;
+      }
       const now = receivedAt.toISOString();
       const latestInvocation = this.#store.db
         .query<{ state: string; started_at: string | null }, [bigint]>(
@@ -356,7 +393,9 @@ export class TelegramIngestion {
         'SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_sequence FROM bucket_messages WHERE bucket_id = ?',
       )
       .get(bucketId);
-    if (sequence === null) throw new Error('Unable to allocate bucket sequence');
+    if (sequence === null) {
+      throw new Error('Unable to allocate bucket sequence');
+    }
     this.#store.db
       .query('INSERT INTO bucket_messages(bucket_id, message_id, sequence_no, source_bucket_id) VALUES (?, ?, ?, ?)')
       .run(bucketId, message.id, sequence.next_sequence, bucketId);
@@ -388,7 +427,9 @@ interface NormalizedMessage {
 function normalizeMessage(message: Message, service: boolean): NormalizedMessage {
   const media: NormalizedMedia[] = [];
   let kind = service ? 'service' : 'unsupported';
-  if (message.text !== undefined) kind = 'text';
+  if (message.text !== undefined) {
+    kind = 'text';
+  }
   if (message.photo !== undefined) {
     kind = 'photo';
     const photo = message.photo.at(-1);
@@ -472,7 +513,9 @@ function compactReply(message: Message): Record<string, unknown> {
 
 function isServiceMessage(message: Message): boolean {
   for (const key of Object.keys(SERVICE_KEYS)) {
-    if (key in message) return true;
+    if (key in message) {
+      return true;
+    }
   }
   return false;
 }

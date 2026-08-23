@@ -61,13 +61,17 @@ function request(path: string, init: RequestInit = {}): Request {
 
 function post(path: string, body: unknown, cookie?: string): Request {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (cookie !== undefined) headers.cookie = cookie;
+  if (cookie !== undefined) {
+    headers.cookie = cookie;
+  }
   return request(path, { method: 'POST', headers, body: JSON.stringify(body) });
 }
 
 function sessionCookie(response: Response): string {
   const header = response.headers.get('set-cookie');
-  if (header === null) throw new Error('Expected a session cookie');
+  if (header === null) {
+    throw new Error('Expected a session cookie');
+  }
   return header.slice(0, header.indexOf(';'));
 }
 
@@ -211,7 +215,9 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
     const received = new Date('2026-03-01T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'hello audit panel'), received);
     const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-    if (invocationId === undefined) throw new Error('Expected an invocation');
+    if (invocationId === undefined) {
+      throw new Error('Expected an invocation');
+    }
     const iso = received.toISOString();
     store.db
       .query(
@@ -232,7 +238,9 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
       )
       .run(invocationId, iso, iso);
     const toolRow = store.db.query<{ id: bigint }, []>("SELECT id FROM tool_calls WHERE tool_call_id = 'call-1'").get();
-    if (toolRow === null) throw new Error('Expected the tool call row');
+    if (toolRow === null) {
+      throw new Error('Expected the tool call row');
+    }
     store.db
       .query(
         "INSERT INTO telegram_sends(tool_call_id, conversation_id, kind, request_json, state, telegram_message_id, created_at, finished_at) VALUES (?, (SELECT conversation_id FROM invocations WHERE id = ?), 'text', '{\"text\":\"hi\"}', 'success', 555, ?, ?)",
@@ -261,7 +269,9 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
     const analysis = store.db
       .query<{ id: bigint }, []>("SELECT id FROM media_analyses WHERE file_unique_id = 'uniq-1'")
       .get();
-    if (analysis === null) throw new Error('Expected the analysis row');
+    if (analysis === null) {
+      throw new Error('Expected the analysis row');
+    }
     store.db
       .query(
         "INSERT INTO stickers(sticker_set_id, file_unique_id, file_id, emoji, format, active, current_analysis_id, index_state, updated_at) VALUES ((SELECT id FROM sticker_sets WHERE alias = 'cats'), 'uniq-1', 'file-1', '😺', 'static', 1, ?, 'success', ?)",
@@ -341,7 +351,9 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
     expect(otherSet.items).toHaveLength(0);
 
     const chat = store.db.query<{ id: bigint }, []>('SELECT id FROM chats WHERE telegram_chat_id = 123456789').get();
-    if (chat === null) throw new Error('Expected the chat row');
+    if (chat === null) {
+      throw new Error('Expected the chat row');
+    }
     store.db.query('INSERT INTO chat_pause(chat_id, paused_at) VALUES (?, ?)').run(chat.id, iso);
     const sleeping = enterSleep(store.db);
 
@@ -448,7 +460,9 @@ test('admin can cancel all pending sessions', async () => {
     const received = new Date('2026-03-01T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'backlogged'), received);
     const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-    if (invocationId === undefined) throw new Error('Expected an invocation');
+    if (invocationId === undefined) {
+      throw new Error('Expected an invocation');
+    }
 
     const cookie = sessionCookie(
       await server.handle(post('/api/auth/setup', { username: 'owner', password: PASSWORD })),

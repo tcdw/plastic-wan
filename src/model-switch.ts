@@ -52,7 +52,9 @@ export class AgentModelSwitcher {
     const options: AgentModelOption[] = [];
     for (const alias of Object.keys(this.#config.providers)) {
       for (const candidate of this.#models.getModels(alias)) {
-        if (!candidate.input.includes('text')) continue;
+        if (!candidate.input.includes('text')) {
+          continue;
+        }
         options.push({
           provider: alias,
           model: candidate.id,

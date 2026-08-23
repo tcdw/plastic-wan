@@ -13,19 +13,25 @@ export class SecretStore {
       value = reference;
     } else if ('env' in reference) {
       const resolved = process.env[reference.env];
-      if (resolved === undefined) throw new Error(`Secret environment variable is not set: ${reference.env}`);
+      if (resolved === undefined) {
+        throw new Error(`Secret environment variable is not set: ${reference.env}`);
+      }
       value = resolved;
     } else {
       value = await resolveCommand(reference.command);
     }
-    if (value.length === 0) throw new Error('Resolved secret is empty');
+    if (value.length === 0) {
+      throw new Error('Resolved secret is empty');
+    }
     this.#values.add(value);
     return value;
   }
 
   redact(text: string): string {
     let redacted = text;
-    for (const value of this.#values) redacted = redacted.replaceAll(value, '[REDACTED]');
+    for (const value of this.#values) {
+      redacted = redacted.replaceAll(value, '[REDACTED]');
+    }
     return redacted;
   }
 
@@ -39,7 +45,9 @@ function formatErrorDetail(error: unknown): string {
     const detail = error.stack ?? `${error.name}: ${error.message}`;
     return error.cause === undefined ? detail : `${detail}\nCaused by: ${formatErrorDetail(error.cause)}`;
   }
-  if (typeof error === 'string') return error;
+  if (typeof error === 'string') {
+    return error;
+  }
   try {
     return JSON.stringify(error) ?? String(error);
   } catch {
@@ -65,7 +73,9 @@ async function resolveCommand(argv: readonly string[]): Promise<string> {
       return new Error(`Secret command stdout exceeds ${MAX_SECRET_BYTES} bytes`);
     });
     const exitCode = await processHandle.exited;
-    if (exitCode !== 0) throw new Error(`Secret command failed with exit code ${exitCode}`);
+    if (exitCode !== 0) {
+      throw new Error(`Secret command failed with exit code ${exitCode}`);
+    }
     return stdout.replace(/\r?\n$/, '');
   } finally {
     clearTimeout(timeout);

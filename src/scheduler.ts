@@ -42,7 +42,6 @@ interface SleepingInvocationRow extends InvocationRow {
   readonly created_at: string;
 }
 
-
 interface MessageSnapshotRow {
   readonly message_id: bigint;
   readonly conversation_id: bigint;
@@ -93,7 +92,9 @@ export class BucketScheduler {
   }
 
   start(now = new Date()): void {
-    if (this.#running) throw new Error('Bucket scheduler is already running');
+    if (this.#running) {
+      throw new Error('Bucket scheduler is already running');
+    }
     this.recover(now);
     this.#running = true;
     this.#loopPromise = this.#loop();
@@ -114,7 +115,9 @@ export class BucketScheduler {
           'SELECT v.chat_id FROM invocations i JOIN conversations v ON v.id = i.conversation_id WHERE i.id = ?',
         )
         .get(BigInt(id));
-      if (row !== null && row.chat_id === chatId) entry.controller.abort(new Error('chat_paused'));
+      if (row !== null && row.chat_id === chatId) {
+        entry.controller.abort(new Error('chat_paused'));
+      }
     }
   }
 
@@ -123,7 +126,9 @@ export class BucketScheduler {
     this.wake();
     await this.#loopPromise;
     const active = [...this.#active.values()];
-    if (active.length === 0) return;
+    if (active.length === 0) {
+      return;
+    }
     const finished = Promise.allSettled(active.map((entry) => entry.promise));
     let graceTimer: NodeJS.Timeout | undefined;
     const graceElapsed = new Promise<'timeout'>((resolve) => {
@@ -132,7 +137,9 @@ export class BucketScheduler {
     const result = await Promise.race([finished, graceElapsed]);
     clearTimeout(graceTimer);
     if (result === 'timeout') {
-      for (const entry of active) entry.controller.abort(new Error('shutdown'));
+      for (const entry of active) {
+        entry.controller.abort(new Error('shutdown'));
+      }
       await finished;
     }
   }
@@ -219,7 +226,9 @@ export class BucketScheduler {
       const invocationIds: bigint[] = [];
       for (const messages of grouped.values()) {
         const latest = messages.at(-1);
-        if (latest === undefined) continue;
+        if (latest === undefined) {
+          continue;
+        }
         const budget = resolveChatConfig(this.#config, this.#store.db, latest.telegram_chat_id)?.budget;
         const skipReason =
           budget === undefined
@@ -269,7 +278,9 @@ export class BucketScheduler {
       const cleared = this.#store.db
         .query('DELETE FROM app_state WHERE key = ? AND value = ?')
         .run(STARTUP_CATCH_UP_STATE_KEY, startedAt.toISOString());
-      if (cleared.changes !== 1) throw new Error('Startup catch-up state was not cleared');
+      if (cleared.changes !== 1) {
+        throw new Error('Startup catch-up state was not cleared');
+      }
       return invocationIds;
     });
   }
@@ -295,7 +306,9 @@ export class BucketScheduler {
       const invocations: bigint[] = [];
       for (const bucket of due) {
         const invocationId = this.#queueBucket(bucket, now, sleepUntil);
-        if (invocationId !== undefined) invocations.push(invocationId);
+        if (invocationId !== undefined) {
+          invocations.push(invocationId);
+        }
       }
       return invocations;
     });
@@ -309,7 +322,9 @@ export class BucketScheduler {
       await new Promise<void>((resolve) => {
         let settled = false;
         const finish = (): void => {
-          if (settled) return;
+          if (settled) {
+            return;
+          }
           settled = true;
           clearTimeout(timer);
           resolve();
@@ -334,7 +349,9 @@ export class BucketScheduler {
          ORDER BY b.deadline_at, b.id LIMIT 1`,
       )
       .get();
-    if (row === null) return 60_000;
+    if (row === null) {
+      return 60_000;
+    }
     return Math.max(0, Math.min(60_000, Date.parse(row.deadline_at) - Date.now()));
   }
 
@@ -346,7 +363,9 @@ export class BucketScheduler {
          FROM conversations v JOIN chats c ON c.id = v.chat_id WHERE v.id = ?`,
       )
       .get(bucket.conversation_id);
-    if (chat === null) throw new Error(`Bucket ${bucket.id} has no chat`);
+    if (chat === null) {
+      throw new Error(`Bucket ${bucket.id} has no chat`);
+    }
     if (chat.paused === 1n) {
       this.#markBucketSkipped(bucket.id, now, 'chat_paused');
       return undefined;
@@ -513,7 +532,9 @@ export class BucketScheduler {
              ORDER BY i.id LIMIT 1`,
           )
           .get(new Date().toISOString());
-        if (candidate === null) return null;
+        if (candidate === null) {
+          return null;
+        }
         const now = new Date().toISOString();
         this.#store.db
           .query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
@@ -523,7 +544,9 @@ export class BucketScheduler {
           .run(now, now, candidate.bucket_id);
         return candidate;
       });
-      if (invocation === null) return;
+      if (invocation === null) {
+        return;
+      }
       const controller = new AbortController();
       const promise = this.#execute(invocation, controller);
       this.#active.set(invocation.id.toString(), { controller, promise });
@@ -610,7 +633,9 @@ export class BucketScheduler {
         const started = this.#store.db
           .query<{ started_at: string }, [bigint]>('SELECT started_at FROM invocations WHERE id = ?')
           .get(invocation.id);
-        if (started === null) throw new Error(`Invocation ${invocation.id} has no start time`);
+        if (started === null) {
+          throw new Error(`Invocation ${invocation.id} has no start time`);
+        }
         const nextDeadline = new Date(
           Math.max(
             finishedAt.getTime(),
@@ -620,7 +645,9 @@ export class BucketScheduler {
         const chat = this.#store.db
           .query<{ chat_id: bigint }, [bigint]>('SELECT chat_id FROM conversations WHERE id = ?')
           .get(invocation.conversation_id);
-        if (chat === null) throw new Error(`Invocation ${invocation.id} has no chat`);
+        if (chat === null) {
+          throw new Error(`Invocation ${invocation.id} has no chat`);
+        }
         this.#store.db
           .query(
             `UPDATE buckets SET deadline_at = ?, updated_at = ?
@@ -632,7 +659,9 @@ export class BucketScheduler {
       persisted = true;
     } finally {
       this.#active.delete(invocation.id.toString());
-      if (persisted) this.processDue(finishedAt);
+      if (persisted) {
+        this.processDue(finishedAt);
+      }
       this.#logInvocationDiagnostic(
         'agent_invocation_end',
         invocation,
@@ -671,7 +700,9 @@ export class BucketScheduler {
            WHERE v.id = ?`,
         )
         .get(invocation.bucket_id, invocation.id, invocation.conversation_id);
-      if (row === null) throw new Error('invocation_conversation_missing');
+      if (row === null) {
+        throw new Error('invocation_conversation_missing');
+      }
       const currentStartedAt =
         this.#store.db
           .query<{ started_at: string | null }, [bigint]>('SELECT started_at FROM invocations WHERE id = ?')
@@ -742,7 +773,9 @@ export class BucketScheduler {
           "SELECT amount FROM daily_usage WHERE utc_date = ? AND scope = 'chat' AND resource = ? AND metric = 'agent_invocations'",
         )
         .get(date, resource)?.amount ?? 0n;
-    if (current >= BigInt(limit)) return false;
+    if (current >= BigInt(limit)) {
+      return false;
+    }
     this.#store.db
       .query(
         "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'agent_invocations', 1, ?) ON CONFLICT(utc_date, scope, resource, metric) DO UPDATE SET amount = amount + 1, updated_at = excluded.updated_at",

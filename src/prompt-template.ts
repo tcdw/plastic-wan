@@ -27,7 +27,9 @@ export function validatePromptTemplate(template: string, label: string): void {
     const opening = template.indexOf('{{', cursor);
     const closing = template.indexOf('}}', cursor);
     if (opening < 0) {
-      if (closing >= 0) throw new Error(`${label} contains a malformed template expression`);
+      if (closing >= 0) {
+        throw new Error(`${label} contains a malformed template expression`);
+      }
       return;
     }
     if (closing >= 0 && closing < opening) {
@@ -50,7 +52,9 @@ export function renderPromptTemplate(template: string, values: PromptTemplateVal
   return template.replace(/\{\{([\s\S]*?)\}\}/g, (_match, rawKey: string) => {
     const key = templateKey(rawKey);
     const resolve = TEMPLATE_VALUES[key];
-    if (resolve === undefined) throw new Error(`Prompt contains unsupported template variable "${key}"`);
+    if (resolve === undefined) {
+      throw new Error(`Prompt contains unsupported template variable "${key}"`);
+    }
     return resolve(values);
   });
 }

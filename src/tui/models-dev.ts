@@ -117,9 +117,15 @@ export function listModels(provider: ModelsDevProvider): ModelsDevModel[] {
 export function extractInputCapabilities(model: ModelsDevModel): Array<'text' | 'image'> {
   const capabilities: Array<'text' | 'image'> = [];
   const inputs = new Set(model.modalities.input);
-  if (inputs.has('text')) capabilities.push('text');
-  if (inputs.has('image')) capabilities.push('image');
-  if (capabilities.length === 0) capabilities.push('text');
+  if (inputs.has('text')) {
+    capabilities.push('text');
+  }
+  if (inputs.has('image')) {
+    capabilities.push('image');
+  }
+  if (capabilities.length === 0) {
+    capabilities.push('text');
+  }
   return capabilities;
 }
 

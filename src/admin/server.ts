@@ -80,7 +80,9 @@ export class AdminServer {
 
   constructor(options: AdminServerOptions) {
     const admin = options.config.admin;
-    if (admin === undefined) throw new Error('Admin panel is not configured');
+    if (admin === undefined) {
+      throw new Error('Admin panel is not configured');
+    }
     this.#store = options.store;
     this.#config = options.config;
     this.#admin = admin;
@@ -92,7 +94,9 @@ export class AdminServer {
   }
 
   start(): { readonly hostname: string; readonly port: number } {
-    if (this.#server !== undefined) throw new Error('Admin server is already listening');
+    if (this.#server !== undefined) {
+      throw new Error('Admin server is already listening');
+    }
     this.#auth.purgeExpired();
     const server = Bun.serve({
       hostname: this.#admin.host,
@@ -107,7 +111,9 @@ export class AdminServer {
   async stop(): Promise<void> {
     const server = this.#server;
     this.#server = undefined;
-    if (server === undefined) return;
+    if (server === undefined) {
+      return;
+    }
     await server.stop(true);
   }
 
@@ -115,7 +121,9 @@ export class AdminServer {
     const url = new URL(request.url);
     const segments = url.pathname.split('/').filter((segment) => segment.length > 0);
     try {
-      if (segments[0] === 'api') return await this.#api(request, url, segments.slice(1));
+      if (segments[0] === 'api') {
+        return await this.#api(request, url, segments.slice(1));
+      }
       return await this.#staticAsset(request, segments);
     } catch (error) {
       if (error instanceof AdminAuthError || error instanceof AdminQueryError || error instanceof ModelSwitchError) {
@@ -173,7 +181,9 @@ export class AdminServer {
       return json({ status: 'ok' }, 200, `${SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
     }
     const session = this.#auth.authenticate(readCookie(request, SESSION_COOKIE));
-    if (session === null) return json({ error: 'unauthenticated', message: 'Admin session is required' }, 401);
+    if (session === null) {
+      return json({ error: 'unauthenticated', message: 'Admin session is required' }, 401);
+    }
     if (route === 'auth/credentials' && request.method === 'POST') {
       const token = await this.#auth.changeCredentials(session.userId, await readCredentials(request));
       return json({ status: 'ok' }, 200, this.#sessionCookie(token));
@@ -246,9 +256,12 @@ export class AdminServer {
         return json(this.#modelState(switcher, switcher.reset()));
       }
     }
-    if (request.method !== 'GET')
+    if (request.method !== 'GET') {
       return json({ error: 'method_not_allowed', message: 'Audit routes are read-only' }, 405);
-    if (route === 'overview') return json(overview(database));
+    }
+    if (route === 'overview') {
+      return json(overview(database));
+    }
     if (route === 'usage') {
       const daysParam = url.searchParams.get('days');
       const days = daysParam === null ? 7 : Number.parseInt(daysParam, 10);
@@ -257,18 +270,26 @@ export class AdminServer {
       }
       return json(usage(database, days));
     }
-    if (route === 'invocations') return json(listInvocations(database, query));
+    if (route === 'invocations') {
+      return json(listInvocations(database, query));
+    }
     if (segments[0] === 'invocations' && segments.length === 2) {
       const found = getInvocation(database, parseId(segments[1] ?? '', 'id'));
       return found === null ? json({ error: 'not_found', message: 'Invocation does not exist' }, 404) : json(found);
     }
-    if (route === 'messages') return json(listMessages(database, query));
+    if (route === 'messages') {
+      return json(listMessages(database, query));
+    }
     if (segments[0] === 'messages' && segments.length === 2) {
       const found = getMessage(database, parseId(segments[1] ?? '', 'id'));
       return found === null ? json({ error: 'not_found', message: 'Message does not exist' }, 404) : json(found);
     }
-    if (route === 'sticker-sets') return json({ items: listStickerSets(database) });
-    if (route === 'stickers') return json(listStickers(database, query));
+    if (route === 'sticker-sets') {
+      return json({ items: listStickerSets(database) });
+    }
+    if (route === 'stickers') {
+      return json(listStickers(database, query));
+    }
     return json({ error: 'not_found', message: 'Unknown admin API route' }, 404);
   }
 
@@ -313,10 +334,14 @@ export class AdminServer {
       return json({ error: 'not_found', message: 'Asset does not exist' }, 404);
     }
     const direct = Bun.file(candidate);
-    if (await direct.exists()) return asset(direct, candidate);
+    if (await direct.exists()) {
+      return asset(direct, candidate);
+    }
     const indexPath = join(this.#staticDir, 'index.html');
     const index = Bun.file(indexPath);
-    if (await index.exists()) return asset(index, indexPath);
+    if (await index.exists()) {
+      return asset(index, indexPath);
+    }
     return json(
       {
         error: 'admin_bundle_missing',
@@ -338,7 +363,9 @@ function json(body: unknown, status = 200, cookie?: string): Response {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
   });
-  if (cookie !== undefined) headers.set('set-cookie', cookie);
+  if (cookie !== undefined) {
+    headers.set('set-cookie', cookie);
+  }
   return new Response(JSON.stringify(body), { status, headers });
 }
 
@@ -356,11 +383,17 @@ function asset(file: Bun.BunFile, path: string): Response {
 
 function readCookie(request: Request, name: string): string {
   const header = request.headers.get('cookie');
-  if (header === null) return '';
+  if (header === null) {
+    return '';
+  }
   for (const part of header.split(';')) {
     const separator = part.indexOf('=');
-    if (separator < 0) continue;
-    if (part.slice(0, separator).trim() !== name) continue;
+    if (separator < 0) {
+      continue;
+    }
+    if (part.slice(0, separator).trim() !== name) {
+      continue;
+    }
     return part.slice(separator + 1).trim();
   }
   return '';
@@ -372,7 +405,9 @@ async function readJsonObject(request: Request): Promise<Record<string, unknown>
     throw new AdminAuthError(413, 'body_too_large', 'Request body is too large');
   }
   const text = await request.text();
-  if (text.length > MAX_BODY_BYTES) throw new AdminAuthError(413, 'body_too_large', 'Request body is too large');
+  if (text.length > MAX_BODY_BYTES) {
+    throw new AdminAuthError(413, 'body_too_large', 'Request body is too large');
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);

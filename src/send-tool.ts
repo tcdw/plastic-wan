@@ -21,9 +21,13 @@ export type SendToolInput =
 
 function narrowSendInput(input: Static<typeof SendInputSchema>): SendToolInput | undefined {
   const kind = input.kind ?? (input.text !== undefined && input.sticker_ref === undefined ? 'text' : undefined);
-  if (kind === undefined) return undefined;
+  if (kind === undefined) {
+    return undefined;
+  }
   const field = kind === 'text' ? ('text' as const) : ('sticker_ref' as const);
-  if (input[field] === undefined) return undefined;
+  if (input[field] === undefined) {
+    return undefined;
+  }
   const reply = input.reply_to_message_id === undefined ? {} : { reply_to_message_id: input.reply_to_message_id };
   return { kind, [field]: input[field], ...reply } as SendToolInput;
 }
@@ -126,7 +130,9 @@ export function createSendTool(
           );
         return { toolId, sendId: BigInt(sendInsert.lastInsertRowid) };
       });
-      if (pending.sendId === null) throw new Error(`send limit of ${environment.maxSends} reached`);
+      if (pending.sendId === null) {
+        throw new Error(`send limit of ${environment.maxSends} reached`);
+      }
       const options = {
         ...(targetThreadId === 0n ? {} : { message_thread_id: Number(targetThreadId) }),
         ...(send.reply_to_message_id === undefined
@@ -151,9 +157,13 @@ export function createSendTool(
             }
             break;
           } catch (error) {
-            if (!(error instanceof GrammyError) || error.error_code !== 429) throw error;
+            if (!(error instanceof GrammyError) || error.error_code !== 429) {
+              throw error;
+            }
             const retryAfter = error.parameters.retry_after;
-            if (retryAfter === undefined || Date.now() + retryAfter * 1000 >= environment.deadline) throw error;
+            if (retryAfter === undefined || Date.now() + retryAfter * 1000 >= environment.deadline) {
+              throw error;
+            }
             await delay(retryAfter * 1000, undefined, { signal });
           }
         }
@@ -236,11 +246,15 @@ function recordOutgoingMessage(
   const sender = environment.store.db
     .query<{ id: bigint }, [bigint]>("SELECT id FROM senders WHERE telegram_type = 'user' AND telegram_id = ?")
     .get(environment.bot.id);
-  if (sender === null) throw new Error('Bot sender row is missing after upsert');
+  if (sender === null) {
+    throw new Error('Bot sender row is missing after upsert');
+  }
   const chat = environment.store.db
     .query<{ id: bigint }, [bigint]>('SELECT id FROM chats WHERE telegram_chat_id = ?')
     .get(environment.context.chatId);
-  if (chat === null) throw new Error('Outgoing chat row does not exist');
+  if (chat === null) {
+    throw new Error('Outgoing chat row does not exist');
+  }
   const created = environment.store.db
     .query(
       'INSERT INTO messages(conversation_id, chat_id, telegram_message_id, visible, sent_by_bot, telegram_date, received_at) VALUES (?, ?, ?, 1, 1, ?, ?)',

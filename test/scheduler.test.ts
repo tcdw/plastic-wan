@@ -103,7 +103,9 @@ describe('bucket scheduler', () => {
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'before'), start);
     const [firstInvocation] = scheduler.processDue(new Date(start.getTime() + 15_000));
-    if (firstInvocation === undefined) throw new Error('Expected first invocation');
+    if (firstInvocation === undefined) {
+      throw new Error('Expected first invocation');
+    }
     store.db
       .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
       .run(firstInvocation);
@@ -122,7 +124,9 @@ describe('bucket scheduler', () => {
     ingestion.ingest(edited, new Date(start.getTime() + 16_000));
     ingestion.ingest(textUpdate(3, 11, 'next'), new Date(start.getTime() + 20_000));
     const [secondInvocation] = scheduler.processDue(new Date(start.getTime() + 35_000));
-    if (secondInvocation === undefined) throw new Error('Expected second invocation');
+    if (secondInvocation === undefined) {
+      throw new Error('Expected second invocation');
+    }
     const frozen = store.db
       .query<{ snapshot_json: string }, [bigint]>(
         "SELECT snapshot_json FROM invocation_messages WHERE invocation_id = ? AND section = 'new'",
@@ -164,7 +168,9 @@ describe('bucket scheduler', () => {
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'first'), start);
     const [firstInvocation] = scheduler.processDue(new Date(start.getTime() + 15_000));
-    if (firstInvocation === undefined) throw new Error('Expected first invocation');
+    if (firstInvocation === undefined) {
+      throw new Error('Expected first invocation');
+    }
     store.db
       .query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
       .run(new Date(start.getTime() + 15_000).toISOString(), firstInvocation);
@@ -188,7 +194,9 @@ describe('bucket scheduler', () => {
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'first'), start);
     const [firstInvocation] = scheduler.processDue(new Date(start.getTime() + 15_000));
-    if (firstInvocation === undefined) throw new Error('Expected first invocation');
+    if (firstInvocation === undefined) {
+      throw new Error('Expected first invocation');
+    }
     store.db
       .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
       .run(firstInvocation);
@@ -211,7 +219,9 @@ describe('bucket scheduler', () => {
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'first'), start);
     const [firstInvocation] = scheduler.processDue(new Date(start.getTime() + 6_000));
-    if (firstInvocation === undefined) throw new Error('Expected first invocation');
+    if (firstInvocation === undefined) {
+      throw new Error('Expected first invocation');
+    }
     const firstStarted = new Date(start.getTime() + 6_000);
     store.db
       .query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
@@ -246,7 +256,9 @@ describe('bucket scheduler', () => {
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'first'), start);
     const [firstInvocation] = scheduler.processDue(new Date(start.getTime() + 6_000));
-    if (firstInvocation === undefined) throw new Error('Expected first invocation');
+    if (firstInvocation === undefined) {
+      throw new Error('Expected first invocation');
+    }
     store.db
       .query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
       .run(new Date(start.getTime() + 6_000).toISOString(), firstInvocation);
@@ -274,7 +286,9 @@ describe('bucket scheduler', () => {
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'only'), start);
     const [invocationId] = scheduler.processDue(new Date(start.getTime() + 15_000));
-    if (invocationId === undefined) throw new Error('Expected invocation');
+    if (invocationId === undefined) {
+      throw new Error('Expected invocation');
+    }
     store.db
       .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
       .run(invocationId);
@@ -308,13 +322,21 @@ describe('bucket scheduler', () => {
       (toml) => toml.replace('bucket_window_seconds = 15', 'bucket_window_seconds = 0'),
       async (invocationId) => {
         started.push(invocationId);
-        if (started.length === 1) firstStarted();
-        if (started.length === 2) secondStarted();
+        if (started.length === 1) {
+          firstStarted();
+        }
+        if (started.length === 2) {
+          secondStarted();
+        }
         active += 1;
         maxActive = Math.max(maxActive, active);
-        if (started.length === 1) await firstGate;
+        if (started.length === 1) {
+          await firstGate;
+        }
         active -= 1;
-        if (started.length === 2) secondFinished();
+        if (started.length === 2) {
+          secondFinished();
+        }
         return { state: 'completed', reason: 'done' };
       },
     );
@@ -370,7 +392,9 @@ describe('bucket scheduler', () => {
     ingestion.ingest(topicUpdate(1, 10, 100, 'topic-a'), start);
     ingestion.ingest(topicUpdate(2, 11, 200, 'topic-b'), new Date(start.getTime() + 1_000));
     const [firstId] = scheduler.processDue(new Date(start.getTime() + 6_000));
-    if (firstId === undefined) throw new Error('Expected first invocation');
+    if (firstId === undefined) {
+      throw new Error('Expected first invocation');
+    }
     const firstStarted = new Date(start.getTime() + 6_000);
     store.db
       .query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")

@@ -171,7 +171,9 @@ describe('startup catch-up', () => {
       now: fixedClock(),
     });
     const invocationId = result.invocationIds[0];
-    if (invocationId === undefined) throw new Error('Expected startup catch-up invocation');
+    if (invocationId === undefined) {
+      throw new Error('Expected startup catch-up invocation');
+    }
     const context = builder.build(invocationId, 200_000, 0, 32768);
     const sentThreads: Array<number | undefined> = [];
     const api: TelegramSendApi = {

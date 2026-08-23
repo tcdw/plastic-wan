@@ -254,7 +254,9 @@ export async function loadConfig(path: string): Promise<LoadedConfig> {
   const { config, promptFiles } = await resolvePrompts(parsed, dirname(configPath));
   const hash = createHash('sha256');
   hash.update(text);
-  for (const file of promptFiles) hash.update(`\u0000${file.content}`);
+  for (const file of promptFiles) {
+    hash.update(`\u0000${file.content}`);
+  }
   return { config, toml: parsed, configPath, hash: hash.digest('hex') };
 }
 
@@ -272,7 +274,9 @@ async function resolvePrompts(
     'agent.system_prompt_file',
     promptFiles,
   );
-  if (systemPrompt.length === 0) throw new Error(`agent.system_prompt_file is empty: ${toml.agent.system_prompt_file}`);
+  if (systemPrompt.length === 0) {
+    throw new Error(`agent.system_prompt_file is empty: ${toml.agent.system_prompt_file}`);
+  }
   validatePromptTemplate(systemPrompt, 'agent.system_prompt_file');
   const chats: Array<Omit<TomlChat, 'instructions_file'> & { instructions: string }> = [];
   for (const chat of toml.telegram.chats) {
@@ -311,22 +315,33 @@ async function readPromptFile(path: string, label: string, sink: PromptFile[]): 
 }
 
 export async function assertConfigPermissions(configPath: string): Promise<void> {
-  if (process.platform === 'win32') return;
+  if (process.platform === 'win32') {
+    return;
+  }
   const file = await stat(configPath);
   const parent = await stat(resolve(configPath, '..'));
-  if ((file.mode & 0o777) !== 0o600) throw new Error(`Config must have mode 0600: ${configPath}`);
-  if ((parent.mode & 0o777) !== 0o700)
+  if ((file.mode & 0o777) !== 0o600) {
+    throw new Error(`Config must have mode 0600: ${configPath}`);
+  }
+  if ((parent.mode & 0o777) !== 0o700) {
     throw new Error(`Config parent must have mode 0700: ${resolve(configPath, '..')}`);
+  }
 }
 
 function validateSemantics(config: TomlConfig): void {
   validateTimezone(config.timezone, 'timezone');
   const chatIds = new Set<number>();
   for (const chat of config.telegram.chats) {
-    if (!Number.isSafeInteger(chat.id) || chat.id === 0) throw new Error(`Invalid Telegram chat ID: ${chat.id}`);
-    if (chatIds.has(chat.id)) throw new Error(`Duplicate Telegram chat ID: ${chat.id}`);
+    if (!Number.isSafeInteger(chat.id) || chat.id === 0) {
+      throw new Error(`Invalid Telegram chat ID: ${chat.id}`);
+    }
+    if (chatIds.has(chat.id)) {
+      throw new Error(`Duplicate Telegram chat ID: ${chat.id}`);
+    }
     chatIds.add(chat.id);
-    if (chat.timezone !== undefined) validateTimezone(chat.timezone, `chat ${chat.id} timezone`);
+    if (chat.timezone !== undefined) {
+      validateTimezone(chat.timezone, `chat ${chat.id} timezone`);
+    }
   }
   for (const adminId of config.telegram.admins ?? []) {
     if (!Number.isSafeInteger(adminId) || adminId === 0) {
@@ -369,8 +384,9 @@ function validateSemantics(config: TomlConfig): void {
     if (server.tools !== '*') {
       const allowed = new Set(server.tools);
       for (const policy of policies) {
-        if (!allowed.has(policy.name))
+        if (!allowed.has(policy.name)) {
           throw new Error(`MCP server ${server.alias} policy references unlisted tool ${policy.name}`);
+        }
       }
       for (const tool of server.tools) {
         if (!policies.some((policy) => policy.name === tool)) {
@@ -394,13 +410,20 @@ function validateModelReference(
   requiredInputs: readonly ('text' | 'image')[],
 ): void {
   const provider = config.providers[providerAlias];
-  if (provider === undefined) throw new Error(`${role}.provider references unknown alias ${providerAlias}`);
-  if (provider.kind === 'builtin') return;
+  if (provider === undefined) {
+    throw new Error(`${role}.provider references unknown alias ${providerAlias}`);
+  }
+  if (provider.kind === 'builtin') {
+    return;
+  }
   const model = provider.models.find((candidate) => candidate.id === modelId);
-  if (model === undefined) throw new Error(`${role}.model ${modelId} is absent from provider ${providerAlias}`);
+  if (model === undefined) {
+    throw new Error(`${role}.model ${modelId} is absent from provider ${providerAlias}`);
+  }
   for (const requiredInput of requiredInputs) {
-    if (!model.input.includes(requiredInput))
+    if (!model.input.includes(requiredInput)) {
       throw new Error(`${role}.model ${modelId} lacks ${requiredInput} input capability`);
+    }
   }
 }
 
@@ -436,7 +459,9 @@ function assertUnique<T>(items: readonly T[], select: (item: T) => string, label
   const values = new Set<string>();
   for (const item of items) {
     const value = select(item);
-    if (values.has(value)) throw new Error(`Duplicate ${label}: ${value}`);
+    if (values.has(value)) {
+      throw new Error(`Duplicate ${label}: ${value}`);
+    }
     values.add(value);
   }
 }

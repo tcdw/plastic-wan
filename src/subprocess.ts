@@ -2,7 +2,9 @@ export function pickEnv(names: readonly string[]): Record<string, string> {
   const environment: Record<string, string> = {};
   for (const name of names) {
     const value = process.env[name];
-    if (value !== undefined) environment[name] = value;
+    if (value !== undefined) {
+      environment[name] = value;
+    }
   }
   return environment;
 }
@@ -18,9 +20,13 @@ export async function readBoundedOutput(
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        break;
+      }
       size += value.byteLength;
-      if (size > limit) throw onOverflow();
+      if (size > limit) {
+        throw onOverflow();
+      }
       chunks.push(value);
     }
   } finally {

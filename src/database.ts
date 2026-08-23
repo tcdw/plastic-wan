@@ -28,10 +28,13 @@ export class ServeLock {
         return new ServeLock(path, handle);
       } catch (error) {
         const code = error instanceof Error && 'code' in error ? error.code : undefined;
-        if (code !== 'EEXIST' || attempt > 0) throw new Error(`Another serve process holds ${path}`);
+        if (code !== 'EEXIST' || attempt > 0) {
+          throw new Error(`Another serve process holds ${path}`);
+        }
         const pid = Number.parseInt(await readFile(path, 'utf8'), 10);
-        if (Number.isInteger(pid) && isProcessAlive(pid))
+        if (Number.isInteger(pid) && isProcessAlive(pid)) {
           throw new Error(`Another serve process holds ${path} with PID ${pid}`);
+        }
         await unlink(path);
       }
     }
@@ -42,7 +45,9 @@ export class ServeLock {
     await this.#handle.close();
     await unlink(this.#path).catch((error: unknown) => {
       const code = error instanceof Error && 'code' in error ? error.code : undefined;
-      if (code !== 'ENOENT') throw error;
+      if (code !== 'ENOENT') {
+        throw error;
+      }
     });
   }
 }
@@ -67,8 +72,12 @@ export class SqliteStore {
     database.exec('PRAGMA busy_timeout = 5000;');
     const store = new SqliteStore(path, database);
     try {
-      if (migrate) await store.migrate(config, existed);
-      if (process.platform !== 'win32') await chmod(path, 0o600);
+      if (migrate) {
+        await store.migrate(config, existed);
+      }
+      if (process.platform !== 'win32') {
+        await chmod(path, 0o600);
+      }
       return store;
     } catch (error) {
       database.close();
@@ -96,7 +105,9 @@ export class SqliteStore {
         )
       : new Set<number>();
     const pending = migrations.filter((migration) => !applied.has(migration.version));
-    if (pending.length === 0) return;
+    if (pending.length === 0) {
+      return;
+    }
     if (databaseExisted) {
       await createBackupFile(
         this.db,
@@ -248,11 +259,15 @@ export function resolveChatConfig(
   chatId: bigint,
 ): RawConfig['telegram']['chats'][number] | undefined {
   const direct = config.telegram.chats.find((chat) => BigInt(chat.id) === chatId);
-  if (direct !== undefined) return direct;
+  if (direct !== undefined) {
+    return direct;
+  }
   const migration = db
     .query<{ old_chat_id: bigint }, [bigint]>('SELECT old_chat_id FROM chat_migrations WHERE new_chat_id = ?')
     .get(chatId);
-  if (migration === null) return undefined;
+  if (migration === null) {
+    return undefined;
+  }
   return config.telegram.chats.find((chat) => BigInt(chat.id) === migration.old_chat_id);
 }
 
@@ -263,7 +278,7 @@ export function isChatPaused(db: Database, chatId: bigint): boolean {
   );
 }
 
-export type ToolCallFinishState = "success" | "error" | "outcome_unknown";
+export type ToolCallFinishState = 'success' | 'error' | 'outcome_unknown';
 
 /** Inserts the pending audit row for a starting tool call and returns its rowid. */
 export function startToolCall(
@@ -312,10 +327,14 @@ export function finishToolCall(
   errorCode: string | null,
   options: { startedAt?: number; pendingOnly?: boolean; now?: Date } = {},
 ): void {
-  let sql = "UPDATE tool_calls SET state = ?, result_text = ?, error_code = ?";
-  if (options.startedAt !== undefined) sql += ", duration_ms = ?";
-  sql += ", finished_at = ? WHERE id = ?";
-  if (options.pendingOnly === true) sql += " AND state = 'pending'";
+  let sql = 'UPDATE tool_calls SET state = ?, result_text = ?, error_code = ?';
+  if (options.startedAt !== undefined) {
+    sql += ', duration_ms = ?';
+  }
+  sql += ', finished_at = ? WHERE id = ?';
+  if (options.pendingOnly === true) {
+    sql += " AND state = 'pending'";
+  }
   const values: (string | bigint | null)[] = [state, resultText, errorCode];
   if (options.startedAt !== undefined) {
     values.push(BigInt(Math.max(0, Math.round(performance.now() - options.startedAt))));
@@ -329,7 +348,9 @@ async function createBackupFile(database: Database, backupDir: string, filename:
   const finalPath = join(backupDir, filename);
   const temporaryPath = `${finalPath}.tmp-${crypto.randomUUID()}`;
   database.query('VACUUM INTO ?').run(temporaryPath);
-  if (process.platform !== 'win32') await chmod(temporaryPath, 0o600);
+  if (process.platform !== 'win32') {
+    await chmod(temporaryPath, 0o600);
+  }
   await rename(temporaryPath, finalPath);
   return finalPath;
 }
@@ -356,7 +377,9 @@ async function loadMigrations(): Promise<Migration[]> {
   for (let index = 1; index < migrations.length; index += 1) {
     const previous = migrations[index - 1];
     const current = migrations[index];
-    if (previous === undefined || current === undefined) continue;
+    if (previous === undefined || current === undefined) {
+      continue;
+    }
     if (previous.version >= current.version) {
       throw new Error(`Migration versions are not strictly increasing near ${current.name}`);
     }

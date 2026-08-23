@@ -17,7 +17,7 @@ export async function runConfigure(configPath: string): Promise<void> {
     const loaded = await loadConfig(configPath);
     config = loaded.toml;
     const file = Bun.file(configPath);
-    originalToml = (await file.exists()) ? await file.text() : "";
+    originalToml = (await file.exists()) ? await file.text() : '';
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Failed to load config: ${message}`);
@@ -51,12 +51,16 @@ export async function runConfigure(configPath: string): Promise<void> {
       }
       case 'save': {
         const saved = await saveConfig(configPath, config, originalToml);
-        if (saved) exit = true;
+        if (saved) {
+          exit = true;
+        }
         break;
       }
       default: {
         const ok = await confirm({ message: 'Discard changes?', default: false });
-        if (ok) exit = true;
+        if (ok) {
+          exit = true;
+        }
         break;
       }
     }

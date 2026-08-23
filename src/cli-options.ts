@@ -6,17 +6,13 @@ interface CliOptions {
   readonly outputAgentPrompt: boolean;
 }
 
-const COMMANDS: readonly string[] = [
-  'serve',
-  'check-config',
-  'doctor',
-  'backup',
-  'configure',
-];
+const COMMANDS: readonly string[] = ['serve', 'check-config', 'doctor', 'backup', 'configure'];
 
 export function parseCli(argv: readonly string[]): CliOptions {
   const [commandValue, ...argumentsList] = argv;
-  if (commandValue === undefined || !isCommand(commandValue)) throw new Error(usage());
+  if (commandValue === undefined || !isCommand(commandValue)) {
+    throw new Error(usage());
+  }
   let configPath: string | undefined;
   let outputAgentPrompt = false;
   for (let index = 0; index < argumentsList.length; index += 1) {
@@ -25,12 +21,18 @@ export function parseCli(argv: readonly string[]): CliOptions {
       outputAgentPrompt = true;
       continue;
     }
-    if (argument !== '--config' || configPath !== undefined) throw new Error(usage());
+    if (argument !== '--config' || configPath !== undefined) {
+      throw new Error(usage());
+    }
     configPath = argumentsList[index + 1];
-    if (configPath === undefined || configPath.startsWith('--')) throw new Error(usage());
+    if (configPath === undefined || configPath.startsWith('--')) {
+      throw new Error(usage());
+    }
     index += 1;
   }
-  if (configPath === undefined) throw new Error(usage());
+  if (configPath === undefined) {
+    throw new Error(usage());
+  }
   return { command: commandValue, configPath, outputAgentPrompt };
 }
 

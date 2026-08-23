@@ -117,25 +117,33 @@ export class McpManager {
   async stop(): Promise<void> {
     this.#stopping = true;
     for (const server of this.#servers.values()) {
-      if (server.reconnectTimer !== undefined) clearTimeout(server.reconnectTimer);
+      if (server.reconnectTimer !== undefined) {
+        clearTimeout(server.reconnectTimer);
+      }
       server.reconnectTimer = undefined;
       server.generation += 1;
       const client = server.client;
       server.client = undefined;
-      if (client !== undefined) await client.close().catch(() => undefined);
+      if (client !== undefined) {
+        await client.close().catch(() => undefined);
+      }
       server.definitions = [];
       this.#setState(server, 'stopped', null);
     }
   }
 
   async #connect(server: ManagedServer, startup: boolean): Promise<void> {
-    if (this.#stopping) return;
+    if (this.#stopping) {
+      return;
+    }
     this.#setState(server, 'starting', null);
     const oldClient = server.client;
     server.client = undefined;
     server.generation += 1;
     const generation = server.generation;
-    if (oldClient !== undefined) await oldClient.close().catch(() => undefined);
+    if (oldClient !== undefined) {
+      await oldClient.close().catch(() => undefined);
+    }
     const client = new Client(
       { name: 'plasticwan', version: '0.1.0' },
       {
@@ -154,7 +162,9 @@ export class McpManager {
     );
     const transport = new CompatibleTransport(await this.#createTransport(server));
     client.onclose = () => {
-      if (this.#stopping || generation !== server.generation) return;
+      if (this.#stopping || generation !== server.generation) {
+        return;
+      }
       server.client = undefined;
       const detail =
         server.config.transport === 'stdio' ? `transport_closed_stderr_${server.stderrBytes}` : 'transport_closed';
@@ -162,7 +172,9 @@ export class McpManager {
       this.#scheduleReconnect(server);
     };
     client.onerror = () => {
-      if (this.#stopping || generation !== server.generation) return;
+      if (this.#stopping || generation !== server.generation) {
+        return;
+      }
       this.#setState(server, 'degraded', 'transport_error');
     };
     await client.connect(transport, { signal: AbortSignal.timeout(30_000), timeout: 30_000, maxTotalTimeout: 30_000 });
@@ -184,14 +196,18 @@ export class McpManager {
     server.client = client;
     server.reconnectAttempt = 0;
     this.#setState(server, 'ready', null);
-    if (!startup) this.#validateCandidateRegistry();
+    if (!startup) {
+      this.#validateCandidateRegistry();
+    }
   }
 
   async #refreshTools(server: ManagedServer): Promise<void> {
     const release = await server.semaphore.acquire(new AbortController().signal);
     try {
       const client = server.client;
-      if (client === undefined) throw new Error('MCP server is unavailable');
+      if (client === undefined) {
+        throw new Error('MCP server is unavailable');
+      }
       const listed = await client.listTools(undefined, {
         signal: AbortSignal.timeout(30_000),
         timeout: 30_000,
@@ -215,7 +231,9 @@ export class McpManager {
   async #createTransport(server: ManagedServer): Promise<StdioClientTransport | StreamableHTTPClientTransport> {
     if (server.config.transport === 'stdio') {
       const [command, ...args] = server.config.command;
-      if (command === undefined) throw new Error('MCP stdio command is empty');
+      if (command === undefined) {
+        throw new Error('MCP stdio command is empty');
+      }
       const env = {
         ...getDefaultEnvironment(),
         ...(await resolveSecretRecord(server.config.env ?? {}, this.#secrets)),
@@ -274,7 +292,9 @@ export class McpManager {
   ): McpToolDefinition[] {
     const byName = new Map<string, (typeof listed)[number]>();
     for (const tool of listed) {
-      if (byName.has(tool.name)) throw new Error(`MCP server ${server.alias} returned duplicate tool ${tool.name}`);
+      if (byName.has(tool.name)) {
+        throw new Error(`MCP server ${server.alias} returned duplicate tool ${tool.name}`);
+      }
       byName.set(tool.name, tool);
     }
     const selected =
@@ -282,19 +302,24 @@ export class McpManager {
         ? listed
         : server.tools.map((name) => {
             const tool = byName.get(name);
-            if (tool === undefined) throw new Error(`MCP server ${server.alias} is missing configured tool ${name}`);
+            if (tool === undefined) {
+              throw new Error(`MCP server ${server.alias} is missing configured tool ${name}`);
+            }
             return tool;
           });
     return selected.map((tool) => {
-      if (tool.execution?.taskSupport === 'required')
+      if (tool.execution?.taskSupport === 'required') {
         throw new Error(`MCP task-only tool ${server.alias}__${tool.name} is unsupported`);
+      }
       const exposedName = `${server.alias}__${tool.name}`;
       if (exposedName.length > 128 || !TOOL_NAME_PATTERN.test(exposedName)) {
         throw new Error(`MCP tool name is incompatible with model APIs: ${exposedName}`);
       }
       const configuredPolicy =
         server.tool_policies?.find((policy) => policy.name === tool.name) ?? server.default_tool_policy;
-      if (configuredPolicy === undefined) throw new Error(`MCP tool ${exposedName} has no policy`);
+      if (configuredPolicy === undefined) {
+        throw new Error(`MCP tool ${exposedName} has no policy`);
+      }
       const parameters = Type.Unsafe<Record<string, unknown>>(tool.inputSchema);
       const validator = Compile(parameters);
       return {
@@ -355,7 +380,9 @@ export class McpManager {
       throw new Error('MCP tool arguments exceed 32 KiB');
     }
     const started = this.#reserveAndStart(context, toolCallId, definition, argumentsJson);
-    if (started.blocked) throw new Error('MCP tool daily call budget reached');
+    if (started.blocked) {
+      throw new Error('MCP tool daily call budget reached');
+    }
     const server = this.#servers.get(definition.serverAlias);
     if (server === undefined) {
       finishToolCall(this.#store.db, started.auditId, 'error', null, 'server_unconfigured', {
@@ -378,19 +405,26 @@ export class McpManager {
     try {
       const timeoutMs = Math.max(1, Math.min(definition.policy.timeoutMs, invocationDeadline - Date.now()));
       const signals = [AbortSignal.timeout(timeoutMs)];
-      if (outerSignal !== undefined) signals.push(outerSignal);
+      if (outerSignal !== undefined) {
+        signals.push(outerSignal);
+      }
       const signal = AbortSignal.any(signals);
       let result: McpCallResult;
       try {
         result = await this.#call(server, definition, input, signal, timeoutMs);
       } catch (error) {
-        if (!definition.policy.readOnly || !isTransient(error) || signal.aborted) throw error;
+        if (!definition.policy.readOnly || !isTransient(error) || signal.aborted) {
+          throw error;
+        }
         await delay(100, undefined, { signal });
         result = await this.#call(server, definition, input, signal, timeoutMs);
       }
       const text = truncateUtf8(JSON.stringify(result), definition.resultMaxBytes);
       if ('isError' in result && result.isError === true) {
-        finishToolCall(this.#store.db, started.auditId, 'error', text, 'mcp_tool_error', { startedAt, pendingOnly: true });
+        finishToolCall(this.#store.db, started.auditId, 'error', text, 'mcp_tool_error', {
+          startedAt,
+          pendingOnly: true,
+        });
         throw new KnownToolError(text);
       }
       finishToolCall(this.#store.db, started.auditId, 'success', text, null, { startedAt, pendingOnly: true });
@@ -399,13 +433,18 @@ export class McpManager {
         details: { server: definition.serverAlias, tool: definition.originalName },
       };
     } catch (error) {
-      if (error instanceof KnownToolError) throw new Error(error.message);
+      if (error instanceof KnownToolError) {
+        throw new Error(error.message);
+      }
       const known =
         error instanceof McpError &&
         error.code !== ErrorCode.ConnectionClosed &&
         error.code !== ErrorCode.RequestTimeout;
       const state = known ? 'error' : 'outcome_unknown';
-      finishToolCall(this.#store.db, started.auditId, state, null, classifyMcpError(error), { startedAt, pendingOnly: true });
+      finishToolCall(this.#store.db, started.auditId, state, null, classifyMcpError(error), {
+        startedAt,
+        pendingOnly: true,
+      });
       if (!known) {
         this.#setState(server, 'degraded', classifyMcpError(error));
         this.#scheduleReconnect(server);
@@ -424,7 +463,9 @@ export class McpManager {
     timeoutMs: number,
   ): Promise<McpCallResult> {
     const client = server.client;
-    if (client === undefined || server.state !== 'ready') throw new Error('MCP transport is unavailable');
+    if (client === undefined || server.state !== 'ready') {
+      throw new Error('MCP transport is unavailable');
+    }
     return client.callTool({ name: definition.originalName, arguments: input }, undefined, {
       signal,
       timeout: timeoutMs,
@@ -464,7 +505,9 @@ export class McpManager {
           blocked ? now : null,
         );
       const auditId = BigInt(created.lastInsertRowid);
-      if (blocked) return { auditId, blocked: true };
+      if (blocked) {
+        return { auditId, blocked: true };
+      }
       this.#incrementUsage(date, 'mcp_chat', chatResource, now);
       this.#incrementUsage(date, 'mcp_global', globalResource, now);
       return { auditId, blocked: false };
@@ -508,7 +551,9 @@ export class McpManager {
   }
 
   #scheduleReconnect(server: ManagedServer): void {
-    if (this.#stopping || server.reconnectTimer !== undefined) return;
+    if (this.#stopping || server.reconnectTimer !== undefined) {
+      return;
+    }
     const attempt = server.reconnectAttempt;
     const waitMs = Math.min(RECONNECT_MAX_MS, 1_000 * 2 ** Math.min(attempt, 6));
     server.reconnectAttempt += 1;
@@ -538,7 +583,9 @@ export class McpManager {
 
   #validateCandidateRegistry(): void {
     const tools = this.#createToolsForDefinitions(this.#allDefinitions(), previewContext(), Number.MAX_SAFE_INTEGER);
-    if (tools.length > 61) throw new Error(`MCP registry has ${tools.length} tools; maximum alongside built-ins is 61`);
+    if (tools.length > 61) {
+      throw new Error(`MCP registry has ${tools.length} tools; maximum alongside built-ins is 61`);
+    }
     this.#registryValidator?.(tools);
   }
 
@@ -608,7 +655,9 @@ class CompatibleTransport implements Transport {
   }
 
   setProtocolVersion(version: string): void {
-    if (this.#inner instanceof StreamableHTTPClientTransport) this.#inner.setProtocolVersion(version);
+    if (this.#inner instanceof StreamableHTTPClientTransport) {
+      this.#inner.setProtocolVersion(version);
+    }
   }
 }
 
@@ -619,12 +668,16 @@ async function resolveSecretRecord(
   secrets: SecretStore,
 ): Promise<Record<string, string>> {
   const resolved: Record<string, string> = {};
-  for (const [name, reference] of Object.entries(record)) resolved[name] = await secrets.resolve(reference);
+  for (const [name, reference] of Object.entries(record)) {
+    resolved[name] = await secrets.resolve(reference);
+  }
   return resolved;
 }
 
 function limitResponseBody(response: Response, maxBytes: number, onLimit: () => void): Response {
-  if (response.body === null) return response;
+  if (response.body === null) {
+    return response;
+  }
   const reader = response.body.getReader();
   let bytes = 0;
   const body = new ReadableStream<Uint8Array>({
@@ -656,12 +709,18 @@ function limitResponseBody(response: Response, maxBytes: number, onLimit: () => 
 
 function truncateUtf8(value: string, maxBytes: number): string {
   const encoded = new TextEncoder().encode(value);
-  if (encoded.byteLength <= maxBytes) return value;
+  if (encoded.byteLength <= maxBytes) {
+    return value;
+  }
   const marker = new TextEncoder().encode(TRUNCATION_MARKER);
-  if (marker.byteLength >= maxBytes) return new TextDecoder().decode(marker.subarray(0, maxBytes));
+  if (marker.byteLength >= maxBytes) {
+    return new TextDecoder().decode(marker.subarray(0, maxBytes));
+  }
   const available = Math.max(0, maxBytes - marker.byteLength);
   let end = available;
-  while (end > 0 && (encoded[end] ?? 0) >= 0x80 && (encoded[end] ?? 0) < 0xc0) end -= 1;
+  while (end > 0 && (encoded[end] ?? 0) >= 0x80 && (encoded[end] ?? 0) < 0xc0) {
+    end -= 1;
+  }
   const prefix = new TextDecoder().decode(encoded.subarray(0, end));
   return `${prefix}${TRUNCATION_MARKER}`;
 }
@@ -675,8 +734,9 @@ function safeJson(value: unknown, maxBytes: number): string {
 }
 
 function isTransient(error: unknown): boolean {
-  if (error instanceof StreamableHTTPError)
+  if (error instanceof StreamableHTTPError) {
     return error.code === 429 || error.code === 502 || error.code === 503 || error.code === 504;
+  }
   return (
     error instanceof McpError && (error.code === ErrorCode.ConnectionClosed || error.code === ErrorCode.RequestTimeout)
   );
@@ -684,18 +744,32 @@ function isTransient(error: unknown): boolean {
 
 function classifyMcpError(error: unknown): string {
   if (error instanceof McpError) {
-    if (error.code === ErrorCode.ConnectionClosed) return 'connection_closed';
-    if (error.code === ErrorCode.RequestTimeout) return 'timeout';
+    if (error.code === ErrorCode.ConnectionClosed) {
+      return 'connection_closed';
+    }
+    if (error.code === ErrorCode.RequestTimeout) {
+      return 'timeout';
+    }
     return `mcp_${error.code}`;
   }
-  if (error instanceof StreamableHTTPError) return error.code === undefined ? 'http_error' : `http_${error.code}`;
-  if (error instanceof DOMException && error.name === 'TimeoutError') return 'timeout';
-  if (error instanceof Error && error.name === 'AbortError') return 'aborted';
+  if (error instanceof StreamableHTTPError) {
+    return error.code === undefined ? 'http_error' : `http_${error.code}`;
+  }
+  if (error instanceof DOMException && error.name === 'TimeoutError') {
+    return 'timeout';
+  }
+  if (error instanceof Error && error.name === 'AbortError') {
+    return 'aborted';
+  }
   return 'transport_error';
 }
 
 function safeErrorName(error: unknown): string {
-  if (error instanceof McpError) return `mcp_${error.code}`;
-  if (error instanceof Error) return error.name;
+  if (error instanceof McpError) {
+    return `mcp_${error.code}`;
+  }
+  if (error instanceof Error) {
+    return error.name;
+  }
   return 'unknown_error';
 }

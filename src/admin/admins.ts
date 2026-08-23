@@ -43,7 +43,9 @@ export function addBotAdmin(db: Database, telegramUserId: bigint, addedBy: strin
        RETURNING telegram_user_id, display_name, added_by, created_at, updated_at`,
     )
     .get(telegramUserId, addedBy, timestamp, timestamp);
-  if (row === null) throw new Error('Bot admin row is missing after upsert');
+  if (row === null) {
+    throw new Error('Bot admin row is missing after upsert');
+  }
   return { ...row, telegram_user_id: row.telegram_user_id.toString() };
 }
 
@@ -54,7 +56,9 @@ export function removeBotAdmin(db: Database, telegramUserId: bigint): boolean {
 // Config-seeded admins guarantee the operator can always recover control; the
 // panel remains the runtime source of truth, so seeds never remove entries.
 export function seedConfigAdmins(db: Database, adminIds: readonly number[], now = new Date()): void {
-  if (adminIds.length === 0) return;
+  if (adminIds.length === 0) {
+    return;
+  }
   const timestamp = now.toISOString();
   db.transaction(() => {
     for (const adminId of adminIds) {

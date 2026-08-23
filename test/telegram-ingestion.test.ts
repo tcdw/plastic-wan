@@ -105,7 +105,9 @@ describe('Telegram ingestion', () => {
   test('bot and service messages cannot trigger collection', async () => {
     const { store, ingestion } = await setup();
     const botUpdate = textUpdate(1, 10, 'bot');
-    if (botUpdate.message === undefined || botUpdate.message.from === undefined) throw new Error('Invalid fixture');
+    if (botUpdate.message === undefined || botUpdate.message.from === undefined) {
+      throw new Error('Invalid fixture');
+    }
     botUpdate.message.from.is_bot = true;
     botUpdate.message.from.id = 500;
     const serviceUpdate: Update = {

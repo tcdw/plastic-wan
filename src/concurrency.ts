@@ -17,12 +17,16 @@ export class AsyncSemaphore {
     limit: number,
     private readonly onIdle?: (semaphore: AsyncSemaphore) => void,
   ) {
-    if (!Number.isInteger(limit) || limit < 1) throw new Error('Semaphore limit must be a positive integer');
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new Error('Semaphore limit must be a positive integer');
+    }
     this.#limit = limit;
   }
 
   acquire(signal: AbortSignal, priority = 0): Promise<() => void> {
-    if (signal.aborted) return Promise.reject(new Error('Semaphore wait aborted'));
+    if (signal.aborted) {
+      return Promise.reject(new Error('Semaphore wait aborted'));
+    }
     if (this.#active < this.#limit) {
       this.#active += 1;
       return Promise.resolve(() => this.#release());
@@ -31,7 +35,9 @@ export class AsyncSemaphore {
       let waiter: Waiter;
       const onAbort = (): void => {
         const index = this.#waiters.indexOf(waiter);
-        if (index >= 0) this.#waiters.splice(index, 1);
+        if (index >= 0) {
+          this.#waiters.splice(index, 1);
+        }
         reject(new Error('Semaphore wait aborted'));
         this.#notifyIdle();
       };
@@ -46,9 +52,13 @@ export class AsyncSemaphore {
   #release(): void {
     while (true) {
       const waiter = this.#waiters.shift();
-      if (waiter === undefined) break;
+      if (waiter === undefined) {
+        break;
+      }
       waiter.signal.removeEventListener('abort', waiter.onAbort);
-      if (waiter.signal.aborted) continue;
+      if (waiter.signal.aborted) {
+        continue;
+      }
       waiter.resolve(() => this.#release());
       return;
     }
@@ -57,7 +67,9 @@ export class AsyncSemaphore {
   }
 
   #notifyIdle(): void {
-    if (this.#active === 0 && this.#waiters.length === 0) this.onIdle?.(this);
+    if (this.#active === 0 && this.#waiters.length === 0) {
+      this.onIdle?.(this);
+    }
   }
 }
 
@@ -68,7 +80,9 @@ export class KeyedSemaphore {
     let semaphore = this.#semaphores.get(key);
     if (semaphore === undefined) {
       semaphore = new AsyncSemaphore(1, (idle) => {
-        if (this.#semaphores.get(key) === idle) this.#semaphores.delete(key);
+        if (this.#semaphores.get(key) === idle) {
+          this.#semaphores.delete(key);
+        }
       });
       this.#semaphores.set(key, semaphore);
     }

@@ -85,7 +85,9 @@ export async function promptPositiveInteger(message: string, initial?: number): 
     default: initial !== undefined ? String(initial) : undefined,
     validate: (raw) => {
       const number = Number(raw);
-      if (!Number.isInteger(number) || number < 1) return 'Must be a positive integer';
+      if (!Number.isInteger(number) || number < 1) {
+        return 'Must be a positive integer';
+      }
       return true;
     },
   });
@@ -98,7 +100,9 @@ export async function promptNonNegativeNumber(message: string, initial?: number)
     default: initial !== undefined ? String(initial) : undefined,
     validate: (raw) => {
       const number = Number(raw);
-      if (Number.isNaN(number) || number < 0) return 'Must be a non-negative number';
+      if (Number.isNaN(number) || number < 0) {
+        return 'Must be a non-negative number';
+      }
       return true;
     },
   });
@@ -110,7 +114,9 @@ export async function promptString(message: string, initial?: string, required =
     message,
     default: initial,
     validate: (value) => {
-      if (!required) return true;
+      if (!required) {
+        return true;
+      }
       return value.trim().length > 0 || 'Required';
     },
   });

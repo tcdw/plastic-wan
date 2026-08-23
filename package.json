@@ -15,8 +15,8 @@
     "start": "bun run src/cli.ts serve",
     "admin:dev": "bun run --filter plasticwan-admin dev",
     "admin:build": "bun run --filter plasticwan-admin build",
-    "lint": "biome lint .",
-    "lint:fix": "biome lint --write ."
+    "lint": "biome lint . && biome format .",
+    "lint:fix": "biome lint --write --unsafe . && biome format --write ."
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.2",

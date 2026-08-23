@@ -128,14 +128,18 @@ export class AgentRuntime {
       },
     });
     const chat = resolveChatConfig(this.#config, this.#store.db, provisionalContext.chatId);
-    if (chat === undefined) throw new Error(`Invocation ${invocationId} chat is no longer configured`);
+    if (chat === undefined) {
+      throw new Error(`Invocation ${invocationId} chat is no longer configured`);
+    }
     const initialBudget = readDailyTokenBudget(
       this.#store.db,
       provisionalContext.chatId,
       chat.budget.max_tokens_per_day,
     );
     let zzzExposed = isLowDailyTokenBudget(initialBudget);
-    if (zzzExposed) this.#logZzzExposure(invocationId, provisionalContext.chatId, initialBudget);
+    if (zzzExposed) {
+      this.#logZzzExposure(invocationId, provisionalContext.chatId, initialBudget);
+    }
     const preliminarySend = createSendTool({
       store: this.#store,
       api: this.#telegramApi,
@@ -171,11 +175,7 @@ export class AgentRuntime {
       deadline,
       bot: this.#bot,
     });
-    const tools = [
-      send,
-      ...(this.#additionalTools?.(context, state, deadline) ?? []),
-      ...(zzzExposed ? [zzz] : []),
-    ];
+    const tools = [send, ...(this.#additionalTools?.(context, state, deadline) ?? []), ...(zzzExposed ? [zzz] : [])];
     validateToolRegistry(tools, model.contextWindow);
     this.#recordToolRegistry(invocationId, tools);
     const timeoutSignal = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
@@ -239,23 +239,26 @@ export class AgentRuntime {
         }
         if (
           toolCall.name === 'zzz' &&
-          !isLowDailyTokenBudget(
-            readDailyTokenBudget(this.#store.db, context.chatId, chat.budget.max_tokens_per_day),
-          )
+          !isLowDailyTokenBudget(readDailyTokenBudget(this.#store.db, context.chatId, chat.budget.max_tokens_per_day))
         ) {
           return { block: true, reason: 'You are no longer sleepy' };
         }
         toolCalls += 1;
-        if (toolCalls > this.#config.agent.max_tool_calls)
+        if (toolCalls > this.#config.agent.max_tool_calls) {
           return { block: true, reason: 'Invocation tool-call limit reached', terminate: true };
+        }
         this.#store.db
           .query('UPDATE invocations SET tool_calls_used = ? WHERE id = ?')
           .run(BigInt(toolCalls), invocationId);
         return undefined;
       },
       shouldStopAfterTurn: async (turn) => {
-        if (sleepRequested || activeSleepUntil(this.#store.db) !== null) return true;
-        if (turns >= this.#config.agent.max_turns || closing) return true;
+        if (sleepRequested || activeSleepUntil(this.#store.db) !== null) {
+          return true;
+        }
+        if (turns >= this.#config.agent.max_turns || closing) {
+          return true;
+        }
         const stopThreshold = Math.floor(model.contextWindow * this.#config.agent.context_stop_ratio);
         if (estimatedInputTokens + model.maxTokens >= model.contextWindow && estimatedInputTokens >= stopThreshold) {
           return true;
@@ -315,7 +318,9 @@ export class AgentRuntime {
       if (event.type === 'tool_execution_end' && event.toolName === 'send') {
         sendUsed = true;
       }
-      if (event.type !== 'message_end') return;
+      if (event.type !== 'message_end') {
+        return;
+      }
       if (event.message.role === 'assistant') {
         const text = event.message.content
           .filter((entry) => entry.type === 'text')
@@ -360,7 +365,9 @@ export class AgentRuntime {
       unsubscribe();
       agent.reset();
     }
-    if (outcome === undefined) throw new Error('Agent run ended without an outcome');
+    if (outcome === undefined) {
+      throw new Error('Agent run ended without an outcome');
+    }
     return outcome;
   }
 
@@ -420,11 +427,7 @@ export class AgentRuntime {
           BigInt(usage.cacheWrite),
           BigInt(usage.totalTokens),
           usage.cost.total,
-          message.stopReason === 'error'
-            ? 'model_error'
-            : message.stopReason === 'aborted'
-              ? 'model_aborted'
-              : null,
+          message.stopReason === 'error' ? 'model_error' : message.stopReason === 'aborted' ? 'model_aborted' : null,
           message.errorMessage === undefined ? null : this.#secrets.redact(message.errorMessage),
           now,
           callId,
@@ -445,10 +448,11 @@ export class AgentRuntime {
       .run(errorCode, this.#secrets.redactError(error), new Date().toISOString(), callId);
   }
 
-
   #tokenBudgetReached(chatId: bigint): boolean {
     const chat = resolveChatConfig(this.#config, this.#store.db, chatId);
-    if (chat === undefined) return true;
+    if (chat === undefined) {
+      return true;
+    }
     const date = new Date().toISOString().slice(0, 10);
     const amount =
       this.#store.db
@@ -474,14 +478,19 @@ export class AgentRuntime {
   }
 }
 
-
 function validateToolRegistry(tools: readonly AgentTool[], contextWindow: number): void {
-  if (tools.length > 64) throw new Error(`Tool registry has ${tools.length} tools; maximum is 64`);
+  if (tools.length > 64) {
+    throw new Error(`Tool registry has ${tools.length} tools; maximum is 64`);
+  }
   const characters = tools.reduce((total, tool) => total + JSON.stringify(tool.parameters).length, 0);
-  if (characters / 4 > contextWindow * 0.1) throw new Error('Tool registry exceeds 10% of the model context window');
+  if (characters / 4 > contextWindow * 0.1) {
+    throw new Error('Tool registry exceeds 10% of the model context window');
+  }
   const names = new Set<string>();
   for (const tool of tools) {
-    if (names.has(tool.name)) throw new Error(`Duplicate tool name: ${tool.name}`);
+    if (names.has(tool.name)) {
+      throw new Error(`Duplicate tool name: ${tool.name}`);
+    }
     names.add(tool.name);
   }
 }

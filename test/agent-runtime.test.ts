@@ -52,7 +52,9 @@ test('a fresh Agent publishes only through send and audits model usage', async (
     reason: 'done',
   }));
   const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-  if (invocationId === undefined) throw new Error('Expected a due invocation');
+  if (invocationId === undefined) {
+    throw new Error('Expected a due invocation');
+  }
 
   const faux = fauxProvider({
     provider: 'agent',
@@ -145,7 +147,9 @@ test('audits complete redacted model error details', async () => {
     reason: 'done',
   }));
   const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-  if (invocationId === undefined) throw new Error('Expected a due invocation');
+  if (invocationId === undefined) {
+    throw new Error('Expected a due invocation');
+  }
 
   const errorDetail = 'Provider request failed with telegram-secret\nstatus=500\nbody={"error":"upstream exploded"}';
   const faux = fauxProvider({
@@ -233,7 +237,9 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
     reason: 'done',
   }));
   const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-  if (invocationId === undefined) throw new Error('Expected a due invocation');
+  if (invocationId === undefined) {
+    throw new Error('Expected a due invocation');
+  }
 
   const faux = fauxProvider({
     provider: 'agent',
@@ -243,8 +249,9 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
     (context) => {
       const user = context.messages[0];
       expect(user?.role).toBe('user');
-      if (user?.role !== 'user' || typeof user.content === 'string')
+      if (user?.role !== 'user' || typeof user.content === 'string') {
         throw new Error('Expected multimodal user content');
+      }
       const images = user.content.filter((entry) => entry.type === 'image');
       expect(images).toHaveLength(1);
       expect(images[0]?.mimeType).toBe('image/jpeg');
@@ -332,7 +339,9 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
     reason: 'done',
   }));
   const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-  if (invocationId === undefined) throw new Error('Expected a due invocation');
+  if (invocationId === undefined) {
+    throw new Error('Expected a due invocation');
+  }
 
   const agentFaux = fauxProvider({
     provider: 'agent',
@@ -347,7 +356,9 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
         const match = /"image_ref":"([^"]+)"/.exec(text);
         photoRef = match?.[1];
       }
-      if (photoRef === undefined) throw new Error('Text-only agent context omitted image_ref');
+      if (photoRef === undefined) {
+        throw new Error('Text-only agent context omitted image_ref');
+      }
       return fauxAssistantMessage(fauxToolCall('read_image', { image_ref: photoRef }), { stopReason: 'toolUse' });
     },
     fauxAssistantMessage('understood'),
@@ -443,7 +454,9 @@ test('nudges the model once to use send when it drafts a private reply and never
     reason: 'done',
   }));
   const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-  if (invocationId === undefined) throw new Error('Expected a due invocation');
+  if (invocationId === undefined) {
+    throw new Error('Expected a due invocation');
+  }
 
   // Turn 1: a would-be reply drafted as private assistant text, no send call.
   // Turn 2: after the nudge, the model still forgets send — proving no re-nudge.
@@ -458,7 +471,9 @@ test('nudges the model once to use send when it drafts a private reply and never
       const lastUser = [...context.messages].reverse().find((message) => message.role === 'user');
       const content = lastUser?.content;
       const nudgeText = Array.isArray(content) ? (content.find((block) => block.type === 'text')?.text ?? '') : '';
-      if (nudgeText.includes('call the send tool')) sawNudge = true;
+      if (nudgeText.includes('call the send tool')) {
+        sawNudge = true;
+      }
       return fauxAssistantMessage('another long private reply that still forgets to call send');
     },
   ]);

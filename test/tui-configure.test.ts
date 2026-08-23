@@ -126,7 +126,9 @@ describe('provider wizard discovery', () => {
         observedPath = new URL(request.url).pathname;
         observedAuthorization = request.headers.get('authorization') ?? '';
         observedRoute = request.headers.get('x-route') ?? '';
-        if (observedPath === '/invalid/models') return Response.json({ models: [] });
+        if (observedPath === '/invalid/models') {
+          return Response.json({ models: [] });
+        }
         return Response.json({
           object: 'list',
           data: [

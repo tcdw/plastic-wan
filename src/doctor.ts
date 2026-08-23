@@ -52,12 +52,16 @@ async function runDoctorChecks(
   await mkdir(config.paths.media_cache, { recursive: true, mode: 0o700 });
   await mkdir(config.paths.backups, { recursive: true, mode: 0o700 });
   const dataDirectory = await stat(config.data_dir);
-  if (!dataDirectory.isDirectory()) throw new Error(`Data path is not a directory: ${config.data_dir}`);
-  if (process.platform !== 'win32' && (dataDirectory.mode & 0o077) !== 0)
+  if (!dataDirectory.isDirectory()) {
+    throw new Error(`Data path is not a directory: ${config.data_dir}`);
+  }
+  if (process.platform !== 'win32' && (dataDirectory.mode & 0o077) !== 0) {
     throw new Error('Data directory must not grant group or other permissions');
+  }
   const filesystem = await statfs(config.data_dir);
-  if (filesystem.bavail * filesystem.bsize < 100 * 1024 * 1024)
+  if (filesystem.bavail * filesystem.bsize < 100 * 1024 * 1024) {
     throw new Error('Data filesystem has less than 100 MiB available');
+  }
   verifyFtsTrigram();
   await sharp({ create: { width: 1, height: 1, channels: 3, background: 'white' } })
     .png()
@@ -71,9 +75,13 @@ async function runDoctorChecks(
   let mcp: McpManager | undefined;
   try {
     for (const [alias, provider] of Object.entries(config.providers)) {
-      if (provider.kind !== 'custom') continue;
+      if (provider.kind !== 'custom') {
+        continue;
+      }
       const model = registry.models.getModels(alias).find((candidate) => candidate.input.includes('text'));
-      if (model === undefined) throw new Error(`Custom provider ${alias} has no text-capable model for doctor probe`);
+      if (model === undefined) {
+        throw new Error(`Custom provider ${alias} has no text-capable model for doctor probe`);
+      }
       await completeDoctorCall(
         store,
         registry,
@@ -202,7 +210,9 @@ async function runDoctorChecks(
 }
 
 function doctorReasoning(model: Model<Api>, level: ModelThinkingLevel): ThinkingLevel | undefined {
-  if (!model.reasoning) return undefined;
+  if (!model.reasoning) {
+    return undefined;
+  }
   return level === 'off' ? 'low' : level;
 }
 
@@ -248,7 +258,9 @@ async function completeDoctorCall(
         new Date().toISOString(),
         callId,
       );
-    if (state === 'error') throw new Error(`Doctor model probe failed for ${model.provider}/${model.id}`);
+    if (state === 'error') {
+      throw new Error(`Doctor model probe failed for ${model.provider}/${model.id}`);
+    }
     return response;
   } catch (error) {
     store.db
@@ -270,12 +282,16 @@ async function resolveAllSecrets(
   for (const provider of Object.values(providers)) {
     await secrets.resolve(provider.api_key);
     if (provider.kind === 'custom') {
-      for (const reference of Object.values(provider.headers ?? {})) await secrets.resolve(reference);
+      for (const reference of Object.values(provider.headers ?? {})) {
+        await secrets.resolve(reference);
+      }
     }
   }
   for (const server of servers) {
     const references = server.transport === 'stdio' ? (server.env ?? {}) : (server.headers ?? {});
-    for (const reference of Object.values(references)) await secrets.resolve(reference);
+    for (const reference of Object.values(references)) {
+      await secrets.resolve(reference);
+    }
   }
 }
 
@@ -287,7 +303,9 @@ function verifyFtsTrigram(): void {
     const result = database
       .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM probe WHERE probe MATCH 'stick'")
       .get();
-    if (result?.count !== 1n) throw new Error('SQLite FTS5 trigram probe returned an invalid result');
+    if (result?.count !== 1n) {
+      throw new Error('SQLite FTS5 trigram probe returned an invalid result');
+    }
   } finally {
     database.close();
   }
@@ -313,7 +331,9 @@ async function verifyLottie(dataDir: string): Promise<void> {
     await Bun.write(input, gzipSync(fixture));
     await runDependency(createLottieCommand([input, output]));
     const rendered = await sharp(output).png().toBuffer({ resolveWithObject: true });
-    if (rendered.info.format !== 'png') throw new Error('lottie_convert.py did not produce a renderable SVG');
+    if (rendered.info.format !== 'png') {
+      throw new Error('lottie_convert.py did not produce a renderable SVG');
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -329,7 +349,9 @@ async function runDependency(argv: readonly string[]): Promise<void> {
   const timeout = setTimeout(() => processHandle.kill(), 10_000);
   try {
     const exitCode = await processHandle.exited;
-    if (exitCode !== 0) throw new Error(`${argv[0] ?? 'Dependency'} probe failed with exit code ${exitCode}`);
+    if (exitCode !== 0) {
+      throw new Error(`${argv[0] ?? 'Dependency'} probe failed with exit code ${exitCode}`);
+    }
   } finally {
     clearTimeout(timeout);
   }

@@ -129,10 +129,13 @@ export class ContextBuilder {
          WHERE i.id = ?`,
       )
       .get(invocationId);
-    if (identity === null) throw new Error(`Invocation ${invocationId} does not exist`);
+    if (identity === null) {
+      throw new Error(`Invocation ${invocationId} does not exist`);
+    }
     const chatConfig = resolveChatConfig(this.#config, this.#store.db, identity.telegram_chat_id);
-    if (chatConfig === undefined)
+    if (chatConfig === undefined) {
       throw new Error(`Invocation chat ${identity.telegram_chat_id} is no longer configured`);
+    }
     const timezone = chatConfig.timezone ?? this.#config.timezone;
     const participation =
       identity.chat_type === 'private'
@@ -200,14 +203,18 @@ export class ContextBuilder {
     let usedCharacters = 80;
     for (const entry of current.toReversed()) {
       const size = JSON.stringify(entry.snapshot).length + 1;
-      if (selectedCurrent.length > 0 && usedCharacters + size > maximumCharacters) break;
+      if (selectedCurrent.length > 0 && usedCharacters + size > maximumCharacters) {
+        break;
+      }
       selectedCurrent.unshift(entry);
       usedCharacters += size;
     }
     const selectedHistory: typeof history = [];
     for (const entry of history.toReversed()) {
       const size = JSON.stringify(entry.snapshot).length + 1;
-      if (usedCharacters + size > maximumCharacters) break;
+      if (usedCharacters + size > maximumCharacters) {
+        break;
+      }
       selectedHistory.unshift(entry);
       usedCharacters += size;
     }
@@ -230,14 +237,18 @@ export class ContextBuilder {
     const selectedMedia = [...selectedHistory, ...selectedCurrent].flatMap((entry) => entry.snapshot.media);
     const selectedMediaIds = new Set(selectedMedia.map((media) => media.image_ref));
     for (const [reference] of capabilities) {
-      if (!selectedMediaIds.has(reference)) capabilities.delete(reference);
+      if (!selectedMediaIds.has(reference)) {
+        capabilities.delete(reference);
+      }
     }
     const directImages = supportsImages
       ? selectedMedia
           .filter((media) => media.kind !== 'sticker')
           .flatMap((media) => {
             const mediaId = mediaIds.get(media.image_ref);
-            if (mediaId === undefined) throw new Error('Selected media is missing its capability reference');
+            if (mediaId === undefined) {
+              throw new Error('Selected media is missing its capability reference');
+            }
             return [{ mediaId, imageRef: media.image_ref }];
           })
       : [];
@@ -280,11 +291,15 @@ export class ContextBuilder {
     } catch {
       throw new Error('Stored invocation message contains invalid JSON');
     }
-    if (!snapshotValidator.Check(parsed)) throw new Error('Stored invocation message does not match its schema');
+    if (!snapshotValidator.Check(parsed)) {
+      throw new Error('Stored invocation message does not match its schema');
+    }
     const media = parsed.media.map((entry) => {
       const reference = `img_${crypto.randomUUID().replaceAll('-', '')}`;
       mediaIds.set(reference, BigInt(entry.id));
-      if (!supportsImages || entry.kind === 'sticker') capabilities.set(reference, BigInt(entry.id));
+      if (!supportsImages || entry.kind === 'sticker') {
+        capabilities.set(reference, BigInt(entry.id));
+      }
       return {
         image_ref: reference,
         kind: entry.kind,
@@ -309,7 +324,6 @@ export class ContextBuilder {
       media,
     };
   }
-
 }
 
 interface PreparedSnapshot extends Omit<MessageSnapshot, 'revision' | 'media'> {

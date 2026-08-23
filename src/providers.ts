@@ -34,7 +34,9 @@ export async function createModelRegistry(config: RawConfig, secrets: SecretStor
     const apiKey = await secrets.resolve(configured.api_key);
     if (configured.kind === 'builtin') {
       const source = builtinById.get(configured.provider);
-      if (source === undefined) throw new Error(`Unknown built-in provider: ${configured.provider}`);
+      if (source === undefined) {
+        throw new Error(`Unknown built-in provider: ${configured.provider}`);
+      }
       models.setProvider(aliasBuiltinProvider(alias, source, fixedAuth(alias, apiKey)));
       continue;
     }
@@ -43,7 +45,9 @@ export async function createModelRegistry(config: RawConfig, secrets: SecretStor
       headers[name] = await secrets.resolve(reference);
     }
     const adapter = CUSTOM_ADAPTERS[configured.api];
-    if (adapter === undefined) throw new Error(`Unsupported custom API adapter: ${configured.api}`);
+    if (adapter === undefined) {
+      throw new Error(`Unsupported custom API adapter: ${configured.api}`);
+    }
     const baseUrl = configured.base_url.replace(/\/+$/, '');
     models.setProvider(
       createProvider({
@@ -129,10 +133,13 @@ function requireModel(
   capabilities: readonly ('text' | 'image')[],
 ): Model<Api> {
   const model = models.getModel(provider, modelId);
-  if (model === undefined) throw new Error(`Model ${provider}/${modelId} is not registered`);
+  if (model === undefined) {
+    throw new Error(`Model ${provider}/${modelId} is not registered`);
+  }
   for (const capability of capabilities) {
-    if (!model.input.includes(capability))
+    if (!model.input.includes(capability)) {
       throw new Error(`Model ${provider}/${modelId} lacks ${capability} input capability`);
+    }
   }
   return model;
 }

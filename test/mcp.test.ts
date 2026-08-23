@@ -80,14 +80,20 @@ global_daily_calls = 2
       reason: 'done',
     }));
     const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-    if (invocationId === undefined) throw new Error('Expected a due invocation');
+    if (invocationId === undefined) {
+      throw new Error('Expected a due invocation');
+    }
     const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
     const [tool] = manager.createTools(context, Date.now() + 30_000);
-    if (tool === undefined) throw new Error('MCP tool was not exposed');
+    if (tool === undefined) {
+      throw new Error('MCP tool was not exposed');
+    }
 
     const result = await tool.execute('mcp-1', { text: 'x'.repeat(400) });
     const text = result.content.find((entry) => entry.type === 'text');
-    if (text === undefined || text.type !== 'text') throw new Error('MCP result omitted text');
+    if (text === undefined || text.type !== 'text') {
+      throw new Error('MCP result omitted text');
+    }
     expect(text.text.endsWith('[tool result truncated]')).toBe(true);
     expect(Buffer.byteLength(text.text)).toBeLessThanOrEqual(128);
 
@@ -139,9 +145,12 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
     port: 0,
     fetch: (request) => {
       const url = new URL(request.url);
-      if (url.searchParams.get('api_key') !== 'public-key') return new Response('unauthorized', { status: 401 });
-      if (request.headers.get('authorization') !== 'Bearer static-secret')
+      if (url.searchParams.get('api_key') !== 'public-key') {
         return new Response('unauthorized', { status: 401 });
+      }
+      if (request.headers.get('authorization') !== 'Bearer static-secret') {
+        return new Response('unauthorized', { status: 401 });
+      }
       return transport.handleRequest(request);
     },
   });
@@ -191,13 +200,19 @@ global_daily_calls = 2
       reason: 'done',
     }));
     const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-    if (invocationId === undefined) throw new Error('Expected a due invocation');
+    if (invocationId === undefined) {
+      throw new Error('Expected a due invocation');
+    }
     const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
     const [tool] = manager.createTools(context, Date.now() + 30_000);
-    if (tool === undefined) throw new Error('HTTP MCP tool was not exposed');
+    if (tool === undefined) {
+      throw new Error('HTTP MCP tool was not exposed');
+    }
     const result = await tool.execute('http-1', { key: 'answer' });
     const text = result.content.find((entry) => entry.type === 'text');
-    if (text === undefined || text.type !== 'text') throw new Error('HTTP MCP result omitted text');
+    if (text === undefined || text.type !== 'text') {
+      throw new Error('HTTP MCP result omitted text');
+    }
     expect(text.text).toContain('value:answer');
   } finally {
     await manager.stop();

@@ -61,7 +61,9 @@ function update(updateId: number, messageId: number, text: string): Update {
 
 function processOne(scheduler: BucketScheduler, at: Date): bigint {
   const [invocationId] = scheduler.processDue(at);
-  if (invocationId === undefined) throw new Error('Expected one due invocation');
+  if (invocationId === undefined) {
+    throw new Error('Expected one due invocation');
+  }
   return invocationId;
 }
 
@@ -116,7 +118,9 @@ describe('invocation context', () => {
     const conversation = store.db
       .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
       .get(invocationId);
-    if (conversation === null) throw new Error('Expected invocation conversation');
+    if (conversation === null) {
+      throw new Error('Expected invocation conversation');
+    }
     memory.add(conversation.conversation_id, '{{ agent.model }}', 86_400);
     const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768, false, {
       provider: 'runtime',

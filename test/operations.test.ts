@@ -34,7 +34,9 @@ test('retention scrubs referenced history and backup keeps seven consistent copi
   const oldReceived = new Date('2026-01-01T00:00:00.000Z');
   ingestion.ingest(textUpdate(1, 10, 'old private text'), oldReceived);
   const [oldInvocation] = scheduler.processDue(new Date(oldReceived.getTime() + 15_000));
-  if (oldInvocation === undefined) throw new Error('Expected old invocation');
+  if (oldInvocation === undefined) {
+    throw new Error('Expected old invocation');
+  }
   store.db
     .query("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
     .run(oldReceived.toISOString(), oldInvocation);
@@ -52,7 +54,9 @@ test('retention scrubs referenced history and backup keeps seven consistent copi
   const newReceived = new Date('2026-02-15T00:00:00.000Z');
   ingestion.ingest(textUpdate(2, 11, 'new private text'), newReceived);
   const [newInvocation] = scheduler.processDue(new Date(newReceived.getTime() + 15_000));
-  if (newInvocation === undefined) throw new Error('Expected new invocation');
+  if (newInvocation === undefined) {
+    throw new Error('Expected new invocation');
+  }
   const historyBefore = store.db
     .query<{ snapshot_json: string }, [bigint]>(
       "SELECT snapshot_json FROM invocation_messages WHERE invocation_id = ? AND section = 'history'",

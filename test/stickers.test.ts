@@ -106,7 +106,9 @@ name = "CatSet"
   });
   await stickers.sync();
   const stickerRow = store.db.query<{ id: bigint }, []>('SELECT id FROM stickers').get();
-  if (stickerRow === null) throw new Error('Sticker sync did not create a row');
+  if (stickerRow === null) {
+    throw new Error('Sticker sync did not create a row');
+  }
   const directAnalysis = await media.analyzeStickerForIndex(stickerRow.id, new AbortController().signal);
   expect(directAnalysis.description).toBe('一只委屈猫正在哭泣');
   expect(await stickers.runOne()).toBe(true);
@@ -133,15 +135,21 @@ name = "CatSet"
     reason: 'done',
   }));
   const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-  if (invocationId === undefined) throw new Error('Expected a due invocation');
+  if (invocationId === undefined) {
+    throw new Error('Expected a due invocation');
+  }
   const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
   const capabilities = new Map<string, string>();
   const search = stickers.createSearchTool(context, capabilities);
   const result = await search.execute('search-1', { query: '委屈猫', set: 'cats', limit: 5 });
   const text = result.content.find((entry) => entry.type === 'text');
-  if (text === undefined || text.type !== 'text') throw new Error('Search returned no text result');
+  if (text === undefined || text.type !== 'text') {
+    throw new Error('Search returned no text result');
+  }
   const parsed: unknown = JSON.parse(text.text);
-  if (!Array.isArray(parsed) || parsed.length !== 1) throw new Error('Search result shape is invalid');
+  if (!Array.isArray(parsed) || parsed.length !== 1) {
+    throw new Error('Search result shape is invalid');
+  }
   const first = parsed[0];
   if (
     typeof first !== 'object' ||

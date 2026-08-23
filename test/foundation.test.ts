@@ -30,7 +30,9 @@ describe('configuration', () => {
     expect(loaded.config.telegram.bucket_window_seconds).toBe(15);
     const agentProvider = loaded.config.providers.agent;
     expect(agentProvider?.kind).toBe('custom');
-    if (agentProvider?.kind !== 'custom') throw new Error('Expected the custom agent provider');
+    if (agentProvider?.kind !== 'custom') {
+      throw new Error('Expected the custom agent provider');
+    }
     expect(agentProvider.models[0]?.compat?.supports_developer_role).toBe(false);
     const registry = await createModelRegistry(loaded.config, new SecretStore());
     expect(registry.agentModel.compat).toMatchObject({ supportsDeveloperRole: false });

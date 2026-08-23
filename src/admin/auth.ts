@@ -92,7 +92,9 @@ export class AdminAuth {
         const updated = this.#db
           .query('UPDATE admin_users SET username = ?, password_hash = ?, updated_at = ? WHERE id = ?')
           .run(credentials.username, passwordHash, iso, userId);
-        if (updated.changes === 0) throw new AdminAuthError(401, 'unauthenticated', 'Admin session is required');
+        if (updated.changes === 0) {
+          throw new AdminAuthError(401, 'unauthenticated', 'Admin session is required');
+        }
         this.#db.query('DELETE FROM admin_sessions WHERE user_id = ?').run(userId);
         return this.#createSession(userId, now);
       })
@@ -133,7 +135,9 @@ export class AdminAuth {
   }
 
   authenticate(token: string, now = new Date()): AdminSession | null {
-    if (token.length === 0) return null;
+    if (token.length === 0) {
+      return null;
+    }
     const row = this.#db
       .query<SessionRow, [string]>(
         `SELECT s.id, s.user_id, u.username, s.expires_at
@@ -141,7 +145,9 @@ export class AdminAuth {
          WHERE s.token_hash = ?`,
       )
       .get(hashToken(token));
-    if (row === null) return null;
+    if (row === null) {
+      return null;
+    }
     if (row.expires_at <= now.toISOString()) {
       this.#db.query('DELETE FROM admin_sessions WHERE id = ?').run(row.id);
       return null;
@@ -151,7 +157,9 @@ export class AdminAuth {
   }
 
   logout(token: string): void {
-    if (token.length === 0) return;
+    if (token.length === 0) {
+      return;
+    }
     this.#db.query('DELETE FROM admin_sessions WHERE token_hash = ?').run(hashToken(token));
   }
 

@@ -34,7 +34,9 @@ export async function serve(configPath: string): Promise<void> {
   let startupCatchUpController: AbortController | undefined;
   let shuttingDown = false;
   const shutdown = (): void => {
-    if (shuttingDown) return;
+    if (shuttingDown) {
+      return;
+    }
     shuttingDown = true;
     logEvent('shutdown_requested');
     startupCatchUpController?.abort(new Error('shutdown'));
@@ -181,7 +183,9 @@ export function logEvent(event: string, fields: Readonly<Record<string, string |
 
 async function replyToCommand(context: Context, commands: BotCommandService, command: ParsedCommand): Promise<void> {
   const message = context.update.message;
-  if (message === undefined) return;
+  if (message === undefined) {
+    return;
+  }
   const chatId = message.chat.id;
   const sender =
     message.from === undefined

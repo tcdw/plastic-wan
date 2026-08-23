@@ -50,16 +50,26 @@ export async function registerBotCommands(api: CommandRegistrationApi): Promise<
 // Telegram command tokens are case-insensitive and may carry an explicit
 // bot mention (`/pause@PlasticWanBot`); the mention must match this bot.
 export function parseBotCommand(message: Message, botUsername: string | null): ParsedCommand | null {
-  if (message.text === undefined || message.from?.is_bot === true) return null;
+  if (message.text === undefined || message.from?.is_bot === true) {
+    return null;
+  }
   const entity = message.entities?.find((entry) => entry.type === 'bot_command' && entry.offset === 0);
-  if (entity === undefined) return null;
+  if (entity === undefined) {
+    return null;
+  }
   const token = message.text.slice(0, entity.length);
   const separator = token.indexOf('@');
   const name = (separator === -1 ? token.slice(1) : token.slice(1, separator)).toLowerCase();
   const mention = separator === -1 ? null : token.slice(separator + 1).toLowerCase();
-  if (mention !== null && mention !== botUsername?.toLowerCase()) return null;
-  if (!COMMAND_NAMES.has(name as ParsedCommand['name'])) return null;
-  if (name !== 'model') return { name: name as ParsedCommand['name'] };
+  if (mention !== null && mention !== botUsername?.toLowerCase()) {
+    return null;
+  }
+  if (!COMMAND_NAMES.has(name as ParsedCommand['name'])) {
+    return null;
+  }
+  if (name !== 'model') {
+    return { name: name as ParsedCommand['name'] };
+  }
   const argument = message.text.slice(entity.offset + entity.length).trim();
   return argument.length === 0 ? { name: 'model' } : { name: 'model', argument };
 }
@@ -93,7 +103,9 @@ export class BotCommandService {
   }
 
   #adminGate(sender: CommandSender | null): boolean {
-    if (sender === null || !isBotAdmin(this.#store.db, sender.id)) return false;
+    if (sender === null || !isBotAdmin(this.#store.db, sender.id)) {
+      return false;
+    }
     const timestamp = new Date().toISOString();
     // Keep the panel list readable: refresh the display name of acting admins.
     this.#store.db
@@ -106,7 +118,9 @@ export class BotCommandService {
 
   #pause(telegramChatId: bigint, now: Date): string {
     const chatId = this.#internalChatId(telegramChatId);
-    if (chatId === null) throw new Error(`Chat ${telegramChatId} has no stored row`);
+    if (chatId === null) {
+      throw new Error(`Chat ${telegramChatId} has no stored row`);
+    }
     const timestamp = now.toISOString();
     this.#store.transaction(() => {
       this.#store.db
@@ -133,15 +147,21 @@ export class BotCommandService {
 
   #resume(telegramChatId: bigint): string {
     const chatId = this.#internalChatId(telegramChatId);
-    if (chatId === null) throw new Error(`Chat ${telegramChatId} has no stored row`);
+    if (chatId === null) {
+      throw new Error(`Chat ${telegramChatId} has no stored row`);
+    }
     this.#store.db.query('DELETE FROM chat_pause WHERE chat_id = ?').run(chatId);
     return '已恢复本群互动。';
   }
 
   #modelSwitch(argument: string | undefined): string {
     const switcher = this.#modelSwitcher;
-    if (switcher === undefined) return '运行时模型切换不可用。';
-    if (argument === undefined) return this.#modelMenu(switcher, 1, switcher.list());
+    if (switcher === undefined) {
+      return '运行时模型切换不可用。';
+    }
+    if (argument === undefined) {
+      return this.#modelMenu(switcher, 1, switcher.list());
+    }
     if (argument === 'reset') {
       const current = switcher.reset();
       return `已恢复 config.toml 默认模型: ${current.provider} / ${current.model}。`;
@@ -161,7 +181,9 @@ export class BotCommandService {
       return `无效序号。${this.#modelMenu(switcher, 1, options)}`;
     }
     const option = options[index - 1];
-    if (option === undefined) return `无效序号。${this.#modelMenu(switcher, 1, options)}`;
+    if (option === undefined) {
+      return `无效序号。${this.#modelMenu(switcher, 1, options)}`;
+    }
     const current = switcher.switch(option.provider, option.model);
     return `已切换: ${current.provider} / ${current.model}，将在下一次 agent session 生效。`;
   }
@@ -177,7 +199,9 @@ export class BotCommandService {
     ];
     for (let index = start; index < end; index += 1) {
       const option = options[index];
-      if (option === undefined) break;
+      if (option === undefined) {
+        break;
+      }
       lines.push(`${index + 1}. ${option.provider} / ${option.model}（${option.name}）`);
     }
     lines.push('使用 /model 序号 切换，/model page 页码 翻页，/model reset 恢复默认');
@@ -186,7 +210,9 @@ export class BotCommandService {
 
   #status(telegramChatId: bigint, now: Date): string {
     const chat = this.#chatConfig(telegramChatId);
-    if (chat === undefined) throw new Error(`Chat ${telegramChatId} is not configured`);
+    if (chat === undefined) {
+      throw new Error(`Chat ${telegramChatId} is not configured`);
+    }
     const date = now.toISOString().slice(0, 10);
     const tokens =
       this.#store.db
@@ -209,7 +235,9 @@ export class BotCommandService {
       `thinking effort: ${this.#config.agent.thinking_level}`,
       `今日 token 用量: ${tokens} / ${chat.budget.max_tokens_per_day}`,
     ];
-    if (paused) lines.push('互动: 已暂停');
+    if (paused) {
+      lines.push('互动: 已暂停');
+    }
     return lines.join('\n');
   }
 
@@ -223,11 +251,15 @@ export class BotCommandService {
 
   #chatConfig(telegramChatId: bigint): RawConfig['telegram']['chats'][number] | undefined {
     const direct = this.#config.telegram.chats.find((chat) => BigInt(chat.id) === telegramChatId);
-    if (direct !== undefined) return direct;
+    if (direct !== undefined) {
+      return direct;
+    }
     const migration = this.#store.db
       .query<{ old_chat_id: bigint }, [bigint]>('SELECT old_chat_id FROM chat_migrations WHERE new_chat_id = ?')
       .get(telegramChatId);
-    if (migration === null) return undefined;
+    if (migration === null) {
+      return undefined;
+    }
     return this.#config.telegram.chats.find((chat) => BigInt(chat.id) === migration.old_chat_id);
   }
 }

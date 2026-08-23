@@ -63,7 +63,6 @@ export class MemoryStore {
       .all(conversationId, now.toISOString());
   }
 
-
   add(conversationId: bigint, content: string, ttlSeconds: number, now = new Date()): MemoryRecord {
     const timestamp = now.toISOString();
     const record: MemoryRecord = {
@@ -123,7 +122,15 @@ function createAddMemoryTool(
     executionMode: 'sequential',
     execute: async (toolCallId, input, _signal) => {
       const now = new Date();
-      const toolId = startToolCall(store.db, context.invocationId, toolCallId, 'add_memory', JSON.stringify(input), true, now);
+      const toolId = startToolCall(
+        store.db,
+        context.invocationId,
+        toolCallId,
+        'add_memory',
+        JSON.stringify(input),
+        true,
+        now,
+      );
       try {
         const record = store.add(
           context.conversationId,
@@ -131,7 +138,9 @@ function createAddMemoryTool(
           input.ttl_seconds ?? DEFAULT_MEMORY_TTL_SECONDS,
           now,
         );
-        finishToolCall(store.db, toolId, 'success', `memory_id=${record.id} expires_at=${record.expiresAt}`, null, { now });
+        finishToolCall(store.db, toolId, 'success', `memory_id=${record.id} expires_at=${record.expiresAt}`, null, {
+          now,
+        });
         return {
           content: [{ type: 'text', text: `Saved memory ${record.id}; it expires at ${record.expiresAt}` }],
           details: { id: record.id, expires_at: record.expiresAt },

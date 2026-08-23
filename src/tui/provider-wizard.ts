@@ -115,7 +115,9 @@ export async function runProviderWizard(config: TomlConfig): Promise<TomlConfig>
 
 async function selectProviderAlias(providers: Record<string, ProviderConfig>): Promise<string | undefined> {
   const aliases = Object.keys(providers);
-  if (aliases.length === 0) return undefined;
+  if (aliases.length === 0) {
+    return undefined;
+  }
   return searchChoice(
     'Select provider',
     aliases.map((alias) => ({
@@ -126,7 +128,9 @@ async function selectProviderAlias(providers: Record<string, ProviderConfig>): P
 }
 
 function describeProvider(alias: string, provider: ProviderConfig): string {
-  if (provider.kind === 'builtin') return `${alias} (built-in: ${provider.provider})`;
+  if (provider.kind === 'builtin') {
+    return `${alias} (built-in: ${provider.provider})`;
+  }
   return `${alias} (custom: ${provider.api})`;
 }
 
@@ -148,10 +152,16 @@ async function addProvider(): Promise<{ alias: string; config: ProviderConfig } 
           { value: 'cancel', name: 'Cancel adding provider' },
         ],
       });
-      if (kind === 'back') continue aliasStep;
-      if (kind === 'cancel') return undefined;
+      if (kind === 'back') {
+        continue aliasStep;
+      }
+      if (kind === 'cancel') {
+        return undefined;
+      }
       const config = kind === 'builtin' ? await configureBuiltinProvider() : await configureCustomProvider();
-      if (config !== undefined) return { alias, config };
+      if (config !== undefined) {
+        return { alias, config };
+      }
     }
   }
 }
@@ -335,7 +345,9 @@ async function editHeaders(headers: Record<string, SecretRef>): Promise<Record<s
     { value: '__back', name: 'Done' },
   ];
   const action = await select<string>({ message: 'Custom headers', choices });
-  if (action === '__back') return headers;
+  if (action === '__back') {
+    return headers;
+  }
   if (action === '__add') {
     const name = await input({ message: 'Header name', validate: (value) => value.trim().length > 0 || 'Required' });
     const value = await promptSecretRef(`Value for "${name}"`, false);
@@ -390,7 +402,9 @@ async function runModelWizard(
           })),
         );
         const model = await addModel(discovered.id);
-        if (model !== undefined) current = [...current, model];
+        if (model !== undefined) {
+          current = [...current, model];
+        }
         break;
       }
       case 'edit': {
@@ -398,7 +412,9 @@ async function runModelWizard(
         const toEdit = index !== undefined ? current[index] : undefined;
         if (toEdit !== undefined) {
           const model = await editModel(toEdit);
-          if (model !== undefined) current = current.map((m, i) => (i === index ? model : m));
+          if (model !== undefined) {
+            current = current.map((m, i) => (i === index ? model : m));
+          }
         }
         break;
       }
@@ -553,7 +569,9 @@ async function lookupModelDefaults(id: string): Promise<
     providers.map((provider) => ({ value: provider.id, name: `${provider.name} (${provider.id})` })),
   );
   const provider = providers.find((p) => p.id === providerId);
-  if (provider === undefined) return undefined;
+  if (provider === undefined) {
+    return undefined;
+  }
   const exact = findModel(catalog, providerId, id);
   let model: ModelsDevModel | undefined = exact;
   if (model === undefined) {
@@ -564,7 +582,9 @@ async function lookupModelDefaults(id: string): Promise<
     );
     model = findModel(catalog, providerId, modelId);
   }
-  if (model === undefined) return undefined;
+  if (model === undefined) {
+    return undefined;
+  }
   const defaults = toModelDefaults(model);
   console.log(`Filled from models.dev: ${model.name}`);
   return defaults;
@@ -609,7 +629,9 @@ export function filterSearchChoices<Value>(
       .toLocaleLowerCase()
       .split(/\s+/)
       .filter((token) => token.length > 0) ?? [];
-  if (tokens.length === 0) return choices;
+  if (tokens.length === 0) {
+    return choices;
+  }
   return choices.filter((choice) => {
     const searchable = `${choice.name} ${choice.description ?? ''}`.toLocaleLowerCase();
     return tokens.every((token) => searchable.includes(token));

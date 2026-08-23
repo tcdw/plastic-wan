@@ -66,7 +66,9 @@ async function runtimeSetup(usedTokens: bigint): Promise<{
     reason: 'done',
   }));
   const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-  if (invocationId === undefined) throw new Error('Expected a due invocation');
+  if (invocationId === undefined) {
+    throw new Error('Expected a due invocation');
+  }
   const now = new Date().toISOString();
   store.db
     .query(
@@ -165,8 +167,11 @@ test('zzz enters sleeping and ends without another model turn', async () => {
   expect(activeSleepUntil(store.db)).not.toBeNull();
   expect(modelToolLists(store)).toHaveLength(1);
   expect(
-    store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM tool_calls WHERE tool_name = 'zzz' AND state = 'success'").get()
-      ?.count,
+    store.db
+      .query<{ count: bigint }, []>(
+        "SELECT COUNT(*) AS count FROM tool_calls WHERE tool_name = 'zzz' AND state = 'success'",
+      )
+      .get()?.count,
   ).toBe(1n);
   expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM telegram_sends').get()?.count).toBe(0n);
   store.close();
@@ -184,7 +189,9 @@ test('sleeping skips both due and already queued agent sessions', async () => {
   expect(scheduler.processDue(new Date(now.getTime() + 15_000))).toEqual([]);
 
   const secondUpdate = structuredClone(update);
-  if (secondUpdate.message === undefined) throw new Error('Expected message update');
+  if (secondUpdate.message === undefined) {
+    throw new Error('Expected message update');
+  }
   secondUpdate.update_id = 2;
   secondUpdate.message.message_id = 11;
   const secondReceived = new Date(now.getTime() + 17_000);
@@ -192,13 +199,15 @@ test('sleeping skips both due and already queued agent sessions', async () => {
   store.db.query('DELETE FROM app_state WHERE key = ?').run(SLEEP_STATE_KEY);
   ingestion.ingest(secondUpdate, secondReceived);
   const [queuedId] = scheduler.processDue(new Date(secondReceived.getTime() + 15_000));
-  if (queuedId === undefined) throw new Error('Expected a queued invocation');
+  if (queuedId === undefined) {
+    throw new Error('Expected a queued invocation');
+  }
   enterSleep(store.db, new Date(secondReceived.getTime() + 16_000));
   scheduler.start(new Date(secondReceived.getTime() + 16_000));
   await scheduler.stop();
-  expect(store.db.query<{ state: string }, [bigint]>('SELECT state FROM invocations WHERE id = ?').get(queuedId)?.state).toBe(
-    'skipped_budget',
-  );
+  expect(
+    store.db.query<{ state: string }, [bigint]>('SELECT state FROM invocations WHERE id = ?').get(queuedId)?.state,
+  ).toBe('skipped_budget');
   store.close();
 });
 
@@ -238,8 +247,7 @@ test('repeated concurrent sleep requests keep one unchanged state', async () => 
   expect(
     store.db
       .query<{ count: bigint }, [string]>('SELECT COUNT(*) AS count FROM app_state WHERE key = ?')
-      .get(SLEEP_STATE_KEY)
-      ?.count,
+      .get(SLEEP_STATE_KEY)?.count,
   ).toBe(1n);
   store.close();
 });

@@ -401,7 +401,6 @@ describe('ingestion command interception', () => {
   test('commands are audited but not stored and never create buckets', async () => {
     const { store, ingestion } = await setup();
     const result = ingestion.ingest(commandUpdate(1, 10, '/status'), FIXED_NOW);
-    expect(result.allowed).toBe(true);
     expect(result.command).toEqual({ name: 'status' });
     expect(result.messageId).toBeUndefined();
     expect(result.bucketId).toBeUndefined();
@@ -429,7 +428,13 @@ describe('ingestion command interception', () => {
   test('commands are not intercepted for disallowed chats', async () => {
     const { store, ingestion } = await setup();
     const result = ingestion.ingest(commandUpdate(1, 10, '/pause', 987654321), FIXED_NOW);
-    expect(result.allowed).toBe(false);
+    const audit = store.db
+      .query<{ allowed: bigint; rejection_reason: string }, []>(
+        'SELECT allowed, rejection_reason FROM telegram_updates',
+      )
+      .get();
+    expect(audit?.allowed).toBe(0n);
+    expect(audit?.rejection_reason).toBe('chat_not_allowed');
     expect(result.command).toBeUndefined();
     store.close();
   });

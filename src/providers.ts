@@ -4,7 +4,6 @@ import {
   createProvider,
   type Model,
   type Models,
-  type MutableModels,
   type Provider,
   type ProviderAuth,
   type ProviderStreams,
@@ -24,7 +23,6 @@ const CUSTOM_ADAPTERS: Record<string, () => ProviderStreams> = {
 
 export interface ModelRegistry {
   readonly models: Models;
-  readonly mutableModels: MutableModels;
   readonly agentModel: Model<Api>;
   readonly visionModel: Model<Api>;
 }
@@ -83,7 +81,7 @@ export async function createModelRegistry(config: RawConfig, secrets: SecretStor
   if (config.vision.max_output_tokens > visionModel.maxTokens) {
     throw new Error('Vision max_output_tokens exceeds registered model limit');
   }
-  return { models, mutableModels: models, agentModel, visionModel };
+  return { models, agentModel, visionModel };
 }
 
 function aliasBuiltinProvider(alias: string, source: Provider, auth: ProviderAuth): Provider {

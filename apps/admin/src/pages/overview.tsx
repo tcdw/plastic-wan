@@ -48,7 +48,7 @@ const USAGE_COLUMNS = [
   },
 ];
 
-export function OverviewPage(): React.ReactElement {
+export function OverviewPage(): React.ReactNode {
   const [days, setDays] = useState(7);
   const queryClient = useQueryClient();
   const { data, isPending, error } = useQuery(overviewQuery);
@@ -67,8 +67,7 @@ export function OverviewPage(): React.ReactElement {
     },
   });
   const placeholder = queryState({ isPending: isPending || data === undefined, error });
-  if (placeholder !== null) return placeholder;
-  if (data === undefined) throw new Error("Overview data is missing");
+  if (data === undefined || placeholder !== null) return placeholder;
   const totalInvocations = data.invocation_states.reduce((sum, entry) => sum + entry.count, 0);
   const queuedInvocations = data.invocation_states.find((entry) => entry.label === "queued")?.count ?? 0;
   return (

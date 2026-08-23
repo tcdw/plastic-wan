@@ -63,7 +63,7 @@ name = "CatSet"
   const models = createModels();
   models.setProvider(faux.provider);
   const model = faux.getModel();
-  const registry: ModelRegistry = { models, mutableModels: models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
   const downloadedFileIds: string[] = [];
   const downloader: MediaDownloader = {
     download: async (fileId, destination, signal) => {

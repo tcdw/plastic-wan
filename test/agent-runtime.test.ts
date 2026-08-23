@@ -64,7 +64,7 @@ test('a fresh Agent publishes only through send and audits model usage', async (
   const models = createModels();
   models.setProvider(faux.provider);
   const model = faux.getModel();
-  const registry: ModelRegistry = { models, mutableModels: models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
   let messageId = 500;
   const api: TelegramSendApi = {
     sendMessage: async () => ({ message_id: ++messageId, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -181,7 +181,7 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
   const models = createModels();
   models.setProvider(faux.provider);
   const model = faux.getModel();
-  const registry: ModelRegistry = { models, mutableModels: models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
   const downloader: MediaDownloader = {
     download: async (fileId, destination, signal) => {
       signal.throwIfAborted();
@@ -286,7 +286,7 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
   models.setProvider(visionFaux.provider);
   const agentModel = agentFaux.getModel();
   const visionModel = visionFaux.getModel();
-  const registry: ModelRegistry = { models, mutableModels: models, agentModel, visionModel };
+  const registry: ModelRegistry = { models, agentModel, visionModel };
   const media = new MediaService({
     store,
     config: loaded.config,
@@ -387,7 +387,7 @@ test('nudges the model once to use send when it drafts a private reply and never
   const models = createModels();
   models.setProvider(faux.provider);
   const model = faux.getModel();
-  const registry: ModelRegistry = { models, mutableModels: models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
   const api: TelegramSendApi = {
     sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
     sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),

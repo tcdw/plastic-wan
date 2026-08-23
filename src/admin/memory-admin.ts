@@ -11,8 +11,6 @@ import { AdminQueryError, type ListQuery, type Page, parseId, parseLimit } from 
 
 type Bindings = (string | bigint)[];
 
-export const MEMORY_STATES = ['active', 'expired', 'long_ttl'] as const;
-
 export interface MemoryAdminItem {
   readonly id: string;
   readonly conversation_id: string;

@@ -47,8 +47,7 @@ function textUpdate(updateId: number, messageId: number, text: string, chatId = 
 describe('Telegram ingestion', () => {
   test('stores denied metadata without content', async () => {
     const { store, ingestion } = await setup();
-    const result = ingestion.ingest(textUpdate(1, 10, 'private text', 777));
-    expect(result.allowed).toBe(false);
+    ingestion.ingest(textUpdate(1, 10, 'private text', 777));
     const row = store.db
       .query<{ raw_json: string | null; rejection_reason: string }, []>(
         'SELECT raw_json, rejection_reason FROM telegram_updates',
@@ -67,7 +66,7 @@ describe('Telegram ingestion', () => {
     const first = ingestion.ingest(textUpdate(1, 10, 'first'), firstTime);
     const duplicate = ingestion.ingest(textUpdate(1, 10, 'first'), firstTime);
     const second = ingestion.ingest(textUpdate(2, 11, 'second'), new Date(firstTime.getTime() + 5_000));
-    expect(duplicate.duplicate).toBe(true);
+    expect(duplicate.messageId).toBeUndefined();
     expect(first.bucketId).toBe(second.bucketId);
     const bucket = store.db
       .query<{ deadline_at: string; messages: bigint }, []>(
@@ -146,8 +145,7 @@ instructions_file = "chat-instructions.md"`,
     });
     ingestion.ingest(topicUpdate(1, 10, 100));
     ingestion.ingest(topicUpdate(2, 11, 200));
-    const denied = ingestion.ingest(topicUpdate(3, 12, 300));
-    expect(denied.allowed).toBe(false);
+    ingestion.ingest(topicUpdate(3, 12, 300));
     expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM conversations').get()?.count).toBe(2n);
     expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(2n);
     expect(

@@ -49,12 +49,7 @@ export type ModelsDevModel = z.infer<typeof ModelSchema>;
 export type ModelsDevProvider = z.infer<typeof ProviderSchema>;
 export type ModelsDevCatalog = z.infer<typeof CatalogSchema>;
 
-export interface FetchedCatalog {
-  readonly catalog: ModelsDevCatalog;
-  readonly fetchedAt: Date;
-}
-
-export async function fetchModelsDevCatalog(url = MODELS_DEV_URL): Promise<FetchedCatalog> {
+export async function fetchModelsDevCatalog(url = MODELS_DEV_URL): Promise<ModelsDevCatalog> {
   const response = await fetch(url, {
     headers: { accept: 'application/json' },
   });
@@ -62,8 +57,7 @@ export async function fetchModelsDevCatalog(url = MODELS_DEV_URL): Promise<Fetch
     throw new Error(`models.dev returned ${response.status} ${response.statusText}`);
   }
   const raw: unknown = await response.json();
-  const catalog = CatalogSchema.parse(raw);
-  return { catalog, fetchedAt: new Date() };
+  return CatalogSchema.parse(raw);
 }
 
 export function findModel(catalog: ModelsDevCatalog, providerId: string, modelId: string): ModelsDevModel | undefined {

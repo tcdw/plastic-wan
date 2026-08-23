@@ -92,9 +92,17 @@ test('memories persist per conversation, expire by TTL, and purge expired rows',
     // Cross-conversation delete is a no-op and leaks nothing.
     const otherConversation = conversationId + 1n;
     expect(memory.remove(first.id, otherConversation, later)).toBe(false);
-    expect(memory.get(first.id)).not.toBeNull();
+    expect(
+      store.db
+        .query<{ count: bigint }, [string]>('SELECT COUNT(*) AS count FROM memories WHERE id = ?')
+        .get(first.id)?.count,
+    ).toBe(1n);
     expect(memory.remove(first.id, conversationId, later)).toBe(true);
-    expect(memory.get(first.id)).toBeNull();
+    expect(
+      store.db
+        .query<{ count: bigint }, [string]>('SELECT COUNT(*) AS count FROM memories WHERE id = ?')
+        .get(first.id)?.count,
+    ).toBe(0n);
 
     // purgeExpiredData also cleans expired rows during retention purging.
     memory.add(conversationId, 'ephemeral', 60, new Date('2026-08-15T15:00:00.000Z'));
@@ -150,18 +158,30 @@ test('add_memory and delete_memory audit tool calls and respect conversation sco
       { content: 'short-lived', ttl_seconds: 3_600 },
       new AbortController().signal,
     );
-    const stored = memory.get(custom.details.id);
-    expect(stored?.expiresAt).toBe(new Date(Date.parse(stored!.createdAt) + 3_600_000).toISOString());
+    const stored = store.db
+      .query<{ created_at: string; expires_at: string }, [string]>(
+        'SELECT created_at, expires_at FROM memories WHERE id = ?',
+      )
+      .get(custom.details.id);
+    expect(stored?.expires_at).toBe(new Date(Date.parse(stored!.created_at) + 3_600_000).toISOString());
 
     // delete_memory removes only its own conversation's memory.
     const foreignConversation = secondConversation(store, conversationId);
     const foreign = new MemoryStore(store.db).add(foreignConversation, 'foreign note', 86_400);
     const foreignDelete = await deleteTool.execute('call-3', { id: foreign.id }, new AbortController().signal);
     expect(foreignDelete.details.id).toBe(foreign.id);
-    expect(memory.get(foreign.id)).not.toBeNull();
+    expect(
+      store.db
+        .query<{ count: bigint }, [string]>('SELECT COUNT(*) AS count FROM memories WHERE id = ?')
+        .get(foreign.id)?.count,
+    ).toBe(1n);
     const deleted = await deleteTool.execute('call-4', { id }, new AbortController().signal);
     expect(deleted.details.id).toBe(id);
-    expect(memory.get(id)).toBeNull();
+    expect(
+      store.db
+        .query<{ count: bigint }, [string]>('SELECT COUNT(*) AS count FROM memories WHERE id = ?')
+        .get(id)?.count,
+    ).toBe(0n);
     const audit = store.db
       .query<{ state: string; result_text: string }, []>(
         "SELECT state, result_text FROM tool_calls WHERE tool_call_id = 'call-4'",

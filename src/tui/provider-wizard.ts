@@ -543,7 +543,7 @@ async function lookupModelDefaults(id: string): Promise<
 > {
   let catalog: ModelsDevCatalog;
   try {
-    ({ catalog } = await fetchModelsDevCatalog());
+    catalog = await fetchModelsDevCatalog();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Failed to fetch models.dev catalog: ${message}`);

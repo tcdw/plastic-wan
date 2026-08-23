@@ -36,11 +36,10 @@ interface RouterContext {
   readonly queryClient: QueryClient;
 }
 
-function AuthGate(): React.ReactElement {
+function AuthGate(): React.ReactNode {
   const { data, isPending, error } = useQuery(sessionQuery);
   const placeholder = queryState({ isPending: isPending || data === undefined, error });
-  if (placeholder !== null) return placeholder;
-  if (data === undefined) throw new Error("Session data is missing");
+  if (data === undefined || placeholder !== null) return placeholder;
   if (data.setup_required) return <CredentialsCard mode="setup" />;
   if (!data.authenticated) return <CredentialsCard mode="login" />;
   return <AdminShell username={data.username ?? "admin"} />;

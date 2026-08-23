@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import Type, { type Static } from 'typebox';
+import Type from 'typebox';
 import type { InvocationContext } from './context-builder.ts';
 
 export const DEFAULT_MEMORY_TTL_SECONDS = 86_400;
@@ -18,13 +18,11 @@ export const AddMemoryInputSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-export type AddMemoryInput = Static<typeof AddMemoryInputSchema>;
 
 export const DeleteMemoryInputSchema = Type.Object(
   { id: Type.String({ pattern: MEMORY_ID_PATTERN }) },
   { additionalProperties: false },
 );
-export type DeleteMemoryInput = Static<typeof DeleteMemoryInputSchema>;
 
 interface MemoryRow {
   readonly id: string;
@@ -44,10 +42,6 @@ export interface MemoryRecord {
   readonly updatedAt: string;
 }
 
-export interface MemoryChanges {
-  readonly content?: string;
-  readonly expiresAt?: string;
-}
 
 function toRecord(row: MemoryRow): MemoryRecord {
   return {
@@ -89,14 +83,6 @@ export class MemoryStore {
       .map(toRecord);
   }
 
-  get(id: string): MemoryRecord | null {
-    const row = this.#db
-      .query<MemoryRow, [string]>(
-        'SELECT id, conversation_id, content, created_at, expires_at, updated_at FROM memories WHERE id = ?',
-      )
-      .get(id);
-    return row === null ? null : toRecord(row);
-  }
 
   add(conversationId: bigint, content: string, ttlSeconds: number, now = new Date()): MemoryRecord {
     const timestamp = now.toISOString();
@@ -134,27 +120,6 @@ export class MemoryStore {
       .immediate();
   }
 
-  update(id: string, changes: MemoryChanges, now = new Date()): MemoryRecord | null {
-    const timestamp = now.toISOString();
-    const sets: string[] = ['updated_at = ?'];
-    const parameters: (string | bigint)[] = [timestamp];
-    if (changes.content !== undefined) {
-      sets.push('content = ?');
-      parameters.push(changes.content);
-    }
-    if (changes.expiresAt !== undefined) {
-      sets.push('expires_at = ?');
-      parameters.push(changes.expiresAt);
-    }
-    parameters.push(id);
-    const result = this.#db.query(`UPDATE memories SET ${sets.join(', ')} WHERE id = ?`).run(...parameters);
-    if (result.changes === 0) return null;
-    return this.get(id);
-  }
-
-  purgeExpired(now = new Date()): void {
-    this.#db.query('DELETE FROM memories WHERE expires_at <= ?').run(now.toISOString());
-  }
 
   recordToolCall(
     invocationId: bigint,

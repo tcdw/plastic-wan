@@ -401,8 +401,6 @@ function validateModelReference(
     if (!model.input.includes(requiredInput))
       throw new Error(`${role}.model ${modelId} lacks ${requiredInput} input capability`);
   }
-  const configuredMax = config.vision.max_output_tokens;
-  if (configuredMax > model.max_tokens) throw new Error(`vision.max_output_tokens exceeds model ${modelId} max_tokens`);
 }
 
 function validateEndpoint(value: string, label: string, options: { allowQuery?: boolean } = {}): void {

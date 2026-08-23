@@ -34,9 +34,6 @@ const SERVICE_KEYS: Record<string, true> = {
 };
 const MAX_IMAGE_DOCUMENT_BYTES = 20 * 1024 * 1024;
 
-interface ChatAuthorization {
-  readonly topicIds?: ReadonlySet<bigint>;
-}
 
 interface StoredMessage {
   readonly id: bigint;
@@ -46,8 +43,6 @@ interface StoredMessage {
 }
 
 export interface IngestResult {
-  readonly duplicate: boolean;
-  readonly allowed: boolean;
   readonly messageId?: bigint;
   readonly bucketId?: bigint;
   readonly command?: ParsedCommand;
@@ -56,7 +51,7 @@ export interface IngestResult {
 export class TelegramIngestion {
   readonly #store: SqliteStore;
   readonly #config: RawConfig;
-  readonly #allowedChats = new Map<string, ChatAuthorization>();
+  readonly #allowedChats = new Map<string, ReadonlySet<bigint> | undefined>();
   readonly #botId: bigint;
   readonly #botUsername: string | null;
 
@@ -66,11 +61,10 @@ export class TelegramIngestion {
     this.#botId = BigInt(bot.id);
     this.#botUsername = bot.username ?? null;
     for (const chat of config.telegram.chats) {
-      this.#allowedChats.set(String(chat.id), {
-        ...(chat.topic_ids === undefined
-          ? {}
-          : { topicIds: new Set(chat.topic_ids.map((topicId) => BigInt(topicId))) }),
-      });
+      this.#allowedChats.set(
+        String(chat.id),
+        chat.topic_ids === undefined ? undefined : new Set(chat.topic_ids.map((topicId) => BigInt(topicId))),
+      );
     }
   }
 
@@ -88,9 +82,8 @@ export class TelegramIngestion {
     const chat = message?.chat ?? membership?.chat;
     const chatId = chat === undefined ? undefined : BigInt(chat.id);
     const threadId = message?.message_thread_id === undefined ? 0n : BigInt(message.message_thread_id);
-    const authorization = chatId === undefined ? undefined : this.#resolveAuthorization(chatId);
-    const topicAllowed =
-      authorization !== undefined && (authorization.topicIds === undefined || authorization.topicIds.has(threadId));
+    const topics = chatId === undefined ? null : this.#topicsFor(chatId);
+    const topicAllowed = topics !== null && (topics === undefined || topics.has(threadId));
     const allowed = chat !== undefined && chat.type !== 'channel' && topicAllowed;
     const rejectionReason = allowed
       ? null
@@ -98,7 +91,7 @@ export class TelegramIngestion {
         ? 'unsupported_update'
         : chat.type === 'channel'
           ? 'channel'
-          : authorization === undefined
+          : topics === null
             ? 'chat_not_allowed'
             : 'topic_not_allowed';
     const inserted = this.#store.db
@@ -114,38 +107,36 @@ export class TelegramIngestion {
         rejectionReason,
         allowed ? JSON.stringify(update) : null,
       );
-    if (inserted.changes === 0) return { duplicate: true, allowed };
-    if (!allowed || chat === undefined || chatId === undefined || authorization === undefined) {
-      return { duplicate: false, allowed: false };
-    }
+    if (inserted.changes === 0) return {};
+    if (!allowed || chat === undefined || chatId === undefined || topics === null) return {};
 
     this.#recordMigration(message, receivedAt);
     const internalChatId = this.#upsertChat(chat, chatId, receivedAt);
-    if (message === undefined) return { duplicate: false, allowed: true };
+    if (message === undefined) return {};
     const edited = update.edited_message !== undefined;
     // Chat control commands are handled by the bot itself: they are audited
     // but never stored as messages, so they cannot trigger or taint buckets.
     const command = schedule && !edited ? parseBotCommand(message, this.#botUsername) : null;
-    if (command !== null) return { duplicate: false, allowed: true, command };
+    if (command !== null) return { command };
     const stored = this.#storeMessage(message, internalChatId, threadId, receivedAt, edited);
-    if (stored === undefined) return { duplicate: false, allowed: true };
+    if (stored === undefined) return {};
     let bucketId: bigint | undefined;
     if (!edited && schedule) bucketId = this.#appendToBucket(internalChatId, threadId, stored, receivedAt);
     return {
-      duplicate: false,
-      allowed: true,
       messageId: stored.id,
       ...(bucketId === undefined ? {} : { bucketId }),
     };
   }
 
-  #resolveAuthorization(chatId: bigint): ChatAuthorization | undefined {
-    const direct = this.#allowedChats.get(chatId.toString());
-    if (direct !== undefined) return direct;
+  /** `null` when the chat is not allowed; `undefined` when allowed for all topics. */
+  #topicsFor(chatId: bigint): ReadonlySet<bigint> | undefined | null {
+    if (this.#allowedChats.has(chatId.toString())) return this.#allowedChats.get(chatId.toString());
     const migration = this.#store.db
       .query<{ old_chat_id: bigint }, [bigint]>('SELECT old_chat_id FROM chat_migrations WHERE new_chat_id = ?')
       .get(chatId);
-    return migration === null ? undefined : this.#allowedChats.get(migration.old_chat_id.toString());
+    if (migration === null) return null;
+    const migrated = migration.old_chat_id.toString();
+    return this.#allowedChats.has(migrated) ? this.#allowedChats.get(migrated) : null;
   }
 
   #recordMigration(message: Message | undefined, receivedAt: Date): void {

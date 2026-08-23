@@ -13,7 +13,7 @@ import {
 import { KeyedSemaphore } from './concurrency.ts';
 import type { RawConfig } from './config.ts';
 import { ContextBuilder, type InvocationContext } from './context-builder.ts';
-import type { SqliteStore } from './database.ts';
+import { type SqliteStore, resolveChatConfig } from './database.ts';
 import type { AgentModelSwitcher } from './model-switch.ts';
 import type { ModelRegistry } from './providers.ts';
 import type { InvocationOutcome } from './scheduler.ts';
@@ -347,15 +347,7 @@ export class AgentRuntime {
   }
 
   #tokenBudgetReached(chatId: bigint): boolean {
-    let chat = this.#config.telegram.chats.find((candidate) => BigInt(candidate.id) === chatId);
-    if (chat === undefined) {
-      const migration = this.#store.db
-        .query<{ old_chat_id: bigint }, [bigint]>('SELECT old_chat_id FROM chat_migrations WHERE new_chat_id = ?')
-        .get(chatId);
-      if (migration !== null) {
-        chat = this.#config.telegram.chats.find((candidate) => BigInt(candidate.id) === migration.old_chat_id);
-      }
-    }
+    const chat = resolveChatConfig(this.#config, this.#store.db, chatId);
     if (chat === undefined) return true;
     const date = new Date().toISOString().slice(0, 10);
     const amount =

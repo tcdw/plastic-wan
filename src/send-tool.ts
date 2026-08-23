@@ -20,11 +20,10 @@ export type SendToolInput =
   | { readonly kind: 'sticker'; readonly sticker_ref: string; readonly reply_to_message_id?: string };
 
 function narrowSendInput(input: Static<typeof SendInputSchema>): SendToolInput | undefined {
+  const field = input.kind === 'text' ? ('text' as const) : ('sticker_ref' as const);
+  if (input[field] === undefined) return undefined;
   const reply = input.reply_to_message_id === undefined ? {} : { reply_to_message_id: input.reply_to_message_id };
-  if (input.kind === 'text') {
-    return input.text === undefined ? undefined : { kind: 'text', text: input.text, ...reply };
-  }
-  return input.sticker_ref === undefined ? undefined : { kind: 'sticker', sticker_ref: input.sticker_ref, ...reply };
+  return { kind: input.kind, [field]: input[field], ...reply } as SendToolInput;
 }
 
 interface TelegramSendResponse {

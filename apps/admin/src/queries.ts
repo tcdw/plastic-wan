@@ -14,6 +14,7 @@ import {
   listStickerSets,
   listStickers,
   type ListFilters,
+  type Page,
 } from "./api.ts";
 
 export const PAGE_SIZE = 25;
@@ -41,40 +42,33 @@ export const stickerSetsQuery = queryOptions({
   queryFn: listStickerSets,
 });
 
-export function invocationsQuery(filters: ListFilters) {
+function infiniteList<T>(
+  key: string,
+  list: (filters: ListFilters) => Promise<Page<T>>,
+  filters: ListFilters,
+) {
   return infiniteQueryOptions({
-    queryKey: ["invocations", filters],
-    queryFn: ({ pageParam }) => listInvocations({ ...filters, limit: PAGE_SIZE, cursor: pageParam }),
+    queryKey: [key, filters],
+    queryFn: ({ pageParam }) => list({ ...filters, limit: PAGE_SIZE, cursor: pageParam }),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_cursor,
   });
+}
+
+export function invocationsQuery(filters: ListFilters) {
+  return infiniteList("invocations", listInvocations, filters);
 }
 
 export function messagesQuery(filters: ListFilters) {
-  return infiniteQueryOptions({
-    queryKey: ["messages", filters],
-    queryFn: ({ pageParam }) => listMessages({ ...filters, limit: PAGE_SIZE, cursor: pageParam }),
-    initialPageParam: null as string | null,
-    getNextPageParam: (last) => last.next_cursor,
-  });
+  return infiniteList("messages", listMessages, filters);
 }
 
 export function stickersQuery(filters: ListFilters) {
-  return infiniteQueryOptions({
-    queryKey: ["stickers", filters],
-    queryFn: ({ pageParam }) => listStickers({ ...filters, limit: PAGE_SIZE, cursor: pageParam }),
-    initialPageParam: null as string | null,
-    getNextPageParam: (last) => last.next_cursor,
-  });
+  return infiniteList("stickers", listStickers, filters);
 }
 
 export function memoriesQuery(filters: ListFilters) {
-  return infiniteQueryOptions({
-    queryKey: ["memories", filters],
-    queryFn: ({ pageParam }) => listMemories({ ...filters, limit: PAGE_SIZE, cursor: pageParam }),
-    initialPageParam: null as string | null,
-    getNextPageParam: (last) => last.next_cursor,
-  });
+  return infiniteList("memories", listMemories, filters);
 }
 
 export const memoryChatsQuery = queryOptions({

@@ -1,5 +1,5 @@
 import type { RawConfig } from './config.ts';
-import type { SqliteStore } from './database.ts';
+import { type SqliteStore, isChatPaused, resolveChatConfig } from './database.ts';
 
 const RECOVERY_MAX_AGE_MS = 5 * 60_000;
 export const STARTUP_CATCH_UP_STATE_KEY = 'telegram_startup_catch_up';
@@ -96,14 +96,6 @@ export class BucketScheduler {
   wake(): void {
     this.#wakeResolver?.();
     this.#wakeResolver = undefined;
-  }
-
-  #isChatPaused(chatId: bigint): boolean {
-    return (
-      this.#store.db
-        .query<{ present: bigint }, [bigint]>('SELECT 1 AS present FROM chat_pause WHERE chat_id = ?')
-        .get(chatId) !== null
-    );
   }
 
   // Aborts invocations currently running in a chat (used by /pause). The
@@ -221,11 +213,11 @@ export class BucketScheduler {
       for (const messages of grouped.values()) {
         const latest = messages.at(-1);
         if (latest === undefined) continue;
-        const budget = this.#chatBudget(latest.telegram_chat_id);
+        const budget = resolveChatConfig(this.#config, this.#store.db, latest.telegram_chat_id)?.budget;
         const skipReason =
           budget === undefined
             ? 'chat_removed'
-            : this.#isChatPaused(latest.chat_id)
+            : isChatPaused(this.#store.db, latest.chat_id)
               ? 'chat_paused'
               : this.#reserveInvocation(latest.telegram_chat_id, budget.max_invocations_per_day, now)
                 ? undefined
@@ -346,7 +338,7 @@ export class BucketScheduler {
       this.#markBucketSkipped(bucket.id, now, 'chat_paused');
       return undefined;
     }
-    const budget = this.#chatBudget(chat.telegram_chat_id);
+    const budget = resolveChatConfig(this.#config, this.#store.db, chat.telegram_chat_id)?.budget;
     if (budget === undefined) {
       this.#markBucketSkipped(bucket.id, now, 'chat_removed');
       return undefined;
@@ -664,16 +656,6 @@ export class BucketScheduler {
         }),
       );
     }
-  }
-
-  #chatBudget(chatId: bigint): RawConfig['telegram']['chats'][number]['budget'] | undefined {
-    const direct = this.#config.telegram.chats.find((chat) => BigInt(chat.id) === chatId);
-    if (direct !== undefined) return direct.budget;
-    const migration = this.#store.db
-      .query<{ old_chat_id: bigint }, [bigint]>('SELECT old_chat_id FROM chat_migrations WHERE new_chat_id = ?')
-      .get(chatId);
-    if (migration === null) return undefined;
-    return this.#config.telegram.chats.find((chat) => BigInt(chat.id) === migration.old_chat_id)?.budget;
   }
 
   #reserveInvocation(chatId: bigint, limit: number, now: Date): boolean {

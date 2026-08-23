@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Button, Card, Input, Select, Space, Table, Tag, Typography } from "antd";
 import type { StickerEntry, StickerSetEntry } from "../api.ts";
-import { JsonBlock, queryState, StateTag, TextValue } from "../components.tsx";
+import { flatPages, JsonBlock, queryState, StateTag, TextValue, useSearchFilter } from "../components.tsx";
 import { formatTime } from "../format.ts";
 import { stickerSetsQuery, stickersQuery } from "../queries.ts";
 
@@ -11,12 +11,10 @@ const INDEX_STATES = ["pending", "running", "success", "error"];
 export function StickersPage(): React.ReactElement {
   const [set, setSet] = useState<string | undefined>(undefined);
   const [state, setState] = useState<string | undefined>(undefined);
-  const [search, setSearch] = useState("");
+  const search = useSearchFilter();
   const sets = useQuery(stickerSetsQuery);
-  const stickers = useInfiniteQuery(
-    stickersQuery({ set, state, search: search.length === 0 ? undefined : search }),
-  );
-  const items = stickers.data?.pages.flatMap((page) => page.items) ?? [];
+  const stickers = useInfiniteQuery(stickersQuery({ set, state, search: search.filter }));
+  const items = flatPages(stickers.data);
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
       <Card title="Configured sticker sets" size="small">
@@ -90,7 +88,7 @@ export function StickersPage(): React.ReactElement {
               allowClear
               placeholder="Search description or emoji"
               style={{ width: 320 }}
-              onSearch={(value) => setSearch(value.trim())}
+              onSearch={(value) => search.set(value)}
             />
           </Space>
           {queryState({ isPending: stickers.isPending, error: stickers.error })}

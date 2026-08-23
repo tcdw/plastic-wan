@@ -1,22 +1,16 @@
-import { useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Button, Card, Descriptions, Input, Space, Table, Tag, Typography } from "antd";
 import type { MediaEntry, MessageListItem, RevisionEntry } from "../api.ts";
-import { JsonBlock, queryState, TextValue } from "../components.tsx";
+import { flatPages, JsonBlock, queryState, TextValue, useSearchFilter } from "../components.tsx";
 import { formatNumber, formatTime } from "../format.ts";
 import { messageQuery, messagesQuery } from "../queries.ts";
 
 export function MessagesPage(): React.ReactElement {
-  const [search, setSearch] = useState("");
-  const [chat, setChat] = useState("");
-  const query = useInfiniteQuery(
-    messagesQuery({
-      search: search.length === 0 ? undefined : search,
-      chat: chat.length === 0 ? undefined : chat,
-    }),
-  );
-  const items = query.data?.pages.flatMap((page) => page.items) ?? [];
+  const search = useSearchFilter();
+  const chat = useSearchFilter();
+  const query = useInfiniteQuery(messagesQuery({ search: search.filter, chat: chat.filter }));
+  const items = flatPages(query.data);
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
       <Space wrap>
@@ -24,13 +18,13 @@ export function MessagesPage(): React.ReactElement {
           allowClear
           placeholder="Search text or caption"
           style={{ width: 320 }}
-          onSearch={(value) => setSearch(value.trim())}
+          onSearch={(value) => search.set(value)}
         />
         <Input.Search
           allowClear
           placeholder="Telegram chat ID"
           style={{ width: 240 }}
-          onSearch={(value) => setChat(value.trim())}
+          onSearch={(value) => chat.set(value)}
         />
       </Space>
       {queryState({ isPending: query.isPending, error: query.error })}

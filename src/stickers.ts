@@ -1,4 +1,5 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
+import type { SQLQueryBindings } from 'bun:sqlite';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import type { RawConfig } from './config.ts';
@@ -263,32 +264,25 @@ export class StickerService {
   }
 
   #search(query: string, setId: bigint | undefined, limit: number): SearchRow[] {
-    if ([...query].length < 3) {
-      const like = `%${query.replace(/[\\%_]/g, '\\$&')}%`;
-      return setId === undefined
-        ? this.#store.db
-            .query<SearchRow, [string, bigint]>(
-              "SELECT s.id, s.file_id, s.emoji, ma.description FROM sticker_search ss JOIN stickers s ON CAST(s.id AS TEXT) = ss.sticker_id JOIN sticker_sets st ON st.id = s.sticker_set_id JOIN media_analyses ma ON ma.id = s.current_analysis_id WHERE s.active = 1 AND st.configured = 1 AND ss.description LIKE ? ESCAPE '\\' ORDER BY s.id LIMIT ?",
-            )
-            .all(like, BigInt(limit))
-        : this.#store.db
-            .query<SearchRow, [bigint, string, bigint]>(
-              "SELECT s.id, s.file_id, s.emoji, ma.description FROM sticker_search ss JOIN stickers s ON CAST(s.id AS TEXT) = ss.sticker_id JOIN sticker_sets st ON st.id = s.sticker_set_id JOIN media_analyses ma ON ma.id = s.current_analysis_id WHERE s.active = 1 AND st.configured = 1 AND s.sticker_set_id = ? AND ss.description LIKE ? ESCAPE '\\' ORDER BY s.id LIMIT ?",
-            )
-            .all(setId, like, BigInt(limit));
+    const from =
+      'FROM sticker_search ss JOIN stickers s ON CAST(s.id AS TEXT) = ss.sticker_id ' +
+      'JOIN sticker_sets st ON st.id = s.sticker_set_id JOIN media_analyses ma ON ma.id = s.current_analysis_id';
+    const filter = setId === undefined ? '' : 'AND s.sticker_set_id = ?';
+    const prefix = setId === undefined ? [] : [setId];
+    if ([...query].length >= 3) {
+      const match = `"${query.replaceAll('"', '""')}"`;
+      return this.#store.db
+        .query<SearchRow, SQLQueryBindings[]>(
+          `SELECT s.id, s.file_id, s.emoji, ma.description ${from} WHERE s.active = 1 AND st.configured = 1 ${filter} AND sticker_search MATCH ? ORDER BY bm25(sticker_search), s.id LIMIT ?`,
+        )
+        .all(...prefix, match, BigInt(limit));
     }
-    const match = `"${query.replaceAll('"', '""')}"`;
-    return setId === undefined
-      ? this.#store.db
-          .query<SearchRow, [string, bigint]>(
-            'SELECT s.id, s.file_id, s.emoji, ma.description FROM sticker_search ss JOIN stickers s ON CAST(s.id AS TEXT) = ss.sticker_id JOIN sticker_sets st ON st.id = s.sticker_set_id JOIN media_analyses ma ON ma.id = s.current_analysis_id WHERE sticker_search MATCH ? AND s.active = 1 AND st.configured = 1 ORDER BY bm25(sticker_search), s.id LIMIT ?',
-          )
-          .all(match, BigInt(limit))
-      : this.#store.db
-          .query<SearchRow, [bigint, string, bigint]>(
-            'SELECT s.id, s.file_id, s.emoji, ma.description FROM sticker_search ss JOIN stickers s ON CAST(s.id AS TEXT) = ss.sticker_id JOIN sticker_sets st ON st.id = s.sticker_set_id JOIN media_analyses ma ON ma.id = s.current_analysis_id WHERE s.sticker_set_id = ? AND sticker_search MATCH ? AND s.active = 1 AND st.configured = 1 ORDER BY bm25(sticker_search), s.id LIMIT ?',
-          )
-          .all(setId, match, BigInt(limit));
+    const like = `%${query.replace(/[\\%_]/g, '\\$&')}%`;
+    return this.#store.db
+      .query<SearchRow, SQLQueryBindings[]>(
+        `SELECT s.id, s.file_id, s.emoji, ma.description ${from} WHERE s.active = 1 AND st.configured = 1 ${filter} AND ss.description LIKE ? ESCAPE '\\' ORDER BY s.id LIMIT ?`,
+      )
+      .all(...prefix, like, BigInt(limit));
   }
 
   #startSearchCall(invocationId: bigint, toolCallId: string, input: unknown): bigint {

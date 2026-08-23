@@ -36,14 +36,13 @@ export function isBotAdmin(db: Database, telegramUserId: bigint): boolean {
 
 export function addBotAdmin(db: Database, telegramUserId: bigint, addedBy: string, now = new Date()): BotAdminItem {
   const timestamp = now.toISOString();
-  db.query(
-    "INSERT INTO bot_admins(telegram_user_id, display_name, added_by, created_at, updated_at) VALUES (?, '', ?, ?, ?) ON CONFLICT(telegram_user_id) DO UPDATE SET added_by = excluded.added_by, updated_at = excluded.updated_at",
-  ).run(telegramUserId, addedBy, timestamp, timestamp);
   const row = db
-    .query<BotAdminRow, [bigint]>(
-      'SELECT telegram_user_id, display_name, added_by, created_at, updated_at FROM bot_admins WHERE telegram_user_id = ?',
+    .query<BotAdminRow, [bigint, string, string, string]>(
+      `INSERT INTO bot_admins(telegram_user_id, display_name, added_by, created_at, updated_at) VALUES (?, '', ?, ?, ?)
+       ON CONFLICT(telegram_user_id) DO UPDATE SET added_by = excluded.added_by, updated_at = excluded.updated_at
+       RETURNING telegram_user_id, display_name, added_by, created_at, updated_at`,
     )
-    .get(telegramUserId);
+    .get(telegramUserId, addedBy, timestamp, timestamp);
   if (row === null) throw new Error('Bot admin row is missing after upsert');
   return { ...row, telegram_user_id: row.telegram_user_id.toString() };
 }

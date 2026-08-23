@@ -242,6 +242,27 @@ export function purgeExpiredData(database: Database, config: RawConfig, now = ne
     .immediate();
 }
 
+export function resolveChatConfig(
+  config: RawConfig,
+  db: Database,
+  chatId: bigint,
+): RawConfig['telegram']['chats'][number] | undefined {
+  const direct = config.telegram.chats.find((chat) => BigInt(chat.id) === chatId);
+  if (direct !== undefined) return direct;
+  const migration = db
+    .query<{ old_chat_id: bigint }, [bigint]>('SELECT old_chat_id FROM chat_migrations WHERE new_chat_id = ?')
+    .get(chatId);
+  if (migration === null) return undefined;
+  return config.telegram.chats.find((chat) => BigInt(chat.id) === migration.old_chat_id);
+}
+
+export function isChatPaused(db: Database, chatId: bigint): boolean {
+  return (
+    db.query<{ present: bigint }, [bigint]>('SELECT 1 AS present FROM chat_pause WHERE chat_id = ?').get(chatId) !==
+    null
+  );
+}
+
 async function createBackupFile(database: Database, backupDir: string, filename: string): Promise<string> {
   await mkdir(backupDir, { recursive: true, mode: 0o700 });
   const finalPath = join(backupDir, filename);

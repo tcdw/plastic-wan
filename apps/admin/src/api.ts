@@ -394,29 +394,20 @@ export function getSession(): Promise<SessionState> {
   return call<SessionState>("/auth/session");
 }
 
-export function createFirstAdmin(credentials: Credentials): Promise<{ status: string }> {
-  return call("/auth/setup", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(credentials),
-  });
+function postCredentials(path: string): (credentials: Credentials) => Promise<{ status: string }> {
+  return (credentials) =>
+    call(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(credentials),
+    });
 }
 
-export function login(credentials: Credentials): Promise<{ status: string }> {
-  return call("/auth/login", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(credentials),
-  });
-}
-export function updateCredentials(credentials: Credentials): Promise<{ status: string }> {
-  return call("/auth/credentials", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(credentials),
-  });
-}
+export const createFirstAdmin = postCredentials("/auth/setup");
 
+export const login = postCredentials("/auth/login");
+
+export const updateCredentials = postCredentials("/auth/credentials");
 
 export function logout(): Promise<{ status: string }> {
   return call("/auth/logout", { method: "POST" });

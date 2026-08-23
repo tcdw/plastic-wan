@@ -12,7 +12,7 @@ import type {
   ToolCallEntry,
   ToolRegistryEntry,
 } from "../api.ts";
-import { JsonBlock, queryState, StateTag, TextValue } from "../components.tsx";
+import { flatPages, JsonBlock, queryState, StateTag, TextValue, useSearchFilter } from "../components.tsx";
 import { formatCost, formatDuration, formatNumber, formatTime } from "../format.ts";
 import { invocationQuery, invocationsQuery } from "../queries.ts";
 
@@ -386,9 +386,9 @@ function SessionOverview({ invocation }: { readonly invocation: InvocationDetail
 
 export function InvocationsPage(): React.ReactElement {
   const [state, setState] = useState<string | undefined>(undefined);
-  const [chat, setChat] = useState("");
-  const query = useInfiniteQuery(invocationsQuery({ state, chat: chat.length === 0 ? undefined : chat }));
-  const items = query.data?.pages.flatMap((page) => page.items) ?? [];
+  const chat = useSearchFilter();
+  const query = useInfiniteQuery(invocationsQuery({ state, chat: chat.filter }));
+  const items = flatPages(query.data);
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
       <Space wrap>
@@ -404,8 +404,8 @@ export function InvocationsPage(): React.ReactElement {
           allowClear
           placeholder="Telegram chat ID"
           style={{ width: 240 }}
-          defaultValue={chat}
-          onSearch={(value) => setChat(value.trim())}
+          defaultValue={chat.filter}
+          onSearch={(value) => chat.set(value)}
         />
       </Space>
       {queryState({ isPending: query.isPending, error: query.error })}

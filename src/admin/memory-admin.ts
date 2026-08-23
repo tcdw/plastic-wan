@@ -7,7 +7,7 @@ import {
   MEMORY_TTL_MIN_SECONDS,
   newMemoryId,
 } from '../memory.ts';
-import { AdminQueryError, type ListQuery, type Page, parseId, parseLimit } from './audit.ts';
+import { AdminQueryError, type ListQuery, type Page, page, parseId, parseLimit, where } from './audit.ts';
 
 type Bindings = (string | bigint)[];
 
@@ -108,12 +108,7 @@ export function listMemories(
   const rows = db
     .query<MemoryListRow, Bindings>(`${MEMORY_LIST_SELECT} ${where(conditions)} ORDER BY m.id DESC LIMIT ?`)
     .all(...parameters);
-  const visible = rows.slice(0, limit);
-  const last = visible.at(-1);
-  return {
-    items: visible.map((row) => toItem(row, nowIso, warningIso)),
-    next_cursor: rows.length > limit && last !== undefined ? last.id : null,
-  };
+  return page(rows, limit, (row) => toItem(row, nowIso, warningIso));
 }
 
 export function listMemoryChats(db: Database): readonly MemoryChatOption[] {
@@ -200,14 +195,14 @@ export function parseCreateMemoryBody(value: unknown): CreateMemoryBody {
   const record = asRecord(value);
   const chatIdValue = record.chat_id;
   const content = record.content;
-  if (typeof chatIdValue !== 'string' || !/^-?\d{1,19}$/.test(chatIdValue)) {
+  if (typeof chatIdValue !== 'string') {
     throw new AdminQueryError('invalid_chat_id', 'chat_id must be an integer');
   }
   if (typeof content !== 'string' || content.length < 1 || content.length > MEMORY_MAX_CONTENT_LENGTH) {
     throw new AdminQueryError('invalid_content', `content must be 1-${MEMORY_MAX_CONTENT_LENGTH} characters`);
   }
   return {
-    chatId: BigInt(chatIdValue),
+    chatId: parseId(chatIdValue, 'chat_id'),
     threadId: parseThreadId(record.message_thread_id),
     content,
     ttlSeconds: parseTtlSeconds(record.ttl_seconds) ?? DEFAULT_MEMORY_TTL_SECONDS,
@@ -289,8 +284,4 @@ function toItem(row: MemoryListRow, nowIso: string, warningIso: string): MemoryA
     expired: remainingSeconds <= 0,
     long_ttl: row.expires_at > warningIso,
   };
-}
-
-function where(conditions: readonly string[]): string {
-  return conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`;
 }

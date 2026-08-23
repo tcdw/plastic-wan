@@ -24,15 +24,6 @@ export const DeleteMemoryInputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-interface MemoryRow {
-  readonly id: string;
-  readonly conversation_id: bigint;
-  readonly content: string;
-  readonly created_at: string;
-  readonly expires_at: string;
-  readonly updated_at: string;
-}
-
 export interface MemoryRecord {
   readonly id: string;
   readonly conversationId: bigint;
@@ -40,18 +31,6 @@ export interface MemoryRecord {
   readonly createdAt: string;
   readonly expiresAt: string;
   readonly updatedAt: string;
-}
-
-
-function toRecord(row: MemoryRow): MemoryRecord {
-  return {
-    id: row.id,
-    conversationId: row.conversation_id,
-    content: row.content,
-    createdAt: row.created_at,
-    expiresAt: row.expires_at,
-    updatedAt: row.updated_at,
-  };
 }
 
 export function newMemoryId(): string {
@@ -73,14 +52,14 @@ export class MemoryStore {
   /** All non-expired memories of one conversation, strictly in creation order. */
   listActive(conversationId: bigint, now = new Date()): MemoryRecord[] {
     return this.#db
-      .query<MemoryRow, [bigint, string]>(
-        `SELECT id, conversation_id, content, created_at, expires_at, updated_at
+      .query<MemoryRecord, [bigint, string]>(
+        `SELECT id, conversation_id AS conversationId, content, created_at AS createdAt,
+                expires_at AS expiresAt, updated_at AS updatedAt
          FROM memories
          WHERE conversation_id = ? AND expires_at > ?
          ORDER BY created_at, id`,
       )
-      .all(conversationId, now.toISOString())
-      .map(toRecord);
+      .all(conversationId, now.toISOString());
   }
 
 

@@ -17,7 +17,7 @@ import Type, { type TUnsafe } from 'typebox';
 import Compile from 'typebox/compile';
 import { AsyncSemaphore } from './concurrency.ts';
 import type { McpServerConfig, RawConfig, SecretRef } from './config.ts';
-import type { InvocationContext } from './context-builder.ts';
+import { type InvocationContext, previewContext } from './context-builder.ts';
 import type { SqliteStore } from './database.ts';
 import type { SecretStore } from './secrets.ts';
 
@@ -720,19 +720,4 @@ function safeErrorName(error: unknown): string {
   if (error instanceof McpError) return `mcp_${error.code}`;
   if (error instanceof Error) return error.name;
   return 'unknown_error';
-}
-
-function previewContext(): InvocationContext {
-  return {
-    invocationId: 0n,
-    conversationId: 0n,
-    chatId: 0n,
-    threadId: 0n,
-    systemPrompt: '',
-    userPrompt: '',
-    imageCapabilities: new Map(),
-    directImages: [],
-    replyTargets: new Map(),
-    omittedNewMessages: 0,
-  };
 }

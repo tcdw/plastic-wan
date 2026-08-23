@@ -5,7 +5,7 @@ import { AgentRuntime } from './agent-runtime.ts';
 import { BOT_COMMANDS, BotCommandService, type ParsedCommand, registerBotCommands } from './bot-commands.ts';
 import { KeyedSemaphore } from './concurrency.ts';
 import { assertConfigPermissions, loadConfig } from './config.ts';
-import type { InvocationContext } from './context-builder.ts';
+import { previewContext } from './context-builder.ts';
 import { ServeLock, SqliteStore } from './database.ts';
 import { McpManager } from './mcp.ts';
 import { MediaService, TelegramMediaClient } from './media.ts';
@@ -116,18 +116,7 @@ export async function serve(configPath: string): Promise<void> {
     );
     scheduler = startedScheduler;
     const commands = new BotCommandService(store, loaded.config, startedScheduler, modelSwitcher);
-    const preview: InvocationContext = {
-      invocationId: 0n,
-      conversationId: 0n,
-      chatId: 0n,
-      threadId: 0n,
-      systemPrompt: '',
-      userPrompt: '',
-      imageCapabilities: new Map(),
-      directImages: [],
-      replyTargets: new Map(),
-      omittedNewMessages: 0,
-    };
+    const preview = previewContext();
     mcpManager.setRegistryValidator((mcpTools) =>
       runtime.validateAdditionalTools(preview, [
         media.createReadImageTool(preview, Number.MAX_SAFE_INTEGER),

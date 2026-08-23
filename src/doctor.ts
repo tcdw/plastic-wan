@@ -10,8 +10,9 @@ import { AgentRuntime } from './agent-runtime.ts';
 import { KeyedSemaphore } from './concurrency.ts';
 import type { McpServerConfig, ProviderConfig, RawConfig, SecretRef } from './config.ts';
 import { assertConfigPermissions, loadConfig } from './config.ts';
-import type { InvocationContext } from './context-builder.ts';
+import { previewContext } from './context-builder.ts';
 import { SqliteStore } from './database.ts';
+import { pickEnv } from './subprocess.ts';
 import { McpManager } from './mcp.ts';
 import { createLottieCommand, MediaService, TelegramMediaClient } from './media.ts';
 import { AgentModelSwitcher } from './model-switch.ts';
@@ -321,7 +322,7 @@ async function runDependency(argv: readonly string[]): Promise<void> {
     stdin: 'ignore',
     stdout: 'ignore',
     stderr: 'ignore',
-    env: minimalDependencyEnvironment(),
+    env: pickEnv(DEPENDENCY_ENV_NAMES),
   });
   const timeout = setTimeout(() => processHandle.kill(), 10_000);
   try {
@@ -332,30 +333,7 @@ async function runDependency(argv: readonly string[]): Promise<void> {
   }
 }
 
-function minimalDependencyEnvironment(): Record<string, string> {
-  const names =
-    process.platform === 'win32'
-      ? ['PATH', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP']
-      : ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR'];
-  const environment: Record<string, string> = {};
-  for (const name of names) {
-    const value = process.env[name];
-    if (value !== undefined) environment[name] = value;
-  }
-  return environment;
-}
-
-function previewContext(): InvocationContext {
-  return {
-    invocationId: 0n,
-    conversationId: 0n,
-    chatId: 0n,
-    threadId: 0n,
-    systemPrompt: '',
-    userPrompt: '',
-    imageCapabilities: new Map(),
-    directImages: [],
-    replyTargets: new Map(),
-    omittedNewMessages: 0,
-  };
-}
+const DEPENDENCY_ENV_NAMES =
+  process.platform === 'win32'
+    ? ['PATH', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP']
+    : ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR'];

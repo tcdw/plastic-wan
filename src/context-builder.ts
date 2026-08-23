@@ -1,7 +1,7 @@
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import type { RawConfig } from './config.ts';
-import type { SqliteStore } from './database.ts';
+import { type SqliteStore, resolveChatConfig } from './database.ts';
 import { MemoryStore } from './memory.ts';
 import { type PromptTemplateModel, type PromptTemplateValues, renderPromptTemplate } from './prompt-template.ts';
 
@@ -84,6 +84,21 @@ export interface InvocationContext {
   readonly omittedNewMessages: number;
 }
 
+export function previewContext(): InvocationContext {
+  return {
+    invocationId: 0n,
+    conversationId: 0n,
+    chatId: 0n,
+    threadId: 0n,
+    systemPrompt: '',
+    userPrompt: '',
+    imageCapabilities: new Map(),
+    directImages: [],
+    replyTargets: new Map(),
+    omittedNewMessages: 0,
+  };
+}
+
 export class ContextBuilder {
   readonly #store: SqliteStore;
   readonly #config: RawConfig;
@@ -115,7 +130,7 @@ export class ContextBuilder {
       )
       .get(invocationId);
     if (identity === null) throw new Error(`Invocation ${invocationId} does not exist`);
-    const chatConfig = this.#chatConfig(identity.telegram_chat_id);
+    const chatConfig = resolveChatConfig(this.#config, this.#store.db, identity.telegram_chat_id);
     if (chatConfig === undefined)
       throw new Error(`Invocation chat ${identity.telegram_chat_id} is no longer configured`);
     const timezone = chatConfig.timezone ?? this.#config.timezone;
@@ -295,15 +310,6 @@ export class ContextBuilder {
     };
   }
 
-  #chatConfig(chatId: bigint): RawConfig['telegram']['chats'][number] | undefined {
-    const direct = this.#config.telegram.chats.find((chat) => BigInt(chat.id) === chatId);
-    if (direct !== undefined) return direct;
-    const migration = this.#store.db
-      .query<{ old_chat_id: bigint }, [bigint]>('SELECT old_chat_id FROM chat_migrations WHERE new_chat_id = ?')
-      .get(chatId);
-    if (migration === null) return undefined;
-    return this.#config.telegram.chats.find((chat) => BigInt(chat.id) === migration.old_chat_id);
-  }
 }
 
 interface PreparedSnapshot extends Omit<MessageSnapshot, 'revision' | 'media'> {

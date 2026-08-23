@@ -1,7 +1,7 @@
 import type { Message, Update } from 'grammy/types';
 import { type ParsedCommand, parseBotCommand } from './bot-commands.ts';
 import type { RawConfig } from './config.ts';
-import type { SqliteStore } from './database.ts';
+import { type SqliteStore, isChatPaused } from './database.ts';
 
 const IMAGE_MIME_TYPES: Record<string, true> = {
   'image/jpeg': true,
@@ -294,14 +294,6 @@ export class TelegramIngestion {
     return row.id;
   }
 
-  #isChatPaused(chatId: bigint): boolean {
-    return (
-      this.#store.db
-        .query<{ present: bigint }, [bigint]>('SELECT 1 AS present FROM chat_pause WHERE chat_id = ?')
-        .get(chatId) !== null
-    );
-  }
-
   #upsertConversation(chatId: bigint, threadId: bigint, receivedAt: Date): bigint {
     this.#store.db
       .query(
@@ -318,7 +310,7 @@ export class TelegramIngestion {
   }
 
   #appendToBucket(chatId: bigint, threadId: bigint, message: StoredMessage, receivedAt: Date): bigint | undefined {
-    if (this.#isChatPaused(chatId)) return undefined;
+    if (isChatPaused(this.#store.db, chatId)) return undefined;
     const conversation = this.#store.db
       .query<{ id: bigint }, [bigint, bigint]>(
         'SELECT id FROM conversations WHERE chat_id = ? AND message_thread_id = ?',

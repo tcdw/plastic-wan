@@ -11,6 +11,7 @@ import type { RawConfig } from './config.ts';
 import type { DirectImage, InvocationContext } from './context-builder.ts';
 import type { SqliteStore } from './database.ts';
 import type { ModelRegistry } from './providers.ts';
+import { pickEnv, readBoundedOutput } from './subprocess.ts';
 
 const ReadImageSchema = Type.Object({ image_ref: Type.String({ minLength: 1 }) }, { additionalProperties: false });
 const StickerTelegramSchema = Type.Object(
@@ -697,7 +698,11 @@ async function runExternal(argv: readonly string[], captureOutput: boolean, sign
     stdin: 'ignore',
     stdout: captureOutput ? 'pipe' : 'ignore',
     stderr: 'ignore',
-    env: mediaCommandEnvironment(),
+    env: pickEnv(
+      process.platform === 'win32'
+        ? ['PATH', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP']
+        : ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR'],
+    ),
   });
   const abortProcess = (): void => processHandle.kill();
   signal.addEventListener('abort', abortProcess, { once: true });
@@ -705,7 +710,10 @@ async function runExternal(argv: readonly string[], captureOutput: boolean, sign
   try {
     const output =
       captureOutput && processHandle.stdout instanceof ReadableStream
-        ? await readCommandOutput(processHandle.stdout, processHandle)
+        ? await readBoundedOutput(processHandle.stdout, 65_536, () => {
+          processHandle.kill();
+          return new Error('Media command output exceeds 64 KiB');
+        })
         : '';
     const exitCode = await processHandle.exited;
     if (signal.aborted) throw new Error('Media command aborted');
@@ -715,42 +723,6 @@ async function runExternal(argv: readonly string[], captureOutput: boolean, sign
     clearTimeout(timeout);
     signal.removeEventListener('abort', abortProcess);
   }
-}
-
-async function readCommandOutput(stream: ReadableStream<Uint8Array>, processHandle: Bun.Subprocess): Promise<string> {
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > 65_536) {
-      processHandle.kill();
-      throw new Error('Media command output exceeds 64 KiB');
-    }
-    chunks.push(value);
-  }
-  const output = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    output.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder('utf-8', { fatal: true }).decode(output);
-}
-
-function mediaCommandEnvironment(): Record<string, string> {
-  const names =
-    process.platform === 'win32'
-      ? ['PATH', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP']
-      : ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR'];
-  const environment: Record<string, string> = {};
-  for (const name of names) {
-    const value = process.env[name];
-    if (value !== undefined) environment[name] = value;
-  }
-  return environment;
 }
 
 async function normalizeImage(inputPath: string, directory: string): Promise<NormalizedImage> {

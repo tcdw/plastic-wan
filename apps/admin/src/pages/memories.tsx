@@ -3,7 +3,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import { App as AntApp, Alert, Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from "antd";
 import type { MemoryDraft, MemoryEntry, MemoryUpdate } from "../api.ts";
 import { createMemory, deleteMemory, updateMemory } from "../api.ts";
-import { queryState } from "../components.tsx";
+import { flatPages, queryState, useSearchFilter } from "../components.tsx";
 import { formatTime } from "../format.ts";
 import { memoriesQuery, memoryChatsQuery } from "../queries.ts";
 
@@ -26,17 +26,15 @@ interface MemoryFormValues {
 export function MemoriesPage(): React.ReactElement {
   const queryClient = useQueryClient();
   const { message } = AntApp.useApp();
-  const [chat, setChat] = useState("");
+  const chat = useSearchFilter();
   const [state, setState] = useState<string | undefined>(undefined);
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<MemoryEntry | null>(null);
   const [createForm] = Form.useForm<MemoryFormValues>();
   const [editForm] = Form.useForm<MemoryFormValues>();
-  const memories = useInfiniteQuery(
-    memoriesQuery({ chat: chat.length === 0 ? undefined : chat, state }),
-  );
+  const memories = useInfiniteQuery(memoriesQuery({ chat: chat.filter, state }));
   const chats = useQuery(memoryChatsQuery);
-  const items = memories.data?.pages.flatMap((page) => page.items) ?? [];
+  const items = flatPages(memories.data);
   const invalidate = async (): Promise<void> => {
     await queryClient.invalidateQueries({ queryKey: ["memories"] });
   };
@@ -112,7 +110,7 @@ export function MemoriesPage(): React.ReactElement {
           allowClear
           placeholder="Telegram chat ID"
           style={{ width: 240 }}
-          onSearch={(value) => setChat(value.trim())}
+          onSearch={(value) => chat.set(value)}
         />
         <Select
           allowClear

@@ -6,6 +6,9 @@ const MAX_SEARCH_LENGTH = 100;
 
 type Bindings = (string | number | bigint | null)[];
 
+const num = (value: unknown): number | null => (value === null ? null : Number(value));
+const bit = (value: unknown): boolean => value === 1n;
+
 export interface Page<T> {
   readonly items: readonly T[];
   readonly next_cursor: string | null;
@@ -254,7 +257,7 @@ export function listInvocations(db: Database, query: ListQuery): Page<Record<str
     sends_used: Number(row.sends_used),
     tool_calls_used: Number(row.tool_calls_used),
     turns_used: Number(row.turns_used),
-    side_effect_started: row.side_effect_started === 1n,
+    side_effect_started: bit(row.side_effect_started),
     config_hash: row.config_hash,
     chat: chatSummary(row),
     tool_call_count: Number(row.tool_call_count),
@@ -337,7 +340,7 @@ export function getInvocation(db: Database, id: bigint): Record<string, unknown>
     sends_used: Number(invocation.sends_used),
     tool_calls_used: Number(invocation.tool_calls_used),
     turns_used: Number(invocation.turns_used),
-    side_effect_started: invocation.side_effect_started === 1n,
+    side_effect_started: bit(invocation.side_effect_started),
     config_hash: invocation.config_hash,
     prompt_version: Number(invocation.prompt_version),
     tool_registry_hash: invocation.tool_registry_hash,
@@ -352,9 +355,9 @@ export function getInvocation(db: Database, id: bigint): Record<string, unknown>
       arguments_json: row.arguments_json,
       result_text: row.result_text,
       state: row.state,
-      side_effect: row.side_effect === 1n,
+      side_effect: bit(row.side_effect),
       error_code: row.error_code,
-      duration_ms: row.duration_ms === null ? null : Number(row.duration_ms),
+      duration_ms: num(row.duration_ms),
       created_at: row.created_at,
       finished_at: row.finished_at,
     })),
@@ -365,13 +368,13 @@ export function getInvocation(db: Database, id: bigint): Record<string, unknown>
       model: row.model,
       attempt: Number(row.attempt),
       state: row.state,
-      input_tokens: row.input_tokens === null ? null : Number(row.input_tokens),
-      output_tokens: row.output_tokens === null ? null : Number(row.output_tokens),
-      cache_read_tokens: row.cache_read_tokens === null ? null : Number(row.cache_read_tokens),
-      cache_write_tokens: row.cache_write_tokens === null ? null : Number(row.cache_write_tokens),
-      total_tokens: row.total_tokens === null ? null : Number(row.total_tokens),
+      input_tokens: num(row.input_tokens),
+      output_tokens: num(row.output_tokens),
+      cache_read_tokens: num(row.cache_read_tokens),
+      cache_write_tokens: num(row.cache_write_tokens),
+      total_tokens: num(row.total_tokens),
       cost: row.cost,
-      duration_ms: row.duration_ms === null ? null : Number(row.duration_ms),
+      duration_ms: num(row.duration_ms),
       error_code: row.error_code,
       created_at: row.created_at,
       finished_at: row.finished_at,
@@ -405,6 +408,18 @@ export function getInvocation(db: Database, id: bigint): Record<string, unknown>
   };
 }
 
+const MESSAGE_SELECT = `SELECT m.id, m.telegram_message_id, m.telegram_date, m.received_at, m.visible, m.sent_by_bot,
+              ch.telegram_chat_id, ch.type AS chat_type, ch.title AS chat_title, c.message_thread_id,
+              r.revision_no, r.kind, r.text, r.caption, r.reply_to_message_id, r.media_group_id,
+              sd.display_name AS sender_display_name, sd.username AS sender_username, sd.is_bot AS sender_is_bot,
+              (SELECT COUNT(*) FROM message_revisions mr WHERE mr.message_id = m.id) AS revision_count,
+              (SELECT COUNT(*) FROM media md WHERE md.revision_id = m.current_revision_id) AS media_count
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       JOIN chats ch ON ch.id = m.chat_id
+       LEFT JOIN message_revisions r ON r.id = m.current_revision_id
+       LEFT JOIN senders sd ON sd.id = r.sender_id`;
+
 export function listMessages(db: Database, query: ListQuery): Page<Record<string, unknown>> {
   const limit = parseLimit(query.limit);
   const conditions: string[] = [];
@@ -423,20 +438,7 @@ export function listMessages(db: Database, query: ListQuery): Page<Record<string
   parameters.push(BigInt(limit + 1));
   const rows = db
     .query<MessageListRow, Bindings>(
-      `SELECT m.id, m.telegram_message_id, m.telegram_date, m.received_at, m.visible, m.sent_by_bot,
-              ch.telegram_chat_id, ch.type AS chat_type, ch.title AS chat_title, c.message_thread_id,
-              r.revision_no, r.kind, r.text, r.caption, r.reply_to_message_id, r.media_group_id,
-              sd.display_name AS sender_display_name, sd.username AS sender_username, sd.is_bot AS sender_is_bot,
-              (SELECT COUNT(*) FROM message_revisions mr WHERE mr.message_id = m.id) AS revision_count,
-              (SELECT COUNT(*) FROM media md WHERE md.revision_id = m.current_revision_id) AS media_count
-       FROM messages m
-       JOIN conversations c ON c.id = m.conversation_id
-       JOIN chats ch ON ch.id = m.chat_id
-       LEFT JOIN message_revisions r ON r.id = m.current_revision_id
-       LEFT JOIN senders sd ON sd.id = r.sender_id
-       ${where(conditions)}
-       ORDER BY m.id DESC
-       LIMIT ?`,
+      `${MESSAGE_SELECT} ${where(conditions)} ORDER BY m.id DESC LIMIT ?`,
     )
     .all(...parameters);
   return page(rows, limit, (row) => ({
@@ -444,15 +446,15 @@ export function listMessages(db: Database, query: ListQuery): Page<Record<string
     telegram_message_id: row.telegram_message_id.toString(),
     telegram_date: row.telegram_date,
     received_at: row.received_at,
-    visible: row.visible === 1n,
-    sent_by_bot: row.sent_by_bot === 1n,
+    visible: bit(row.visible),
+    sent_by_bot: bit(row.sent_by_bot),
     chat: {
       telegram_chat_id: row.telegram_chat_id.toString(),
       type: row.chat_type,
       title: row.chat_title,
       message_thread_id: Number(row.message_thread_id),
     },
-    revision_no: row.revision_no === null ? null : Number(row.revision_no),
+    revision_no: num(row.revision_no),
     kind: row.kind,
     text: row.text,
     caption: row.caption,
@@ -461,7 +463,7 @@ export function listMessages(db: Database, query: ListQuery): Page<Record<string
     sender:
       row.sender_display_name === null
         ? null
-        : { display_name: row.sender_display_name, username: row.sender_username, is_bot: row.sender_is_bot === 1n },
+        : { display_name: row.sender_display_name, username: row.sender_username, is_bot: bit(row.sender_is_bot) },
     revision_count: Number(row.revision_count),
     media_count: Number(row.media_count),
   }));
@@ -470,18 +472,7 @@ export function listMessages(db: Database, query: ListQuery): Page<Record<string
 export function getMessage(db: Database, id: bigint): Record<string, unknown> | null {
   const message = db
     .query<MessageListRow, [bigint]>(
-      `SELECT m.id, m.telegram_message_id, m.telegram_date, m.received_at, m.visible, m.sent_by_bot,
-              ch.telegram_chat_id, ch.type AS chat_type, ch.title AS chat_title, c.message_thread_id,
-              r.revision_no, r.kind, r.text, r.caption, r.reply_to_message_id, r.media_group_id,
-              sd.display_name AS sender_display_name, sd.username AS sender_username, sd.is_bot AS sender_is_bot,
-              (SELECT COUNT(*) FROM message_revisions mr WHERE mr.message_id = m.id) AS revision_count,
-              (SELECT COUNT(*) FROM media md WHERE md.revision_id = m.current_revision_id) AS media_count
-       FROM messages m
-       JOIN conversations c ON c.id = m.conversation_id
-       JOIN chats ch ON ch.id = m.chat_id
-       LEFT JOIN message_revisions r ON r.id = m.current_revision_id
-       LEFT JOIN senders sd ON sd.id = r.sender_id
-       WHERE m.id = ?`,
+      `${MESSAGE_SELECT} WHERE m.id = ?`,
     )
     .get(id);
   if (message === null) return null;
@@ -512,8 +503,8 @@ export function getMessage(db: Database, id: bigint): Record<string, unknown> | 
     telegram_message_id: message.telegram_message_id.toString(),
     telegram_date: message.telegram_date,
     received_at: message.received_at,
-    visible: message.visible === 1n,
-    sent_by_bot: message.sent_by_bot === 1n,
+    visible: bit(message.visible),
+    sent_by_bot: bit(message.sent_by_bot),
     chat: {
       telegram_chat_id: message.telegram_chat_id.toString(),
       type: message.chat_type,
@@ -543,9 +534,9 @@ export function getMessage(db: Database, id: bigint): Record<string, unknown> | 
       kind: row.kind,
       file_unique_id: row.file_unique_id,
       mime_type: row.mime_type,
-      file_size: row.file_size === null ? null : Number(row.file_size),
-      width: row.width === null ? null : Number(row.width),
-      height: row.height === null ? null : Number(row.height),
+      file_size: num(row.file_size),
+      width: num(row.width),
+      height: num(row.height),
       analysis_state: row.analysis_state,
       analysis_description: row.analysis_description,
     })),
@@ -570,7 +561,7 @@ export function listStickerSets(db: Database): readonly Record<string, unknown>[
     alias: row.alias,
     telegram_name: row.telegram_name,
     title: row.title,
-    configured: row.configured === 1n,
+    configured: bit(row.configured),
     sync_state: row.sync_state,
     last_synced_at: row.last_synced_at,
     error_code: row.error_code,
@@ -622,7 +613,7 @@ export function listStickers(db: Database, query: ListQuery): Page<Record<string
     file_unique_id: row.file_unique_id,
     emoji: row.emoji,
     format: row.format,
-    active: row.active === 1n,
+    active: bit(row.active),
     index_state: row.index_state,
     failure_count: Number(row.failure_count),
     next_retry_at: row.next_retry_at,
@@ -636,7 +627,7 @@ export function listStickers(db: Database, query: ListQuery): Page<Record<string
             analysis_version: row.analysis_version,
             provider: row.provider,
             model: row.model,
-            prompt_version: row.prompt_version === null ? null : Number(row.prompt_version),
+            prompt_version: num(row.prompt_version),
             description: row.description,
             metadata_json: row.metadata_json,
             updated_at: row.analysis_updated_at,
@@ -700,7 +691,7 @@ function chatSummary(row: {
   };
 }
 
-function page<Row extends { readonly id: bigint }, Item>(
+export function page<Row extends { readonly id: bigint | string }, Item>(
   rows: readonly Row[],
   limit: number,
   map: (row: Row) => Item,
@@ -713,7 +704,7 @@ function page<Row extends { readonly id: bigint }, Item>(
   };
 }
 
-function where(conditions: readonly string[]): string {
+export function where(conditions: readonly string[]): string {
   return conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`;
 }
 

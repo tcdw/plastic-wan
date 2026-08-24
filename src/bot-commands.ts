@@ -223,6 +223,9 @@ export class BotCommandService {
         )
         .get(date, telegramChatId.toString())?.amount ?? 0n;
     const dailyBudget = readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens, now);
+    const dailyBudgetBasisPoints =
+      (dailyBudget.usedTokens * 10_000n + dailyBudget.maxTokens / 2n) / dailyBudget.maxTokens;
+    const dailyBudgetPercentage = `${dailyBudgetBasisPoints / 100n}.${(dailyBudgetBasisPoints % 100n).toString().padStart(2, '0')}%`;
     const tokenBreakdown =
       chatId === null
         ? null
@@ -253,12 +256,12 @@ export class BotCommandService {
     const lines = [
       `当前模型: ${effective.provider} / ${effective.model}`,
       `思考强度: ${this.#config.agent.thinking_level}`,
-      `本群今日 token 用量: ${tokens}`,
-      `全局今日 token 用量: ${dailyBudget.usedTokens} / ${dailyBudget.maxTokens}`,
-      `读取: ${tokenBreakdown?.readTokens ?? 0n}`,
-      `写入: ${tokenBreakdown?.writeTokens ?? 0n}`,
-      `缓存读取: ${tokenBreakdown?.cacheReadTokens ?? 0n}`,
-      `缓存写入: ${tokenBreakdown?.cacheWriteTokens ?? 0n}`,
+      `本群今日 token 用量: ${tokens.toLocaleString('en-US')}`,
+      `全局今日 token 用量: ${dailyBudget.usedTokens.toLocaleString('en-US')} / ${dailyBudget.maxTokens.toLocaleString('en-US')} (${dailyBudgetPercentage})`,
+      `读取: ${(tokenBreakdown?.readTokens ?? 0n).toLocaleString('en-US')}`,
+      `写入: ${(tokenBreakdown?.writeTokens ?? 0n).toLocaleString('en-US')}`,
+      `缓存读取: ${(tokenBreakdown?.cacheReadTokens ?? 0n).toLocaleString('en-US')}`,
+      `缓存写入: ${(tokenBreakdown?.cacheWriteTokens ?? 0n).toLocaleString('en-US')}`,
     ];
     if (paused) {
       lines.push('互动: 已暂停');

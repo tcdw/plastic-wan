@@ -205,7 +205,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 暂停期间消息仍入库并保留 Revision，但不创建 Bucket、不启动会话；`processDue` 与启动追赶也会跳过暂停 Chat（追赶 Bucket 记 `skipped_budget`/`chat_paused`）。`/resume` 删除 `chat_pause` 行，恢复正常节拍。
 
-`/status` 返回当前生效的 `agent.provider` / `agent.model`（含 Admin Panel 热切换后的运行时模型）、`agent.thinking_level`、本 Chat 的当日 `model_tokens` 用量，以及全局当日用量与 `agent.daily_budget.max_tokens` 上限；并按该 Chat 的 Model Call 审计拆分显示 `read`、`write`、`cache read`、`cache write` token。日期口径均为 UTC；暂停中额外显示一行。
+`/status` 返回当前生效的 `agent.provider` / `agent.model`（含 Admin Panel 热切换后的运行时模型）、`agent.thinking_level`、本 Chat 的当日 `model_tokens` 用量，以及全局当日用量、`agent.daily_budget.max_tokens` 上限与四舍五入到两位小数的用量百分比；所有 token 数量使用千位分隔符。并按该 Chat 的 Model Call 审计拆分显示 `read`、`write`、`cache read`、`cache write` token。日期口径均为 UTC；暂停中额外显示一行。
 
 ## Bot 管理员列表
 

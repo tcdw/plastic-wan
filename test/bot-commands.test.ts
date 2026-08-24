@@ -287,7 +287,7 @@ describe('bot command service', () => {
     expect(status).toContain('agent / agent-model');
     expect(status).toContain('思考强度: low');
     expect(status).toContain(
-      '本群今日 token 用量: 1234\n全局今日 token 用量: 1300 / 300000\n读取: 500\n写入: 200\n缓存读取: 400\n缓存写入: 134',
+      '本群今日 token 用量: 1,234\n全局今日 token 用量: 1,300 / 300,000 (0.43%)\n读取: 500\n写入: 200\n缓存读取: 400\n缓存写入: 134',
     );
     expect(status).not.toContain('已暂停');
     commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
@@ -445,7 +445,7 @@ describe('bot command service', () => {
       )
       .run(FIXED_NOW.toISOString().slice(0, 10), '987654321', FIXED_NOW.toISOString());
     expect(commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain(
-      '本群今日 token 用量: 0\n全局今日 token 用量: 888 / 300000',
+      '本群今日 token 用量: 0\n全局今日 token 用量: 888 / 300,000 (0.30%)',
     );
     store.close();
   });

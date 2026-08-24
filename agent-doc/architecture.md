@@ -66,7 +66,7 @@ send Tool → Telegram API → 审计
 | 模块 | 职责 |
 | --- | --- |
 | `application.ts` | 启动、组件装配、信号处理和关闭顺序 |
-| `config.ts` | 严格 TOML Schema、语义校验、配置哈希和权限检查 |
+| `config.ts` | 严格 JSONC Schema、语义校验、配置哈希和权限检查 |
 | `secrets.ts` | literal/env/command SecretRef、大小/超时限制和脱敏 |
 | `database.ts` | SQLite 打开、迁移、单实例锁、保留清理和备份 |
 | `telegram-ingestion.ts` | Update 判定、消息/修订/媒体入库、Chat 迁移 |

@@ -6,7 +6,7 @@ import { loadConfig } from '../src/config.ts';
 import { backupDatabase, SqliteStore } from '../src/database.ts';
 import { createModelRegistry } from '../src/providers.ts';
 import { SecretStore } from '../src/secrets.ts';
-import { testConfigToml, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -17,7 +17,7 @@ afterEach(async () => {
 async function fixture(): Promise<{ directory: string; configPath: string }> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   return { directory, configPath };
 }
@@ -41,7 +41,10 @@ describe('configuration', () => {
 
   test('rejects unknown fields', async () => {
     const { directory, configPath } = await fixture();
-    await Bun.write(configPath, `${testConfigToml(directory)}\nunknown = true\n`);
+    await Bun.write(
+      configPath,
+      testConfigJsonc(directory, (config) => Object.assign(config, { unknown: true })),
+    );
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
   });
 
@@ -49,19 +52,29 @@ describe('configuration', () => {
     const { directory, configPath } = await fixture();
     await Bun.write(
       configPath,
-      testConfigToml(directory).replace('bucket_window_seconds = 15', 'bucket_window_seconds = 0'),
+      testConfigJsonc(directory, (config) => {
+        config.telegram.bucket_window_seconds = 0;
+      }),
     );
     expect((await loadConfig(configPath)).config.telegram.bucket_window_seconds).toBe(0);
     await Bun.write(
       configPath,
-      testConfigToml(directory).replace('bucket_window_seconds = 15', 'bucket_window_seconds = 301'),
+      testConfigJsonc(directory, (config) => {
+        config.telegram.bucket_window_seconds = 301;
+      }),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
   });
 
   test('accepts an agent model without image input', async () => {
     const { directory, configPath } = await fixture();
-    const config = testConfigToml(directory).replace('input = ["text", "image"]', 'input = ["text"]');
+    const config = testConfigJsonc(directory, (fileConfig) => {
+      const provider = fileConfig.providers.agent;
+      if (provider?.kind !== 'custom' || provider.models[0] === undefined) {
+        throw new Error('Expected custom agent provider fixture');
+      }
+      provider.models[0].input = ['text'];
+    });
     await Bun.write(configPath, config);
     const loaded = await loadConfig(configPath);
     const registry = await createModelRegistry(loaded.config, new SecretStore());
@@ -70,12 +83,15 @@ describe('configuration', () => {
 
   test('rejects a vision model without image input', async () => {
     const { directory, configPath } = await fixture();
-    const config = testConfigToml(directory);
-    const firstModel = config.indexOf('input = ["text", "image"]');
-    const secondModel = config.indexOf('input = ["text", "image"]', firstModel + 1);
     await Bun.write(
       configPath,
-      `${config.slice(0, secondModel)}input = ["text"]${config.slice(secondModel + 'input = ["text", "image"]'.length)}`,
+      testConfigJsonc(directory, (config) => {
+        const provider = config.providers.vision;
+        if (provider?.kind !== 'custom' || provider.models[0] === undefined) {
+          throw new Error('Expected custom vision provider fixture');
+        }
+        provider.models[0].input = ['text'];
+      }),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('vision.model vision-model lacks image input capability');
   });
@@ -84,7 +100,13 @@ describe('configuration', () => {
     const { directory, configPath } = await fixture();
     await Bun.write(
       configPath,
-      testConfigToml(directory).replace('api = "openai-responses"', 'api = "anthropic-messages"'),
+      testConfigJsonc(directory, (config) => {
+        const provider = config.providers.agent;
+        if (provider?.kind !== 'custom') {
+          throw new Error('Expected custom agent provider fixture');
+        }
+        provider.api = 'anthropic-messages';
+      }),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('supports_developer_role requires an OpenAI API adapter');
   });
@@ -93,7 +115,7 @@ describe('configuration', () => {
     const { directory, configPath } = await fixture();
     await Bun.write(
       configPath,
-      testConfigToml(directory).replace('model = "agent-model"', 'model = "agent-model"\nmax_output_tokens = 4096'),
+      testConfigJsonc(directory, (config) => Object.assign(config.agent, { max_output_tokens: 4096 })),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
   });
@@ -102,10 +124,9 @@ describe('configuration', () => {
     const { directory, configPath } = await fixture();
     await Bun.write(
       configPath,
-      testConfigToml(directory).replace(
-        'process_bot_messages = false',
-        'process_bot_messages = false\nadmins = [42, 99]',
-      ),
+      testConfigJsonc(directory, (config) => {
+        config.telegram.admins = [42, 99];
+      }),
     );
     const loaded = await loadConfig(configPath);
     expect(loaded.config.telegram.admins).toEqual([42, 99]);
@@ -115,25 +136,40 @@ describe('configuration', () => {
     const { directory, configPath } = await fixture();
     await Bun.write(
       configPath,
-      testConfigToml(directory).replace('process_bot_messages = false', 'process_bot_messages = false\nadmins = [0]'),
+      testConfigJsonc(directory, (config) => {
+        config.telegram.admins = [0];
+      }),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
     await Bun.write(
       configPath,
-      testConfigToml(directory).replace(
-        'process_bot_messages = false',
-        'process_bot_messages = false\nadmins = [9007199254740992.0]',
-      ),
+      testConfigJsonc(directory, (config) => {
+        config.telegram.admins = [9_007_199_254_740_992];
+      }),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid Telegram admin user ID');
     await Bun.write(
       configPath,
-      testConfigToml(directory).replace(
-        'process_bot_messages = false',
-        'process_bot_messages = false\nadmins = [42, 42]',
-      ),
+      testConfigJsonc(directory, (config) => {
+        config.telegram.admins = [42, 42];
+      }),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
+  });
+
+  test('accepts JSONC comments and trailing commas', async () => {
+    const { directory, configPath } = await fixture();
+    const source = testConfigJsonc(directory)
+      .replace('{', '{\n  // Operator-managed configuration')
+      .replace('"version": 1,', '"version": 1, /* schema version */');
+    await Bun.write(configPath, source.replace(/\n}\n$/, ',\n}\n'));
+    expect((await loadConfig(configPath)).config.version).toBe(1);
+  });
+
+  test('rejects invalid JSONC syntax', async () => {
+    const { configPath } = await fixture();
+    await Bun.write(configPath, '{ "version": 1,, }');
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid JSONC');
   });
 });
 

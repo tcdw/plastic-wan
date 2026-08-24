@@ -165,7 +165,7 @@ export class BotCommandService {
     }
     if (argument === 'reset') {
       const current = switcher.reset();
-      return `已恢复 config.toml 默认模型: ${current.provider} / ${current.model}。`;
+      return `已恢复 config.jsonc 默认模型: ${current.provider} / ${current.model}。`;
     }
     const options = switcher.list();
     const pageMatch = /^page\s+(\d+)$/.exec(argument);

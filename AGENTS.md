@@ -34,7 +34,7 @@ plastic-wan/
 │   ├── stickers.ts         # Sticker Set 同步、索引、搜索
 │   ├── mcp.ts              # MCP 生命周期、策略、预算与审计
 │   ├── database.ts         # SQLite、迁移、保留与备份
-│   ├── config.ts           # 严格 TOML Schema 与语义校验
+│   ├── config.ts           # 严格 JSONC Schema 与语义校验
 │   ├── providers.ts        # Pi AI Provider/Model 注册
 │   ├── doctor.ts           # 真实依赖与外部连接诊断
 │   ├── admin/              # Admin Panel 认证、审计查询与 HTTP 边界
@@ -71,7 +71,7 @@ Telegram Update
 | --- | --- |
 | 文档入口与主题索引 | [agent-doc/README.md](agent-doc/README.md) |
 | 进程组成、数据流、并发和信任边界 | [agent-doc/architecture.md](agent-doc/architecture.md) |
-| TOML、SecretRef、Chat/Topic、Provider、MCP 配置 | [agent-doc/configuration.md](agent-doc/configuration.md) |
+| JSONC、SecretRef、Chat/Topic、Provider、MCP 配置 | [agent-doc/configuration.md](agent-doc/configuration.md) |
 | SQLite 表组、迁移、保留与备份 | [agent-doc/data-layer.md](agent-doc/data-layer.md) |
 | Telegram 入库、Bucket、Context、发送与媒体流程 | [agent-doc/telegram-agent-flow.md](agent-doc/telegram-agent-flow.md) |
 | 本地运行、依赖、systemd、诊断和故障处理 | [agent-doc/operations.md](agent-doc/operations.md) |
@@ -86,17 +86,17 @@ Telegram Update
 bun install
 bun run check
 bun test
-bun run src/cli.ts check-config --config dev-data/config.toml
-bun run src/cli.ts doctor --config dev-data/config.toml
-bun run src/cli.ts serve --config dev-data/config.toml
-bun run src/cli.ts backup --config dev-data/config.toml
+bun run src/cli.ts check-config --config dev-data/config.jsonc
+bun run src/cli.ts doctor --config dev-data/config.jsonc
+bun run src/cli.ts serve --config dev-data/config.jsonc
+bun run src/cli.ts backup --config dev-data/config.jsonc
 bun run admin:build
 bun run admin:dev
 ```
 
 - `bun run check`：严格 TypeScript 检查，不生成文件。
 - `bun test`：运行全部行为测试。
-- `check-config`：只验证 TOML Schema、语义与引用，输出配置哈希。
+- `check-config`：只验证 JSONC Schema、语义与引用，输出配置哈希。
 - `doctor`：执行 SQLite/Sharp/FFmpeg/Lottie、Provider、Vision、Telegram 与 required MCP 的真实探针。
 - `serve`：启动 Telegram long polling；配置只在启动时加载，不支持热重载。
 - `backup`：执行保留清理、SQLite `VACUUM INTO` 备份与轮换；完整性检查属于独立恢复验证。
@@ -107,7 +107,7 @@ bun run admin:dev
 
 - `serve` 是长期进程。Agent 必须使用进程监督器启动，等待 `serve_started`，并通过日志或真实消息验证。
 - 同一 `data_dir` 只能有一个实例；`ServeLock` 使用 `serve.lock` 防止双实例和 Telegram long polling 竞争。
-- 修改 `config.toml` 后必须重启。用启动日志中的 `config_hash` 与 `check-config` 输出对比，避免误判白名单或模型配置。
+- 修改 `config.jsonc` 后必须重启。用启动日志中的 `config_hash` 与 `check-config` 输出对比，避免误判白名单或模型配置。
 - 本地人工运行使用 `Ctrl+C` 停止；不要用未验证 PID 的强制终止命令。
 - Admin Panel 随 `serve` 在同一进程内启动，仅在 `admin.enabled = true` 时监听，且必须绑定回环地址。
 

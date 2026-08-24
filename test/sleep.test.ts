@@ -45,7 +45,7 @@ afterAll(async () => {
 async function openStore(prefix = 'plasticwan-sleep-'): Promise<{ loaded: LoadedConfig; store: SqliteStore }> {
   const directory = await mkdtemp(join(tmpdir(), prefix));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
   return { loaded, store: await SqliteStore.open(loaded.config) };

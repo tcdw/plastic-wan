@@ -127,7 +127,7 @@ MCP Tool 调用本身复用 `tool_calls`，预算复用 `daily_usage`。
 ## 备份
 
 ```bash
-bun run src/cli.ts backup --config dev-data/config.toml
+bun run src/cli.ts backup --config dev-data/config.jsonc
 ```
 
 流程：
@@ -147,7 +147,7 @@ systemd timer 每天 UTC 00:00 调用该命令。恢复或复制前应额外运�
 
 ```text
 dev-data/
-├── config.toml
+├── config.jsonc
 └── data/
     ├── plasticwan.sqlite
     ├── plasticwan.sqlite-wal

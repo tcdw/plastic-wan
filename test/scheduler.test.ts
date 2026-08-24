@@ -3,11 +3,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
-import { type LoadedConfig, loadConfig } from '../src/config.ts';
+import { type FileConfig, type LoadedConfig, loadConfig } from '../src/config.ts';
 import { SqliteStore } from '../src/database.ts';
 import { BucketScheduler } from '../src/scheduler.ts';
 import { TelegramIngestion } from '../src/telegram-ingestion.ts';
-import { testConfigToml, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -19,7 +19,7 @@ afterAll(async () => {
 });
 
 async function setup(
-  transform?: (toml: string) => string,
+  transform?: (config: FileConfig) => void,
   handler: ConstructorParameters<typeof BucketScheduler>[3] = async () => ({ state: 'completed', reason: 'done' }),
 ): Promise<{
   loaded: LoadedConfig;
@@ -29,9 +29,9 @@ async function setup(
 }> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-scheduler-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
-  const toml = transform?.(testConfigToml(directory)) ?? testConfigToml(directory);
-  await writeTestConfig(directory, configPath, toml);
+  const configPath = join(directory, 'config.jsonc');
+  const jsonc = testConfigJsonc(directory, transform);
+  await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   return {
@@ -72,9 +72,9 @@ function topicUpdate(updateId: number, messageId: number, threadId: number, text
 
 describe('bucket scheduler', () => {
   test('freezes the latest revision at the fixed deadline', async () => {
-    const { store, ingestion, scheduler } = await setup((toml) =>
-      toml.replace('bucket_window_seconds = 15', 'bucket_window_seconds = 6'),
-    );
+    const { store, ingestion, scheduler } = await setup((config) => {
+      config.telegram.bucket_window_seconds = 6;
+    });
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'before'), start);
     const edited: Update = {
@@ -188,9 +188,13 @@ describe('bucket scheduler', () => {
   });
 
   test('skips a bucket once the daily invocation reservation is exhausted', async () => {
-    const { store, ingestion, scheduler } = await setup((toml) =>
-      toml.replace('max_invocations_per_day = 100', 'max_invocations_per_day = 1'),
-    );
+    const { store, ingestion, scheduler } = await setup((config) => {
+      const chat = config.telegram.chats[0];
+      if (chat === undefined) {
+        throw new Error('Expected chat fixture');
+      }
+      chat.budget.max_invocations_per_day = 1;
+    });
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'first'), start);
     const [firstInvocation] = scheduler.processDue(new Date(start.getTime() + 15_000));
@@ -213,9 +217,9 @@ describe('bucket scheduler', () => {
   });
 
   test('starts the next busy-period bucket on the prior session pace', async () => {
-    const { store, ingestion, scheduler } = await setup((toml) =>
-      toml.replace('bucket_window_seconds = 15', 'bucket_window_seconds = 6'),
-    );
+    const { store, ingestion, scheduler } = await setup((config) => {
+      config.telegram.bucket_window_seconds = 6;
+    });
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'first'), start);
     const [firstInvocation] = scheduler.processDue(new Date(start.getTime() + 6_000));
@@ -250,9 +254,9 @@ describe('bucket scheduler', () => {
   });
 
   test('waits for a slow session to finish before queueing the next bucket', async () => {
-    const { store, ingestion, scheduler } = await setup((toml) =>
-      toml.replace('bucket_window_seconds = 15', 'bucket_window_seconds = 6'),
-    );
+    const { store, ingestion, scheduler } = await setup((config) => {
+      config.telegram.bucket_window_seconds = 6;
+    });
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'first'), start);
     const [firstInvocation] = scheduler.processDue(new Date(start.getTime() + 6_000));
@@ -319,7 +323,9 @@ describe('bucket scheduler', () => {
     let active = 0;
     let maxActive = 0;
     const { store, ingestion, scheduler } = await setup(
-      (toml) => toml.replace('bucket_window_seconds = 15', 'bucket_window_seconds = 0'),
+      (config) => {
+        config.telegram.bucket_window_seconds = 0;
+      },
       async (invocationId) => {
         started.push(invocationId);
         if (started.length === 1) {
@@ -385,9 +391,9 @@ describe('bucket scheduler', () => {
   });
 
   test('serializes agent sessions across forum topics of the same chat', async () => {
-    const { store, ingestion, scheduler } = await setup((toml) =>
-      toml.replace('bucket_window_seconds = 15', 'bucket_window_seconds = 6'),
-    );
+    const { store, ingestion, scheduler } = await setup((config) => {
+      config.telegram.bucket_window_seconds = 6;
+    });
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(topicUpdate(1, 10, 100, 'topic-a'), start);
     ingestion.ingest(topicUpdate(2, 11, 200, 'topic-b'), new Date(start.getTime() + 1_000));
@@ -437,9 +443,9 @@ describe('bucket scheduler', () => {
   });
 
   test('runs agent sessions of different chats concurrently', async () => {
-    const { store, ingestion, scheduler } = await setup(
-      (toml) => `${toml}\n[[telegram.chats]]\nid = 987654321\nbudget = { max_invocations_per_day = 100 }\n`,
-    );
+    const { store, ingestion, scheduler } = await setup((config) => {
+      config.telegram.chats.push({ id: 987654321, budget: { max_invocations_per_day: 100 } });
+    });
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'chat-a', 123456789), start);
     ingestion.ingest(textUpdate(2, 11, 'chat-b', 987654321), start);

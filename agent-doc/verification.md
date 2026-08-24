@@ -42,7 +42,7 @@ bun test test/memory.test.ts
 ## 配置验证
 
 ```bash
-bun run src/cli.ts check-config --config dev-data/config.toml
+bun run src/cli.ts check-config --config dev-data/config.jsonc
 ```
 
 检查：
@@ -55,13 +55,13 @@ bun run src/cli.ts check-config --config dev-data/config.toml
 ## Doctor
 
 ```bash
-bun run src/cli.ts doctor --config dev-data/config.toml
+bun run src/cli.ts doctor --config dev-data/config.jsonc
 ```
 
 如需同时验证 Prompt 模板的渲染结果：
 
 ```bash
-bun run src/cli.ts doctor --config dev-data/config.toml --output-agent-prompt
+bun run src/cli.ts doctor --config dev-data/config.jsonc --output-agent-prompt
 ```
 
 该模式仍执行完整外部依赖冒烟，并在成功 JSON 中输出 `agent_prompt`。Prompt 正文可能包含内部配置，不要转发到共享日志。
@@ -82,7 +82,7 @@ Doctor 成功只证明连接与最小能力，不证明真实群聊调度、Repl
 启动：
 
 ```bash
-bun run src/cli.ts serve --config dev-data/config.toml
+bun run src/cli.ts serve --config dev-data/config.jsonc
 ```
 
 验证：
@@ -100,7 +100,7 @@ bun run src/cli.ts serve --config dev-data/config.toml
 
 ```bash
 bun run admin:build
-bun run src/cli.ts serve --config dev-data/config.toml
+bun run src/cli.ts serve --config dev-data/config.jsonc
 ```
 
 验证：
@@ -198,7 +198,7 @@ telegram_updates
 ## 备份与恢复验证
 
 ```bash
-bun run src/cli.ts backup --config dev-data/config.toml
+bun run src/cli.ts backup --config dev-data/config.jsonc
 ```
 
 检查：

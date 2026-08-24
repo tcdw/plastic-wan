@@ -13,8 +13,8 @@
 | 类别 | 位置 |
 | --- | --- |
 | `bun:sqlite` | `database.ts`、`doctor.ts`、`memory.ts`、`admin/*`（多为 type-only）、`operations.test.ts` |
-| `Bun.file` / `Bun.write` / `Bun.BunFile` | `config.ts`、`database.ts`、`media.ts`、`admin/server.ts`、`tui/toml.ts`、`tui/configure.ts`、`doctor.ts` |
-| `Bun.TOML.parse` | `config.ts`（`smol-toml` 已是 dependency，但仅部分使用） |
+| `Bun.file` / `Bun.write` / `Bun.BunFile` | `config.ts`、`database.ts`、`media.ts`、`admin/server.ts`、`tui/configure.ts`、`doctor.ts` |
+| `Bun.JSONC.parse` | `config.ts` |
 | `Bun.spawn` / `Bun.Subprocess` | `doctor.ts`、`media.ts`（FFmpeg/Lottie 外部链路）、`secrets.ts`（command SecretRef） |
 | `Bun.password.hash/verify` | `admin/auth.ts`（Argon2id） |
 | `Bun.serve` | `admin/server.ts`（fetch 风格 Request/Response 处理器 + 静态资源） |
@@ -32,7 +32,7 @@
 | 测试框架 | Vitest | API（`describe`/`afterAll`/`expect`）与 bun:test 接近，迁移机械；`node:test` 的断言模型差异大被否决 |
 | 密码哈希 | `@node-rs/argon2`（预编译 NAPI） | Argon2id PHC 字符串跨库可互验，存量 hash 无需重置；避免 node-gyp 本地编译 |
 | HTTP 服务 | Hono + `@hono/node-server` | 现有 handler 已是 Web 标准 Request/Response，移植面最小；纯 `node:http` 手写被否决 |
-| TOML | 统一到已有 `smol-toml` | 删除双轨（`smol-toml` + `Bun.TOML`） |
+| JSONC | `jsonc-parser` | Node.js 没有支持注释与尾逗号的原生 JSON parser；保持现有 JSONC 契约 |
 | 子进程 | `node:child_process.spawn` | 手工聚合 stdout（现有 `readCommandOutput` 模式平移） |
 | 包管理 | pnpm workspaces | 替换 `workspaces` 字段与 `bun run --filter` |
 
@@ -62,7 +62,7 @@
 ### Phase 3 — 运行时无关化（每项独立提交，均在 Bun 上回归）
 
 1. `Bun.file`/`Bun.write`/`exists`/`lastModified` → `node:fs/promises`（`readFile`/`writeFile`/`stat`/`access`）；`media.ts` 中 `arrayBuffer()` 读法改为 `readFile` 直取 Buffer。
-2. `Bun.TOML` → `smol-toml`（`config.ts`），删除双轨。
+2. `Bun.JSONC.parse` → `jsonc-parser`（`config.ts`）。
 3. `Bun.spawn` → `node:child_process.spawn`；`readCommandOutput` 平移到 `Readable` 流聚合；覆盖 `doctor`、`media`、`secrets` 三处。
 4. `Bun.password` → `@node-rs/argon2`；**必须用存量管理员账号做登录回归**，证明旧 PHC hash 可验证；`HASH_OPTIONS` 参数逐项映射。
 5. `Bun.serve` → Hono + `@hono/node-server`：回环绑定、`idleTimeout: 30` 对应参数、静态资源 fallback（`index.html`）、错误 JSON 形状不变。

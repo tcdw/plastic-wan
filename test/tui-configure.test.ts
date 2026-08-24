@@ -2,7 +2,6 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stringify } from 'smol-toml';
 import { parseCli } from '../src/cli-options.ts';
 import { loadConfig } from '../src/config.ts';
 import { renderDoctorAgentPrompt } from '../src/doctor.ts';
@@ -15,7 +14,7 @@ import {
 } from '../src/tui/models-dev.ts';
 import { fetchProviderModels, modelsEndpoint } from '../src/tui/provider-models.ts';
 import { filterSearchChoices } from '../src/tui/provider-wizard.ts';
-import { testConfigToml, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -26,17 +25,17 @@ afterEach(async () => {
 async function fixture(): Promise<{ directory: string; configPath: string }> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   return { directory, configPath };
 }
 
-describe('configure TOML round-trip', () => {
-  test('smol-toml output is accepted by loadConfig', async () => {
+describe('configure JSONC round-trip', () => {
+  test('formatted JSON output is accepted by loadConfig', async () => {
     const { configPath } = await fixture();
-    const { toml } = await loadConfig(configPath);
-    const outPath = configPath.replace('config.toml', 'out.toml');
-    await Bun.write(outPath, stringify(toml as Record<string, unknown>));
+    const { fileConfig } = await loadConfig(configPath);
+    const outPath = configPath.replace('config.jsonc', 'out.jsonc');
+    await Bun.write(outPath, `${JSON.stringify(fileConfig, null, 2)}\n`);
     const { config: reparsed } = await loadConfig(outPath);
     expect(reparsed.version).toBe(1);
     expect(reparsed.providers.agent?.kind).toBe('custom');
@@ -173,24 +172,24 @@ describe('provider wizard discovery', () => {
 
 describe('configure CLI option', () => {
   test('parses configure command with config path', () => {
-    const options = parseCli(['configure', '--config', 'dev-data/config.toml']);
+    const options = parseCli(['configure', '--config', 'dev-data/config.jsonc']);
     expect(options.command).toBe('configure');
-    expect(options.configPath).toBe('dev-data/config.toml');
+    expect(options.configPath).toBe('dev-data/config.jsonc');
   });
 
   test('accepts doctor agent prompt output option', () => {
-    const options = parseCli(['doctor', '--config', 'dev-data/config.toml', '--output-agent-prompt']);
+    const options = parseCli(['doctor', '--config', 'dev-data/config.jsonc', '--output-agent-prompt']);
     expect(options.command).toBe('doctor');
     expect(options.outputAgentPrompt).toBe(true);
   });
   test('renders the configured agent prompt templates', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'plasticwan-doctor-prompt-'));
     directories.push(directory);
-    const configPath = join(directory, 'config.toml');
+    const configPath = join(directory, 'config.jsonc');
     await writeTestConfig(
       directory,
       configPath,
-      testConfigToml(directory),
+      testConfigJsonc(directory),
       'Using {{ agent.provider }}/{{ agent.model }} with {{ vision.model }}',
     );
     const loaded = await loadConfig(configPath);

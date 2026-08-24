@@ -16,7 +16,7 @@ import { BucketScheduler } from '../src/scheduler.ts';
 import { createSendTool, type TelegramSendApi } from '../src/send-tool.ts';
 import { StickerService } from '../src/stickers.ts';
 import { TelegramIngestion } from '../src/telegram-ingestion.ts';
-import { testConfigToml, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -30,13 +30,11 @@ afterAll(async () => {
 test('sync, representative-frame indexing, search, and sticker send share scoped capabilities', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-stickers-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
-  const toml = `${testConfigToml(directory)}
-[[telegram.sticker_sets]]
-alias = "cats"
-name = "CatSet"
-`;
-  await writeTestConfig(directory, configPath, toml);
+  const configPath = join(directory, 'config.jsonc');
+  const jsonc = testConfigJsonc(directory, (config) => {
+    config.telegram.sticker_sets = [{ alias: 'cats', name: 'CatSet' }];
+  });
+  await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   const fixturePath = join(directory, 'sticker.webp');

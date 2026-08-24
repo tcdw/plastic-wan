@@ -16,7 +16,7 @@ import { SecretStore } from '../src/secrets.ts';
 import { BucketScheduler } from '../src/scheduler.ts';
 import type { TelegramSendApi } from '../src/send-tool.ts';
 import { TelegramIngestion } from '../src/telegram-ingestion.ts';
-import { testConfigToml, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -30,7 +30,7 @@ afterAll(async () => {
 test('a fresh Agent publishes only through send and audits model usage', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
@@ -123,7 +123,7 @@ test('a fresh Agent publishes only through send and audits model usage', async (
 test('audits complete redacted model error details', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-error-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
@@ -197,7 +197,7 @@ test('audits complete redacted model error details', async () => {
 test('passes Telegram photos directly to the multimodal agent and keeps stickers tool-only', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-image-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
@@ -310,9 +310,15 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
 test('lets a text-only agent read a Telegram photo through read_image', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-fallback-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
-  const config = testConfigToml(directory).replace('input = ["text", "image"]', 'input = ["text"]');
-  await writeTestConfig(directory, configPath, config);
+  const configPath = join(directory, 'config.jsonc');
+  const jsonc = testConfigJsonc(directory, (config) => {
+    const provider = config.providers.agent;
+    if (provider?.kind !== 'custom' || provider.models[0] === undefined) {
+      throw new Error('Expected custom agent provider fixture');
+    }
+    provider.models[0].input = ['text'];
+  });
+  await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   const fixturePath = join(directory, 'fixture.png');
@@ -432,7 +438,7 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
 test('nudges the model once to use send when it drafts a private reply and never re-nudges', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-nudge-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);

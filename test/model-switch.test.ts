@@ -2,11 +2,11 @@ import { afterAll, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig } from '../src/config.ts';
+import { type FileConfig, loadConfig } from '../src/config.ts';
 import { AgentModelSwitcher } from '../src/model-switch.ts';
 import { createModelRegistry } from '../src/providers.ts';
 import { SecretStore } from '../src/secrets.ts';
-import { testConfigToml, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -17,32 +17,34 @@ afterAll(async () => {
   );
 });
 
-async function switcherWith(transform: (toml: string) => string = (toml) => toml): Promise<AgentModelSwitcher> {
+async function switcherWith(transform?: (config: FileConfig) => void): Promise<AgentModelSwitcher> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-switch-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
-  await writeTestConfig(directory, configPath, transform(testConfigToml(directory)));
+  const configPath = join(directory, 'config.jsonc');
+  await writeTestConfig(directory, configPath, testConfigJsonc(directory, transform));
   const loaded = await loadConfig(configPath);
   const registry = await createModelRegistry(loaded.config, new SecretStore());
   return new AgentModelSwitcher(loaded.config, registry.models);
 }
 
-// A second agent-provider model that cannot serve as an agent model (no text input).
-const IMAGE_ONLY_MODEL = `
-[[providers.agent.models]]
-id = "vision-only"
-name = "Vision Only"
-reasoning = false
-input = ["image"]
-context_window = 64000
-max_tokens = 4096
-cost = { input = 1, output = 2, cache_read = 0.1, cache_write = 1 }
-`;
+function addImageOnlyModel(config: FileConfig): void {
+  const provider = config.providers.agent;
+  if (provider?.kind !== 'custom') {
+    throw new Error('Expected custom agent provider fixture');
+  }
+  provider.models.push({
+    id: 'vision-only',
+    name: 'Vision Only',
+    reasoning: false,
+    input: ['image'],
+    context_window: 64000,
+    max_tokens: 4096,
+    cost: { input: 1, output: 2, cache_read: 0.1, cache_write: 1 },
+  });
+}
 
 test('lists text-capable models of configured providers', async () => {
-  const switcher = await switcherWith((toml) =>
-    toml.replace('[providers.vision]', `${IMAGE_ONLY_MODEL}[providers.vision]`),
-  );
+  const switcher = await switcherWith(addImageOnlyModel);
   const options = switcher.list();
   expect(options.map((option) => `${option.provider}/${option.model}`)).toEqual([
     'agent/agent-model',
@@ -69,9 +71,7 @@ test('switch applies to the next session and reset reverts to the config default
 });
 
 test('rejects unknown providers, unknown models and image-only models', async () => {
-  const switcher = await switcherWith((toml) =>
-    toml.replace('[providers.vision]', `${IMAGE_ONLY_MODEL}[providers.vision]`),
-  );
+  const switcher = await switcherWith(addImageOnlyModel);
   // Message-based assertions: bun:test mis-evaluates instanceof against
   // classes imported from another module inside toThrowError predicates.
   expect(() => switcher.switch('ghost', 'agent-model')).toThrowError('Provider ghost is not configured');
@@ -79,6 +79,5 @@ test('rejects unknown providers, unknown models and image-only models', async ()
   expect(() => switcher.switch('agent', 'vision-only')).toThrowError(
     'Model agent/vision-only does not accept text input',
   );
-  // A failed switch leaves the current model untouched.
   expect(switcher.current()).toMatchObject({ provider: 'agent', model: 'agent-model' });
 });

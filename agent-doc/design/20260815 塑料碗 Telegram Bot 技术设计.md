@@ -29,7 +29,7 @@ Phase 1 不使用 Vercel AI SDK，不部署到无状态或 Serverless 运行时�
 | 模型接口 | `@earendil-works/pi-ai` | Provider Registry 同时支持 Pi AI 内建 Provider 与显式 endpoint/API adapter 的自定义 Provider |
 | 数据库 | `bun:sqlite` | 原生 SQL、显式事务，不引入 ORM |
 | Schema 校验 | TypeBox | 同时复用 Pi Agent Tool 的 JSON Schema 类型 |
-| TOML | `Bun.TOML` | 配置版本固定为 `version = 1` |
+| JSONC | `Bun.JSONC` | 配置版本固定为 `"version": 1` |
 | MCP | `@modelcontextprotocol/sdk` | 支持 stdio 与 Streamable HTTP；仅启用 Tools |
 | 静态图片 | `sharp` | 格式检查、缩放、自动旋转、移除元数据 |
 | WEBM 单帧 | `ffmpeg` | Thumbnail 缺失时取时间中点 |
@@ -75,26 +75,28 @@ flowchart TD
 
 ### 4.1 加载规则
 
-- 配置格式为 TOML，必须包含 `version = 1`。
-- 使用 `Bun.TOML` 解析，再以 TypeBox 严格校验。
+- 配置格式为 JSONC，必须包含 `"version": 1`。
+- 使用 `Bun.JSONC.parse` 解析，再以 TypeBox 严格校验。
 - 未知字段、重复 alias、无效 Chat ID、无效 IANA timezone、预算缺失、未知 API adapter、无效 endpoint 或模型能力不匹配均导致启动失败。
 - 配置仅在启动时加载，不热重载。修改后通过 systemd 重启。
 - 配置文件权限必须为 `0600`，父目录为 `0700`。
-- 程序不得自动改写配置文件。
+- `serve`、`doctor` 与 `check-config` 不改写配置；`configure` 只在管理员显式保存时写回格式化 JSON。
 
 ### 4.2 SecretRef
 
 所有密钥字段统一接受三种形式：
 
-```toml
-api_key = "sk-aaaaaaaa"
-api_key = { env = "OPENAI_API_KEY" }
-api_key = { command = ["security", "find-generic-password", "-w", "-s", "openai"] }
+```jsonc
+[
+  "sk-aaaaaaaa",
+  { "env": "OPENAI_API_KEY" },
+  { "command": ["security", "find-generic-password", "-w", "-s", "openai"] },
+]
 ```
 
 约束：
 
-- `command` 必须是 TOML 字符串数组；第一个元素为可执行文件，其余为 argv。
+- `command` 必须是 JSONC 字符串数组；第一个元素为可执行文件，其余为 argv。
 - 使用 `Bun.spawn(argv)`，绝不经过 Shell，不进行变量插值。
 - 只在 `serve`/`doctor` 启动阶段执行。
 - 默认 5 秒超时，stdout 最大 4 KiB，只移除一个末尾换行。
@@ -110,11 +112,16 @@ Registry 支持两类 Provider。
 
 #### 内建 Provider
 
-```toml
-[providers.vision_openai]
-kind = "builtin"
-provider = "openai"
-api_key = { env = "OPENAI_API_KEY" }
+```jsonc
+{
+  "providers": {
+    "vision_openai": {
+      "kind": "builtin",
+      "provider": "openai",
+      "api_key": { "env": "OPENAI_API_KEY" },
+    },
+  },
+}
 ```
 
 - `provider` 必须是应用显式注册的 Pi AI 内建 Provider ID；
@@ -123,24 +130,31 @@ api_key = { env = "OPENAI_API_KEY" }
 
 #### 自定义 Provider
 
-```toml
-[providers.primary_relay]
-kind = "custom"
-base_url = "https://relay.example.com/v1"
-api = "openai-responses"
-api_key = { env = "RELAY_API_KEY" }
-
-[providers.primary_relay.headers]
-X-Project = { env = "RELAY_PROJECT" }
-
-[[providers.primary_relay.models]]
-id = "relay-model"
-name = "Relay Model"
-reasoning = true
-input = ["text", "image"]
-context_window = 200000
-max_tokens = 32768
-cost = { input = 1.0, output = 5.0, cache_read = 0.1, cache_write = 1.0 }
+```jsonc
+{
+  "providers": {
+    "primary_relay": {
+      "kind": "custom",
+      "base_url": "https://relay.example.com/v1",
+      "api": "openai-responses",
+      "api_key": { "env": "RELAY_API_KEY" },
+      "headers": {
+        "X-Project": { "env": "RELAY_PROJECT" },
+      },
+      "models": [
+        {
+          "id": "relay-model",
+          "name": "Relay Model",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "context_window": 200000,
+          "max_tokens": 32768,
+          "cost": { "input": 1.0, "output": 5.0, "cache_read": 0.1, "cache_write": 1.0 },
+        },
+      ],
+    },
+  },
+}
 ```
 
 Phase 1 的 custom Provider 只接受已编译并测试的 API adapter：
@@ -161,125 +175,143 @@ Phase 1 的 custom Provider 只接受已编译并测试的 API adapter：
 
 数值只是结构示例；预算字段必须由管理员明确填写，不提供无限默认值。
 
-```toml
-version = 1
-data_dir = "/var/lib/plasticwan"
-timezone = "Asia/Shanghai"
-
-[telegram]
-token = { env = "TELEGRAM_BOT_TOKEN" }
-process_bot_messages = false
-bucket_window_seconds = 15
-
-[providers.primary_relay]
-kind = "custom"
-base_url = "https://relay.example.com/v1"
-api = "openai-responses"
-api_key = { env = "RELAY_API_KEY" }
-
-[providers.primary_relay.headers]
-X-Project = { env = "RELAY_PROJECT" }
-
-[[providers.primary_relay.models]]
-id = "relay-model"
-name = "Relay Model"
-reasoning = true
-input = ["text", "image"]
-context_window = 200000
-max_tokens = 32768
-cost = { input = 1.0, output = 5.0, cache_read = 0.1, cache_write = 1.0 }
-
-[providers.vision_openai]
-kind = "builtin"
-provider = "openai"
-api_key = { command = ["pass", "show", "plasticwan/openai"] }
-
-[agent]
-provider = "primary_relay"
-model = "relay-model"
-daily_budget = { max_tokens = 600000 }
-max_output_tokens = 4096
-thinking_level = "low"
-system_prompt = """
-你是参与 Telegram 对话的 Agent。根据当前对话决定是否参与。
-"""
-max_turns = 8
-max_tool_calls = 12
-max_sends = 6
-timeout_seconds = 90
-max_concurrency = 4
-context_stop_ratio = 0.8
-history_messages = 20
-
-[vision]
-provider = "vision_openai"
-model = "gpt-5.2"
-max_output_tokens = 2048
-max_concurrency = 2
-background_sticker_concurrency = 1
-prompt_version = 1
-
-[vision.daily_budget]
-max_tokens = 200000
-max_images = 200
-
-[retention]
-online_days = 30
-backup_copies = 7
-
-[paths]
-database = "/var/lib/plasticwan/plasticwan.sqlite"
-media_cache = "/var/lib/plasticwan/media"
-backups = "/var/lib/plasticwan/backups"
-
-[[telegram.chats]]
-id = 123456789
-timezone = "Asia/Shanghai"
-instructions = "这是私聊。默认积极回应。"
-budget = { max_invocations_per_day = 100 }
-
-[[telegram.chats]]
-id = -1001234567890
-topic_ids = [3, 8]
-instructions = "这是群聊。没有明确价值时保持沉默。"
-budget = { max_invocations_per_day = 200 }
-
-[[telegram.sticker_sets]]
-alias = "cat_pack"
-name = "ActualTelegramStickerSetName"
-
-[[mcp.servers]]
-alias = "search"
-transport = "stdio"
-command = ["bunx", "-y", "example-search-mcp"]
-required = true
-tools = ["web_search"]
-payload_max_bytes = 1048576
-result_max_bytes = 32768
-
-[mcp.servers.env]
-SEARCH_API_KEY = { env = "SEARCH_API_KEY" }
-
-[[mcp.servers.tool_policies]]
-name = "web_search"
-read_only = true
-timeout_seconds = 30
-per_chat_daily_calls = 50
-global_daily_calls = 500
-
-[[mcp.servers]]
-alias = "remote"
-transport = "streamable_http"
-url = "http://10.0.0.20:8080/mcp"
-follow_redirects = false
-required = false
-tools = "*"
-payload_max_bytes = 1048576
-result_max_bytes = 32768
-default_tool_policy = { read_only = false, timeout_seconds = 30, per_chat_daily_calls = 10, global_daily_calls = 100 }
-
-[mcp.servers.headers]
-Authorization = { env = "REMOTE_MCP_AUTHORIZATION" }
+```jsonc
+{
+  "version": 1,
+  "data_dir": "/var/lib/plasticwan",
+  "timezone": "Asia/Shanghai",
+  "telegram": {
+    "token": { "env": "TELEGRAM_BOT_TOKEN" },
+    "process_bot_messages": false,
+    "bucket_window_seconds": 15,
+    "chats": [
+      {
+        "id": 123456789,
+        "timezone": "Asia/Shanghai",
+        "instructions_file": "prompts/private.md",
+        "budget": { "max_invocations_per_day": 100 },
+      },
+      {
+        "id": -1001234567890,
+        "topic_ids": [3, 8],
+        "instructions_file": "prompts/group.md",
+        "budget": { "max_invocations_per_day": 200 },
+      },
+    ],
+    "sticker_sets": [
+      {
+        "alias": "cat_pack",
+        "name": "ActualTelegramStickerSetName",
+      },
+    ],
+  },
+  "providers": {
+    "primary_relay": {
+      "kind": "custom",
+      "base_url": "https://relay.example.com/v1",
+      "api": "openai-responses",
+      "api_key": { "env": "RELAY_API_KEY" },
+      "headers": {
+        "X-Project": { "env": "RELAY_PROJECT" },
+      },
+      "models": [
+        {
+          "id": "relay-model",
+          "name": "Relay Model",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "context_window": 200000,
+          "max_tokens": 32768,
+          "cost": { "input": 1.0, "output": 5.0, "cache_read": 0.1, "cache_write": 1.0 },
+        },
+      ],
+    },
+    "vision_openai": {
+      "kind": "builtin",
+      "provider": "openai",
+      "api_key": { "command": ["pass", "show", "plasticwan/openai"] },
+    },
+  },
+  "agent": {
+    "provider": "primary_relay",
+    "model": "relay-model",
+    "daily_budget": { "max_tokens": 600000 },
+    "thinking_level": "low",
+    "system_prompt_file": "prompts/system.md",
+    "max_turns": 8,
+    "max_tool_calls": 12,
+    "max_sends": 6,
+    "timeout_seconds": 90,
+    "max_concurrency": 4,
+    "context_stop_ratio": 0.8,
+    "history_messages": 20,
+  },
+  "vision": {
+    "provider": "vision_openai",
+    "model": "gpt-5.2",
+    "max_output_tokens": 2048,
+    "max_concurrency": 2,
+    "background_sticker_concurrency": 1,
+    "prompt_version": 1,
+    "daily_budget": {
+      "max_tokens": 200000,
+      "max_images": 200,
+    },
+  },
+  "mcp": {
+    "servers": [
+      {
+        "alias": "search",
+        "transport": "stdio",
+        "command": ["bunx", "-y", "example-search-mcp"],
+        "required": true,
+        "tools": ["web_search"],
+        "payload_max_bytes": 1048576,
+        "result_max_bytes": 32768,
+        "env": {
+          "SEARCH_API_KEY": { "env": "SEARCH_API_KEY" },
+        },
+        "tool_policies": [
+          {
+            "name": "web_search",
+            "read_only": true,
+            "timeout_seconds": 30,
+            "per_chat_daily_calls": 50,
+            "global_daily_calls": 500,
+          },
+        ],
+      },
+      {
+        "alias": "remote",
+        "transport": "streamable_http",
+        "url": "http://10.0.0.20:8080/mcp",
+        "follow_redirects": false,
+        "required": false,
+        "tools": "*",
+        "payload_max_bytes": 1048576,
+        "result_max_bytes": 32768,
+        "default_tool_policy": {
+          "read_only": false,
+          "timeout_seconds": 30,
+          "per_chat_daily_calls": 10,
+          "global_daily_calls": 100,
+        },
+        "headers": {
+          "Authorization": { "env": "REMOTE_MCP_AUTHORIZATION" },
+        },
+      },
+    ],
+  },
+  "retention": {
+    "online_days": 30,
+    "backup_copies": 7,
+  },
+  "paths": {
+    "database": "/var/lib/plasticwan/plasticwan.sqlite",
+    "media_cache": "/var/lib/plasticwan/media",
+    "backups": "/var/lib/plasticwan/backups",
+  },
+}
 ```
 
 ### 4.5 Chat 配置语义
@@ -289,7 +321,7 @@ Authorization = { env = "REMOTE_MCP_AUTHORIZATION" }
 - Conversation Key 为 `(chat_id, message_thread_id)`。
 - 不同 Topic 的短期 Context、Bucket 和 Invocation 隔离。
 - 每日 Agent/MCP 预算按 `chat_id` 汇总，不因 Topic 数量扩大。
-- 数据库存储 Telegram 可信迁移事件产生的旧、新 Chat ID 映射；旧 ID 已允许时，新 ID 自动继承授权，并在运行日志中提示管理员更新 TOML。
+- 数据库存储 Telegram 可信迁移事件产生的旧、新 Chat ID 映射；旧 ID 已允许时，新 ID 自动继承授权，并在运行日志中提示管理员更新 JSONC。
 - 全局 timezone 必填，Chat 可以覆盖；消息时间在 Prompt 中按 Chat timezone 展示，数据库与每日预算统一使用 UTC。
 
 ---
@@ -527,7 +559,7 @@ Tool 权限、Chat allowlist、引用授权、预算与参数限制全部在代�
 - 最多 12 个 Tool Call；
 - 最多 6 个 `send`；
 - 所有 Tool 按模型给出的顺序执行；
-- `max_output_tokens` 由 TOML 必填并在启动时验证；
+- 每次请求的输出上限使用目标模型声明的 `max_tokens`；
 - 主模型固定为全局单模型，不自动切换 Provider 或 fallback 模型。
 
 同一模型调用遇到明确的瞬时错误时最多重试 2 次，指数退避并受 90 秒总时限约束。仅在该 Assistant Message 尚未完成、新 Tool 尚未执行时重试。整个失败 Bucket 不做延迟重放。
@@ -663,7 +695,7 @@ Sticker Set 在启动后同步 `getStickerSet`。新增 Sticker 进入后台视�
 
 ### 10.2 静态授权
 
-- Server 只能由 TOML 配置，Bot Command、聊天内容和 Agent 都不能新增或修改。
+- Server 只能由 JSONC 配置，Bot Command、聊天内容和 Agent 都不能新增或修改。
 - 对 Agent 暴露的名称固定为 `<server_alias>__<tool_name>`。
 - 内建 `send`、`read_image`、`search_stickers` 不加 MCP namespace。
 - `tools = ["..."]` 时启动严格校验：缺失 Tool 导致 required Server 启动失败，额外 Tool 不暴露。
@@ -720,7 +752,7 @@ Streamable HTTP：
 - read-only Tool 遇到明确瞬时错误时可在总时限内重试一次；
 - 有副作用 Tool 不自动重试；
 - 超时或断线导致结果未知时记录 `outcome_unknown`；
-- MCP annotations 只用于审计，不覆盖 TOML 的副作用分类。
+- MCP annotations 只用于审计，不覆盖 JSONC 的副作用分类。
 
 ### 10.6 故障恢复
 
@@ -735,7 +767,7 @@ Streamable HTTP：
 
 ### 11.1 Invocation 并发
 
-- 全局最多 4 个 running Invocation，TOML 可调。
+- 全局最多 4 个 running Invocation，JSONC 可调。
 - 同一 Conversation 永远最多 1 个 running Invocation。
 - 同一 `chat_id` 下主模型与聊天触发的 Sticker 视觉模型调用共享模型闸门；不同 Topic 的 Invocation 可以在等待 Tool 等阶段并发。
 - 全局 Agent 日 Token 上限可能被已放行的并发模型调用小幅超出。
@@ -897,7 +929,7 @@ Agent registry 中不存在：
 - `ffmpeg`/`ffprobe` 可执行；
 - `lottie_convert.py` 能把内置 TGS fixture 转成 PNG；
 - 数据目录权限与剩余空间；
-- TOML、Secret、Provider Registry 与模型 metadata；
+- JSONC、Secret、Provider Registry 与模型 metadata；
 - 每个 custom Provider endpoint 完成一次最小文本请求；
 - 主 Agent Provider 完成一次无副作用的严格 Tool Call smoke test；
 - Vision Provider 使用内置 1×1 图片完成一次视觉请求；
@@ -908,10 +940,10 @@ Agent registry 中不存在：
 ### 15.2 CLI
 
 ```text
-plasticwan serve --config /etc/plasticwan/config.toml
-plasticwan check-config --config /etc/plasticwan/config.toml
-plasticwan doctor --config /etc/plasticwan/config.toml
-plasticwan backup --config /etc/plasticwan/config.toml
+plasticwan serve --config /etc/plasticwan/config.jsonc
+plasticwan check-config --config /etc/plasticwan/config.jsonc
+plasticwan doctor --config /etc/plasticwan/config.jsonc
+plasticwan backup --config /etc/plasticwan/config.jsonc
 ```
 
 - `check-config` 只解析和做静态校验，不执行网络请求。

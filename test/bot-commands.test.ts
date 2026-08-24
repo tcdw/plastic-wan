@@ -12,18 +12,20 @@ import {
   parseBotCommand,
   registerBotCommands,
 } from '../src/bot-commands.ts';
-import { type LoadedConfig, loadConfig } from '../src/config.ts';
+import { type FileConfig, type LoadedConfig, loadConfig } from '../src/config.ts';
 import { SqliteStore } from '../src/database.ts';
 import { AgentModelSwitcher } from '../src/model-switch.ts';
 import { createModelRegistry } from '../src/providers.ts';
 import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from '../src/scheduler.ts';
 import { SecretStore } from '../src/secrets.ts';
 import { TelegramIngestion } from '../src/telegram-ingestion.ts';
-import { testConfigToml, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 const BOT_USERNAME = 'plasticwan_test_bot';
 const ALICE: CommandSender = { id: 42n, name: 'Alice', username: 'alice' };
+
+type ConfigTransform = (config: FileConfig) => void;
 
 afterAll(async () => {
   Bun.gc(true);
@@ -33,8 +35,9 @@ afterAll(async () => {
 });
 
 async function setup(
-  transform: (toml: string) => string = (toml) =>
-    toml.replace('process_bot_messages = false', 'process_bot_messages = false\nadmins = [42]'),
+  transform: ConfigTransform = (config) => {
+    config.telegram.admins = [42];
+  },
   handler: ConstructorParameters<typeof BucketScheduler>[3] = async () => ({ state: 'completed', reason: 'done' }),
 ): Promise<{
   loaded: LoadedConfig;
@@ -45,8 +48,8 @@ async function setup(
 }> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-commands-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
-  await writeTestConfig(directory, configPath, transform(testConfigToml(directory)));
+  const configPath = join(directory, 'config.jsonc');
+  await writeTestConfig(directory, configPath, testConfigJsonc(directory, transform));
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   seedConfigAdmins(store.db, loaded.config.telegram.admins ?? [], new Date('2026-08-15T00:00:00.000Z'));
@@ -303,25 +306,28 @@ describe('bot command service', () => {
   });
 
   describe('model command', () => {
-    function manyModelTransform(count: number): (toml: string) => string {
-      const models = Array.from(
-        { length: count },
-        (_, index) => `[[providers.agent.models]]
-id = "agent-extra-${index + 1}"
-name = "Agent Extra ${index + 1}"
-reasoning = false
-input = ["text"]
-context_window = 128000
-max_tokens = 8192
-cost = { input = 1, output = 2, cache_read = 0.1, cache_write = 1 }`,
-      ).join('\n\n');
-      return (toml) =>
-        toml
-          .replace('process_bot_messages = false', 'process_bot_messages = false\nadmins = [42]')
-          .replace('\n[providers.vision]', `\n\n${models}\n\n[providers.vision]`);
+    function manyModelTransform(count: number): ConfigTransform {
+      return (config) => {
+        config.telegram.admins = [42];
+        const provider = config.providers.agent;
+        if (provider?.kind !== 'custom') {
+          throw new Error('Expected custom agent provider fixture');
+        }
+        provider.models.push(
+          ...Array.from({ length: count }, (_, index) => ({
+            id: `agent-extra-${index + 1}`,
+            name: `Agent Extra ${index + 1}`,
+            reasoning: false,
+            input: ['text' as const],
+            context_window: 128000,
+            max_tokens: 8192,
+            cost: { input: 1, output: 2, cache_read: 0.1, cache_write: 1 },
+          })),
+        );
+      };
     }
 
-    async function commandSetup(transform?: (toml: string) => string): Promise<{
+    async function commandSetup(transform?: ConfigTransform): Promise<{
       store: SqliteStore;
       commands: BotCommandService;
       switcher: AgentModelSwitcher;
@@ -410,7 +416,7 @@ cost = { input = 1, output = 2, cache_read = 0.1, cache_write = 1 }`,
       const { store, commands, switcher } = await commandSetup();
       switcher.switch('vision', 'vision-model');
       const reply = commands.run({ name: 'model', argument: 'reset' }, 123456789n, ALICE, FIXED_NOW);
-      expect(reply).toBe('已恢复 config.toml 默认模型: agent / agent-model。');
+      expect(reply).toBe('已恢复 config.jsonc 默认模型: agent / agent-model。');
       expect(switcher.current()).toMatchObject({ provider: 'agent', model: 'agent-model' });
       store.close();
     });
@@ -462,7 +468,7 @@ cost = { input = 1, output = 2, cache_read = 0.1, cache_write = 1 }`,
   });
 
   test('anonymous senders and absent admins are denied', async () => {
-    const { store, commands } = await setup((toml) => toml);
+    const { store, commands } = await setup(() => {});
     expect(commands.run({ name: 'pause' }, 123456789n, null, FIXED_NOW)).toBe('该命令仅对本 Bot 的管理员可用。');
     const stranger: CommandSender = { id: 42n, name: 'Alice', username: 'alice' };
     expect(commands.run({ name: 'pause' }, 123456789n, stranger, FIXED_NOW)).toBe('该命令仅对本 Bot 的管理员可用。');
@@ -575,7 +581,7 @@ describe('scheduler pause enforcement', () => {
     });
     let sawAbort = false;
     const { store, ingestion, scheduler } = await setup(
-      (toml) => toml,
+      () => {},
       async (_id, signal) => {
         await gate;
         if (signal.aborted) {

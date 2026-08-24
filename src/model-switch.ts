@@ -19,9 +19,6 @@ export interface AgentModelOption {
   readonly maxTokens: number;
 }
 
-// Runtime agent-model selection. config.toml stays the default; a switch
-// overrides it in memory until reset or restart, and applies to invocations
-// that start afterwards ("next agent session").
 export class AgentModelSwitcher {
   readonly #config: RawConfig;
   readonly #models: Models;
@@ -32,12 +29,10 @@ export class AgentModelSwitcher {
     this.#models = models;
   }
 
-  /** Effective agent model: runtime override when set, else the config default. */
   current(): AgentModelOption {
     return this.#option(this.#reference().provider, this.#reference().model);
   }
 
-  /** The resolved model the next agent session streams with. */
   model(): Model<Api> {
     const reference = this.#reference();
     const found = this.#models.getModel(reference.provider, reference.model);
@@ -47,7 +42,6 @@ export class AgentModelSwitcher {
     return found;
   }
 
-  /** Every switchable agent model: text-capable models of configured providers. */
   list(): readonly AgentModelOption[] {
     const options: AgentModelOption[] = [];
     for (const alias of Object.keys(this.#config.providers)) {
@@ -67,14 +61,12 @@ export class AgentModelSwitcher {
     return options;
   }
 
-  /** Validate and set the runtime override; effective for the next session. */
   switch(provider: string, modelId: string): AgentModelOption {
     const option = this.#option(provider, modelId);
     this.#override = { provider, model: modelId };
     return option;
   }
 
-  /** Revert to the config.toml default. */
   reset(): AgentModelOption {
     this.#override = null;
     return this.current();

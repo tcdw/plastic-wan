@@ -1,6 +1,5 @@
 import { confirm, select } from '@inquirer/prompts';
-import { stringify } from 'smol-toml';
-import { loadConfig, type TomlConfig } from '../config.ts';
+import { loadConfig, type FileConfig } from '../config.ts';
 import { runProviderWizard } from './provider-wizard.ts';
 
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
@@ -11,13 +10,13 @@ export async function runConfigure(configPath: string): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  let config: TomlConfig;
-  let originalToml: string;
+  let config: FileConfig;
+  let originalSource: string;
   try {
     const loaded = await loadConfig(configPath);
-    config = loaded.toml;
+    config = loaded.fileConfig;
     const file = Bun.file(configPath);
-    originalToml = (await file.exists()) ? await file.text() : '';
+    originalSource = (await file.exists()) ? await file.text() : '';
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Failed to load config: ${message}`);
@@ -50,7 +49,7 @@ export async function runConfigure(configPath: string): Promise<void> {
         break;
       }
       case 'save': {
-        const saved = await saveConfig(configPath, config, originalToml);
+        const saved = await saveConfig(configPath, config, originalSource);
         if (saved) {
           exit = true;
         }
@@ -67,9 +66,9 @@ export async function runConfigure(configPath: string): Promise<void> {
   }
 }
 
-async function saveConfig(path: string, config: TomlConfig, originalToml: string): Promise<boolean> {
+async function saveConfig(path: string, config: FileConfig, originalSource: string): Promise<boolean> {
   try {
-    await Bun.write(path, stringify(config as Record<string, unknown>));
+    await Bun.write(path, `${JSON.stringify(config, null, 2)}\n`);
     const loaded = await loadConfig(path);
     console.log(`Config saved and validated. Hash: ${loaded.hash}`);
     return true;
@@ -78,7 +77,7 @@ async function saveConfig(path: string, config: TomlConfig, originalToml: string
     console.error(`Failed to save config: ${message}`);
     const restore = await confirm({ message: 'Restore previous config?', default: true });
     if (restore) {
-      await Bun.write(path, originalToml);
+      await Bun.write(path, originalSource);
       console.log('Previous config restored.');
     }
     return false;

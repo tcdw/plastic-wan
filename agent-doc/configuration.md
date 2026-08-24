@@ -1,12 +1,12 @@
 # 配置
 
-Plastic Wan 使用严格 TOML 配置。Schema 位于 `src/config.ts`，未知字段会被拒绝；除类型校验外，还会验证时区、ID 唯一性、模型引用、URL 和预算关系。
+Plastic Wan 使用严格 JSONC 配置。Schema 位于 `src/config.ts`，未知字段会被拒绝；除类型校验外，还会验证时区、ID 唯一性、模型引用、URL 和预算关系。
 
 ## 加载语义
 
 - CLI 必须显式传入 `--config <path>`。
 - 配置在 `serve` 启动时读取一次，不支持热重载。
-- 配置哈希是原始 TOML 文本与所有 Prompt 文件内容的 SHA-256，写入 Invocation 并打印在 `serve_started` 日志中。
+- 配置哈希是原始 JSONC 文本与所有 Prompt 文件内容的 SHA-256，写入 Invocation 并打印在 `serve_started` 日志中。
 - 修改 allowlist、Bucket 窗口、Provider、Prompt、Sticker Set 或 MCP 后必须重启。
 - 相对 `data_dir`/`paths` 按服务当前工作目录解释；systemd 固定在 `/opt/plasticwan`。
 - Prompt 文件路径（`system_prompt_file`、`instructions_file`）相对于配置文件所在目录解释；修改文件内容同样会改变 `config_hash`。
@@ -15,22 +15,22 @@ Plastic Wan 使用严格 TOML 配置。Schema 位于 `src/config.ts`，未知字
 验证命令：
 
 ```bash
-bun run src/cli.ts check-config --config dev-data/config.toml
+bun run src/cli.ts check-config --config dev-data/config.jsonc
 ```
 
 ## SecretRef
 
 Telegram Token、Provider API key、MCP Header/环境变量都使用同一 SecretRef：
 
-```toml
-# 字面量：仅适合已 gitignore 且权限受限的本地文件
-token = "literal-secret"
-
-# 环境变量：推荐
-api_key = { env = "GOOGLE_API_KEY" }
-
-# 固定 argv 的外部命令
-api_key = { command = ["secret-tool", "lookup", "service", "plasticwan"] }
+```jsonc
+[
+  // 字面量：仅适合已 gitignore 且权限受限的本地文件
+  "literal-secret",
+  // 环境变量：推荐
+  { "env": "GOOGLE_API_KEY" },
+  // 固定 argv 的外部命令
+  { "command": ["secret-tool", "lookup", "service", "plasticwan"] },
+]
 ```
 
 command SecretRef：
@@ -61,18 +61,23 @@ command SecretRef：
 
 ## Telegram Chat 与 Topic
 
-```toml
-[telegram]
-token = { env = "TELEGRAM_BOT_TOKEN" }
-process_bot_messages = false
-bucket_window_seconds = 15
-
-[[telegram.chats]]
-id = -1001234567890
-instructions_file = "prompts/chat-1001234567890.md"
-timezone = "Asia/Shanghai"
-topic_ids = [100, 200]
-budget = { max_invocations_per_day = 100 }
+```jsonc
+{
+  "telegram": {
+    "token": { "env": "TELEGRAM_BOT_TOKEN" },
+    "process_bot_messages": false,
+    "bucket_window_seconds": 15,
+    "chats": [
+      {
+        "id": -1001234567890,
+        "instructions_file": "prompts/chat-1001234567890.md",
+        "timezone": "Asia/Shanghai",
+        "topic_ids": [100, 200],
+        "budget": { "max_invocations_per_day": 100 },
+      },
+    ],
+  },
+}
 ```
 
 规则：
@@ -89,10 +94,12 @@ budget = { max_invocations_per_day = 100 }
 
 ## Sticker Set
 
-```toml
-[[telegram.sticker_sets]]
-alias = "cats"
-name = "TelegramStickerSetName"
+```jsonc
+{
+  "telegram": {
+    "sticker_sets": [{ "alias": "cats", "name": "TelegramStickerSetName" }],
+  },
+}
 ```
 
 - `alias` 是模型搜索/发送使用的稳定名称。
@@ -104,34 +111,46 @@ name = "TelegramStickerSetName"
 
 内置 Provider 复用 Pi AI 的模型目录：
 
-```toml
-[providers.google]
-kind = "builtin"
-provider = "google"
-api_key = { env = "GOOGLE_API_KEY" }
-
-[agent]
-provider = "google"
-model = "gemini-3.7-flash"
+```jsonc
+{
+  "providers": {
+    "google": {
+      "kind": "builtin",
+      "provider": "google",
+      "api_key": { "env": "GOOGLE_API_KEY" },
+    },
+  },
+  "agent": {
+    "provider": "google",
+    "model": "gemini-3.7-flash",
+  },
+}
 ```
 
 自定义 Provider 必须显式声明 API 兼容层和模型元数据：
 
-```toml
-[providers.gateway]
-kind = "custom"
-base_url = "https://example.invalid/v1"
-api = "openai-responses"
-api_key = { env = "GATEWAY_API_KEY" }
-
-[[providers.gateway.models]]
-id = "model-id"
-reasoning = true
-compat = { supports_developer_role = false }
-input = ["text", "image"]
-context_window = 128000
-max_tokens = 8192
-cost = { input = 0, output = 0, cache_read = 0, cache_write = 0 }
+```jsonc
+{
+  "providers": {
+    "gateway": {
+      "kind": "custom",
+      "base_url": "https://example.invalid/v1",
+      "api": "openai-responses",
+      "api_key": { "env": "GATEWAY_API_KEY" },
+      "models": [
+        {
+          "id": "model-id",
+          "reasoning": true,
+          "compat": { "supports_developer_role": false },
+          "input": ["text", "image"],
+          "context_window": 128000,
+          "max_tokens": 8192,
+          "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 },
+        },
+      ],
+    },
+  },
+}
 ```
 
 可用 `api`：`openai-responses`、`openai-completions`、`anthropic-messages`。`agent` 模型必须支持 text；若同时支持 image，用户 Photo/图片 Document 直接作为多模态输入，否则保留为 `read_image` capability 并由独立 `vision` 模型按需解析。`vision` 模型必须支持 image，也负责 Sticker 的按需理解与后台索引；配置输出上限不能超过注册模型上限。
@@ -157,7 +176,7 @@ cost = { input = 0, output = 0, cache_read = 0, cache_write = 0 }
 
 Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用目标模型在 provider 中声明的 `max_tokens`。Provider 注册的模型必须满足 `max_tokens ≤ context_window`，且 agent 模型必须支持 text。
 
-运行时热切换：Admin Panel「Model」页面（`GET/PUT/DELETE /api/model`）可在已配置的 provider/模型之间切换 agent 模型。切换是内存态，立即对后续启动的 agent session（Invocation）生效，不影响进行中的会话；重启 `serve` 后恢复 `config.toml` 的默认值。`/status` 命令展示当前生效模型。
+运行时热切换：Admin Panel「Model」页面（`GET/PUT/DELETE /api/model`）可在已配置的 provider/模型之间切换 agent 模型。切换是内存态，立即对后续启动的 agent session（Invocation）生效，不影响进行中的会话；重启 `serve` 后恢复 `config.jsonc` 的默认值。`/status` 命令展示当前生效模型。
 
 `vision` 约束：
 
@@ -171,34 +190,44 @@ Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用
 
 支持两种 transport：
 
-```toml
-[[mcp.servers]]
-alias = "search"
-transport = "stdio"
-command = ["node", "server.js"]
-required = false
-tools = ["search"]
-payload_max_bytes = 32768
-result_max_bytes = 32768
-
-[mcp.servers.default_tool_policy]
-read_only = true
-timeout_seconds = 20
-per_chat_daily_calls = 20
-global_daily_calls = 200
+```jsonc
+{
+  "mcp": {
+    "servers": [
+      {
+        "alias": "search",
+        "transport": "stdio",
+        "command": ["node", "server.js"],
+        "required": false,
+        "tools": ["search"],
+        "payload_max_bytes": 32768,
+        "result_max_bytes": 32768,
+        "default_tool_policy": {
+          "read_only": true,
+          "timeout_seconds": 20,
+          "per_chat_daily_calls": 20,
+          "global_daily_calls": 200,
+        },
+      },
+    ],
+  },
+}
 ```
 
 Streamable HTTP 使用 `url` 与可选 SecretRef `headers`，且 `follow_redirects` 必须为 `false`。`url` 可以包含服务协议要求的查询参数，但禁止 URL userinfo 与 fragment；机密值应使用 SecretRef `headers`，不应写入查询参数。每个 Tool 使用显式策略或 `default_tool_policy`；没有策略的 Tool 不会暴露给模型。`required = true` 的 Server 启动失败会阻止 `serve`/`doctor` 成功。
 
 ## Admin Panel
 
-```toml
-[admin]
-enabled = true
-host = "127.0.0.1"
-port = 8787
-session_ttl_hours = 168
-static_dir = "/opt/plasticwan/apps/admin/dist"
+```jsonc
+{
+  "admin": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8787,
+    "session_ttl_hours": 168,
+    "static_dir": "/opt/plasticwan/apps/admin/dist",
+  },
+}
 ```
 
 - `enabled = false` 或省略整个 section 时 `serve` 不监听任何 HTTP 端口。

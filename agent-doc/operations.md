@@ -29,16 +29,16 @@ cd C:\Users\tcdw\Projects\plastic-wan
 bun install
 
 $env:GOOGLE_API_KEY = "<rotated-key>"
-bun run src/cli.ts check-config --config dev-data/config.toml
-bun run src/cli.ts doctor --config dev-data/config.toml
+bun run src/cli.ts check-config --config dev-data/config.jsonc
+bun run src/cli.ts doctor --config dev-data/config.jsonc
 ```
 
-`dev-data/config.toml`、数据库、媒体和备份已由 `.gitignore` 排除。不要把 Secret 复制到受版本控制的示例或文档。
+`dev-data/config.jsonc`、数据库、媒体和备份已由 `.gitignore` 排除。不要把 Secret 复制到受版本控制的示例或文档。
 
 ## 启动与停止
 
 ```powershell
-bun run src/cli.ts serve --config dev-data/config.toml
+bun run src/cli.ts serve --config dev-data/config.jsonc
 ```
 
 成功标志依次包含启动追赶完成与常规轮询启动：
@@ -64,9 +64,9 @@ bun run src/cli.ts serve --config dev-data/config.toml
 配置不热重载。变更后：
 
 ```powershell
-bun run src/cli.ts check-config --config dev-data/config.toml
+bun run src/cli.ts check-config --config dev-data/config.jsonc
 # 停止旧进程
-bun run src/cli.ts serve --config dev-data/config.toml
+bun run src/cli.ts serve --config dev-data/config.jsonc
 ```
 
 必须确认新 `serve_started.config_hash` 与 `check-config.config_hash` 一致。Chat 已写入文件但仍出现 `chat_not_allowed` 时，首先检查旧进程是否仍使用旧哈希。
@@ -74,13 +74,13 @@ bun run src/cli.ts serve --config dev-data/config.toml
 ## Doctor
 
 ```powershell
-bun run src/cli.ts doctor --config dev-data/config.toml
+bun run src/cli.ts doctor --config dev-data/config.jsonc
 ```
 
 如需查看配置中 Agent 系统 Prompt 的模板渲染结果：
 
 ```powershell
-bun run src/cli.ts doctor --config dev-data/config.toml --output-agent-prompt
+bun run src/cli.ts doctor --config dev-data/config.jsonc --output-agent-prompt
 ```
 
 该选项仍会执行完整 Doctor 检查；成功 JSON 中增加 `agent_prompt` 字段。输出包含 Prompt 正文，但不会包含 Secret、Chat 记忆或 Chat-specific instructions。不要在共享日志中使用该选项。
@@ -173,7 +173,7 @@ Doctor 会产生 `role = 'doctor'` 的模型调用审计并消耗少量 Provider
 手动：
 
 ```bash
-bun run src/cli.ts backup --config dev-data/config.toml
+bun run src/cli.ts backup --config dev-data/config.jsonc
 ```
 
 输出备份文件路径。备份前执行保留清理，完成后按 `backup_copies` 轮换。定期从复制出的数据库运行：
@@ -197,7 +197,7 @@ PRAGMA integrity_check;
 | 路径 | 用途 |
 | --- | --- |
 | `/opt/plasticwan` | 只读应用工作目录 |
-| `/etc/plasticwan/config.toml` | `0600` 配置 |
+| `/etc/plasticwan/config.jsonc` | `0600` 配置 |
 | `/var/lib/plasticwan` | SQLite、媒体和备份唯一写目录 |
 | `/usr/local/bin/bun` | Bun 可执行文件 |
 

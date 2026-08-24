@@ -10,7 +10,7 @@ import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from '../src/scheduler.ts
 import { createSendTool, type TelegramSendApi } from '../src/send-tool.ts';
 import { runStartupCatchUp, type StartupCatchUpApi } from '../src/startup-catch-up.ts';
 import { TelegramIngestion } from '../src/telegram-ingestion.ts';
-import { testConfigToml, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -56,15 +56,18 @@ async function setup(twoChats: boolean): Promise<{
 }> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-startup-catch-up-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
-  let toml = testConfigToml(directory).replace('history_messages = 20', 'history_messages = 10');
-  if (twoChats) {
-    toml = toml.replace(
-      '[providers.agent]',
-      `[[telegram.chats]]\nid = ${SECOND_CHAT_ID}\ninstructions_file = "chat-instructions.md"\nbudget = { max_invocations_per_day = 100 }\n\n[providers.agent]`,
-    );
-  }
-  await writeTestConfig(directory, configPath, toml);
+  const configPath = join(directory, 'config.jsonc');
+  const jsonc = testConfigJsonc(directory, (config) => {
+    config.agent.history_messages = 10;
+    if (twoChats) {
+      config.telegram.chats.push({
+        id: SECOND_CHAT_ID,
+        instructions_file: 'chat-instructions.md',
+        budget: { max_invocations_per_day: 100 },
+      });
+    }
+  });
+  await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   return {

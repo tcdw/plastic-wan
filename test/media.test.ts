@@ -38,7 +38,7 @@ test('builds an executable Lottie command for the host platform', () => {
 test('read_image normalizes once and reuses the 30-day description cache', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-media-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);

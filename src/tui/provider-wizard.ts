@@ -1,6 +1,6 @@
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { confirm, input, search, select } from '@inquirer/prompts';
-import type { SecretRef, TomlConfig } from '../config.ts';
+import type { FileConfig, SecretRef } from '../config.ts';
 import { SecretStore } from '../secrets.ts';
 import {
   fetchModelsDevCatalog,
@@ -64,7 +64,7 @@ type SearchChoice<Value> = {
   readonly description?: string;
 };
 
-export async function runProviderWizard(config: TomlConfig): Promise<TomlConfig> {
+export async function runProviderWizard(config: FileConfig): Promise<FileConfig> {
   let providers: Record<string, ProviderConfig> = { ...(config.providers as Record<string, ProviderConfig>) };
   let exit = false;
   while (!exit) {
@@ -110,7 +110,7 @@ export async function runProviderWizard(config: TomlConfig): Promise<TomlConfig>
         break;
     }
   }
-  return { ...config, providers: providers as TomlConfig['providers'] };
+  return { ...config, providers: providers as FileConfig['providers'] };
 }
 
 async function selectProviderAlias(providers: Record<string, ProviderConfig>): Promise<string | undefined> {

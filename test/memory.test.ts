@@ -11,7 +11,7 @@ import { purgeExpiredData, SqliteStore } from '../src/database.ts';
 import { AddMemoryInputSchema, createMemoryTools, DeleteMemoryInputSchema, MemoryStore } from '../src/memory.ts';
 import { BucketScheduler } from '../src/scheduler.ts';
 import { TelegramIngestion } from '../src/telegram-ingestion.ts';
-import { testConfigToml, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -29,16 +29,11 @@ interface Fixture {
   readonly invocationId: bigint;
 }
 
-async function fixture(extra = ''): Promise<Fixture> {
+async function fixture(): Promise<Fixture> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-memory-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
-  await writeTestConfig(
-    directory,
-    configPath,
-    `${testConfigToml(directory)}
-${extra}`,
-  );
+  const configPath = join(directory, 'config.jsonc');
+  await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
@@ -232,20 +227,22 @@ test('the system prompt injects active memories in creation order', async () => 
 test('admin panel manages memories with chat filter and long-TTL warnings', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-memory-admin-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   const staticDir = join(directory, 'bundle');
   await Bun.write(join(staticDir, 'index.html'), '<!doctype html><title>admin</title>');
   await writeTestConfig(
     directory,
     configPath,
-    `${testConfigToml(directory).replace('history_messages = 20', 'history_messages = 20\nmemory_ttl_warning_days = 2')}
-
-[admin]
-enabled = true
-host = "127.0.0.1"
-port = 8899
-session_ttl_hours = 12
-static_dir = ${JSON.stringify(staticDir.replaceAll('\\', '/'))}`,
+    testConfigJsonc(directory, (config) => {
+      config.agent.memory_ttl_warning_days = 2;
+      config.admin = {
+        enabled: true,
+        host: '127.0.0.1',
+        port: 8899,
+        session_ttl_hours: 12,
+        static_dir: staticDir.replaceAll('\\', '/'),
+      };
+    }),
   );
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);

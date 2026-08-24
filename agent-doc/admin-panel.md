@@ -6,14 +6,17 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 ## 配置
 
-```toml
-[admin]
-enabled = true
-host = "127.0.0.1"
-port = 8787
-session_ttl_hours = 168
-# 可选：默认 apps/admin/dist
-static_dir = "/opt/plasticwan/apps/admin/dist"
+```jsonc
+{
+  "admin": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8787,
+    "session_ttl_hours": 168,
+    // 可选：默认 apps/admin/dist
+    "static_dir": "/opt/plasticwan/apps/admin/dist",
+  },
+}
 ```
 
 | 字段 | 语义 |
@@ -78,9 +81,9 @@ static_dir = "/opt/plasticwan/apps/admin/dist"
 | `GET /admins` | Bot 管理员列表（Telegram 用户 ID、显示名、来源、添加时间） |
 | `POST /admins` | 指派 Bot 管理员：`{ "telegram_user_id": 42 }`；重复添加幂等 |
 | `DELETE /admins/:id` | 移除 Bot 管理员（`:id` 为 Telegram 用户 ID）；配置种子项会在重启后重新出现 |
-| `GET /model` | 当前生效 agent 模型、config.toml 默认值与全部可切换选项（text 能力模型） |
+| `GET /model` | 当前生效 agent 模型、config.jsonc 默认值与全部可切换选项（text 能力模型） |
 | `PUT /model` | 热切换 agent 模型：`{ "provider", "model" }`；未知 provider/model、无 text 能力返回 400（`unknown_provider`/`unknown_model`/`not_text_capable`） |
-| `DELETE /model` | 恢复 config.toml 默认 agent 模型 |
+| `DELETE /model` | 恢复 config.jsonc 默认 agent 模型 |
 | `POST /cancel-pending-sessions` | 取消所有 `collecting`/`queued` Bucket 及其 queued Invocation，并退回当日调用预算 |
 
 记忆列表项包含 `expired` 与 `long_ttl` 布尔标记：`long_ttl` 表示剩余寿命超过 `agent.memory_ttl_warning_days`（默认 30 天）。创建时若 `(chat_id, message_thread_id)` 对应的 Conversation 尚不存在会自动创建。

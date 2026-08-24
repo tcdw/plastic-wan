@@ -3,10 +3,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
-import { loadConfig } from '../src/config.ts';
+import { type FileConfig, loadConfig } from '../src/config.ts';
 import { SqliteStore } from '../src/database.ts';
 import { TelegramIngestion } from '../src/telegram-ingestion.ts';
-import { testConfigToml, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -20,12 +20,12 @@ afterEach(async () => {
 });
 
 async function setup(
-  transform: (toml: string) => string = (toml) => toml,
+  transform?: (config: FileConfig) => void,
 ): Promise<{ store: SqliteStore; ingestion: TelegramIngestion }> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-ingest-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
-  await writeTestConfig(directory, configPath, transform(testConfigToml(directory)));
+  const configPath = join(directory, 'config.jsonc');
+  await writeTestConfig(directory, configPath, testConfigJsonc(directory, transform));
   const { config } = await loadConfig(configPath);
   const store = await SqliteStore.open(config);
   return { store, ingestion: new TelegramIngestion(store, config, { id: 999 }) };
@@ -59,9 +59,9 @@ describe('Telegram ingestion', () => {
   });
 
   test('uses the configured window and preserves the first deadline', async () => {
-    const { store, ingestion } = await setup((toml) =>
-      toml.replace('bucket_window_seconds = 15', 'bucket_window_seconds = 6'),
-    );
+    const { store, ingestion } = await setup((config) => {
+      config.telegram.bucket_window_seconds = 6;
+    });
     const firstTime = new Date('2026-08-15T00:00:00.000Z');
     const first = ingestion.ingest(textUpdate(1, 10, 'first'), firstTime);
     const duplicate = ingestion.ingest(textUpdate(1, 10, 'first'), firstTime);
@@ -164,13 +164,13 @@ describe('Telegram ingestion', () => {
   });
 
   test('isolates allowed forum topics and rejects unconfigured topics', async () => {
-    const { store, ingestion } = await setup((toml) =>
-      toml.replace(
-        'instructions_file = "chat-instructions.md"',
-        `topic_ids = [100, 200]
-instructions_file = "chat-instructions.md"`,
-      ),
-    );
+    const { store, ingestion } = await setup((config) => {
+      const chat = config.telegram.chats[0];
+      if (chat === undefined) {
+        throw new Error('Expected chat fixture');
+      }
+      chat.topic_ids = [100, 200];
+    });
     const topicUpdate = (updateId: number, messageId: number, threadId: number): Update => ({
       update_id: updateId,
       message: {

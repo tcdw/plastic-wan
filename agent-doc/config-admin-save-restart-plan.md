@@ -17,7 +17,7 @@ Plastic Wan 不实现运行时热加载。Admin Panel 保存配置后，服务�
 
 ### 非目标
 
-- 不监听 `config.toml` 或 Prompt 文件变化。
+- 不监听 `config.jsonc` 或 Prompt 文件变化。
 - 不在进程内替换 Provider、MCP、Sticker worker 或 AgentRuntime。
 - 不自动回滚失败配置。
 - 不自动重试失败启动。
@@ -39,7 +39,7 @@ Plastic Wan 不实现运行时热加载。Admin Panel 保存配置后，服务�
 
 ### 编辑协议
 
-使用受限 JSON patch DTO，不接受任意 TOML 文本、任意 JSON Pointer 或完整配置对象。服务端从当前已加载配置构造候选配置，再执行完整 Schema、语义、Prompt 引用和权限校验。
+使用受限 JSON patch DTO，不接受任意 JSONC 文本、任意 JSON Pointer 或完整配置对象。服务端从当前已加载配置构造候选配置，再执行完整 Schema、语义、Prompt 引用和权限校验。
 
 第一版允许修改的内容属于运行策略：
 
@@ -96,7 +96,7 @@ HTTP 状态为 `202 Accepted`。响应只承诺候选配置已通过校验、已
 data_dir/
 └── config-backup/
     ├── manifest.json
-    ├── config.toml
+    ├── config.jsonc
     └── prompts/
         └── ...
 ```
@@ -107,7 +107,7 @@ data_dir/
 
 1. 保存 API 提交前，先把当前已成功运行的配置输入集合备份到临时目录。
 2. 临时目录完成后原子替换 `config-backup`；备份失败则不改正式配置。
-3. 候选 `config.toml` 与涉及的 Prompt 文件使用临时文件 + 原子 rename 写入。
+3. 候选 `config.jsonc` 与涉及的 Prompt 文件使用临时文件 + 原子 rename 写入。
 4. 新进程在 grammY `bot.start({ onStart })` 回调边界确认已进入 polling 后，把当前配置输入集合更新为新的 `last-known-good`。
 5. 若新配置启动失败，正式配置文件保留失败候选；上一份成功备份不覆盖、不删除。
 6. 不自动恢复、不自动 exec 重试。管理员修复文件或执行显式恢复命令后再启动。
@@ -119,7 +119,7 @@ data_dir/
 提供显式 CLI 恢复命令，例如：
 
 ```powershell
-bun run src/cli.ts restore-config --config dev-data/config.toml
+bun run src/cli.ts restore-config --config dev-data/config.jsonc
 ```
 
 恢复命令要求服务已停止，先校验备份 bundle，再将上一份成功配置恢复到正式配置输入位置；恢复后由管理员正常启动服务。命令不得自动启动第二个 serve 实例。
@@ -153,7 +153,7 @@ Admin API 可提供配置变更列表，但只返回管理员、时间、hash、
 
 ### 阶段 A：配置输入与备份
 
-1. 抽出“读取当前 TOML + Prompt 输入集合”的可复用函数。
+1. 抽出“读取当前 JSONC + Prompt 输入集合”的可复用函数。
 2. 实现显式 patch DTO、字段白名单、集合操作和敏感值拒绝。
 3. 实现候选配置生成和完整 `loadConfig` 校验。
 4. 实现配置 bundle 的临时写入、原子替换和上一份成功配置备份。
@@ -162,7 +162,7 @@ Admin API 可提供配置变更列表，但只返回管理员、时间、hash、
 ### 阶段 B：审计与 Admin API
 
 1. 添加 `config_changes` migration、查询类型和清理策略。
-2. 在 AdminServer 中增加已认证 `PATCH /api/config`（最终路径可沿用仓库路由命名约定，但不能开放未认证或任意 TOML 上传）。
+2. 在 AdminServer 中增加已认证 `PATCH /api/config`（最终路径可沿用仓库路由命名约定，但不能开放未认证或任意 JSONC 上传）。
 3. 在进程内加入单次保存锁、`base_config_hash` CAS 和 draining 状态。
 4. 增加稳定的 400/409/500 错误码及 `202 restart_scheduled` 响应。
 5. 前端增加配置表单、当前 hash、冲突刷新、校验错误、重启中和服务恢复提示。
@@ -195,7 +195,7 @@ Admin API 可提供配置变更列表，但只返回管理员、时间、hash、
 - 缺少或错误 `base_config_hash` 返回 409，旧 patch 不会被合并。
 - 任意未白名单字段、SecretRef、Token、路径、Admin 监听字段和任意文件路径均被拒绝。
 - 两个并发保存只有一个成功；另一个返回 `409 restart_in_progress` 或 `409 config_changed`，不发生双重 exec。
-- TOML、Prompt 引用、时区、Chat/Topic、Provider/Model、MCP 和预算语义校验失败时正式配置不改变。
+- JSONC、Prompt 引用、时区、Chat/Topic、Provider/Model、MCP 和预算语义校验失败时正式配置不改变。
 
 ### 文件、审计与恢复
 

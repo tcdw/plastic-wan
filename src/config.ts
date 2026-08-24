@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { parse as parseToml } from 'smol-toml';
 import { dirname, resolve } from 'node:path';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
@@ -208,12 +207,12 @@ export const ConfigSchema = Type.Object(
 );
 
 export type SecretRef = Static<typeof SecretRefSchema>;
-export type TomlConfig = Static<typeof ConfigSchema>;
-export type TomlChat = TomlConfig['telegram']['chats'][number];
-export type RawConfig = Omit<TomlConfig, 'agent' | 'telegram'> & {
-  agent: Omit<TomlConfig['agent'], 'system_prompt_file'> & { system_prompt: string };
-  telegram: Omit<TomlConfig['telegram'], 'chats'> & {
-    chats: Array<Omit<TomlChat, 'instructions_file'> & { instructions: string }>;
+export type FileConfig = Static<typeof ConfigSchema>;
+export type FileChat = FileConfig['telegram']['chats'][number];
+export type RawConfig = Omit<FileConfig, 'agent' | 'telegram'> & {
+  agent: Omit<FileConfig['agent'], 'system_prompt_file'> & { system_prompt: string };
+  telegram: Omit<FileConfig['telegram'], 'chats'> & {
+    chats: Array<Omit<FileChat, 'instructions_file'> & { instructions: string }>;
   };
 };
 export type ProviderConfig = RawConfig['providers'][string];
@@ -221,7 +220,7 @@ export type McpServerConfig = NonNullable<RawConfig['mcp']>['servers'][number];
 
 export interface LoadedConfig {
   readonly config: RawConfig;
-  readonly toml: TomlConfig;
+  readonly fileConfig: FileConfig;
   readonly configPath: string;
   readonly hash: string;
 }
@@ -233,9 +232,9 @@ export async function loadConfig(path: string): Promise<LoadedConfig> {
   const text = await readFile(configPath, 'utf8');
   let parsed: unknown;
   try {
-    parsed = parseToml(text);
+    parsed = Bun.JSONC.parse(text);
   } catch (error) {
-    throw new Error(`Invalid TOML: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Invalid JSONC: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!validator.Check(parsed)) {
     const details = validator
@@ -252,7 +251,7 @@ export async function loadConfig(path: string): Promise<LoadedConfig> {
   for (const file of promptFiles) {
     hash.update(`\u0000${file.content}`);
   }
-  return { config, toml: parsed, configPath, hash: hash.digest('hex') };
+  return { config, fileConfig: parsed, configPath, hash: hash.digest('hex') };
 }
 
 interface PromptFile {
@@ -260,21 +259,21 @@ interface PromptFile {
 }
 
 async function resolvePrompts(
-  toml: TomlConfig,
+  fileConfig: FileConfig,
   directory: string,
 ): Promise<{ config: RawConfig; promptFiles: PromptFile[] }> {
   const promptFiles: PromptFile[] = [];
   const systemPrompt = await readPromptFile(
-    resolve(directory, toml.agent.system_prompt_file),
+    resolve(directory, fileConfig.agent.system_prompt_file),
     'agent.system_prompt_file',
     promptFiles,
   );
   if (systemPrompt.length === 0) {
-    throw new Error(`agent.system_prompt_file is empty: ${toml.agent.system_prompt_file}`);
+    throw new Error(`agent.system_prompt_file is empty: ${fileConfig.agent.system_prompt_file}`);
   }
   validatePromptTemplate(systemPrompt, 'agent.system_prompt_file');
-  const chats: Array<Omit<TomlChat, 'instructions_file'> & { instructions: string }> = [];
-  for (const chat of toml.telegram.chats) {
+  const chats: Array<Omit<FileChat, 'instructions_file'> & { instructions: string }> = [];
+  for (const chat of fileConfig.telegram.chats) {
     const instructions =
       chat.instructions_file === undefined
         ? ''
@@ -287,13 +286,13 @@ async function resolvePrompts(
     const { instructions_file, ...rest } = chat;
     chats.push({ ...rest, instructions });
   }
-  const { system_prompt_file, ...agent } = toml.agent;
+  const { system_prompt_file, ...agent } = fileConfig.agent;
   return {
     promptFiles,
     config: {
-      ...toml,
+      ...fileConfig,
       agent: { ...agent, system_prompt: systemPrompt },
-      telegram: { ...toml.telegram, chats },
+      telegram: { ...fileConfig.telegram, chats },
     },
   };
 }
@@ -323,7 +322,7 @@ export async function assertConfigPermissions(configPath: string): Promise<void>
   }
 }
 
-function validateSemantics(config: TomlConfig): void {
+function validateSemantics(config: FileConfig): void {
   validateTimezone(config.timezone, 'timezone');
   const chatIds = new Set<number>();
   for (const chat of config.telegram.chats) {
@@ -398,7 +397,7 @@ function validateSemantics(config: TomlConfig): void {
 }
 
 function validateModelReference(
-  config: TomlConfig,
+  config: FileConfig,
   providerAlias: string,
   modelId: string,
   role: string,

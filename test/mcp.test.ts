@@ -13,7 +13,7 @@ import { McpManager } from '../src/mcp.ts';
 import { BucketScheduler } from '../src/scheduler.ts';
 import { SecretStore } from '../src/secrets.ts';
 import { TelegramIngestion } from '../src/telegram-ingestion.ts';
-import { testConfigToml, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -27,27 +27,33 @@ afterAll(async () => {
 test('stdio MCP discovery, result bounds, audit, and dual budget reservation', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-mcp-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   const fixturePath = join(import.meta.dir, 'fixtures', 'mcp-server.ts');
-  const mcpToml = `
-[mcp]
-[[mcp.servers]]
-alias = "local"
-transport = "stdio"
-command = [${JSON.stringify(process.execPath)}, "run", ${JSON.stringify(fixturePath)}]
-required = true
-tools = ["echo"]
-payload_max_bytes = 1048576
-result_max_bytes = 128
-
-[[mcp.servers.tool_policies]]
-name = "echo"
-read_only = true
-timeout_seconds = 5
-per_chat_daily_calls = 1
-global_daily_calls = 2
-`;
-  await writeTestConfig(directory, configPath, `${testConfigToml(directory)}${mcpToml}`);
+  const jsonc = testConfigJsonc(directory, (config) => {
+    config.mcp = {
+      servers: [
+        {
+          alias: 'local',
+          transport: 'stdio',
+          command: [process.execPath, 'run', fixturePath],
+          required: true,
+          tools: ['echo'],
+          payload_max_bytes: 1048576,
+          result_max_bytes: 128,
+          tool_policies: [
+            {
+              name: 'echo',
+              read_only: true,
+              timeout_seconds: 5,
+              per_chat_daily_calls: 1,
+              global_daily_calls: 2,
+            },
+          ],
+        },
+      ],
+    };
+  });
+  await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   const manager = new McpManager(store, loaded.config, new SecretStore());
@@ -125,7 +131,7 @@ global_daily_calls = 2
 test('Streamable HTTP MCP preserves query parameters and static headers while rejecting redirects', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-mcp-http-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   const server = new McpServer({ name: 'plasticwan-http-test', version: '1.0.0' });
   server.registerTool(
     'lookup',
@@ -154,27 +160,33 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
       return transport.handleRequest(request);
     },
   });
-  const mcpToml = `
-[mcp]
-[[mcp.servers]]
-alias = "web"
-transport = "streamable_http"
-url = ${JSON.stringify(`http://127.0.0.1:${http.port}/mcp?api_key=public-key`)}
-follow_redirects = false
-required = true
-tools = ["lookup"]
-payload_max_bytes = 1048576
-result_max_bytes = 32768
-headers = { Authorization = "Bearer static-secret" }
-
-[[mcp.servers.tool_policies]]
-name = "lookup"
-read_only = true
-timeout_seconds = 5
-per_chat_daily_calls = 2
-global_daily_calls = 2
-`;
-  await writeTestConfig(directory, configPath, `${testConfigToml(directory)}${mcpToml}`);
+  const jsonc = testConfigJsonc(directory, (config) => {
+    config.mcp = {
+      servers: [
+        {
+          alias: 'web',
+          transport: 'streamable_http',
+          url: `http://127.0.0.1:${http.port}/mcp?api_key=public-key`,
+          follow_redirects: false,
+          required: true,
+          tools: ['lookup'],
+          payload_max_bytes: 1048576,
+          result_max_bytes: 32768,
+          headers: { Authorization: 'Bearer static-secret' },
+          tool_policies: [
+            {
+              name: 'lookup',
+              read_only: true,
+              timeout_seconds: 5,
+              per_chat_daily_calls: 2,
+              global_daily_calls: 2,
+            },
+          ],
+        },
+      ],
+    };
+  });
+  await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   const manager = new McpManager(store, loaded.config, new SecretStore());
@@ -221,17 +233,40 @@ global_daily_calls = 2
     store.close();
   }
 
-  const redirectConfigPath = join(directory, 'redirect.toml');
+  const redirectConfigPath = join(directory, 'redirect.jsonc');
   const redirect = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
     fetch: () => Response.redirect('http://127.0.0.1/', 302),
   });
   try {
-    const redirectToml = mcpToml
-      .replace(`http://127.0.0.1:${http.port}/mcp`, `http://127.0.0.1:${redirect.port}/mcp`)
-      .replace('headers = { Authorization = "Bearer static-secret" }', 'headers = {}');
-    await Bun.write(redirectConfigPath, `${testConfigToml(directory)}${redirectToml}`);
+    const redirectJsonc = testConfigJsonc(directory, (config) => {
+      config.mcp = {
+        servers: [
+          {
+            alias: 'web',
+            transport: 'streamable_http',
+            url: `http://127.0.0.1:${redirect.port}/mcp?api_key=public-key`,
+            follow_redirects: false,
+            required: true,
+            tools: ['lookup'],
+            payload_max_bytes: 1048576,
+            result_max_bytes: 32768,
+            headers: {},
+            tool_policies: [
+              {
+                name: 'lookup',
+                read_only: true,
+                timeout_seconds: 5,
+                per_chat_daily_calls: 2,
+                global_daily_calls: 2,
+              },
+            ],
+          },
+        ],
+      };
+    });
+    await Bun.write(redirectConfigPath, redirectJsonc);
     const redirectLoaded = await loadConfig(redirectConfigPath);
     const redirectStore = await SqliteStore.open({
       ...redirectLoaded.config,

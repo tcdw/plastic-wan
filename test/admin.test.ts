@@ -12,7 +12,7 @@ import { BucketScheduler } from '../src/scheduler.ts';
 import { SecretStore } from '../src/secrets.ts';
 import { enterSleep } from '../src/sleep.ts';
 import { TelegramIngestion } from '../src/telegram-ingestion.ts';
-import { testConfigToml, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const PASSWORD = 'correct-horse-battery';
 const directories: string[] = [];
@@ -31,24 +31,25 @@ interface Fixture {
   readonly directory: string;
 }
 
-async function fixture(extra = ''): Promise<Fixture> {
+async function fixture(): Promise<Fixture> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-admin-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   const staticDir = join(directory, 'bundle');
   await Bun.write(join(staticDir, 'index.html'), '<!doctype html><title>admin</title>');
   await Bun.write(join(staticDir, 'static', 'app.js'), "console.log('admin');");
   await writeTestConfig(
     directory,
     configPath,
-    `${testConfigToml(directory)}
-[admin]
-enabled = true
-host = "127.0.0.1"
-port = 8899
-session_ttl_hours = 12
-static_dir = ${JSON.stringify(staticDir.replaceAll('\\', '/'))}
-${extra}`,
+    testConfigJsonc(directory, (config) => {
+      config.admin = {
+        enabled: true,
+        host: '127.0.0.1',
+        port: 8899,
+        session_ttl_hours: 12,
+        static_dir: staticDir.replaceAll('\\', '/'),
+      };
+    }),
   );
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
@@ -436,7 +437,7 @@ test('admin static serving falls back to index.html and refuses traversal', asyn
     const script = await server.handle(request('/static/app.js'));
     expect(script.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
 
-    const traversal = await server.handle(request('/../../config.toml'));
+    const traversal = await server.handle(request('/../../config.jsonc'));
     expect(traversal.status).toBe(200);
     expect(await traversal.text()).not.toContain('telegram-secret');
   } finally {
@@ -447,16 +448,17 @@ test('admin static serving falls back to index.html and refuses traversal', asyn
 test('admin config rejects a non-loopback bind host', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-admin-host-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   await Bun.write(
     configPath,
-    `${testConfigToml(directory)}
-[admin]
-enabled = true
-host = "0.0.0.0"
-port = 8899
-session_ttl_hours = 12
-`,
+    testConfigJsonc(directory, (config) => {
+      config.admin = {
+        enabled: true,
+        host: '0.0.0.0',
+        port: 8899,
+        session_ttl_hours: 12,
+      };
+    }),
   );
   await expect(loadConfig(configPath)).rejects.toThrow('admin.host must be a loopback address');
 });

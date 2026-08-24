@@ -22,7 +22,7 @@ afterAll(async () => {
 test('retention scrubs referenced history and backup keeps seven consistent copies', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-operations-'));
   directories.push(directory);
-  const configPath = join(directory, 'config.toml');
+  const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);

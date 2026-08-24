@@ -54,7 +54,7 @@
 5. Snapshot 携带 `message_thread_id`。回复可见消息时，`send` 路由到该消息所属 Topic；不带 Reply 时路由到最新消息所属 Topic。
 6. 排空完成并原子清除启动状态后，才切换到常规按 Conversation 收集。
 
-当前 `dev-data/config.toml` 的 `agent.history_messages = 20`，因此每个群的启动追赶任务最多包含 20 条消息。
+当前 `dev-data/config.jsonc` 的 `agent.history_messages = 20`，因此每个群的启动追赶任务最多包含 20 条消息。
 
 ## 会话节拍与 Bucket
 
@@ -195,7 +195,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 `/pause` 与 `/resume` 仅对 Bot 管理员开放（`bot_admins` 表，见下文）；`/status` 对任何成员开放。非管理员或匿名身份执行会收到拒绝回复，不产生任何状态变更。管理员执行命令时其显示名会刷新到 `bot_admins`。
 
-`/model` 同样仅限管理员，用于运行时切换 agent 模型（与 Admin Panel「Model」页共享同一 `AgentModelSwitcher`）：`/model` 按每页 20 条列出当前模型与第一页可切换序号；`/model page 页码` 翻页，所有页面保留全局序号；`/model 纯数字序号` 直接切换对应模型（立即对后续 Invocation 生效）；`/model reset` 恢复 config.toml 默认。越界页码或无效参数返回提示且不改状态。
+`/model` 同样仅限管理员，用于运行时切换 agent 模型（与 Admin Panel「Model」页共享同一 `AgentModelSwitcher`）：`/model` 按每页 20 条列出当前模型与第一页可切换序号；`/model page 页码` 翻页，所有页面保留全局序号；`/model 纯数字序号` 直接切换对应模型（立即对后续 Invocation 生效）；`/model reset` 恢复 config.jsonc 默认。越界页码或无效参数返回提示且不改状态。
 
 `/pause` 立即生效（与 scheduler 同一事件循环，无竞态）：
 
@@ -211,7 +211,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 `bot_admins`（迁移 `008_bot_admins.sql`）保存可执行 `/pause`、`/resume` 的 Telegram 用户 ID，Bot 全局共享：
 
-- 启动时 `telegram.admins`（TOML 数组）以 `ON CONFLICT DO NOTHING` 播种，保证运营者始终保有控制权；面板新增的条目不会被种子移除。
+- 启动时 `telegram.admins`（JSONC 数组）以 `ON CONFLICT DO NOTHING` 播种，保证运营者始终保有控制权；面板新增的条目不会被种子移除。
 - Admin Panel「Bot admins」页面（`GET/POST /api/admins`、`DELETE /api/admins/:id`）是运行时管理入口。
 - 权限判定在 `BotCommandService`：命令发送者的 `message.from.id` 命中 `bot_admins` 才放行；`sender_chat` 匿名身份一律拒绝。
 

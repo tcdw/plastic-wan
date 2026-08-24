@@ -24,9 +24,9 @@
 
 - Telegram Chat 归一化到 `chats`。
 - Supergroup 迁移通过 `chat_migrations` 把旧 ID 指向 canonical Chat。
-- Conversation 由 Chat 与 `message_thread_id` 组成。
-- 非 Forum/普通消息使用 thread ID `0`。
-- 常规消息处理中，不同 Forum Topic 的 Bucket、Context、Reply 和预算相互隔离；启动追赶是显式的 Chat 级例外。
+- Conversation 由 Chat 与真正的 Forum Topic 组成。仅当 Supergroup 的 `chat.is_forum = true` 且消息的 `is_topic_message = true` 时，才使用 `message_thread_id` 隔离 Conversation。
+- 私聊、普通群消息及非 Forum Supergroup 的普通回复线程统一使用 thread ID `0`；Telegram 在普通回复中提供的 `message_thread_id` 不作为 Topic。
+- 不同 Forum Topic 的 Bucket、Context、Reply 和预算相互隔离；启动追赶是显式的 Chat 级例外。
 
 ## Message Revision
 

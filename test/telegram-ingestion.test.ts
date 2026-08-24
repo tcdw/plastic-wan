@@ -125,6 +125,44 @@ describe('Telegram ingestion', () => {
     expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(0n);
     store.close();
   });
+  test('keeps ordinary supergroup reply threads in the main conversation', async () => {
+    const { store, ingestion } = await setup();
+    const chat = { id: 123456789, type: 'supergroup' as const, title: 'Group' };
+    const sender = { id: 42, is_bot: false, first_name: 'Alice' };
+    const rootMessage = {
+      message_id: 10,
+      date: 1_700_000_000,
+      chat,
+      from: sender,
+      text: 'root',
+    };
+    const first = ingestion.ingest({ update_id: 1, message: rootMessage });
+    const second = ingestion.ingest({
+      update_id: 2,
+      message: {
+        message_id: 11,
+        message_thread_id: 10,
+        date: 1_700_000_001,
+        chat,
+        from: sender,
+        text: 'reply',
+      },
+    });
+    expect(second.bucketId).toBe(first.bucketId);
+    expect(
+      store.db
+        .query<{ conversations: bigint; thread_id: bigint; messages: bigint }, []>(
+          `SELECT COUNT(DISTINCT v.id) AS conversations, MAX(v.message_thread_id) AS thread_id,
+                  COUNT(bm.message_id) AS messages
+           FROM conversations v
+           JOIN buckets b ON b.conversation_id = v.id
+           JOIN bucket_messages bm ON bm.bucket_id = b.id`,
+        )
+        .get(),
+    ).toEqual({ conversations: 1n, thread_id: 0n, messages: 2n });
+    store.close();
+  });
+
   test('isolates allowed forum topics and rejects unconfigured topics', async () => {
     const { store, ingestion } = await setup((toml) =>
       toml.replace(

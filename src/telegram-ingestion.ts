@@ -80,7 +80,13 @@ export class TelegramIngestion {
     const membership = update.my_chat_member;
     const chat = message?.chat ?? membership?.chat;
     const chatId = chat === undefined ? undefined : BigInt(chat.id);
-    const threadId = message?.message_thread_id === undefined ? 0n : BigInt(message.message_thread_id);
+    const threadId =
+      message?.chat.type === 'supergroup' &&
+      message.chat.is_forum === true &&
+      message.is_topic_message === true &&
+      message.message_thread_id !== undefined
+        ? BigInt(message.message_thread_id)
+        : 0n;
     const topics = chatId === undefined ? null : this.#topicsFor(chatId);
     const topicAllowed = topics !== null && (topics === undefined || topics.has(threadId));
     const allowed = chat !== undefined && chat.type !== 'channel' && topicAllowed;

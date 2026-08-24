@@ -61,7 +61,7 @@ async function setup(twoChats: boolean): Promise<{
   if (twoChats) {
     toml = toml.replace(
       '[providers.agent]',
-      `[[telegram.chats]]\nid = ${SECOND_CHAT_ID}\ninstructions_file = "chat-instructions.md"\nbudget = { max_invocations_per_day = 100, max_tokens_per_day = 300000 }\n\n[providers.agent]`,
+      `[[telegram.chats]]\nid = ${SECOND_CHAT_ID}\ninstructions_file = "chat-instructions.md"\nbudget = { max_invocations_per_day = 100 }\n\n[providers.agent]`,
     );
   }
   await writeTestConfig(directory, configPath, toml);

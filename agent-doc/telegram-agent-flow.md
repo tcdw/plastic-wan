@@ -108,7 +108,7 @@ Context
   → completed / failed / aborted / outcome_unknown
 ```
 
-限制来自配置：最大轮次、Tool Call 数、发送数、输出 Token、Invocation 超时和全局并发。模型调用与 Tool Call 分别写入审计。`add_memory`/`delete_memory` 是持久化副作用，按 Conversation 隔离并计入 `tool_calls` 审计；`send` 仍是唯一 Telegram 输出边界。
+限制来自配置：全局每日 Token 预算、最大轮次、Tool Call 数、发送数、输出 Token、Invocation 超时和全局并发。模型调用与 Tool Call 分别写入审计。`add_memory`/`delete_memory` 是持久化副作用，按 Conversation 隔离并计入 `tool_calls` 审计；`send` 仍是唯一 Telegram 输出边界。
 
 每次模型请求都会附带完整的工具注册表（名称、label、描述与参数 Schema）。请求发出前把该请求实际附带的工具名写入 `model_calls.tools_json`，Invocation 的可用注册表快照（`name`/`label`/`description`）写入 `invocations.tool_registry_json`——因此可以审计“模型在某一轮到底看到了哪些工具”。context 接近上限时，Agent 循环只保留 `send` 和已经可用的 `zzz` 继续收尾。
 
@@ -116,7 +116,7 @@ Context
 
 ## 睡眠
 
-每个 Chat 的当日 `model_tokens` 剩余比例严格低于 5% 时，当前 Agent 才会看到 `zzz`；恰好 5% 不可见。运行中的会话越过阈值后，在下一次 model turn 边界更新工具注册表，不为此额外创建会话。
+全局当日 `model_tokens` 剩余比例严格低于 5% 时，当前 Agent 才会看到 `zzz`；恰好 5% 不可见。全局用量是所有 Chat 的主 Agent 与聊天触发 `read_image` 用量之和，同时保留各 Chat 的归属统计。运行中的会话越过阈值后，在下一次 model turn 边界更新工具注册表，不为此额外创建会话。
 
 `zzz` 把全局 `bot_sleep_until` 写入 `app_state`，取 `max(调用时间 + 8 小时, 下一次 UTC 日预算重置)`。写入使用 SQLite IMMEDIATE transaction，重复或并发调用保持同一状态。调用后当前会话停止下一轮模型请求，后续实际 Tool Call 被阻止。
 
@@ -205,7 +205,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 暂停期间消息仍入库并保留 Revision，但不创建 Bucket、不启动会话；`processDue` 与启动追赶也会跳过暂停 Chat（追赶 Bucket 记 `skipped_budget`/`chat_paused`）。`/resume` 删除 `chat_pause` 行，恢复正常节拍。
 
-`/status` 返回当前生效的 `agent.provider` / `agent.model`（含 Admin Panel 热切换后的运行时模型）、`agent.thinking_level` 与本日（UTC 日期，与 `daily_usage`/预算口径一致）该 Chat 的 `model_tokens` 用量及 `budget.max_tokens_per_day` 上限，并按 Model Call 审计拆分显示 `read`、`write`、`cache read`、`cache write` token；暂停中额外显示一行。
+`/status` 返回当前生效的 `agent.provider` / `agent.model`（含 Admin Panel 热切换后的运行时模型）、`agent.thinking_level`、本 Chat 的当日 `model_tokens` 用量，以及全局当日用量与 `agent.daily_budget.max_tokens` 上限；并按该 Chat 的 Model Call 审计拆分显示 `read`、`write`、`cache read`、`cache write` token。日期口径均为 UTC；暂停中额外显示一行。
 
 ## Bot 管理员列表
 

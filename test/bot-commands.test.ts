@@ -266,6 +266,11 @@ describe('bot command service', () => {
         "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', 1234, ?)",
       )
       .run(FIXED_NOW.toISOString().slice(0, 10), '123456789', FIXED_NOW.toISOString());
+    store.db
+      .query(
+        "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', 66, ?)",
+      )
+      .run(FIXED_NOW.toISOString().slice(0, 10), '987654321', FIXED_NOW.toISOString());
     const [invocationId] = scheduler.processDue(new Date(FIXED_NOW.getTime() + 15_000));
     if (invocationId === undefined) {
       throw new Error('Expected queued invocation');
@@ -279,7 +284,7 @@ describe('bot command service', () => {
     expect(status).toContain('agent / agent-model');
     expect(status).toContain('思考强度: low');
     expect(status).toContain(
-      '今日 token 用量: 1234 / 300000\n读取: 500\n写入: 200\n缓存读取: 400\n缓存写入: 134',
+      '本群今日 token 用量: 1234\n全局今日 token 用量: 1300 / 300000\n读取: 500\n写入: 200\n缓存读取: 400\n缓存写入: 134',
     );
     expect(status).not.toContain('已暂停');
     commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
@@ -421,7 +426,7 @@ cost = { input = 1, output = 2, cache_read = 0.1, cache_write = 1 }`,
     });
   });
 
-  test('status ignores token usage from other days and other chats', async () => {
+  test('status isolates per-chat usage and includes other chats in the global total', async () => {
     const { store, commands } = await setup();
     store.db
       .query(
@@ -433,7 +438,9 @@ cost = { input = 1, output = 2, cache_read = 0.1, cache_write = 1 }`,
         "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', 888, ?)",
       )
       .run(FIXED_NOW.toISOString().slice(0, 10), '987654321', FIXED_NOW.toISOString());
-    expect(commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain('0 / 300000');
+    expect(commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain(
+      '本群今日 token 用量: 0\n全局今日 token 用量: 888 / 300000',
+    );
     store.close();
   });
 

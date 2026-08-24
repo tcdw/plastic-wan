@@ -14,7 +14,7 @@ bucket_window_seconds = 15
 [[telegram.chats]]
 id = 123456789
 instructions_file = "chat-instructions.md"
-budget = { max_invocations_per_day = 100, max_tokens_per_day = 300000 }
+budget = { max_invocations_per_day = 100 }
 
 [providers.agent]
 kind = "custom"
@@ -50,6 +50,7 @@ cost = { input = 1, output = 2, cache_read = 0.1, cache_write = 1 }
 [agent]
 provider = "agent"
 model = "agent-model"
+daily_budget = { max_tokens = 300000 }
 thinking_level = "low"
 system_prompt_file = "agent-system-prompt.md"
 max_turns = 8

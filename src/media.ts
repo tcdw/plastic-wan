@@ -12,6 +12,7 @@ import type { DirectImage, InvocationContext } from './context-builder.ts';
 import { finishToolCall, rejectToolCall, startToolCall, type SqliteStore } from './database.ts';
 import type { ModelRegistry } from './providers.ts';
 import type { SecretStore } from './secrets.ts';
+import { isDailyTokenBudgetReached, readDailyTokenBudget } from './sleep.ts';
 import { pickEnv, readBoundedOutput } from './subprocess.ts';
 
 const ReadImageSchema = Type.Object({ image_ref: Type.String({ minLength: 1 }) }, { additionalProperties: false });
@@ -390,8 +391,11 @@ export class MediaService {
     if (media.file_size !== null && media.file_size > BigInt(MAX_DOWNLOAD_BYTES)) {
       throw new Error('Telegram media exceeds 20 MB');
     }
-    if (scope.kind === 'chat' && this.#chatTokenBudgetReached(scope.chatId)) {
-      throw new Error('Chat token budget reached');
+    if (
+      scope.kind === 'chat' &&
+      isDailyTokenBudgetReached(readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens))
+    ) {
+      throw new Error('Daily token budget reached');
     }
     await mkdir(this.#config.paths.media_cache, { recursive: true, mode: 0o700 });
     const temporaryDirectory = await mkdtemp(join(this.#config.paths.media_cache, 'analysis-'));
@@ -596,29 +600,6 @@ export class MediaService {
     this.#store.db
       .query("UPDATE model_calls SET state = 'error', error_code = ?, error_detail = ?, finished_at = ? WHERE id = ?")
       .run(code, this.#secrets.redactError(error), new Date().toISOString(), callId);
-  }
-
-  #chatTokenBudgetReached(chatId: bigint): boolean {
-    let chat = this.#config.telegram.chats.find((candidate) => BigInt(candidate.id) === chatId);
-    if (chat === undefined) {
-      const migration = this.#store.db
-        .query<{ old_chat_id: bigint }, [bigint]>('SELECT old_chat_id FROM chat_migrations WHERE new_chat_id = ?')
-        .get(chatId);
-      if (migration !== null) {
-        chat = this.#config.telegram.chats.find((candidate) => BigInt(candidate.id) === migration.old_chat_id);
-      }
-    }
-    if (chat === undefined) {
-      return true;
-    }
-    const now = new Date().toISOString();
-    const used =
-      this.#store.db
-        .query<{ amount: bigint }, [string, string]>(
-          "SELECT amount FROM daily_usage WHERE utc_date = ? AND scope = 'chat' AND resource = ? AND metric = 'model_tokens'",
-        )
-        .get(now.slice(0, 10), chatId.toString())?.amount ?? 0n;
-    return used >= BigInt(chat.budget.max_tokens_per_day);
   }
 
   #reserveStickerImage(): boolean {

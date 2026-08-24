@@ -197,6 +197,7 @@ api_key = { command = ["pass", "show", "plasticwan/openai"] }
 [agent]
 provider = "primary_relay"
 model = "relay-model"
+daily_budget = { max_tokens = 600000 }
 max_output_tokens = 4096
 thinking_level = "low"
 system_prompt = """
@@ -235,13 +236,13 @@ backups = "/var/lib/plasticwan/backups"
 id = 123456789
 timezone = "Asia/Shanghai"
 instructions = "这是私聊。默认积极回应。"
-budget = { max_invocations_per_day = 100, max_tokens_per_day = 300000 }
+budget = { max_invocations_per_day = 100 }
 
 [[telegram.chats]]
 id = -1001234567890
 topic_ids = [3, 8]
 instructions = "这是群聊。没有明确价值时保持沉默。"
-budget = { max_invocations_per_day = 200, max_tokens_per_day = 600000 }
+budget = { max_invocations_per_day = 200 }
 
 [[telegram.sticker_sets]]
 alias = "cat_pack"
@@ -737,25 +738,15 @@ Streamable HTTP：
 - 全局最多 4 个 running Invocation，TOML 可调。
 - 同一 Conversation 永远最多 1 个 running Invocation。
 - 同一 `chat_id` 下主模型与聊天触发的 Sticker 视觉模型调用共享模型闸门；不同 Topic 的 Invocation 可以在等待 Tool 等阶段并发。
-- 这样 Chat 日 Token 上限最多被最后一个已经放行的模型调用小幅超出一次。
+- 全局 Agent 日 Token 上限可能被已放行的并发模型调用小幅超出。
 
-### 11.2 Chat 日预算
+### 11.2 Agent 日 Token 预算与 Chat 日调用预算
 
-每个 allowlist Chat 必须配置：
+每个 allowlist Chat 必须配置 `max_invocations_per_day`，用于限制该 Chat 每日创建的 Invocation 数量。Chat 不设 Token 硬上限。
 
-- `max_invocations_per_day`；
-- `max_tokens_per_day`。
+`agent.daily_budget.max_tokens` 是所有 Chat 共享的全局日 Token 上限。主 Agent 与聊天触发的 Sticker `read_image` Usage 都计入该上限；同时继续按 Chat 写入 `daily_usage`，保留 input、output、cache read、cache write 与费用拆分审计。
 
-主 Agent 与该 Chat 触发的 Sticker `read_image` Usage 合并计入 `max_tokens_per_day`。使用 Pi AI 返回的 `Usage.totalTokens`；input、output、cache read、cache write 与费用拆分同时审计。
-
-Provider 在响应后才返回准确 Usage，因此规则是：每次模型调用前检查已消费量；调用完成后记账；达到上限后禁止后续调用。最后一次调用可以造成小幅超额。
-
-达到预算后：
-
-- 对聊天静默；
-- Bucket 标记 `skipped_budget`；
-- 写 SQLite 审计和无正文运行日志；
-- 次日 UTC 自动恢复。
+Provider 在响应后才返回准确 Usage，因此每次模型调用前检查全局已消费量，调用完成后按 Chat 归属记账。达到上限后禁止后续模型调用；已放行的并发调用可能造成小幅超额。全局剩余比例低于 5% 时，运行中的 Agent 可调用 `zzz` 进入全局睡眠，并在下一次 UTC 日预算重置后恢复。
 
 ### 11.3 Sticker 系统预算
 

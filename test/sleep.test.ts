@@ -51,7 +51,10 @@ async function openStore(prefix = 'plasticwan-sleep-'): Promise<{ loaded: Loaded
   return { loaded, store: await SqliteStore.open(loaded.config) };
 }
 
-async function runtimeSetup(usedTokens: bigint): Promise<{
+async function runtimeSetup(
+  usedTokens: bigint,
+  usageResource = '123456789',
+): Promise<{
   store: SqliteStore;
   runtime: AgentRuntime;
   invocationId: bigint;
@@ -72,9 +75,9 @@ async function runtimeSetup(usedTokens: bigint): Promise<{
   const now = new Date().toISOString();
   store.db
     .query(
-      "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', '123456789', 'model_tokens', ?, ?)",
+      "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', ?, ?)",
     )
-    .run(now.slice(0, 10), usedTokens, now);
+    .run(now.slice(0, 10), usageResource, usedTokens, now);
 
   const faux = fauxProvider({
     provider: 'agent',
@@ -116,11 +119,21 @@ test('does not expose zzz while more than five percent remains', async () => {
   store.close();
 });
 
-test('exposes zzz only after remaining budget falls below five percent', async () => {
-  const { store, runtime, invocationId, faux } = await runtimeSetup(285_001n);
+test('exposes zzz after global remaining budget falls below five percent', async () => {
+  const { store, runtime, invocationId, faux } = await runtimeSetup(285_001n, '987654321');
   faux.setResponses([fauxAssistantMessage('done')]);
   await runtime.run(invocationId, new AbortController().signal);
   expect(modelToolLists(store)).toEqual([['send', 'zzz']]);
+  store.close();
+});
+
+test('blocks model calls after another chat exhausts the global daily budget', async () => {
+  const { store, runtime, invocationId } = await runtimeSetup(300_000n, '987654321');
+  expect(await runtime.run(invocationId, new AbortController().signal)).toEqual({
+    state: 'failed',
+    reason: 'daily_token_budget',
+  });
+  expect(modelToolLists(store)).toEqual([]);
   store.close();
 });
 

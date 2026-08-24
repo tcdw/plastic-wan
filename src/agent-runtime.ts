@@ -22,6 +22,7 @@ import { createSendTool, type TelegramSendApi } from './send-tool.ts';
 import {
   activeSleepUntil,
   createZzzTool,
+  isDailyTokenBudgetReached,
   isLowDailyTokenBudget,
   readDailyTokenBudget,
   type DailyTokenBudget,
@@ -131,11 +132,7 @@ export class AgentRuntime {
     if (chat === undefined) {
       throw new Error(`Invocation ${invocationId} chat is no longer configured`);
     }
-    const initialBudget = readDailyTokenBudget(
-      this.#store.db,
-      provisionalContext.chatId,
-      chat.budget.max_tokens_per_day,
-    );
+    const initialBudget = readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens);
     let zzzExposed = isLowDailyTokenBudget(initialBudget);
     if (zzzExposed) {
       this.#logZzzExposure(invocationId, provisionalContext.chatId, initialBudget);
@@ -197,9 +194,11 @@ export class AgentRuntime {
         tools,
       },
       streamFn: async (model, modelContext, options) => {
-        if (this.#tokenBudgetReached(context.chatId)) {
+        if (
+          isDailyTokenBudgetReached(readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens))
+        ) {
           modelBudgetBlocked = true;
-          return errorStream(model, 'chat_token_budget');
+          return errorStream(model, 'daily_token_budget');
         }
         const release = await this.#modelGate.acquire(context.chatId.toString(), signal);
         // Per-request visibility audit: the exact tool names this llmContext
@@ -239,7 +238,7 @@ export class AgentRuntime {
         }
         if (
           toolCall.name === 'zzz' &&
-          !isLowDailyTokenBudget(readDailyTokenBudget(this.#store.db, context.chatId, chat.budget.max_tokens_per_day))
+          !isLowDailyTokenBudget(readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens))
         ) {
           return { block: true, reason: 'You are no longer sleepy' };
         }
@@ -284,7 +283,7 @@ export class AgentRuntime {
       prepareNextTurnWithContext: async (turn) => {
         let nextTools = turn.context.tools;
         let toolsChanged = false;
-        const budget = readDailyTokenBudget(this.#store.db, context.chatId, chat.budget.max_tokens_per_day);
+        const budget = readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens);
         const shouldExposeZzz = isLowDailyTokenBudget(budget);
         if (shouldExposeZzz !== zzzExposed) {
           zzzExposed = shouldExposeZzz;
@@ -354,7 +353,7 @@ export class AgentRuntime {
           reason: timeoutSignal.aborted ? 'timeout' : 'aborted',
         };
       } else if (modelBudgetBlocked) {
-        outcome = { state: 'failed', reason: 'chat_token_budget' };
+        outcome = { state: 'failed', reason: 'daily_token_budget' };
       } else if (agent.state.errorMessage !== undefined) {
         outcome = { state: 'failed', reason: 'model_error' };
       } else {
@@ -446,21 +445,6 @@ export class AgentRuntime {
         "UPDATE model_calls SET state = 'error', error_code = ?, error_detail = ?, finished_at = ? WHERE id = ? AND state = 'pending'",
       )
       .run(errorCode, this.#secrets.redactError(error), new Date().toISOString(), callId);
-  }
-
-  #tokenBudgetReached(chatId: bigint): boolean {
-    const chat = resolveChatConfig(this.#config, this.#store.db, chatId);
-    if (chat === undefined) {
-      return true;
-    }
-    const date = new Date().toISOString().slice(0, 10);
-    const amount =
-      this.#store.db
-        .query<{ amount: bigint }, [string, string]>(
-          "SELECT amount FROM daily_usage WHERE utc_date = ? AND scope = 'chat' AND resource = ? AND metric = 'model_tokens'",
-        )
-        .get(date, chatId.toString())?.amount ?? 0n;
-    return amount >= BigInt(chat.budget.max_tokens_per_day);
   }
 
   #recordAgentMessage(invocationId: bigint, role: 'assistant' | 'tool_result' | 'harness_nudge', text: string): void {

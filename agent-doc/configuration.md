@@ -52,7 +52,7 @@ command SecretRef：
 | `timezone` | 默认 IANA 时区 |
 | `telegram` | Token、Bucket 窗口、Chat/Topic allowlist、Sticker Set |
 | `providers` | 内置或自定义 Provider 别名 |
-| `agent` | 对话模型、Prompt、轮次、超时和并发 |
+| `agent` | 对话模型、Prompt、轮次、超时、并发和全局 Token 预算 |
 | `vision` | Sticker 视觉模型、并发、Prompt 版本和预算 |
 | `mcp` | 可选的 stdio/Streamable HTTP Server |
 | `admin` | 可选的本地只读 Admin Panel |
@@ -72,7 +72,7 @@ id = -1001234567890
 instructions_file = "prompts/chat-1001234567890.md"
 timezone = "Asia/Shanghai"
 topic_ids = [100, 200]
-budget = { max_invocations_per_day = 100, max_tokens_per_day = 300000 }
+budget = { max_invocations_per_day = 100 }
 ```
 
 规则：
@@ -85,6 +85,7 @@ budget = { max_invocations_per_day = 100, max_tokens_per_day = 300000 }
 - Forum Topic 按 `(chat_id, message_thread_id)` 隔离 Conversation。
 - `instructions_file`（可选）指向该 Chat 的附加系统提示 Markdown 文件，缺省时为空；提示内容不提供额外授权。
 - 修改 Chat 后重启，并比较 `check-config` 与 `serve_started` 的 `config_hash`。
+- `budget.max_invocations_per_day` 限制该 Chat 每日创建的 Invocation 数量；Chat 不设 Token 硬上限，Token 仅按 Chat 归属统计。
 
 ## Sticker Set
 
@@ -141,6 +142,7 @@ cost = { input = 0, output = 0, cache_read = 0, cache_write = 0 }
 
 ## Agent 与 Vision
 
+- `daily_budget.max_tokens`: 主 Agent 与聊天触发的 `read_image` 共享的全局每日 Token 上限；各 Chat 用量仍分别写入 `daily_usage`。
 - `system_prompt_file`: 指向全局系统提示的 Markdown 文件，路径相对配置文件目录，内容必须非空。系统提示和 Chat 的 `instructions_file` 支持 `{{ agent.provider }}`、`{{ agent.model }}`、`{{ vision.provider }}`、`{{ vision.model }}`、`{{ timezone }}` 模板变量；模板只执行严格白名单替换，未知或格式错误的表达式会拒绝配置。
 - 模板中的 `agent.provider` 与 `agent.model` 是当前 Invocation 实际使用的模型，因此 Admin Panel 或 `/model` 的运行时切换会反映到下一次会话；`vision.*` 始终来自配置。模板值只注入 Prompt，不会注入记忆；记忆内容按原文保留。
 - `max_turns`: 1–8。

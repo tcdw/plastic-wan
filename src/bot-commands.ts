@@ -4,6 +4,7 @@ import type { RawConfig } from './config.ts';
 import type { SqliteStore } from './database.ts';
 import type { AgentModelOption, AgentModelSwitcher } from './model-switch.ts';
 import type { BucketScheduler } from './scheduler.ts';
+import { readDailyTokenBudget } from './sleep.ts';
 
 export interface ParsedCommand {
   readonly name: 'pause' | 'resume' | 'status' | 'model';
@@ -221,6 +222,7 @@ export class BotCommandService {
           "SELECT amount FROM daily_usage WHERE utc_date = ? AND scope = 'chat' AND resource = ? AND metric = 'model_tokens'",
         )
         .get(date, telegramChatId.toString())?.amount ?? 0n;
+    const dailyBudget = readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens, now);
     const tokenBreakdown =
       chatId === null
         ? null
@@ -251,7 +253,8 @@ export class BotCommandService {
     const lines = [
       `当前模型: ${effective.provider} / ${effective.model}`,
       `思考强度: ${this.#config.agent.thinking_level}`,
-      `今日 token 用量: ${tokens} / ${chat.budget.max_tokens_per_day}`,
+      `本群今日 token 用量: ${tokens}`,
+      `全局今日 token 用量: ${dailyBudget.usedTokens} / ${dailyBudget.maxTokens}`,
       `读取: ${tokenBreakdown?.readTokens ?? 0n}`,
       `写入: ${tokenBreakdown?.writeTokens ?? 0n}`,
       `缓存读取: ${tokenBreakdown?.cacheReadTokens ?? 0n}`,

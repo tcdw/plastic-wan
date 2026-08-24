@@ -69,13 +69,7 @@ const CustomProviderSchema = Type.Object(
   },
   Strict,
 );
-const ChatBudgetSchema = Type.Object(
-  {
-    max_invocations_per_day: PositiveInteger,
-    max_tokens_per_day: PositiveInteger,
-  },
-  Strict,
-);
+const ChatBudgetSchema = Type.Object({ max_invocations_per_day: PositiveInteger }, Strict);
 const ChatSchema = Type.Object(
   {
     id: Type.Integer(),
@@ -164,6 +158,7 @@ export const ConfigSchema = Type.Object(
       {
         provider: Type.String({ minLength: 1 }),
         model: Type.String({ minLength: 1 }),
+        daily_budget: Type.Object({ max_tokens: PositiveInteger }, Strict),
         thinking_level: Type.Union([
           Type.Literal('off'),
           Type.Literal('minimal'),

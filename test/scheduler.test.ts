@@ -438,8 +438,7 @@ describe('bucket scheduler', () => {
 
   test('runs agent sessions of different chats concurrently', async () => {
     const { store, ingestion, scheduler } = await setup(
-      (toml) =>
-        `${toml}\n[[telegram.chats]]\nid = 987654321\nbudget = { max_invocations_per_day = 100, max_tokens_per_day = 300000 }\n`,
+      (toml) => `${toml}\n[[telegram.chats]]\nid = 987654321\nbudget = { max_invocations_per_day = 100 }\n`,
     );
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'chat-a', 123456789), start);

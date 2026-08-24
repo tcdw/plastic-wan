@@ -19,24 +19,22 @@ export interface SleepTransition {
   readonly entered: boolean;
 }
 
-export function readDailyTokenBudget(
-  db: Database,
-  chatId: bigint,
-  maxTokens: number,
-  now = new Date(),
-): DailyTokenBudget {
+export function readDailyTokenBudget(db: Database, maxTokens: number, now = new Date()): DailyTokenBudget {
   const usedTokens =
     db
-      .query<{ amount: bigint }, [string, string]>(
-        "SELECT amount FROM daily_usage WHERE utc_date = ? AND scope = 'chat' AND resource = ? AND metric = 'model_tokens'",
+      .query<{ amount: bigint }, [string]>(
+        "SELECT COALESCE(SUM(amount), 0) AS amount FROM daily_usage WHERE utc_date = ? AND scope = 'chat' AND metric = 'model_tokens'",
       )
-      .get(now.toISOString().slice(0, 10), chatId.toString())?.amount ?? 0n;
+      .get(now.toISOString().slice(0, 10))?.amount ?? 0n;
   return { usedTokens, maxTokens: BigInt(maxTokens) };
 }
 
 export function isLowDailyTokenBudget(budget: DailyTokenBudget): boolean {
   const remainingTokens = budget.usedTokens >= budget.maxTokens ? 0n : budget.maxTokens - budget.usedTokens;
   return remainingTokens * 100n < budget.maxTokens * SLEEP_REMAINING_BUDGET_PERCENT;
+}
+export function isDailyTokenBudgetReached(budget: DailyTokenBudget): boolean {
+  return budget.usedTokens >= budget.maxTokens;
 }
 
 export function storedSleepUntil(db: Database): string | null {

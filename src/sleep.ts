@@ -67,6 +67,23 @@ export function activeSleepUntil(db: Database, now = new Date()): string | null 
     .immediate();
 }
 
+export function wakeFromSleep(db: Database, now = new Date()): boolean {
+  return db
+    .transaction(() => {
+      const sleepUntil = storedSleepUntil(db);
+      if (sleepUntil === null) {
+        return false;
+      }
+      const deleted = db.query('DELETE FROM app_state WHERE key = ? AND value = ?').run(SLEEP_STATE_KEY, sleepUntil);
+      if (deleted.changes !== 1) {
+        return false;
+      }
+      console.log(JSON.stringify({ event: 'bot_awake_manually', sleep_until: sleepUntil, at: now.toISOString() }));
+      return true;
+    })
+    .immediate();
+}
+
 export function enterSleep(db: Database, now = new Date()): SleepTransition {
   return db
     .transaction(() => {

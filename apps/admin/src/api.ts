@@ -321,6 +321,11 @@ export interface CancelPendingResult {
   readonly refunded_invocations: number;
 }
 
+export interface WakeResult {
+  readonly status: "awake";
+  readonly was_sleeping: boolean;
+}
+
 export interface PausedChat {
   readonly telegram_chat_id: string;
   readonly type: string;
@@ -519,6 +524,10 @@ export function resetAgentModel(): Promise<ModelState> {
 
 export function cancelPendingSessions(): Promise<CancelPendingResult> {
   return call<CancelPendingResult>("/cancel-pending-sessions", { method: "POST" });
+}
+
+export function wakeBot(): Promise<WakeResult> {
+  return call<WakeResult>("/wake", { method: "POST" });
 }
 
 export function getUsage(days: number): Promise<UsageResponse> {

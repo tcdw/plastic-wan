@@ -376,6 +376,18 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
       ],
     });
 
+    const awakened = await server.handle(post('/api/wake', {}, cookie));
+    expect(awakened.status).toBe(200);
+    expect(await readJson(awakened)).toEqual({ status: 'awake', was_sleeping: true });
+    expect((await readJson(await server.handle(request('/api/overview', { headers })))).runtime_status).toMatchObject({
+      sleeping: false,
+      sleep_until: null,
+    });
+    expect(await readJson(await server.handle(post('/api/wake', {}, cookie)))).toEqual({
+      status: 'awake',
+      was_sleeping: false,
+    });
+
     const now = new Date().toISOString();
     store.db
       .query(

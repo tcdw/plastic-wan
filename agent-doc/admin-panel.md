@@ -63,6 +63,7 @@ static_dir = "/opt/plasticwan/apps/admin/dist"
 | `POST /auth/logout` | 撤销当前 Session |
 | `POST /auth/credentials` | 修改当前管理员用户名和密码，并撤销该用户其它 Session |
 | `GET /overview` | Bot 睡眠状态、管理员暂停的 Chat、Invocation/已配置 Sticker 索引状态、Top Tool、当日预算用量、消息与媒体分析缓存计数 |
+| `POST /wake` | 删除持久化睡眠状态并立即唤醒 Scheduler；重复调用保持 `awake` |
 | `GET /invocations` | Tool Session 列表 |
 | `GET /invocations/:id` | Overview 时间线所需的冻结消息、Tool Call、Model Call、Agent transcript、Telegram 发送与冻结上下文 |
 | `GET /messages` | 消息列表 |
@@ -122,7 +123,7 @@ bun run admin:dev     # Rsbuild dev server，/api 代理到 ADMIN_API_TARGET
 
 `queryState()` 是普通函数而非组件：调用方依赖 `null` 判断是否渲染真实数据，JSX 元素永远不为 `null`。
 
-Overview 的 Bot status 卡片显示当前 `sleeping`/`awake`、`sleep_until`，以及所有 `chat_pause` Chat 的名称或 Telegram ID 与暂停时间。
+Overview 的 Bot status 卡片显示当前 `sleeping`/`awake`、`sleep_until`，睡眠时提供带确认的 `Wake now` 操作，并显示所有 `chat_pause` Chat 的名称或 Telegram ID 与暂停时间。
 
 Tool session 详情默认打开 Overview 时间线：按时间合并冻结消息、Invocation 生命周期、Model Call、Tool Call 与 Agent transcript；消息正文和 `send` 参数中的发送内容直接展示，Tool 结果与完整参数按需展开。失败的 Model Call 同时展示稳定错误码，并可展开查看经密钥脱敏的完整 Provider 错误详情。Assistant 文本显式标注为私有推理，只有 `send` Tool 会发往 Telegram。
 
@@ -154,8 +155,8 @@ bun run check
 bun run admin:build
 ```
 
-`test/admin.test.ts` 覆盖：首次初始化与登录态转换、弱密码拒绝且不写入用户、`setup` 重复调用冲突、错误凭据与未知用户的统一 401、跨站 `POST` 拒绝、Overview 睡眠与管理员暂停状态、审计三大视图的字段与过滤、非法 `limit`/`state` 的 400、审计路由写操作 405、静态资源回退与目录穿越拒绝、`admin.host` 非回环时配置加载失败。
+`test/admin.test.ts` 覆盖：首次初始化与登录态转换、弱密码拒绝且不写入用户、`setup` 重复调用冲突、错误凭据与未知用户的统一 401、跨站 `POST` 拒绝、Overview 睡眠/手动唤醒与管理员暂停状态、审计三大视图的字段与过滤、非法 `limit`/`state` 的 400、审计路由写操作 405、静态资源回退与目录穿越拒绝、`admin.host` 非回环时配置加载失败。
 
 `test/memory.test.ts` 覆盖：记忆持久化与 TTL 过期、跨 Conversation 隔离与删除幂等、Tool 审计与 150 字符硬限制、system prompt 注入顺序与过滤、管理 API 的 CRUD/聊天过滤/`long_ttl` 与 `expired` 标记/参数校验/404 与 405、`purgeExpiredData` 清理过期记忆。
 
-浏览器冒烟应确认：初始化表单 → Overview 统计与 Bot 睡眠/管理员暂停状态 → Tool session 详情六个 Tab，默认 Overview 按时间显示收到的消息与 `send` 内容 → 消息搜索与详情 Revision、媒体分析 → 已配置 Sticker Set 与 `index_state` 过滤 → Memories 页面按群聊与状态过滤、新建/编辑/删除记忆、长 TTL 记忆显示 warning → Bot admins 页面添加/移除管理员与 `telegram.admins` 种子展示 → Model 页面查看当前/默认模型、切换后 `/status` 立即反映新模型、恢复默认 → 登出后深链接回落登录页 → 重新登录恢复。
+浏览器冒烟应确认：初始化表单 → Overview 统计、Bot 睡眠/手动唤醒与管理员暂停状态 → Tool session 详情六个 Tab，默认 Overview 按时间显示收到的消息与 `send` 内容 → 消息搜索与详情 Revision、媒体分析 → 已配置 Sticker Set 与 `index_state` 过滤 → Memories 页面按群聊与状态过滤、新建/编辑/删除记忆、长 TTL 记忆显示 warning → Bot admins 页面添加/移除管理员与 `telegram.admins` 种子展示 → Model 页面查看当前/默认模型、切换后 `/status` 立即反映新模型、恢复默认 → 登出后深链接回落登录页 → 重新登录恢复。

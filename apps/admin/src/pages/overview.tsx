@@ -15,8 +15,8 @@ import {
   Tag,
   Typography,
 } from "antd";
-import type { CancelPendingResult, LabelCount, UsageEntry } from "../api.ts";
-import { cancelPendingSessions } from "../api.ts";
+import type { CancelPendingResult, LabelCount, UsageEntry, WakeResult } from "../api.ts";
+import { cancelPendingSessions, wakeBot } from "../api.ts";
 import { queryState, StateTag } from "../components.tsx";
 import { formatNumber, formatTime } from "../format.ts";
 import { overviewQuery, usageQuery } from "../queries.ts";
@@ -80,6 +80,16 @@ export function OverviewPage(): React.ReactNode {
       message.error(err instanceof Error ? err.message : "Cancel failed");
     },
   });
+  const { mutate: wake, isPending: isWaking } = useMutation<WakeResult, Error, void>({
+    mutationFn: wakeBot,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["overview"] });
+      message.success("Bot is awake");
+    },
+    onError: (err) => {
+      message.error(err instanceof Error ? err.message : "Wake failed");
+    },
+  });
   const placeholder = queryState({ isPending: isPending || data === undefined, error });
   if (data === undefined || placeholder !== null) return placeholder;
   const totalInvocations = data.invocation_states.reduce((sum, entry) => sum + entry.count, 0);
@@ -135,6 +145,19 @@ export function OverviewPage(): React.ReactNode {
                       until {formatTime(data.runtime_status.sleep_until)}
                     </Typography.Text>
                   )}
+                  {data.runtime_status.sleeping ? (
+                    <Popconfirm
+                      title="Wake the bot now?"
+                      description="New sessions may consume the increased token budget immediately."
+                      onConfirm={() => wake()}
+                      okText="Wake"
+                      okButtonProps={{ loading: isWaking }}
+                    >
+                      <Button type="primary" size="small" loading={isWaking}>
+                        Wake now
+                      </Button>
+                    </Popconfirm>
+                  ) : null}
                 </Space>
               </Descriptions.Item>
               <Descriptions.Item label="Administrator pauses">

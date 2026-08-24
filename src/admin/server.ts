@@ -5,6 +5,7 @@ import type { SqliteStore } from '../database.ts';
 import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from '../memory.ts';
 import { type AgentModelOption, type AgentModelSwitcher, ModelSwitchError } from '../model-switch.ts';
 import type { BucketScheduler } from '../scheduler.ts';
+import { wakeFromSleep } from '../sleep.ts';
 import { addBotAdmin, listBotAdmins, parseAdminUserId, removeBotAdmin } from './admins.ts';
 import {
   AdminQueryError,
@@ -192,6 +193,13 @@ export class AdminServer {
       const result = cancelPendingSessions(this.#store.db, new Date());
       this.#scheduler?.wake();
       return json(result);
+    }
+    if (route === 'wake' && request.method === 'POST') {
+      const wasSleeping = wakeFromSleep(this.#store.db);
+      if (wasSleeping) {
+        this.#scheduler?.wake();
+      }
+      return json({ status: 'awake', was_sleeping: wasSleeping });
     }
     const database = this.#store.db;
     const query: ListQuery = {

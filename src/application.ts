@@ -17,6 +17,7 @@ import { SecretStore } from './secrets.ts';
 import { runStartupCatchUp } from './startup-catch-up.ts';
 import { StickerService } from './stickers.ts';
 import { TelegramIngestion } from './telegram-ingestion.ts';
+import { createWebFetchTool } from './web-fetch.ts';
 
 const ALLOWED_UPDATES = ['message', 'edited_message', 'my_chat_member'] as const;
 
@@ -53,6 +54,7 @@ export async function serve(configPath: string): Promise<void> {
     const token = await secrets.resolve(loaded.config.telegram.token);
     lock = await ServeLock.acquire(loaded.config.data_dir);
     store = await SqliteStore.open(loaded.config);
+    const webFetchStore = store;
     seedConfigAdmins(store.db, loaded.config.telegram.admins ?? []);
     bot = new Bot(token);
     const registry = await createModelRegistry(loaded.config, secrets);
@@ -112,6 +114,7 @@ export async function serve(configPath: string): Promise<void> {
         media.createReadImageTool(context, deadline),
         stickerService.createSearchTool(context, state.stickerCapabilities),
         ...createMemoryTools(memoryStore, context),
+        createWebFetchTool({ store: webFetchStore, context, invocationDeadline: deadline }),
         ...mcpManager.createTools(context, deadline),
       ],
     });
@@ -126,6 +129,7 @@ export async function serve(configPath: string): Promise<void> {
         media.createReadImageTool(preview, Number.MAX_SAFE_INTEGER),
         stickerService.createSearchTool(preview, new Map()),
         ...createMemoryTools(memoryStore, preview),
+        createWebFetchTool({ store: webFetchStore, context: preview, invocationDeadline: Number.MAX_SAFE_INTEGER }),
         ...mcpTools,
       ]),
     );

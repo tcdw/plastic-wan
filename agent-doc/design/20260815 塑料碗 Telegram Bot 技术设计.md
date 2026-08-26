@@ -54,6 +54,7 @@ flowchart TD
     INV --> SEND[send]
     INV --> IMAGE[Sticker read_image]
     INV --> STICKER[search_stickers]
+    INV --> WEB[web_fetch]
     INV --> MCP[MCP Tool Adapters]
 
     SEND --> TG
@@ -677,6 +678,18 @@ Sticker Set 在启动后同步 `getStickerSet`。新增 Sticker 进入后台视�
 
 缓存 key 包含 `file_unique_id`、vision provider/model 与 `prompt_version`。配置变化时旧索引继续服务，新版后台完成后原子替换。
 
+### 9.5 `web_fetch`
+
+`web_fetch` 是无认证的受限 HTTP(S) GET，不提供 method、Header、Cookie、Body 或代理配置参数：
+
+- 只接受绝对 HTTP(S) URL、协议默认端口，拒绝 URL credentials 与 fragment；
+- DNS 解析后拒绝环回、私网、链路本地、文档和保留地址，并把实际连接固定到已校验 IP；
+- 最多跟随 3 次跳转，每一跳重新执行 URL 与 DNS 校验；
+- 代理 synthetic DNS 的 `198.18.0.0/15` 仅可作为域名解析结果，直接提交该网段 IP 仍拒绝；
+- 只接受未压缩的文本、JSON、XML 与 JavaScript 响应；
+- 超时 15 秒，结果限制 32 KiB，并在结果前标记内容不可信；
+- `tool_calls.side_effect = false`，保存参数、结果、耗时和稳定失败码。
+
 ---
 
 ## 10. MCP
@@ -697,7 +710,7 @@ Sticker Set 在启动后同步 `getStickerSet`。新增 Sticker 进入后台视�
 
 - Server 只能由 JSONC 配置，Bot Command、聊天内容和 Agent 都不能新增或修改。
 - 对 Agent 暴露的名称固定为 `<server_alias>__<tool_name>`。
-- 内建 `send`、`read_image`、`search_stickers` 不加 MCP namespace。
+- 内建 `send`、`read_image`、`search_stickers`、`web_fetch` 不加 MCP namespace。
 - `tools = ["..."]` 时启动严格校验：缺失 Tool 导致 required Server 启动失败，额外 Tool 不暴露。
 - `tools = "*"` 表示管理员显式信任该 Server 当前和未来的全部 Tool。
 - wildcard Server 必须配置 `default_tool_policy`；新增 Tool 默认 `read_only = false`，并继承超时与双重日调用上限。逐 Tool policy 可以覆盖。
@@ -887,7 +900,7 @@ Agent registry 中不存在：
 - Bash/Shell；
 - 任意代码执行；
 - 通用文件读取或写入；
-- 通用 HTTP client；
+- 不受限的通用 HTTP client；
 - 任意 Telegram API；
 - 任意 Chat/Topic 选择；
 - 动态 MCP Server 注册。
@@ -899,7 +912,7 @@ Agent registry 中不存在：
 - 随机、不可预测；
 - 只映射当前 Context 或当前 Tool Result；
 - Invocation 完成即失效；
-- Agent 提交的 Telegram ID/file_id/URL 不被接受。
+- Telegram capability 不接受 Agent 提交的任意 Telegram ID、file_id 或媒体 URL。
 
 ### 14.4 进程与文件
 
@@ -1048,10 +1061,11 @@ MCP：
 7. text-only Agent 通过 `read_image` 成功读取普通图片并产生 `vision_chat` 审计；
 8. 三类 Sticker 均可通过 `read_image` 读取，同一媒体缓存命中不重复调用视觉模型；
 9. `search_stickers` 找到并发送配置 Set 中的 Sticker；
-10. MCP 搜索成功且未配置 Tool 不可见；
-11. 重启恢复 5 分钟内 Bucket，过期 Bucket 不回复；
-12. SQLite 中可核对 Model Usage、Tool、Telegram send 与 retention 字段；
-13. Agent 无 Bash、文件系统、通用 HTTP 或动态 MCP 能力。
+10. `web_fetch` 可读取公网文本页面，阻止环回/私网地址、直接提交的 synthetic IP 与跳转绕过；
+11. MCP 搜索成功且未配置 Tool 不可见；
+12. 重启恢复 5 分钟内 Bucket，过期 Bucket 不回复；
+13. SQLite 中可核对 Model Usage、Tool、Telegram send 与 retention 字段；
+14. Agent 无 Bash、文件系统、不受限通用 HTTP 或动态 MCP 能力。
 
 ---
 

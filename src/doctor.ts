@@ -20,6 +20,7 @@ import { type PromptTemplateValues, renderPromptTemplate } from './prompt-templa
 import { createModelRegistry, type ModelRegistry } from './providers.ts';
 import { SecretStore } from './secrets.ts';
 import { StickerService } from './stickers.ts';
+import { createWebFetchTool } from './web-fetch.ts';
 
 export async function runDoctor(configPath: string, outputAgentPrompt = false): Promise<void> {
   const loaded = await loadConfig(configPath);
@@ -175,6 +176,7 @@ async function runDoctorChecks(
       additionalTools: (context, state, deadline) => [
         media.createReadImageTool(context, deadline),
         stickers.createSearchTool(context, state.stickerCapabilities),
+        createWebFetchTool({ store, context, invocationDeadline: deadline }),
         ...manager.createTools(context, deadline),
       ],
     });
@@ -183,6 +185,7 @@ async function runDoctorChecks(
       runtime.validateAdditionalTools(preview, [
         media.createReadImageTool(preview, Number.MAX_SAFE_INTEGER),
         stickers.createSearchTool(preview, new Map()),
+        createWebFetchTool({ store, context: preview, invocationDeadline: Number.MAX_SAFE_INTEGER }),
         ...mcpTools,
       ]),
     );

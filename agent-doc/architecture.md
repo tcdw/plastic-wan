@@ -53,7 +53,8 @@ Fresh Pi Agent
   ├─ add_memory / delete_memory
   ├─ read_image（Sticker；text-only Agent 也用于普通图片）
   ├─ search_stickers
-  └─ allowlisted MCP tools
+  ├─ allowlisted MCP tools
+  └─ web_fetch
         │
         ▼
 send Tool → Telegram API → 审计
@@ -78,6 +79,7 @@ send Tool → Telegram API → 审计
 | `media.ts` | Telegram 图片直传准备、普通图片回退分析、Sticker 代表帧、标准化与视觉缓存 |
 | `stickers.ts` | Set 同步、后台单并发索引、FTS 搜索和发送能力 |
 | `mcp.ts` | Server 生命周期、Tool 注册、策略、大小限制和预算 |
+| `web-fetch.ts` | 受限公网 HTTP(S) GET、SSRF 防护、DNS 连接固定、跳转与文本结果大小限制 |
 | `doctor.ts` | 本地依赖、模型、Vision、Telegram、required MCP 的真实探针 |
 | `admin/` | Admin Panel 认证、只读审计查询与本地 HTTP/静态边界 |
 
@@ -108,6 +110,7 @@ Memory 内容是模型自己写入的持久化数据，按 Conversation 隔离�
 - Reply Message ID、媒体引用、Sticker Set 和 Sticker ID 必须来自当前 Context capability。
 - 普通 Assistant 文本不会发往 Telegram；`send` 是唯一发送边界。
 - MCP Tool 必须通过配置 allowlist、策略、预算、超时和大小限制。
+- `web_fetch` 只允许默认端口的公网 HTTP(S) GET；每次 DNS 与跳转目标都重新校验，连接固定到已校验地址，且不发送 Cookie 或认证信息。
 - 模型不能取得 Bash、任意进程、任意文件或原始 Telegram file ID 能力。
 
 ## 外部依赖

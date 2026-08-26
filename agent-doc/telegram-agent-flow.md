@@ -141,6 +141,14 @@ Context
 - 发送内容写入可见消息历史。
 - Agent 的私有 Assistant 文本仍不进入 Telegram。
 
+## `web_fetch`
+
+`web_fetch` 接受模型生成的单个 URL，只执行无 Cookie、无认证 Header 的 HTTP(S) GET。它只允许协议默认端口，最多跟随 3 次跳转；每一跳都重新解析并校验目标，连接固定到已经校验的 IP，防止 DNS rebinding。
+
+直接提交的环回、私网、链路本地、文档与保留地址会被拒绝。代理环境把公网域名解析到 `198.18.0.0/15` synthetic IP 时，仅允许“域名解析结果”使用该网段；模型直接提交该网段 IP 仍会被拒绝。
+
+Tool 只返回文本、JSON、XML 或 JavaScript 响应，拒绝压缩和二进制内容。单次调用最多 15 秒、结果最多 32 KiB；结果前缀明确标记网页为不可信数据。调用参数、结果、耗时和失败码写入 `tool_calls`，`side_effect = false`。
+
 ## 用户图片模型分流
 
 当 `agent` 模型支持 image 时，Photo 与受支持的图片 Document 随冻结 Context 直接送入主模型，不经过 `read_image` 或独立 `vision` 模型。Telegram Photo 只保留最高分辨率变体，避免同一照片重复占用模型输入。

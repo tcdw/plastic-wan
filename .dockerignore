@@ -1,0 +1,16 @@
+.git
+.github
+dev-data
+test
+test-tmp
+coverage
+deploy
+agent-doc
+node_modules
+apps/admin/node_modules
+apps/admin/dist
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env.local
+.DS_Store

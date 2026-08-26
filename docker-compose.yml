@@ -1,0 +1,35 @@
+# Plastic Wan — Docker Compose deployment template
+#
+# Quick start:
+#   1. mkdir -p config data
+#   2. Place your config.jsonc in ./config/   (the entrypoint sets chmod 600)
+#   3. Place system-prompt.md and any chat instruction files in ./config/
+#   4. docker compose up -d
+#
+# In config.jsonc, use container-internal paths:
+#
+#   "data_dir": "/data",
+#   "paths": {
+#     "database": "/data/plasticwan.sqlite",
+#     "media_cache": "/data/media-cache",
+#     "backups": "/data/backups"
+#   }
+#
+# Prompt files (system_prompt_file, instructions_file) resolve relative
+# to the config file, so keep them in ./config/ alongside config.jsonc.
+
+services:
+  plasticwan:
+    image: ghcr.io/tcdw/plasticwan:latest
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+      - ./config:/config
+    # Optional: match host UID/GID to avoid permission issues with bind mounts
+    # environment:
+    #   PUID: "1000"
+    #   PGID: "1000"
+    # Admin panel binds to 127.0.0.1 inside the container.
+    # To access it, use:  docker exec -it <container> curl http://127.0.0.1:8787
+    # ports:
+    #   - "127.0.0.1:8787:8787"

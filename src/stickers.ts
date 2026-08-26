@@ -29,14 +29,26 @@ const StickerSetResponseSchema = Type.Object(
   },
   { additionalProperties: true },
 );
-const SearchStickersSchema = Type.Object(
-  {
-    query: Type.String({ minLength: 1, maxLength: 100 }),
-    set: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
-  },
-  { additionalProperties: false },
-);
+const SearchStickersSchema = Type.Union([
+  Type.Object(
+    {
+      query: Type.String({ minLength: 1, maxLength: 100 }),
+      set: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      ids: Type.Array(Type.String({ pattern: '^[1-9][0-9]*$' }), {
+        minItems: 1,
+        maxItems: 5,
+        uniqueItems: true,
+      }),
+    },
+    { additionalProperties: false },
+  ),
+]);
 const stickerSetValidator = Compile(StickerSetResponseSchema);
 
 interface StickerApi {
@@ -178,9 +190,9 @@ export class StickerService {
   ): AgentTool<typeof SearchStickersSchema, { count: number }> {
     return {
       name: 'search_stickers',
-      label: 'Search approved stickers',
+      label: 'Find approved stickers',
       description:
-        'Search visually indexed stickers from administrator-approved Telegram sticker sets. Returns stk_-prefixed sticker_ref values usable only by send, only within this invocation. Always call this before sending a sticker; the img_ image_ref values shown in the context are unrelated and cannot be sent.',
+        'Inspect up to five sticker_id values from the current untrusted sticker catalog, or search visually indexed stickers by semantic query. Returns descriptions plus stk_-prefixed sticker_ref values usable only by send, only within this invocation. Always call this before sending a sticker; catalog IDs and img_ image_ref values cannot be sent.',
       parameters: SearchStickersSchema,
       executionMode: 'sequential',
       execute: async (toolCallId, input) => {
@@ -194,20 +206,32 @@ export class StickerService {
           false,
         );
         try {
-          const setId =
-            input.set === undefined
-              ? undefined
-              : this.#store.db
-                  .query<{ id: bigint }, [string]>('SELECT id FROM sticker_sets WHERE alias = ? AND configured = 1')
-                  .get(input.set)?.id;
-          if (input.set !== undefined && setId === undefined) {
-            throw new Error('Unknown or disabled sticker set alias');
+          let rows: SearchRow[];
+          if ('ids' in input) {
+            rows = this.#findByIds(input.ids);
+          } else {
+            const setId =
+              input.set === undefined
+                ? undefined
+                : this.#store.db
+                    .query<{ id: bigint }, [string]>(
+                      'SELECT id FROM sticker_sets WHERE alias = ? AND configured = 1',
+                    )
+                    .get(input.set)?.id;
+            if (input.set !== undefined && setId === undefined) {
+              throw new Error('Unknown or disabled sticker set alias');
+            }
+            rows = this.#search(input.query, setId, input.limit ?? 5);
           }
-          const rows = this.#search(input.query, setId, input.limit ?? 5);
           const results = rows.map((row) => {
             const stickerRef = `stk_${crypto.randomUUID().replaceAll('-', '')}`;
             stickerCapabilities.set(stickerRef, row.file_id);
-            return { sticker_ref: stickerRef, description: row.description, emoji: row.emoji };
+            return {
+              sticker_id: row.id.toString(),
+              sticker_ref: stickerRef,
+              description: row.description,
+              emoji: row.emoji,
+            };
           });
           const resultText = JSON.stringify(results);
           finishToolCall(this.#store.db, toolId, 'success', resultText, null, { startedAt: started });
@@ -277,6 +301,20 @@ export class StickerService {
           "UPDATE stickers SET current_analysis_id = ?, index_state = 'success', failure_count = 0, next_retry_at = NULL, updated_at = ? WHERE id = ?",
         )
         .run(analysis.analysisId, now, stickerId);
+    });
+  }
+
+  #findByIds(ids: readonly string[]): SearchRow[] {
+    const query = this.#store.db.query<SearchRow, [bigint]>(
+      `SELECT s.id, s.file_id, s.emoji, ma.description
+       FROM stickers s
+       JOIN sticker_sets ss ON ss.id = s.sticker_set_id
+       JOIN media_analyses ma ON ma.id = s.current_analysis_id
+       WHERE s.id = ? AND s.active = 1 AND s.index_state = 'success' AND ss.configured = 1`,
+    );
+    return ids.flatMap((id) => {
+      const row = query.get(BigInt(id));
+      return row === null ? [] : [row];
     });
   }
 

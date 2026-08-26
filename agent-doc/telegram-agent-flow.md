@@ -82,7 +82,7 @@ first session      = T + telegram.bucket_window_seconds
 `ContextBuilder` 生成：
 
 - `systemPrompt`：安全边界、图片处理说明、全局 Prompt、私聊/群聊参与策略、Chat instructions、记忆列表、当前时间。
-- `userPrompt`：最近 history 与本 Bucket new messages。
+- `userPrompt`：仅列出已允许且索引成功 Sticker 的 `<untrusted_sticker_catalog>`（`sticker_id:emoji`），随后是最近 history 与本 Bucket new messages。
 - `directImages`：当 `agent` 模型支持 image 时，选中消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容。
 - `visibleReplyMessageIds`：本次允许 Reply 的 Telegram Message ID。
 - `imageCapabilities`：Sticker 始终可用；当 `agent` 模型不支持 image 时也包含 Photo/图片 Document，供 `read_image` 使用。
@@ -191,7 +191,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 - 分析成功后更新 `sticker_search` FTS5 trigram 索引。
 - 失败记录次数与 `next_retry_at`，避免热循环。
 
-`search_stickers` 只返回已允许、已成功索引的 Sticker capability。`send` 只接受这些 capability，而不是模型给出的 file ID 或 Set 名称。
+`search_stickers` 支持语义查询，也支持一次解析最多 5 个目录 `sticker_id`；两种方式都只返回已允许、已成功索引的 Sticker，并生成仅限当前 Invocation 的 `sticker_ref`。目录 ID 与 Telegram file ID 都不能直接发送，`send` 只接受本次 `search_stickers` 返回的 capability。
 
 ## Bot Commands
 

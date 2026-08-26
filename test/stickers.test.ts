@@ -137,9 +137,14 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
     throw new Error('Expected a due invocation');
   }
   const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
+  expect(context.userPrompt).toContain(
+    `<untrusted_sticker_catalog>\n${stickerRow.id}:😭\n</untrusted_sticker_catalog>`,
+  );
   const capabilities = new Map<string, string>();
   const search = stickers.createSearchTool(context, capabilities);
-  const result = await search.execute('search-1', { query: '委屈猫', set: 'cats', limit: 5 });
+  const semanticResult = await search.execute('search-1', { query: '委屈猫', set: 'cats', limit: 5 });
+  expect(semanticResult.details.count).toBe(1);
+  const result = await search.execute('search-2', { ids: [stickerRow.id.toString()] });
   const text = result.content.find((entry) => entry.type === 'text');
   if (text === undefined || text.type !== 'text') {
     throw new Error('Search returned no text result');
@@ -149,6 +154,7 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
     throw new Error('Search result shape is invalid');
   }
   const first = parsed[0];
+  expect(first.sticker_id).toBe(stickerRow.id.toString());
   if (
     typeof first !== 'object' ||
     first === null ||

@@ -188,11 +188,14 @@ export class BucketScheduler {
         throw new Error('Startup catch-up state changed before scheduling');
       }
       const selected = this.#store.db
-        .query<StartupMessageRow, [string, bigint]>(
+        .query<StartupMessageRow, [bigint, string, bigint]>(
           `WITH session_messages AS (
              SELECT m.id, m.conversation_id, m.chat_id, c.telegram_chat_id,
                     m.telegram_message_id, m.telegram_date,
-                    CASE WHEN r.kind <> 'service' AND COALESCE(s.is_bot, 0) = 0 THEN 1 ELSE 0 END AS eligible_human
+                    CASE WHEN r.kind <> 'service' AND COALESCE(s.is_bot, 0) = 0
+                              AND (r.kind <> 'sticker' OR r.text IS NOT NULL OR r.caption IS NOT NULL
+                                   OR EXISTS (SELECT 1 FROM media WHERE revision_id = r.id AND kind <> 'sticker')
+                                   OR ? = 1) THEN 1 ELSE 0 END AS eligible_human
              FROM messages m
              JOIN message_revisions r ON r.id = m.current_revision_id
              LEFT JOIN senders s ON s.id = r.sender_id
@@ -211,7 +214,11 @@ export class BucketScheduler {
            WHERE message_rank <= ?
            ORDER BY chat_id, telegram_date, telegram_message_id`,
         )
-        .all(startedAt.toISOString(), BigInt(this.#config.agent.history_messages));
+        .all(
+          this.#config.telegram.sticker_trigger_enabled === true ? 1n : 0n,
+          startedAt.toISOString(),
+          BigInt(this.#config.agent.history_messages),
+        );
       const grouped = new Map<string, StartupMessageRow[]>();
       for (const message of selected) {
         const key = message.chat_id.toString();

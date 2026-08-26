@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
-import { loadConfig } from '../src/config.ts';
+import { type FileConfig, loadConfig } from '../src/config.ts';
 import { ContextBuilder } from '../src/context-builder.ts';
 import { SqliteStore } from '../src/database.ts';
 import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from '../src/scheduler.ts';
@@ -39,6 +39,27 @@ function topicUpdate(updateId: number, messageId: number, chatId: number, thread
   };
 }
 
+function stickerUpdate(updateId: number, messageId: number): Update {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: messageId,
+      date: 1_700_000_000,
+      chat: { id: FIRST_CHAT_ID, type: 'private', first_name: 'Owner' },
+      from: { id: 42, is_bot: false, first_name: 'Alice' },
+      sticker: {
+        file_id: `sticker-${messageId}`,
+        file_unique_id: `sticker-unique-${messageId}`,
+        width: 64,
+        height: 64,
+        is_animated: false,
+        is_video: false,
+        type: 'regular',
+      },
+    },
+  };
+}
+
 function fakeApi(updates: readonly Update[]): StartupCatchUpApi {
   return {
     getUpdates: async (options) =>
@@ -48,7 +69,10 @@ function fakeApi(updates: readonly Update[]): StartupCatchUpApi {
   };
 }
 
-async function setup(twoChats: boolean): Promise<{
+async function setup(
+  twoChats: boolean,
+  transform?: (config: FileConfig) => void,
+): Promise<{
   readonly store: SqliteStore;
   readonly ingestion: TelegramIngestion;
   readonly scheduler: BucketScheduler;
@@ -66,6 +90,7 @@ async function setup(twoChats: boolean): Promise<{
         budget: { max_invocations_per_day: 100 },
       });
     }
+    transform?.(config);
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
@@ -130,6 +155,35 @@ describe('startup catch-up', () => {
     ]);
     expect(store.db.query('SELECT value FROM app_state WHERE key = ?').get(STARTUP_CATCH_UP_STATE_KEY)).toBeNull();
     store.close();
+  });
+
+  test('applies sticker_trigger_enabled to startup catch-up invocations', async () => {
+    const disabled = await setup(false);
+    const disabledResult = await runStartupCatchUp({
+      api: fakeApi([stickerUpdate(1, 10)]),
+      store: disabled.store,
+      ingestion: disabled.ingestion,
+      scheduler: disabled.scheduler,
+      allowedUpdates: ['message', 'edited_message', 'my_chat_member'],
+      now: fixedClock(),
+    });
+    expect(disabledResult.storedMessages).toBe(1);
+    expect(disabledResult.invocationIds).toHaveLength(0);
+    disabled.store.close();
+
+    const enabled = await setup(false, (config) => {
+      config.telegram.sticker_trigger_enabled = true;
+    });
+    const enabledResult = await runStartupCatchUp({
+      api: fakeApi([stickerUpdate(1, 10)]),
+      store: enabled.store,
+      ingestion: enabled.ingestion,
+      scheduler: enabled.scheduler,
+      allowedUpdates: ['message', 'edited_message', 'my_chat_member'],
+      now: fixedClock(),
+    });
+    expect(enabledResult.invocationIds).toHaveLength(1);
+    enabled.store.close();
   });
 
   test('switches to realtime buckets after draining pending updates', async () => {

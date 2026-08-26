@@ -167,6 +167,7 @@ export class ContextBuilder {
       catchUp,
       renderPromptTemplate(chatConfig.instructions, templateValues),
       this.#memoryPrompt(identity.conversation_id),
+      `Current time in ${timezone}: ${currentTime}`,
     ]
       .filter((part) => part.length > 0)
       .join('\n\n');

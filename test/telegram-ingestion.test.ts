@@ -44,6 +44,27 @@ function textUpdate(updateId: number, messageId: number, text: string, chatId = 
   };
 }
 
+function stickerUpdate(updateId: number, messageId: number): Update {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: messageId,
+      date: 1_700_000_000,
+      chat: { id: 123456789, type: 'private', first_name: 'Owner' },
+      from: { id: 42, is_bot: false, first_name: 'Alice' },
+      sticker: {
+        file_id: `sticker-${messageId}`,
+        file_unique_id: `sticker-unique-${messageId}`,
+        width: 64,
+        height: 64,
+        is_animated: false,
+        is_video: false,
+        type: 'regular',
+      },
+    },
+  };
+}
+
 describe('Telegram ingestion', () => {
   test('stores denied metadata without content', async () => {
     const { store, ingestion } = await setup();
@@ -125,6 +146,30 @@ describe('Telegram ingestion', () => {
     expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(0n);
     store.close();
   });
+
+  test('requires sticker_trigger_enabled for a sticker to open a bucket', async () => {
+    const disabled = await setup();
+    const standalone = disabled.ingestion.ingest(stickerUpdate(1, 10));
+    expect(standalone.messageId).toBeDefined();
+    expect(standalone.bucketId).toBeUndefined();
+    expect(disabled.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(
+      0n,
+    );
+    const text = disabled.ingestion.ingest(textUpdate(2, 11, 'hello'));
+    const companion = disabled.ingestion.ingest(stickerUpdate(3, 12));
+    expect(companion.bucketId).toBe(text.bucketId);
+    expect(
+      disabled.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM bucket_messages').get()?.count,
+    ).toBe(2n);
+    disabled.store.close();
+
+    const enabled = await setup((config) => {
+      config.telegram.sticker_trigger_enabled = true;
+    });
+    expect(enabled.ingestion.ingest(stickerUpdate(4, 20)).bucketId).toBeDefined();
+    enabled.store.close();
+  });
+
   test('keeps ordinary supergroup reply threads in the main conversation', async () => {
     const { store, ingestion } = await setup();
     const chat = { id: 123456789, type: 'supergroup' as const, title: 'Group' };

@@ -245,6 +245,14 @@ export class TelegramIngestion {
       revisionNo = existing.revision_no + 1n;
     }
     const normalized = normalizeMessage(message, service);
+    const stickerOnly =
+      normalized.kind === 'sticker' &&
+      normalized.text === null &&
+      normalized.caption === null &&
+      normalized.media.length === 1 &&
+      normalized.media[0]?.kind === 'sticker';
+    const eligibleHuman =
+      !fromBot && !service && (!stickerOnly || this.#config.telegram.sticker_trigger_enabled === true);
     const revision = this.#store.db
       .query(
         'INSERT INTO message_revisions(message_id, revision_no, sender_id, kind, text, caption, reply_to_message_id, reply_snapshot_json, forward_origin_json, media_group_id, service_json, created_at, raw_fragment_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -286,8 +294,8 @@ export class TelegramIngestion {
     return {
       id: messageId,
       revisionId: BigInt(revisionId),
-      eligibleHuman: !fromBot && !service,
-      companionOnly: fromBot || service,
+      eligibleHuman,
+      companionOnly: !eligibleHuman,
     };
   }
 

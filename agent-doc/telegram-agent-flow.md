@@ -16,7 +16,8 @@
 2. Chat ID 是否在 `telegram.chats`。
 3. Forum Topic 是否在可选 `topic_ids`。
 4. 消息是否来自 Bot/Service，以及 `process_bot_messages` 是否允许。
-5. Message/Edited Message 结构是否可归一化。
+5. 单独的人类 Sticker 是否允许按 `sticker_trigger_enabled` 创建 Bucket；该开关默认关闭。
+6. Message/Edited Message 结构是否可归一化。
 
 拒绝的 Update 不进入 Bucket，但保留稳定 `rejection_reason`，例如 `chat_not_allowed`、`topic_not_allowed`。排查 allowlist 时同时比较配置哈希；配置不会热重载。
 
@@ -49,7 +50,7 @@
 
 1. Update 仍经过 allowlist、去重、Revision 与媒体持久化，但不创建常规实时 Bucket。
 2. `app_state.telegram_startup_catch_up` 保存本轮起点；进程在排空或建任务时崩溃，下一次启动从同一起点完成，不丢失已确认 Update。
-3. 每个有可处理人类消息的 Chat 只创建一个 `startup_catch_up` Bucket。
+3. 每个有可触发消息的 Chat 只创建一个 `startup_catch_up` Bucket；单独的人类 Sticker 仍受 `sticker_trigger_enabled` 限制。
 4. Bucket 仅包含该 Chat 按 Telegram 时间排序的最新 `agent.history_messages` 条本轮消息；Forum Topic 可以混合。
 5. Snapshot 携带 `message_thread_id`。回复可见消息时，`send` 路由到该消息所属 Topic；不带 Reply 时路由到最新消息所属 Topic。
 6. 排空完成并原子清除启动状态后，才切换到常规按 Conversation 收集。
@@ -58,7 +59,7 @@
 
 ## 会话节拍与 Bucket
 
-Chat（群）空闲时，第一条可处理消息创建该 Conversation 的 `collecting` Bucket，并先等待一个完整节拍：
+Chat（群）空闲时，第一条可触发消息创建该 Conversation 的 `collecting` Bucket，并先等待一个完整节拍：
 
 ```text
 first_received_at = T
@@ -71,7 +72,7 @@ first session      = T + telegram.bucket_window_seconds
 2. 同一 Chat 同时最多一个 queued/running Invocation；会话运行期间任何 Topic 的新消息只进入自己的 Bucket，不修改当前 Invocation。
 3. 下一次允许启动的时间为 `max(前一会话 started_at + bucket_window_seconds, 前一会话 finished_at)`，按 Chat 计算。
 4. 前一会话短于一个节拍时，等待满节拍；长于一个节拍时，结束后立即处理下一 Bucket。
-5. 没有新的人类消息时不创建 Bucket，也不启动空会话。
+5. 没有新的可触发消息时不创建 Bucket，也不启动空会话。`sticker_trigger_enabled` 默认为 `false`：单独的人类 Sticker 不开 Bucket，但可以加入已有 collecting Bucket；设为 `true` 后可以单独触发。
 6. 到达启动时间后，Scheduler 冻结 `history` 与 `new` 快照、预留预算并创建 Invocation。
 
 因此，如果 Agent 会话耗时为 0 且群友持续发送消息，会话开始时间固定相隔 `bucket_window_seconds`，与该群有多少活跃 Topic 无关。Bot 自己通过 `send` 产生的消息写入可见历史，但不会触发下一 Bucket。

@@ -66,6 +66,7 @@ command SecretRef：
   "telegram": {
     "token": { "env": "TELEGRAM_BOT_TOKEN" },
     "process_bot_messages": false,
+    "sticker_trigger_enabled": false,
     "bucket_window_seconds": 15,
     "chats": [
       {
@@ -83,6 +84,7 @@ command SecretRef：
 规则：
 
 - `bucket_window_seconds` 是全局 Agent 会话节拍，单位秒；接受 0–300 的整数，示例值为 15。`0` 表示有新消息时不额外延迟，但不会创建空会话。节拍按 Chat（群）计算：同一时刻每个群最多一个 Agent 会话，下一会话在前一会话开始满一个节拍、且前一会话结束后启动。
+- `sticker_trigger_enabled` 可选，默认 `false`。关闭时，单独收到的人类 Sticker 仍会持久化，但不会创建 Bucket 或触发 Invocation；已有 collecting Bucket 时仍会加入。设为 `true` 后，单独的 Sticker 可以创建 Bucket。
 - 消息收集仍按 Conversation 隔离：Forum Topic 各自收集、Context 互不混入，只是 Agent 会话在群内串行。
 - Chat ID 必须是非零安全整数且不可重复。
 - 未配置 `topic_ids`：允许该 Chat 的普通消息与所有 Topic。

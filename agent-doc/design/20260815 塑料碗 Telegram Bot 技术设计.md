@@ -184,6 +184,7 @@ Phase 1 的 custom Provider 只接受已编译并测试的 API adapter：
   "telegram": {
     "token": { "env": "TELEGRAM_BOT_TOKEN" },
     "process_bot_messages": false,
+    "sticker_trigger_enabled": false,
     "bucket_window_seconds": 15,
     "chats": [
       {
@@ -449,7 +450,7 @@ pending → success | error | outcome_unknown | blocked_budget
 - static WEBP、animated TGS、video WEBM sticker；
 - caption、reply、forward、media group、edited message。
 
-其他真人消息保存为 `unsupported` 占位并可触发 Bucket。Service Message 只加入已经由真人触发的 collecting Bucket。其他 Bot 消息由 `process_bot_messages` 控制：关闭时完全忽略，开启后只能加入真人已触发 Bucket。自己发送的 Update 始终忽略；自己的出站消息在 Telegram API 成功后由应用直接写入历史。
+其他真人消息保存为 `unsupported` 占位并可触发 Bucket。人类 Sticker 在 `sticker_trigger_enabled` 为 `true` 时可单独触发 Bucket；该开关默认关闭，关闭时 Sticker 只加入已有 collecting Bucket。Service Message 只加入已经由真人触发的 collecting Bucket。其他 Bot 消息由 `process_bot_messages` 控制：关闭时完全忽略，开启后只能加入真人已触发 Bucket。自己发送的 Update 始终忽略；自己的出站消息在 Telegram API 成功后由应用直接写入历史。
 
 Reply 目标不在最近历史时，规范化层保存一层紧凑引用快照：Message ID、发送者、截断正文或媒体占位。不递归展开 Reply。
 
@@ -481,7 +482,7 @@ stateDiagram-v2
 ```
 
 - 节拍通过全局 `telegram.bucket_window_seconds` 配置为 0–300 的整数秒，不按 Chat 覆盖，按 Chat 串行；`0` 仅取消新消息的额外等待，不创建空会话。
-- 空闲 Chat 的首次 deadline 为第一条 eligible human message 的 `received_at + bucket_window_seconds`；不同 Topic 的 Bucket 各自持有 deadline。
+- 空闲 Chat 的首次 deadline 为第一条 eligible human message 的 `received_at + bucket_window_seconds`；不同 Topic 的 Bucket 各自持有 deadline。人类 Sticker 仅在 `telegram.sticker_trigger_enabled = true` 时算 eligible，默认只作为已有 Bucket 的 companion message。
 - Chat 内任意 Invocation 运行期间，各 Topic 只收集一个下一 Bucket。下一启动时间为 `max(previous started_at + bucket_window_seconds, previous finished_at)`，按 Chat 计算。
 - 使用数据库驱动的单一调度器：查询最近 deadline，等待；新建更早 deadline 或 Invocation 结束时唤醒。
 - deadline 与状态持久化；不为每个 Chat 创建独立 `setTimeout`。

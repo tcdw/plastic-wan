@@ -145,6 +145,7 @@ export const ConfigSchema = Type.Object(
       {
         token: SecretRefSchema,
         process_bot_messages: Type.Boolean(),
+        sticker_trigger_enabled: Type.Optional(Type.Boolean()),
         bucket_window_seconds: Type.Integer({ minimum: 0, maximum: 300 }),
         chats: Type.Array(ChatSchema, { minItems: 1 }),
         admins: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }), { uniqueItems: true })),

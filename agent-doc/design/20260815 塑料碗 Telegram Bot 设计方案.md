@@ -150,14 +150,15 @@ wait(5)
 
 Agent 的 Assistant Message 本身不得直接发送到 Telegram。系统只允许通过专门的 `send` Tool 产生 Telegram 可见内容。
 
-`send` 支持两种互斥内容：
+`send` 支持文本或 Sticker 两种互斥内容；文本默认以纯文本发送，也可显式启用 Telegram MarkdownV2：
 
 ```text
 send({ text: "你好", reply_to_message_id?: 123 })
-send({ sticker: "cat_pack/crying", reply_to_message_id?: 123 })
+send({ text: "*你好*", parse_mode: "MarkdownV2", reply_to_message_id?: 123 })
+send({ kind: "sticker", sticker_ref: "stk_...", reply_to_message_id?: 123 })
 ```
 
-文本使用纯文本格式，不启用 Markdown 或 HTML。Reply 目标必须来自当前 Conversation 的可见 Context。超出 Telegram 单条长度限制时，Tool 应返回错误，不自动拆分或截断内容。
+未提供 `parse_mode` 的文本保持纯文本；MarkdownV2 文本由调用方按 Telegram 规则转义。Reply 目标必须来自当前 Conversation 的可见 Context。超出 Telegram 单条长度限制时，Tool 应返回错误，不自动拆分或截断内容。
 
 Sticker 必须来自管理员静态许可的 Sticker Set，并使用系统生成的稳定引用。Agent 不得提交任意 Telegram `file_id` 或未许可的 Sticker Set。
 
@@ -454,7 +455,7 @@ Phase 1 完成后，应能够将 Bot 放入真实 Telegram 对话并满足：
 7. Agent 可以选择完全不参与某一轮对话；
 8. Agent 只能通过 `send` Tool 主动向 Telegram 发言；
 9. 一次 Invocation 可以产生零条至六条 Telegram 文本或许可 Sticker；
-10. 文本以纯文本发送，并可以 Reply 当前 Context 中的消息；
+10. 文本可以纯文本或 Telegram MarkdownV2 发送，并可以 Reply 当前 Context 中的消息；
 11. image-capable Agent 首轮即可直接读取 Photo 与许可的图片 Document；
 12. text-only Agent 可通过 `read_image` 按需读取普通图片；
 13. 静态、动画与视频 Sticker 均可通过 `read_image` 获取单帧描述；

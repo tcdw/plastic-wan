@@ -597,6 +597,7 @@ type SendInput =
   | {
       kind?: "text";
       text: string;
+      parse_mode?: "MarkdownV2";
       reply_to_message_id?: string;
     }
   | {
@@ -609,7 +610,7 @@ type SendInput =
 规则：
 
 - 仅提供 `text`（以及可选的 `reply_to_message_id`）时，`kind` 默认为 `"text"`；Sticker 仍必须显式指定 `kind: "sticker"`；
-- text 为纯文本，不设置 Telegram `parse_mode`；
+- text 默认不设置 Telegram `parse_mode`，保持纯文本；仅当 `parse_mode` 显式为 `"MarkdownV2"` 时启用 Telegram MarkdownV2，调用方负责正确转义；
 - text 必须满足 Telegram 单条长度限制，超长返回 Tool Error，不截断、不拆分；
 - `reply_to_message_id` 必须来自当前 Conversation 的可见 Context；
 - Forum Topic 的 `message_thread_id` 由 Invocation 自动附加，Agent 不能改写；
@@ -1020,7 +1021,7 @@ Timer：
 
 `send`：
 
-- 纯文本、Sticker、Reply；
+- 纯文本、MarkdownV2 文本、Sticker、Reply；
 - 非当前 Context Reply 被拒绝；
 - 任意 file_id/Chat ID 被拒绝；
 - 长文本返回 Tool Error；
@@ -1054,7 +1055,7 @@ MCP：
 
 1. 连续拆分消息只产生一个配置长度的 Bucket；
 2. Agent 选择沉默时没有 Telegram 输出；
-3. Agent 通过 `send` 连续发送 0–6 条纯文本；
+3. Agent 通过 `send` 连续发送 0–6 条纯文本或 MarkdownV2 文本；
 4. Agent Reply 当前 Context 消息；
 5. 截止前编辑消息进入最终输入，截止后编辑不重跑；
 6. image-capable Agent 直接接收 Photo/图片 Document，且不产生 `read_image`/`vision_chat` 审计；

@@ -135,15 +135,19 @@ describe('invocation context', () => {
 });
 
 describe('send tool', () => {
-  test('sends plain text, audits it, and writes Telegram-visible history', async () => {
+  test('sends plain text and MarkdownV2 while auditing Telegram-visible history', async () => {
     const { store, ingestion, scheduler, builder } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const invocationId = processOne(scheduler, new Date(received.getTime() + 15_000));
     const context = builder.build(invocationId, 200_000, 0, 32768);
+    const requests: Array<{ text: string; options: Parameters<TelegramSendApi['sendMessage']>[2] }> = [];
     const api: TelegramSendApi = {
-      sendMessage: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
-      sendSticker: async () => ({ message_id: 502, date: 1_700_000_101, chat: { id: 123456789 } }),
+      sendMessage: async (_chatId, text, options) => {
+        requests.push({ text, options });
+        return { message_id: 500 + requests.length, date: 1_700_000_100, chat: { id: 123456789 } };
+      },
+      sendSticker: async () => ({ message_id: 503, date: 1_700_000_101, chat: { id: 123456789 } }),
     };
     const tool = createSendTool({
       store,
@@ -155,13 +159,23 @@ describe('send tool', () => {
       bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     });
     expect(Compile(tool.parameters).Check({ text: 'world', reply_to_message_id: '10' })).toBe(true);
+    expect(Compile(tool.parameters).Check({ text: '*formatted*', parse_mode: 'MarkdownV2' })).toBe(true);
+    expect(Compile(tool.parameters).Check({ text: '<b>formatted</b>', parse_mode: 'HTML' })).toBe(false);
     await tool.execute('call-1', { text: 'world', reply_to_message_id: '10' });
-    const audit = store.db
+    await tool.execute('call-2', { text: '*formatted*', parse_mode: 'MarkdownV2' });
+    expect(requests).toEqual([
+      { text: 'world', options: { reply_parameters: { message_id: 10 } } },
+      { text: '*formatted*', options: { parse_mode: 'MarkdownV2' } },
+    ]);
+    const audits = store.db
       .query<{ tool_state: string; send_state: string; sent_by_bot: bigint; text: string }, []>(
-        'SELECT tc.state AS tool_state, ts.state AS send_state, m.sent_by_bot, r.text FROM tool_calls tc JOIN telegram_sends ts ON ts.tool_call_id = tc.id JOIN messages m ON m.telegram_message_id = ts.telegram_message_id JOIN message_revisions r ON r.id = m.current_revision_id',
+        'SELECT tc.state AS tool_state, ts.state AS send_state, m.sent_by_bot, r.text FROM tool_calls tc JOIN telegram_sends ts ON ts.tool_call_id = tc.id JOIN messages m ON m.telegram_message_id = ts.telegram_message_id JOIN message_revisions r ON r.id = m.current_revision_id ORDER BY tc.id',
       )
-      .get();
-    expect(audit).toEqual({ tool_state: 'success', send_state: 'success', sent_by_bot: 1n, text: 'world' });
+      .all();
+    expect(audits).toEqual([
+      { tool_state: 'success', send_state: 'success', sent_by_bot: 1n, text: 'world' },
+      { tool_state: 'success', send_state: 'success', sent_by_bot: 1n, text: '*formatted*' },
+    ]);
     store.close();
   });
 

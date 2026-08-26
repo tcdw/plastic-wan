@@ -9,6 +9,7 @@ export const SendInputSchema = Type.Object(
   {
     kind: Type.Optional(Type.Enum({ text: 'text', sticker: 'sticker' })),
     text: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
+    parse_mode: Type.Optional(Type.Literal('MarkdownV2')),
     sticker_ref: Type.Optional(Type.String({ minLength: 1 })),
     reply_to_message_id: Type.Optional(Type.String({ pattern: '^[1-9][0-9]*$' })),
   },
@@ -16,12 +17,17 @@ export const SendInputSchema = Type.Object(
 );
 
 export type SendToolInput =
-  | { readonly kind: 'text'; readonly text: string; readonly reply_to_message_id?: string }
+  | {
+      readonly kind: 'text';
+      readonly text: string;
+      readonly parse_mode?: 'MarkdownV2';
+      readonly reply_to_message_id?: string;
+    }
   | { readonly kind: 'sticker'; readonly sticker_ref: string; readonly reply_to_message_id?: string };
 
 function narrowSendInput(input: Static<typeof SendInputSchema>): SendToolInput | undefined {
   const kind = input.kind ?? (input.text !== undefined && input.sticker_ref === undefined ? 'text' : undefined);
-  if (kind === undefined) {
+  if (kind === undefined || (kind === 'sticker' && input.parse_mode !== undefined)) {
     return undefined;
   }
   const field = kind === 'text' ? ('text' as const) : ('sticker_ref' as const);
@@ -29,7 +35,8 @@ function narrowSendInput(input: Static<typeof SendInputSchema>): SendToolInput |
     return undefined;
   }
   const reply = input.reply_to_message_id === undefined ? {} : { reply_to_message_id: input.reply_to_message_id };
-  return { kind, [field]: input[field], ...reply } as SendToolInput;
+  const parseMode = kind === 'text' && input.parse_mode !== undefined ? { parse_mode: input.parse_mode } : {};
+  return { kind, [field]: input[field], ...parseMode, ...reply } as SendToolInput;
 }
 
 interface TelegramSendResponse {
@@ -44,6 +51,7 @@ export interface TelegramSendApi {
     text: string,
     options: {
       readonly message_thread_id?: number;
+      readonly parse_mode?: 'MarkdownV2';
       readonly reply_parameters?: { readonly message_id: number };
     },
   ): Promise<TelegramSendResponse>;
@@ -74,14 +82,14 @@ export function createSendTool(
     name: 'send',
     label: 'Send to Telegram',
     description:
-      "Send one plain-text message or one sticker to this invocation's Telegram chat. For plain text, kind may be omitted when text is the only content field. For a sticker send, kind MUST be sticker and sticker_ref MUST be a stk_ value returned by search_stickers in THIS invocation; the img_ image_ref values shown in the context are for read_image only and will be rejected. Reply targets must be visible in this invocation.",
+      "Send one plain-text message, one Telegram MarkdownV2 text message, or one sticker to this invocation's Telegram chat. For text, kind may be omitted; omit parse_mode for plain text, or set parse_mode to MarkdownV2 only when text follows Telegram MarkdownV2 escaping rules. For a sticker send, kind MUST be sticker and sticker_ref MUST be a stk_ value returned by search_stickers in THIS invocation; the img_ image_ref values shown in the context are for read_image only and will be rejected. Reply targets must be visible in this invocation.",
     parameters: SendInputSchema,
     executionMode: 'sequential',
     execute: async (toolCallId, input, signal) => {
       const send = narrowSendInput(input);
       if (send === undefined) {
         recordRejectedSend(environment, toolCallId, input, 'send_input_invalid');
-        throw new Error('send input is missing the field required by its kind');
+        throw new Error('send input fields do not match its kind');
       }
       const replyTarget =
         send.reply_to_message_id === undefined
@@ -138,6 +146,7 @@ export function createSendTool(
         ...(send.reply_to_message_id === undefined
           ? {}
           : { reply_parameters: { message_id: Number(send.reply_to_message_id) } }),
+        ...(send.kind === 'text' && send.parse_mode !== undefined ? { parse_mode: send.parse_mode } : {}),
       };
       const startedAt = performance.now();
       try {

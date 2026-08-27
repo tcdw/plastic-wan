@@ -135,6 +135,10 @@ Context
 
 发送前写 pending 审计并标记副作用边界。明确失败可按策略处理；网络中断后无法确认 Telegram 是否接收时记录 `outcome_unknown`，不能盲目重发。
 
+`agent.send_max_text_length` 配置了文本最大字符数（默认不限制）时，超长文本在进入配额扣减前被拒绝：Tool Call 记为 `error`、错误码 `send_text_too_long`，不写 `telegram_sends`、不消耗 `sends_used`。
+
+`agent.send_disallow_consecutive_blank_lines` 开启（默认关闭）时，包含两个及以上连续空行的文本同样在配额扣减前被拒绝，错误码 `send_consecutive_blank_lines`。
+
 成功发送后：
 
 - `tool_calls` 记为 success。

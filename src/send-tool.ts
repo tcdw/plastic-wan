@@ -71,6 +71,8 @@ export interface SendToolEnvironment {
   readonly context: InvocationContext;
   readonly stickerCapabilities: ReadonlyMap<string, string>;
   readonly maxSends: number;
+  readonly maxTextLength: number | undefined;
+  readonly disallowConsecutiveBlankLines: boolean;
   readonly deadline: number;
   readonly bot: { readonly id: bigint; readonly displayName: string; readonly username: string | null };
 }
@@ -101,6 +103,16 @@ export function createSendTool(
       }
       const targetConversationId = replyTarget?.conversationId ?? environment.context.conversationId;
       const targetThreadId = replyTarget?.threadId ?? environment.context.threadId;
+      if (send.kind === 'text' && environment.maxTextLength !== undefined && send.text.length > environment.maxTextLength) {
+        recordRejectedSend(environment, toolCallId, input, 'send_text_too_long');
+        throw new Error(
+          `text length ${send.text.length} exceeds the configured limit of ${environment.maxTextLength} characters`,
+        );
+      }
+      if (send.kind === 'text' && environment.disallowConsecutiveBlankLines && /\n[ \t]*\n[ \t]*\n/.test(send.text)) {
+        recordRejectedSend(environment, toolCallId, input, 'send_consecutive_blank_lines');
+        throw new Error('text must not contain two or more consecutive blank lines');
+      }
       const stickerFileId = send.kind === 'sticker' ? environment.stickerCapabilities.get(send.sticker_ref) : undefined;
       if (send.kind === 'sticker' && stickerFileId === undefined) {
         recordRejectedSend(environment, toolCallId, input, 'sticker_ref_not_authorized');

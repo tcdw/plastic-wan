@@ -12,7 +12,7 @@ import type {
   ToolCallEntry,
   ToolRegistryEntry,
 } from "../api.ts";
-import { flatPages, JsonBlock, queryState, StateTag, TextValue, useSearchFilter } from "../components.tsx";
+import { flatPages, JsonBlock, JsonTreeView, queryState, StateTag, TextValue, useSearchFilter } from "../components.tsx";
 import { formatCost, formatDuration, formatNumber, formatTime } from "../format.ts";
 import { invocationQuery, invocationsQuery } from "../queries.ts";
 
@@ -283,20 +283,30 @@ function ModelTimelineCard({ model }: { readonly model: ModelCallEntry }): React
           <Typography.Text type="danger">Error {model.error_code}</Typography.Text>
         )}
       </Space>
-      {model.error_detail === null ? null : (
+      {model.error_detail === null && model.request_json === null && model.response_json === null ? null : (
         <Collapse
           size="small"
           style={{ marginTop: 12 }}
           items={[
-            {
-              key: "error-detail",
-              label: "View full model error details",
-              children: (
-                <Typography.Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                  {model.error_detail}
-                </Typography.Paragraph>
-              ),
-            },
+            ...(model.error_detail === null
+              ? []
+              : [
+                  {
+                    key: "error-detail",
+                    label: "View full model error details",
+                    children: (
+                      <Typography.Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        {model.error_detail}
+                      </Typography.Paragraph>
+                    ),
+                  },
+                ]),
+            ...(model.request_json === null
+              ? []
+              : [{ key: "request-json", label: "View last API request", children: <JsonTreeView value={model.request_json} title="Last API request payload" /> }]),
+            ...(model.response_json === null
+              ? []
+              : [{ key: "response-json", label: "View last API response", children: <JsonTreeView value={model.response_json} title="Last API response status" /> }]),
           ]}
         />
       )}
@@ -638,11 +648,21 @@ export function InvocationDetailPage({ id }: { readonly id: string }): React.Rea
                   pagination={false}
                   dataSource={[...data.model_calls]}
                   expandable={{
-                    rowExpandable: (row) => row.error_detail !== null,
+                    rowExpandable: (row) => row.error_detail !== null || row.request_json !== null || row.response_json !== null,
                     expandedRowRender: (row) => (
-                      <Typography.Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                        {row.error_detail}
-                      </Typography.Paragraph>
+                      <Space direction="vertical" size="small" style={{ width: "100%" }}>
+                        {row.request_json === null ? null : (
+                          <JsonTreeView value={row.request_json} title="Last API request payload" />
+                        )}
+                        {row.response_json === null ? null : (
+                          <JsonTreeView value={row.response_json} title="Last API response status" />
+                        )}
+                        {row.error_detail === null ? null : (
+                          <Typography.Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                            {row.error_detail}
+                          </Typography.Paragraph>
+                        )}
+                      </Space>
                     ),
                   }}
                   columns={[

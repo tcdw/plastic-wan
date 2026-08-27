@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Alert, Button, Empty, Form, Input, Spin, Tag, Typography } from "antd";
+import JsonView from "@uiw/react-json-view";
+import { Alert, Button, Empty, Form, Input, Segmented, Spin, Tag, Typography } from "antd";
 import { ApiError, type Credentials } from "./api.ts";
 import { prettyJson, stateColor } from "./format.ts";
 
@@ -8,6 +9,64 @@ export function JsonBlock({ value }: { readonly value: string | null }): React.R
   if (text === null) return <Typography.Text type="secondary">—</Typography.Text>;
   return <pre className="admin-json">{text}</pre>;
 }
+
+/** Parses a stored JSON string for tree display; returns null when absent or unparsable. */
+function parseJsonTree(value: string | null): Record<string, unknown> | readonly unknown[] | null {
+  if (value === null || value.length === 0) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "object" && parsed !== null
+      ? parsed as Record<string, unknown> | readonly unknown[]
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+const JSON_TREE_SIDEBAR_WIDTH = 420;
+
+/** Collapsible JSON tree for large payloads (model request snapshots). */
+export function JsonTreeView({ value, title }: { readonly value: string | null; readonly title: string }): React.ReactElement {
+  const [mode, setMode] = useState<"tree" | "text">("tree");
+  const data = parseJsonTree(value);
+  if (data === null) return <JsonBlock value={value} />;
+  return (
+    <div className="admin-json-tree">
+      <SpaceLike>
+        <Segmented
+          size="small"
+          value={mode}
+          onChange={(next) => setMode(next as "tree" | "text")}
+          options={[
+            { value: "tree", label: "Tree" },
+            { value: "text", label: "Text" },
+          ]}
+        />
+        <Typography.Text type="secondary">{title}</Typography.Text>
+      </SpaceLike>
+      {mode === "tree" ? (
+        <JsonView
+          value={data}
+          collapsed={1}
+          displayObjectSize={false}
+          displayDataTypes={false}
+          shortenTextAfterLength={120}
+          enableClipboard
+          style={{ "--w-rjv-background-color": "transparent" } as React.CSSProperties}
+        />
+      ) : (
+        <JsonBlock value={value} />
+      )}
+    </div>
+  );
+}
+
+function SpaceLike({ children }: { readonly children: React.ReactNode }): React.ReactElement {
+  return <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>{children}</div>;
+}
+
+export { JSON_TREE_SIDEBAR_WIDTH };
+
 
 export function StateTag({ state }: { readonly state: string | null }): React.ReactElement {
   if (state === null || state.length === 0) return <Typography.Text type="secondary">—</Typography.Text>;

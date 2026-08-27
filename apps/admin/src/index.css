@@ -24,6 +24,23 @@ body {
   word-break: break-word;
 }
 
+.admin-json-tree {
+  padding: 8px 12px;
+  max-height: 420px;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.admin-json-tree pre.admin-json {
+  background: transparent;
+  padding: 0;
+  max-height: none;
+}
+
 .admin-auth {
   display: flex;
   align-items: center;

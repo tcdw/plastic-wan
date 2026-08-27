@@ -157,7 +157,7 @@ export class ContextBuilder {
       hourCycle: 'h23',
     }).format(new Date());
     const imageHandling = supportsImages
-      ? 'Telegram Photo and supported image Documents are attached directly to the multimodal Agent input. The read_image Tool is restricted to Sticker references.'
+      ? 'Telegram Photo and supported image Documents are attached directly to the multimodal Agent input, in the same order as the figure_N image_ref entries inside the message JSON of <untrusted_telegram_history> and <untrusted_new_messages>. Treat each attached image as the media of the message whose JSON references the matching figure_N. The read_image Tool is restricted to Sticker references.'
       : 'Telegram images and Stickers are available through the read_image Tool. Call it when visual details are needed.';
     const templateValues: PromptTemplateValues = {
       agent: agentModel,
@@ -228,8 +228,32 @@ export class ContextBuilder {
       usedCharacters += size;
     }
     const omittedNewMessages = current.length - selectedCurrent.length;
-    const historyText = selectedHistory.map((entry) => JSON.stringify(entry.snapshot)).join('\n');
-    const currentText = selectedCurrent.map((entry) => JSON.stringify(entry.snapshot)).join('\n');
+    // Multimodal agents receive Photos and image Documents as direct attachments
+    // instead of inline image refs. Rewrite those media entries into ordered
+    // figure markers (figure_1, figure_2, ...) rendered in the message JSON so
+    // each attachment keeps an explicit reference back to the group message
+    // that shared it. Text-only agents keep unmodified image refs.
+    const orderedFigureMedia: { imageRef: string; originalRef: string }[] = [];
+    let nextFigureNumber = 1;
+    const renderSnapshot = (entry: (typeof prepared)[number]): string => {
+      if (!supportsImages || entry.snapshot.media.length === 0) {
+        return JSON.stringify(entry.snapshot);
+      }
+      const snapshot = {
+        ...entry.snapshot,
+        media: entry.snapshot.media.map((media) => {
+          if (media.kind === 'sticker') {
+            return media;
+          }
+          const imageRef = `figure_${nextFigureNumber++}`;
+          orderedFigureMedia.push({ imageRef, originalRef: media.image_ref });
+          return { ...media, image_ref: imageRef };
+        }),
+      };
+      return JSON.stringify(snapshot);
+    };
+    const historyText = selectedHistory.map(renderSnapshot).join('\n');
+    const currentText = selectedCurrent.map(renderSnapshot).join('\n');
     const omission =
       omittedNewMessages === 0 ? '' : `[${omittedNewMessages} earlier new messages omitted to fit the model context]\n`;
     const userPrompt = [
@@ -254,15 +278,13 @@ export class ContextBuilder {
       }
     }
     const directImages = supportsImages
-      ? selectedMedia
-          .filter((media) => media.kind !== 'sticker')
-          .flatMap((media) => {
-            const mediaId = mediaIds.get(media.image_ref);
-            if (mediaId === undefined) {
-              throw new Error('Selected media is missing its capability reference');
-            }
-            return [{ mediaId, imageRef: media.image_ref }];
-          })
+      ? orderedFigureMedia.flatMap((media) => {
+          const mediaId = mediaIds.get(media.originalRef);
+          if (mediaId === undefined) {
+            throw new Error('Selected media is missing its capability reference');
+          }
+          return [{ mediaId, imageRef: media.imageRef }];
+        })
       : [];
     return {
       invocationId,

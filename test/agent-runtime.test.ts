@@ -61,7 +61,13 @@ test('a fresh Agent publishes only through send and audits model usage', async (
     models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
   });
   faux.setResponses([
-    fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'published' }), { stopReason: 'toolUse' }),
+    (context, options) => {
+      // The faux provider never touches the network, so the snapshot hooks are
+      // triggered manually to mirror what real adapters do.
+      options?.onPayload?.({ model: 'agent-model', messages: context.messages }, faux.getModel());
+      void options?.onResponse?.({ status: 200, headers: {} }, faux.getModel());
+      return fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'published' }), { stopReason: 'toolUse' });
+    },
     fauxAssistantMessage('private assistant text'),
   ]);
   const models = createModels();
@@ -106,6 +112,13 @@ test('a fresh Agent publishes only through send and audits model usage', async (
     )
     .get();
   expect(presented?.tools_json).toBe(JSON.stringify(['send']));
+  const snapshot = store.db
+    .query<{ request_json: string | null; response_json: string | null }, []>(
+      "SELECT request_json, response_json FROM model_calls WHERE role = 'agent' AND request_json IS NOT NULL ORDER BY id LIMIT 1",
+    )
+    .get();
+  expect(String(snapshot?.request_json)).toContain('"messages"');
+  expect(snapshot?.response_json).toBe(JSON.stringify({ status: 200 }));
   const registryRow = store.db
     .query<{ tool_registry_json: string | null }, [bigint]>('SELECT tool_registry_json FROM invocations WHERE id = ?')
     .get(invocationId);
@@ -256,6 +269,7 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
       expect(images).toHaveLength(1);
       expect(images[0]?.mimeType).toBe('image/jpeg');
       expect(user.content[0]).toMatchObject({ type: 'text' });
+      expect(user.content).toContainEqual({ type: 'text', text: expect.stringContaining('"image_ref":"figure_1"') });
       return fauxAssistantMessage('saw the photo');
     },
   ]);

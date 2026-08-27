@@ -211,6 +211,16 @@ export class AgentRuntime {
             maxTokens: model.maxTokens,
             maxRetries: 2,
             maxRetryDelayMs: Math.max(0, deadline - Date.now()),
+            // Snapshot audit: capture the exact provider request payload and the
+            // HTTP response status so the rendered context (figure markers,
+            // capability refs) and transport outcome stay inspectable.
+            onPayload: (payload) => {
+              this.#recordModelCallRequest(callId, payload);
+              return undefined;
+            },
+            onResponse: (response) => {
+              this.#recordModelCallResponse(callId, response);
+            },
           });
           void stream
             .result()
@@ -408,6 +418,25 @@ export class AgentRuntime {
       )
       .run(invocationId, model.provider, model.id, JSON.stringify(tools), new Date().toISOString());
     return BigInt(created.lastInsertRowid);
+  }
+  #recordModelCallRequest(callId: bigint, payload: unknown): void {
+    try {
+      this.#store.db
+        .query('UPDATE model_calls SET request_json = ? WHERE id = ? AND request_json IS NULL')
+        .run(JSON.stringify(payload ?? null), callId);
+    } catch {
+      // Snapshotting is best-effort auditing; never break the model call itself.
+    }
+  }
+
+  #recordModelCallResponse(callId: bigint, response: { status: number; headers: Record<string, string> }): void {
+    try {
+      this.#store.db
+        .query('UPDATE model_calls SET response_json = ? WHERE id = ? AND response_json IS NULL')
+        .run(JSON.stringify({ status: response.status }), callId);
+    } catch {
+      // Snapshotting is best-effort auditing; never break the model call itself.
+    }
   }
 
   #finishModelCall(callId: bigint, chatId: bigint, message: AssistantMessage): void {

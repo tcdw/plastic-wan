@@ -96,6 +96,8 @@ interface ModelCallRow {
   readonly duration_ms: bigint | null;
   readonly error_code: string | null;
   readonly error_detail: string | null;
+  readonly request_json: string | null;
+  readonly response_json: string | null;
   readonly created_at: string;
   readonly finished_at: string | null;
   readonly tools_json: string | null;
@@ -314,8 +316,8 @@ export function getInvocation(db: Database, id: bigint): Record<string, unknown>
   const modelCalls = db
     .query<ModelCallRow, [bigint]>(
       `SELECT id, role, provider, model, attempt, state, input_tokens, output_tokens, cache_read_tokens,
-              cache_write_tokens, total_tokens, cost, duration_ms, error_code, error_detail, created_at, finished_at,
-              tools_json
+              cache_write_tokens, total_tokens, cost, duration_ms, error_code, error_detail, request_json,
+              response_json, created_at, finished_at, tools_json
        FROM model_calls WHERE invocation_id = ? ORDER BY id`,
     )
     .all(id);
@@ -389,6 +391,8 @@ export function getInvocation(db: Database, id: bigint): Record<string, unknown>
       duration_ms: num(row.duration_ms),
       error_code: row.error_code,
       error_detail: row.error_detail,
+      request_json: row.request_json,
+      response_json: row.response_json,
       created_at: row.created_at,
       finished_at: row.finished_at,
       tools: parseStringArray(row.tools_json),

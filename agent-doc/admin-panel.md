@@ -2,7 +2,7 @@
 
 Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析、已配置 Sticker Set 的可搜索索引，以及 Agent 短期记忆（`memories`）。后端在 `src/admin/`，前端在 `apps/admin/`（Rsbuild + React + Ant Design + TanStack Query + TanStack Router）。
 
-审计数据只读；记忆管理与 Bot 管理员列表管理是该规则仅有的两个写入例外：管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume` 的 Telegram 用户。面板不能发送消息、修改运行配置、重跑 Invocation 或删除审计记录。
+审计数据只读；记忆管理、Bot 管理员列表管理、模型热切换、解除睡眠与取消挂起会话是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume` 的 Telegram 用户，热切换 agent 模型，或唤醒/取消挂起会话。面板不能改写配置文件、不能重跑 Invocation 或删除审计记录。
 
 ## 配置
 
@@ -53,9 +53,9 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 - 同一 `(client, username)` 连续 10 次失败后锁定 15 分钟，返回 429 `too_many_attempts`。
 - 过期 Session 在认证时删除，并在新建 Session 与服务启动时批量清理。
 - `POST /api/auth/logout` 按 Token 摘要删除 Session。
-- `POST /api/auth/credentials` 修改当前管理员用户名和密码，保留当前 Session、撤销该用户其它 Session，并签发新的 Cookie。
+- `POST /api/auth/credentials` 修改当前管理员用户名和密码，撤销该用户全部 Session（含当前）并签发新的 Cookie。
 
-跨站防护：所有 `POST` 校验 `Origin`，主机不匹配返回 403 `bad_origin`；审计路由只接受 `GET`，其它方法返回 405。
+跨站防护：所有写方法（`POST`/`PUT`/`DELETE`）校验 `Origin`，主机不匹配返回 403 `bad_origin`；审计路由只接受 `GET`，其它方法返回 405。
 
 ## API
 
@@ -122,7 +122,7 @@ bun run admin:dev     # Rsbuild dev server，/api 代理到 ADMIN_API_TARGET
 | `src/queries.ts` | TanStack Query option 工厂（列表用 infinite query） |
 | `src/routes.tsx` | 认证门、登录/初始化卡片、Layout 与路由树 |
 | `src/components.tsx` | `queryState()` 占位渲染、JSON 块、状态 Tag |
-| `src/pages/*.tsx` | Overview、Tool sessions、Messages、Memories、Bot admins、Bot Sticker Set 索引 |
+| `src/pages/*.tsx` | Overview、Tool sessions、Messages、Memories、Bot admins、Sticker Set 索引、Model 切换、Usage chart |
 
 `queryState()` 是普通函数而非组件：调用方依赖 `null` 判断是否渲染真实数据，JSX 元素永远不为 `null`。
 
@@ -147,7 +147,7 @@ Bot 管理员列表（迁移 `src/migrations/008_bot_admins.sql`）：
 | --- | --- |
 | `bot_admins` | Telegram 用户 ID（主键）、显示名、来源（`config`/`admin-panel`/`telegram`）、添加时间 |
 
-`telegram.admins` 配置项在启动时以 `INSERT ... ON CONFLICT DO NOTHING` 播种，只增不减；面板添加、管理员本人执行命令时的显示名刷新分别以 `admin-panel`、`telegram` 记录来源。Bot 管理员决定谁能执行 `/pause` 与 `/resume`，与面板登录账号无关。
+`telegram.admins` 配置项在启动时以 `INSERT ... ON CONFLICT DO NOTHING` 播种，只增不减，来源记为 `config`；面板添加管理员时来源记为 `admin-panel`。管理员本人执行命令时只刷新 `display_name`（`ON CONFLICT DO UPDATE`），不改写 `added_by` 来源。Bot 管理员决定谁能执行 `/pause` 与 `/resume`，与面板登录账号无关。
 
 ## 验证
 

@@ -113,7 +113,7 @@ Context
 
 每次模型请求都会附带完整的工具注册表（名称、label、描述与参数 Schema）。请求发出前把该请求实际附带的工具名写入 `model_calls.tools_json`，Invocation 的可用注册表快照（`name`/`label`/`description`）写入 `invocations.tool_registry_json`——因此可以审计“模型在某一轮到底看到了哪些工具”。context 接近上限时，Agent 循环只保留 `send` 和已经可用的 `zzz` 继续收尾。
 
-普通 Assistant Message 永不自动发布。模型不调用 `send` 即表示保持沉默，这在群聊中是正常成功结果。
+普通 Assistant Message 永不自动发布。模型不调用 `send` 即表示保持沉默，这在群聊中是正常成功结果。`agent.send_nudge_enabled` 开启时，若模型已草拟足够长的私有文本却未调用 `send`，harness 会在会话自然结束前注入一次 `steer` 提醒；提醒后仍不调用则静默放行，文本不出 Telegram。
 
 ## 睡眠
 
@@ -164,7 +164,7 @@ Tool 只返回文本、JSON、XML 或 JavaScript 响应，拒绝压缩和二进�
 
 处理流程：
 
-1. 校验 capability、Invocation deadline 与 Chat Vision 预算。
+1. 校验 capability、Invocation deadline 与全局 agent 每日 Token 预算。
 2. 从 Telegram 下载到 `paths.media_cache` 下的临时目录。
 3. 检查下载大小、图片格式、像素数和标准化输出大小。
 4. 提取 Sticker 代表帧。

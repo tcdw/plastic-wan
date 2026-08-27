@@ -144,7 +144,7 @@ bun run src/cli.ts restore-config --config dev-data/config.jsonc
 - SecretRef、API key、Token、完整 Prompt 正文不得写入审计记录或日志；对敏感值只记录路径、操作和摘要/hash。
 - `config_changed`、`restart_in_progress`、Schema/语义校验失败等拒绝结果也应有稳定错误码；不要依赖自由文本判断。
 - 不新增独立 startup 表，不为每次普通启动创建配置变更行。
-- 新进程启动结果以现有 `serve_started.config_hash` 和 `startup_failed` 结构化日志为准；`config_changes` 不承担跨进程健康握手。
+- 新进程启动结果以现有 `serve_started.config_hash` 结构化日志和启动失败时的抛错为准；`config_changes` 不承担跨进程健康握手。
 - 文件提交与 SQLite INSERT 不假装是一个事务。成功提交后写成功审计；硬崩溃造成的极小审计缺口由启动日志和配置 hash 排查，不增加恢复状态机。
 
 Admin API 可提供配置变更列表，但只返回管理员、时间、hash、修改路径、结果和错误码，不返回配置文件、SecretRef 或 Prompt 正文。

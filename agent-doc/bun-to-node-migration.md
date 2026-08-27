@@ -12,7 +12,7 @@
 
 | 类别 | 位置 |
 | --- | --- |
-| `bun:sqlite` | `database.ts`、`doctor.ts`、`memory.ts`、`admin/*`（多为 type-only）、`operations.test.ts` |
+| `bun:sqlite` | `database.ts`、`doctor.ts`、`memory.ts`、`sleep.ts`、`stickers.ts`、`admin/*`（多为 type-only）、`operations.test.ts` |
 | `Bun.file` / `Bun.write` / `Bun.BunFile` | `config.ts`、`database.ts`、`media.ts`、`admin/server.ts`、`tui/configure.ts`、`doctor.ts` |
 | `Bun.JSONC.parse` | `config.ts` |
 | `Bun.spawn` / `Bun.Subprocess` | `doctor.ts`、`media.ts`（FFmpeg/Lottie 外部链路）、`secrets.ts`（command SecretRef） |
@@ -20,7 +20,7 @@
 | `Bun.serve` | `admin/server.ts`（fetch 风格 Request/Response 处理器 + 静态资源） |
 | `Bun.gc(true)` / `Bun.version` | `scheduler.ts`（强制 GC 与指标字段 `bun_version`） |
 | `Bun.argv` | `cli.ts` |
-| `bun:test` | `test/` 全部约 24 个文件（`afterAll`/`describe`/`expect`） |
+| `bun:test` | `test/` 全部 18 个 `.test.ts` 文件（`afterAll`/`describe`/`expect`） |
 | 其它 | 根 `package.json` 的 `workspaces` + `bun run --filter` 脚本、`@types/bun`、`src/cli.ts` shebang `#!/usr/bin/env bun` |
 
 ## 决策记录
@@ -67,13 +67,13 @@
 4. `Bun.password` → `@node-rs/argon2`；**必须用存量管理员账号做登录回归**，证明旧 PHC hash 可验证；`HASH_OPTIONS` 参数逐项映射。
 5. `Bun.serve` → Hono + `@hono/node-server`：回环绑定、`idleTimeout: 30` 对应参数、静态资源 fallback（`index.html`）、错误 JSON 形状不变。
 6. `Bun.gc(true)` 移除（或 gate 在 `--expose-gc`）；指标字段 `bun_version` 更名 `runtime_version`（确认无持久化消费者）。
-7. `bun:test` → Vitest：24 个测试文件机械改 import；`bun:test` 特有行为（如隐式超时差异）逐一确认。
+7. `bun:test` → Vitest：18 个测试文件机械改 import；`bun:test` 特有行为（如隐式超时差异）逐一确认。
 - 出口条件：除 `drizzle-orm/bun-sqlite` 单一 import、shebang、`@types/bun` 外，仓库零 Bun 引用（`grep -r "Bun\.\|bun:"` 为空）。
 
 ### Phase 4 — tsconfig 与 Node type stripping 审计
 
 - [ ] `moduleResolution: "Bundler"` → `"nodenext"`，`module: "nodenext"`；删除 `"types": ["bun"]`。
-- [ ] 保留 `allowImportingTsExtensions` + `noEmit`（仓库已强制相对导入带 `.ts` 后缀，天然满足 Node strip-types 要求）。
+- [ ] 保留 `allowImportingTsExtensions`（仓库已强制相对导入带 `.ts` 后缀，天然满足 Node strip-types 要求）；no-emit 行为由 `package.json` 的 `tsc --noEmit` 脚本维持，tsconfig 无 `noEmit` 键。
 - [ ] 已核验：src/test 无 `enum`/`namespace`/构造器参数属性（不可擦除语法）；将此作为评审守则记录。
 - [ ] 注意：Node type stripping 不读 tsconfig，只要求可擦除语法；`tsc --noEmit` 仍是类型闸门。
 - 验收：`pnpm check` 在新 tsconfig 下通过（重点观察依赖 export map 在 nodenext 解析下的差异）。

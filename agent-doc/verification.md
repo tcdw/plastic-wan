@@ -27,7 +27,7 @@ bun test test/memory.test.ts
 | --- | --- |
 | `foundation.test.ts` | 严格配置、Secret 脱敏、迁移与备份 |
 | `telegram-ingestion.test.ts` | allowlist、Revision、Bot/Service、Topic 隔离 |
-| `scheduler.test.ts` | 配置 deadline、冻结快照、恢复和合并 |
+| `scheduler.test.ts` | 配置 deadline、冻结快照、恢复和并发串行 |
 | `context-send.test.ts` | Context 可见性、Reply capability、发送次数与未知结果 |
 | `agent-runtime.test.ts` | Fresh Agent、Tool 循环、预算、transcript 隔离与工具可见性审计 |
 | `media.test.ts` | 图片标准化、缓存和 Vision reasoning |

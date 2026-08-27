@@ -36,7 +36,7 @@ TelegramIngestion
 BucketScheduler
   ├─ 冻结 history/new 消息快照
   ├─ 创建 Invocation
-  ├─ 恢复、合并、预算判定
+  ├─ 恢复、节拍、预算判定
   └─ 调用 AgentRuntime
         │
         ▼
@@ -60,7 +60,7 @@ Fresh Pi Agent
 send Tool → Telegram API → 审计
 ```
 
-每个 Invocation 创建新的 Agent 实例。会话连续性来自 SQLite 中冻结的消息快照，不来自进程内长期记忆；Conversation 级短期记忆（`memories`）在每次 Invocation 时按创建时间升序注入 system prompt 末尾，TTL 到期或 Agent 主动删除后消失。
+每个 Invocation 创建新的 Agent 实例。会话连续性来自 SQLite 中冻结的消息快照，不来自进程内长期记忆；Conversation 级短期记忆（`memories`）在每次 Invocation 时按创建时间升序注入 system prompt 倒数第二段（当前时间之前），TTL 到期或 Agent 主动删除后消失。
 
 ## 模块职责
 
@@ -71,7 +71,7 @@ send Tool → Telegram API → 审计
 | `secrets.ts` | literal/env/command SecretRef、大小/超时限制和脱敏 |
 | `database.ts` | SQLite 打开、迁移、单实例锁、保留清理和备份 |
 | `telegram-ingestion.ts` | Update 判定、消息/修订/媒体入库、Chat 迁移 |
-| `scheduler.ts` | Bucket 状态机、Invocation 快照、恢复、合并和并发 |
+| `scheduler.ts` | Bucket 状态机、Invocation 快照、恢复、节拍和并发 |
 | `context-builder.ts` | Prompt、消息窗口、Reply 与按模型能力选择的媒体载荷/capability |
 | `agent-runtime.ts` | Pi Agent 循环、多模态/文本回退输入、模型/Tool 预算、调用审计 |
 | `send-tool.ts` | 文本/Sticker 发送、Reply 授权、重试与副作用审计 |
@@ -91,18 +91,18 @@ send Tool → Telegram API → 审计
 - Vision 总并发由 `vision.max_concurrency` 限制；后台 Sticker 索引固定单并发，且优先级低于前台 `read_image`。
 - MCP 每个 Server 有独立的调用 semaphore、重连状态和审计。
 
-## 恢复与合并
+## 恢复与节拍
 
 - 进程启动时恢复未完成 Bucket/Invocation。
 - 小于 5 分钟的工作可重新排队；更旧工作标记为过期或恢复失败，避免无限重放。
-- 同一 Conversation 排队 Bucket 过多时会合并，最多保留三个队列单元。
+- 同一 Chat 最多一个 queued/running Invocation；Invocation 完成后，该 Chat 仍 collecting 的 Bucket deadline 重算为 `max(finished_at, started_at + bucket_window_seconds)`。
 - 一旦 Tool 产生不可逆副作用，未知结果不得盲目重试；状态进入 `outcome_unknown` 供审计处理。
 
 ## 信任边界
 
 以下内容全部是不可信数据：Telegram 文本与媒体、Reply/Forward 元数据、MCP Tool 描述、MCP 结果、模型生成的 Tool 参数。
 
-Memory 内容是模型自己写入的持久化数据，按 Conversation 隔离，注入 system prompt 前只做长度校验；它不构成任何授权来源，管理员可在面板中人工审核或删除。
+Memory 内容是模型自己写入的持久化数据，按 Conversation 隔离，每条由 `add_memory` 写入时限 150 字符；注入 system prompt 前不做额外校验。它不构成任何授权来源，管理员可在面板中人工审核或删除。
 
 代码而不是 Prompt 执行授权：
 

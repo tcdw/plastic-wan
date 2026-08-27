@@ -1,6 +1,6 @@
 # 数据层
 
-Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索引、预算与审计。数据库不是长期记忆；默认在线保留窗口为 30 天，具体值由 `retention.online_days` 配置。
+Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索引、预算与审计。数据库不是长期记忆；在线保留窗口由必填的 `retention.online_days` 指定（dev 示例为 30 天）。
 
 ## 打开与迁移
 
@@ -101,6 +101,8 @@ MCP Tool 调用本身复用 `tool_calls`，预算复用 `daily_usage`。
 | --- | --- |
 | `admin_users` | 用户名、Argon2id 密码 hash、创建/更新/最近登录时间 |
 | `admin_sessions` | Session Token 的 SHA-256 摘要、所属用户、过期与最近活动时间 |
+| `bot_admins` | Telegram User ID 形式的 Bot 管理员，可执行 `/pause`/`/resume`/`/model` |
+| `chat_pause` | `/pause` 标记的暂停 Chat 与暂停时间 |
 
 密码明文和 Session Token 原文都不入库。两张表不参与在线保留清理：管理员账号不是会话数据；过期 Session 由 `AdminAuth` 在认证、新建 Session 和服务启动时删除。
 

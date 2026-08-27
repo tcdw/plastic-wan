@@ -172,7 +172,7 @@ export const ConfigSchema = Type.Object(
         max_tool_calls: Type.Integer({ minimum: 1, maximum: 12 }),
         max_sends: Type.Integer({ minimum: 1, maximum: 6 }),
         send_max_text_length: Type.Optional(Type.Integer({ minimum: 1, maximum: 4096 })),
-        send_disallow_consecutive_blank_lines: Type.Optional(Type.Boolean()),
+        send_disallow_blank_lines: Type.Optional(Type.Boolean()),
         timeout_seconds: Type.Number({ exclusiveMinimum: 0, maximum: 90 }),
         max_concurrency: PositiveInteger,
         context_stop_ratio: Type.Number({ exclusiveMinimum: 0, maximum: 0.8 }),

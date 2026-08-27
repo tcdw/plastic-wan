@@ -137,7 +137,7 @@ Context
 
 `agent.send_max_text_length` 配置了文本最大字符数（默认不限制）时，超长文本在进入配额扣减前被拒绝：Tool Call 记为 `error`、错误码 `send_text_too_long`，不写 `telegram_sends`、不消耗 `sends_used`。
 
-`agent.send_disallow_consecutive_blank_lines` 开启（默认关闭）时，包含两个及以上连续空行的文本同样在配额扣减前被拒绝，错误码 `send_consecutive_blank_lines`。
+`agent.send_disallow_blank_lines` 开启（默认关闭）时，包含任何空行的文本同样在配额扣减前被拒绝，错误码 `send_blank_lines`。
 
 成功发送后：
 

@@ -100,7 +100,7 @@ export class AgentRuntime {
       stickerCapabilities: new Map(),
       maxSends: this.#config.agent.max_sends,
       maxTextLength: this.#config.agent.send_max_text_length,
-      disallowConsecutiveBlankLines: this.#config.agent.send_disallow_consecutive_blank_lines === true,
+      disallowBlankLines: this.#config.agent.send_disallow_blank_lines === true,
       deadline: Number.MAX_SAFE_INTEGER,
       bot: this.#bot,
     });
@@ -146,7 +146,7 @@ export class AgentRuntime {
       stickerCapabilities: state.stickerCapabilities,
       maxSends: this.#config.agent.max_sends,
       maxTextLength: this.#config.agent.send_max_text_length,
-      disallowConsecutiveBlankLines: this.#config.agent.send_disallow_consecutive_blank_lines === true,
+      disallowBlankLines: this.#config.agent.send_disallow_blank_lines === true,
       deadline,
       bot: this.#bot,
     });
@@ -174,7 +174,7 @@ export class AgentRuntime {
       stickerCapabilities: state.stickerCapabilities,
       maxSends: this.#config.agent.max_sends,
       maxTextLength: this.#config.agent.send_max_text_length,
-      disallowConsecutiveBlankLines: this.#config.agent.send_disallow_consecutive_blank_lines === true,
+      disallowBlankLines: this.#config.agent.send_disallow_blank_lines === true,
       deadline,
       bot: this.#bot,
     });

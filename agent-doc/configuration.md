@@ -171,7 +171,7 @@ command SecretRef：
 - `max_tool_calls`: 1–12。
 - `max_sends`: 1–6。
 - `send_max_text_length`（可选，默认不限制）：`send` 工具文本消息的最大字符数（1–4096）。超出时 Tool Call 记为 `send_text_too_long` 错误，不消耗发送配额、不调用 Telegram；Sticker 不受影响。
-- `send_disallow_consecutive_blank_lines`（可选，默认 `false`）：开启后，文本包含两个及以上连续空行（只含空格/Tab 的行也算空行）时 Tool Call 记为 `send_consecutive_blank_lines` 错误，不消耗发送配额、不调用 Telegram；Sticker 不受影响。
+- `send_disallow_blank_lines`（可选，默认 `false`）：开启后，文本包含任何空行（两个换行符之间只有空格/Tab 也算空行）时 Tool Call 记为 `send_blank_lines` 错误，不消耗发送配额、不调用 Telegram；段落只能用单个换行分隔。Sticker 不受影响。
 - `timeout_seconds`: 大于 0 且不超过 90 秒。
 - `max_concurrency`: 全局并行 running Invocation 上限。
 - `context_stop_ratio`: 大于 0 且不超过 0.8。

@@ -247,7 +247,7 @@ describe('startup catch-up', () => {
       stickerCapabilities: new Map(),
       maxSends: 6,
       maxTextLength: undefined,
-      disallowConsecutiveBlankLines: false,
+      disallowBlankLines: false,
       deadline: Date.now() + 30_000,
       bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     });

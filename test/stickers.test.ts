@@ -178,7 +178,7 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
     stickerCapabilities: capabilities,
     maxSends: 6,
     maxTextLength: undefined,
-    disallowConsecutiveBlankLines: false,
+    disallowBlankLines: false,
     deadline: Date.now() + 30_000,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
   });

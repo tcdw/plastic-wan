@@ -72,7 +72,7 @@ export interface SendToolEnvironment {
   readonly stickerCapabilities: ReadonlyMap<string, string>;
   readonly maxSends: number;
   readonly maxTextLength: number | undefined;
-  readonly disallowConsecutiveBlankLines: boolean;
+  readonly disallowBlankLines: boolean;
   readonly deadline: number;
   readonly bot: { readonly id: bigint; readonly displayName: string; readonly username: string | null };
 }
@@ -109,9 +109,9 @@ export function createSendTool(
           `text length ${send.text.length} exceeds the configured limit of ${environment.maxTextLength} characters`,
         );
       }
-      if (send.kind === 'text' && environment.disallowConsecutiveBlankLines && /\n[ \t]*\n[ \t]*\n/.test(send.text)) {
-        recordRejectedSend(environment, toolCallId, input, 'send_consecutive_blank_lines');
-        throw new Error('text must not contain two or more consecutive blank lines');
+      if (send.kind === 'text' && environment.disallowBlankLines && /\n[ \t]*\n/.test(send.text)) {
+        recordRejectedSend(environment, toolCallId, input, 'send_blank_lines');
+        throw new Error('text must not contain blank lines; separate paragraphs with single newlines');
       }
       const stickerFileId = send.kind === 'sticker' ? environment.stickerCapabilities.get(send.sticker_ref) : undefined;
       if (send.kind === 'sticker' && stickerFileId === undefined) {

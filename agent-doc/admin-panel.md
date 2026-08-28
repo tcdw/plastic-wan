@@ -2,7 +2,7 @@
 
 Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析、已配置 Sticker Set 的可搜索索引，以及 Agent 短期记忆（`memories`）。后端在 `src/admin/`，前端在 `apps/admin/`（Rsbuild + React + Ant Design + TanStack Query + TanStack Router）。
 
-审计数据只读；记忆管理、Bot 管理员列表管理、模型热切换、解除睡眠与取消挂起会话是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume` 的 Telegram 用户，热切换 agent 模型，或唤醒/取消挂起会话。面板不能改写配置文件、不能重跑 Invocation 或删除审计记录。
+审计数据只读；记忆管理、Bot 管理员列表管理、模型热切换、解除睡眠与取消挂起会话是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume`、`/cut_topic` 等 Bot 管理员命令的 Telegram 用户，热切换 agent 模型，或唤醒/取消挂起会话。面板不能改写配置文件、不能重跑 Invocation 或删除审计记录。
 
 ## 配置
 

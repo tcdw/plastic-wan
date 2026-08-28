@@ -409,6 +409,9 @@ export class BucketScheduler {
   }
 
   #snapshotInvocation(invocationId: bigint, bucketId: bigint, conversationId: bigint, includeHistory: boolean): void {
+    // History stops at the per-chat context cutoff (`/cut_topic`), if one
+    // exists: messages at or below the cutoff Telegram message ID never enter
+    // a new invocation snapshot. Live bucket messages are unaffected.
     const history = includeHistory
       ? this.#store.db
           .query<MessageSnapshotRow, [bigint, bigint, bigint]>(
@@ -422,6 +425,8 @@ export class BucketScheduler {
            JOIN message_revisions r ON r.id = m.current_revision_id
            LEFT JOIN senders s ON s.id = r.sender_id
            WHERE m.conversation_id = ? AND m.visible = 1
+             AND (v.chat_id NOT IN (SELECT chat_id FROM chat_context_cutoffs)
+                  OR m.telegram_message_id > (SELECT telegram_message_id FROM chat_context_cutoffs WHERE chat_id = v.chat_id))
              AND NOT EXISTS (SELECT 1 FROM bucket_messages bm WHERE bm.bucket_id = ? AND bm.message_id = m.id)
            ORDER BY m.telegram_date DESC, m.telegram_message_id DESC
            LIMIT ?`,

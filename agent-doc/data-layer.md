@@ -103,6 +103,7 @@ MCP Tool 调用本身复用 `tool_calls`，预算复用 `daily_usage`。
 | `admin_sessions` | Session Token 的 SHA-256 摘要、所属用户、过期与最近活动时间 |
 | `bot_admins` | Telegram User ID 形式的 Bot 管理员，可执行 `/pause`/`/resume`/`/model` |
 | `chat_pause` | `/pause` 标记的暂停 Chat 与暂停时间 |
+| `chat_context_cutoffs` | `/cut_topic` 记录的每 Chat 上下文切点（Telegram message ID），仅影响新 Invocation 的 history |
 
 密码明文和 Session Token 原文都不入库。两张表不参与在线保留清理：管理员账号不是会话数据；过期 Session 由 `AdminAuth` 在认证、新建 Session 和服务启动时删除。
 

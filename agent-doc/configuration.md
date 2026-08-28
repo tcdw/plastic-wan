@@ -93,7 +93,7 @@ command SecretRef：
 - `instructions_file`（可选）指向该 Chat 的附加系统提示 Markdown 文件，缺省时为空；提示内容不提供额外授权。
 - 修改 Chat 后重启，并比较 `check-config` 与 `serve_started` 的 `config_hash`。
 - `budget.max_invocations_per_day` 限制该 Chat 每日创建的 Invocation 数量；Chat 不设 Token 硬上限，Token 仅按 Chat 归属统计。
-- `admins`（可选）是 Telegram User ID 数组，作为 Bot 管理员 seed 到 `bot_admins`；只有管理员能执行 `/pause`、`/resume`、`/model`。
+- `admins`（可选）是 Telegram User ID 数组，作为 Bot 管理员 seed 到 `bot_admins`；只有管理员能执行 `/pause`、`/resume`、`/model`、`/cut_topic`。
 
 ## Sticker Set
 

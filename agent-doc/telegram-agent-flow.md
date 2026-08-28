@@ -199,11 +199,11 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 ## Bot Commands
 
-`/pause`、`/resume` 与 `/status` 是 Chat 级控制命令，作用于发送命令的 Chat（含 Forum 全部 Topic），不按 Topic 隔离。
+`/pause`、`/resume` 与 `/status` 是 Chat 级控制命令，作用于发送命令的 Chat（含 Forum 全部 Topic），不按 Topic 隔离。`/cut_topic` 同样是 Chat 级命令。
 
 - 判定：`message.entities` 中 offset 为 0 的 `bot_command`；命令名大小写不敏感；带 `@用户名` 后缀时必须匹配当前 Bot；Bot 发送者的消息不触发命令。未知命令与非命令消息照常入库。
-- 启动时（`getMe` 后）调用 `setMyCommands` 自动注册 `/pause`、`/resume`、`/status`、`/model` 及中文描述（`BOT_COMMANDS` 是唯一事实来源，注册前校验每个命令都能被 `parseBotCommand` 解析）；注册失败只记 `command_registration_failed`，不阻塞启动——命令菜单是便利设施，文本解析不依赖它。
-- 命令消息只写 `telegram_updates` 审计，不写入 `messages`，因此不会创建 Bucket 或进入 Agent 历史。
+- 启动时（`getMe` 后）调用 `setMyCommands` 自动注册 `/pause`、`/resume`、`/status`、`/model`、`/cut_topic` 及中文描述（`BOT_COMMANDS` 是唯一事实来源，注册前校验每个命令都能被 `parseBotCommand` 解析）；注册失败只记 `command_registration_failed`，不阻塞启动——命令菜单是便利设施，文本解析不依赖它。
+- 命令消息只写 `telegram_updates` 审计，不写入 `messages`，因此不会创建 Bucket 或进入 Agent 历史。`parseBotCommand` 返回的命令附带 `messageId`（命令消息自身的 Telegram message ID），供 `/cut_topic` 记录切点使用。
 - 回复是确定性 Bot 输出（不经模型），直接通过 Bot API 发送并 Reply 原命令消息，不经过 `send` Tool；发送失败只记 `command_reply_failed` 事件，不重试。
 
 `/pause` 与 `/resume` 仅对 Bot 管理员开放（`bot_admins` 表，见下文）；`/status` 对任何成员开放。非管理员或匿名身份执行会收到拒绝回复，不产生任何状态变更。管理员执行命令时其显示名会刷新到 `bot_admins`。
@@ -219,6 +219,12 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 暂停期间消息仍入库并保留 Revision，但不创建 Bucket、不启动会话；`processDue` 与启动追赶也会跳过暂停 Chat（追赶 Bucket 记 `skipped_budget`/`chat_paused`）。`/resume` 删除 `chat_pause` 行，恢复正常节拍。
 
 `/status` 返回当前生效的 `agent.provider` / `agent.model`（含 Admin Panel 热切换后的运行时模型）、`agent.thinking_level`、本 Chat 的当日 `model_tokens` 用量，以及全局当日用量、`agent.daily_budget.max_tokens` 上限与四舍五入到两位小数的用量百分比；所有 token 数量使用千位分隔符。并按该 Chat 的 Model Call 审计拆分显示 `read`、`write`、`cache read`、`cache write` token。日期口径均为 UTC；暂停中额外显示一行。
+
+`/cut_topic` 仅对 Bot 管理员开放，用于在群聊上下文被旧话题污染时手动切断历史：
+
+1. 把命令消息自身的 Telegram message ID 写入 `chat_context_cutoffs`（每 Chat 一行，重复执行即前移切点）。
+2. 之后新建的 Invocation 在冻结 history 快照时排除 `telegram_message_id <= 切点` 的消息，命令消息本身也在切点上，因此不会进入下一个会话的上下文。
+3. 不删除任何消息或 Revision；已排队/运行中的 Invocation 不受影响，启动追赶的 `new` 消息也不受影响。
 
 ## Bot 管理员列表
 

@@ -101,37 +101,54 @@ const FIXED_NOW = new Date('2026-08-15T12:00:00.000Z');
 
 describe('parseBotCommand', () => {
   test('recognizes pause, resume and status case-insensitively', async () => {
-    expect(parseBotCommand(message(commandUpdate(1, 1, '/pause').message), BOT_USERNAME)).toEqual({ name: 'pause' });
-    expect(parseBotCommand(message(commandUpdate(1, 1, '/Resume').message), BOT_USERNAME)).toEqual({ name: 'resume' });
-    expect(parseBotCommand(message(commandUpdate(1, 1, '/STATUS').message), BOT_USERNAME)).toEqual({ name: 'status' });
+    expect(parseBotCommand(message(commandUpdate(1, 1, '/pause').message), BOT_USERNAME)).toEqual({
+      name: 'pause',
+      messageId: 1n,
+    });
+    expect(parseBotCommand(message(commandUpdate(1, 1, '/Resume').message), BOT_USERNAME)).toEqual({
+      name: 'resume',
+      messageId: 1n,
+    });
+    expect(parseBotCommand(message(commandUpdate(1, 1, '/STATUS').message), BOT_USERNAME)).toEqual({
+      name: 'status',
+      messageId: 1n,
+    });
   });
 
   test('accepts an explicit matching bot mention and rejects others', async () => {
     expect(parseBotCommand(message(commandUpdate(1, 1, '/pause@plasticwan_test_bot').message), BOT_USERNAME)).toEqual({
       name: 'pause',
+      messageId: 1n,
     });
     expect(parseBotCommand(message(commandUpdate(1, 1, '/pause@other_bot').message), BOT_USERNAME)).toBeNull();
   });
 
   test('captures the optional /model argument', async () => {
-    expect(parseBotCommand(message(commandUpdate(1, 1, '/model').message), BOT_USERNAME)).toEqual({ name: 'model' });
+    expect(parseBotCommand(message(commandUpdate(1, 1, '/model').message), BOT_USERNAME)).toEqual({
+      name: 'model',
+      messageId: 1n,
+    });
     expect(parseBotCommand(message(commandUpdate(1, 1, '/model 2').message), BOT_USERNAME)).toEqual({
       name: 'model',
       argument: '2',
+      messageId: 1n,
     });
     expect(parseBotCommand(message(commandUpdate(1, 1, '/model page 2').message), BOT_USERNAME)).toEqual({
       name: 'model',
       argument: 'page 2',
+      messageId: 1n,
     });
     expect(parseBotCommand(message(commandUpdate(1, 1, '/Model reset').message), BOT_USERNAME)).toEqual({
       name: 'model',
       argument: 'reset',
+      messageId: 1n,
     });
     expect(parseBotCommand(message(commandUpdate(1, 1, '/model@plasticwan_test_bot 2').message), BOT_USERNAME)).toEqual(
-      { name: 'model', argument: '2' },
+      { name: 'model', argument: '2', messageId: 1n },
     );
     expect(parseBotCommand(message(commandUpdate(1, 1, '/pause whatever').message), BOT_USERNAME)).toEqual({
       name: 'pause',
+      messageId: 1n,
     });
   });
 
@@ -161,7 +178,7 @@ describe('parseBotCommand', () => {
         entities: [{ offset: 0, length: 6, type: 'bot_command' }],
       },
     };
-    expect(parseBotCommand(message(trailing.message), BOT_USERNAME)).toEqual({ name: 'pause' });
+    expect(parseBotCommand(message(trailing.message), BOT_USERNAME)).toEqual({ name: 'pause', messageId: 2n });
   });
 
   test('ignores commands from bots and messages without text', async () => {
@@ -494,7 +511,7 @@ describe('ingestion command interception', () => {
   test('commands are audited but not stored and never create buckets', async () => {
     const { store, ingestion } = await setup();
     const result = ingestion.ingest(commandUpdate(1, 10, '/status'), FIXED_NOW);
-    expect(result.command).toEqual({ name: 'status' });
+    expect(result.command).toEqual({ name: 'status', messageId: 10n });
     expect(result.messageId).toBeUndefined();
     expect(result.bucketId).toBeUndefined();
     expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(0n);

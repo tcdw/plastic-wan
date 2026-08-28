@@ -7,8 +7,10 @@ import type { BucketScheduler } from './scheduler.ts';
 import { readDailyTokenBudget } from './sleep.ts';
 
 export interface ParsedCommand {
-  readonly name: 'pause' | 'resume' | 'status' | 'model';
+  readonly name: 'pause' | 'resume' | 'status' | 'model' | 'cut_topic';
   readonly argument?: string;
+  /** Telegram message ID of the command message itself; used by cut_topic. */
+  readonly messageId?: bigint;
 }
 
 export interface CommandSender {
@@ -17,7 +19,7 @@ export interface CommandSender {
   readonly username: string | null;
 }
 
-const COMMAND_NAMES = new Set<ParsedCommand['name']>(['pause', 'resume', 'status', 'model']);
+const COMMAND_NAMES = new Set<ParsedCommand['name']>(['pause', 'resume', 'status', 'model', 'cut_topic']);
 const DENIED_REPLY = '该命令仅对本 Bot 的管理员可用。';
 const MODEL_PAGE_SIZE = 20;
 
@@ -33,6 +35,7 @@ export const BOT_COMMANDS: readonly BotCommandRegistration[] = [
   { command: 'resume', description: '恢复本群互动（仅管理员）' },
   { command: 'status', description: '查看当前模型、thinking effort 与本日 token 用量' },
   { command: 'model', description: '查看或切换 agent 模型（仅管理员）' },
+  { command: 'cut_topic', description: '切掉此消息及更早的历史，仅对新会话生效（仅管理员）' },
 ];
 
 export interface CommandRegistrationApi {
@@ -68,11 +71,14 @@ export function parseBotCommand(message: Message, botUsername: string | null): P
   if (!COMMAND_NAMES.has(name as ParsedCommand['name'])) {
     return null;
   }
-  if (name !== 'model') {
-    return { name: name as ParsedCommand['name'] };
-  }
-  const argument = message.text.slice(entity.offset + entity.length).trim();
-  return argument.length === 0 ? { name: 'model' } : { name: 'model', argument };
+  const base: ParsedCommand =
+    name !== 'model'
+      ? { name: name as ParsedCommand['name'] }
+      : (() => {
+          const argument = message.text.slice(entity.offset + entity.length).trim();
+          return argument.length === 0 ? { name: 'model' } : { name: 'model', argument };
+        })();
+  return message.message_id === undefined ? base : { ...base, messageId: BigInt(message.message_id) };
 }
 
 // Chat-scoped control commands. State changes and replies are deterministic
@@ -100,6 +106,8 @@ export class BotCommandService {
         return this.#status(telegramChatId, now);
       case 'model':
         return this.#adminGate(sender) ? this.#modelSwitch(command.argument) : DENIED_REPLY;
+      case 'cut_topic':
+        return this.#adminGate(sender) ? this.#cutTopic(telegramChatId, command.messageId) : DENIED_REPLY;
     }
   }
 
@@ -153,6 +161,28 @@ export class BotCommandService {
     }
     this.#store.db.query('DELETE FROM chat_pause WHERE chat_id = ?').run(chatId);
     return '已恢复本群互动。';
+  }
+
+  // Cuts agent-session history at the command message itself: the cutoff row
+  // stores the command's Telegram message ID, so the command and everything
+  // before it drop out of future invocations. Only the new cutoff matters, so
+  // replying is safe even when this chat has never triggered the agent.
+  #cutTopic(telegramChatId: bigint, messageId: bigint | undefined): string {
+    if (messageId === undefined) {
+      throw new Error(`cut_topic command is missing its Telegram message ID`);
+    }
+    const chatId = this.#internalChatId(telegramChatId);
+    if (chatId === null) {
+      throw new Error(`Chat ${telegramChatId} has no stored row`);
+    }
+    const timestamp = new Date().toISOString();
+    this.#store.db
+      .query(
+        `INSERT INTO chat_context_cutoffs(chat_id, telegram_message_id, created_at, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(chat_id) DO UPDATE SET telegram_message_id = excluded.telegram_message_id, updated_at = excluded.updated_at`,
+      )
+      .run(chatId, messageId, timestamp, timestamp);
+    return '已切掉此消息及更早的历史，仅对之后的新会话生效。';
   }
 
   #modelSwitch(argument: string | undefined): string {

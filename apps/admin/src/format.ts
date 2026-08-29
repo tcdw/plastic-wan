@@ -15,6 +15,9 @@ const STATE_COLORS: Record<string, string> = {
   skipped_budget: "orange",
   blocked_budget: "orange",
   expired: "default",
+  firing: "blue",
+  fired: "green",
+  cancelled: "default",
 };
 
 const TIME_FORMAT = new Intl.DateTimeFormat("sv-SE", {

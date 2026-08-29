@@ -143,6 +143,18 @@ export class BotCommandService {
            WHERE state IN ('collecting', 'queued') AND conversation_id IN (SELECT id FROM conversations WHERE chat_id = ?)`,
         )
         .run(timestamp, timestamp, chatId);
+      // A claimed alarm whose queued invocation is being aborted must close as
+      // cancelled/chat_paused rather than stay `firing` until a later restart.
+      this.#store.db
+        .query(
+          `UPDATE alarms SET state = 'cancelled', cancelled_at = ?, cancel_reason = 'chat_paused', admin_cancelled = 0, updated_at = ?
+           WHERE state = 'firing' AND invocation_id IN (
+             SELECT i.id FROM invocations i
+             JOIN conversations v ON v.id = i.conversation_id
+             WHERE i.state = 'queued' AND v.chat_id = ?
+           )`,
+        )
+        .run(timestamp, timestamp, chatId);
       this.#store.db
         .query(
           `UPDATE invocations SET state = 'aborted', completion_reason = 'chat_paused', finished_at = ?

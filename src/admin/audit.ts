@@ -22,6 +22,7 @@ export interface ListQuery {
   readonly chat?: string | null;
   readonly set?: string | null;
   readonly search?: string | null;
+  readonly target?: string | null;
 }
 
 export class AdminQueryError extends Error {

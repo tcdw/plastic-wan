@@ -49,6 +49,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 | `invocations` | 一次 Agent 运行、配置哈希、计数和终态 |
 | `invocation_messages` | 冻结的 `history`/`new` Message Revision 快照 |
 | `agent_messages` | Agent 内部 transcript；Assistant 文本不等于 Telegram 发送 |
+| `alarms` | Deferred Invocation：conversation、目标用户与显示名快照、summary、UTC deadline、生命周期状态、关联 Invocation 与取消审计 |
 
 `invocation_messages` 是可重放边界。消息在 Invocation 创建后被编辑，只影响未来 Context，不改写已经冻结的快照。
 
@@ -124,6 +125,7 @@ MCP Tool 调用本身复用 `tool_calls`，预算复用 `daily_usage`。
 - 仍被快照引用的旧 Message 保留身份，但匿名化 Revision 文本、Sender、Reply/Forward 和 Service 内容。
 - 删除无引用 Sender、过期普通图片分析、独立 Doctor 模型调用与旧预算日期。
 - Sticker 长期视觉索引不按普通图片策略删除。
+- `alarms` 的 `pending`/`firing` 行保留（未来仍需执行）；`fired`/`cancelled` 终态行随在线审计窗口清理。
 
 不要把 `DELETE FROM messages WHERE received_at < ...` 当作等价实现；外键和冻结快照要求分阶段清理。
 

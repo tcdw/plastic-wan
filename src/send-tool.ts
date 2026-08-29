@@ -1,6 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { GrammyError, HttpError } from 'grammy';
+import type { MessageEntity } from 'grammy/types';
 import Type, { type Static } from 'typebox';
 import type { InvocationContext } from './context-builder.ts';
 import type { SqliteStore } from './database.ts';
@@ -53,6 +54,7 @@ export interface TelegramSendApi {
       readonly message_thread_id?: number;
       readonly parse_mode?: 'MarkdownV2';
       readonly reply_parameters?: { readonly message_id: number };
+      readonly entities?: MessageEntity[];
     },
   ): Promise<TelegramSendResponse>;
   sendSticker(
@@ -77,9 +79,34 @@ export interface SendToolEnvironment {
   readonly bot: { readonly id: bigint; readonly displayName: string; readonly username: string | null };
 }
 
+function alarmMention(
+  alarm: InvocationContext['alarm'],
+): { readonly text: string; readonly entity: MessageEntity; readonly url: string } | null {
+  if (alarm === null) {
+    return null;
+  }
+  const text = alarm.displayName.length > 0 ? `@${alarm.displayName}` : `@${alarm.userId.toString()}`;
+  const url = `tg://user?id=${alarm.userId.toString()}`;
+  return {
+    text,
+    url,
+    entity: {
+      type: 'text_link',
+      offset: 0,
+      length: text.length,
+      url,
+    },
+  };
+}
+
+function escapeMarkdownV2LinkText(text: string): string {
+  return text.replace(/[\\_*[\]()~`>#+\-=|{}.!]/g, (character) => `\\${character}`);
+}
+
 export function createSendTool(
   environment: SendToolEnvironment,
 ): AgentTool<typeof SendInputSchema, { telegramMessageId: string }> {
+  let firstTextSent = false;
   return {
     name: 'send',
     label: 'Send to Telegram',
@@ -103,15 +130,32 @@ export function createSendTool(
       }
       const targetConversationId = replyTarget?.conversationId ?? environment.context.conversationId;
       const targetThreadId = replyTarget?.threadId ?? environment.context.threadId;
-      if (send.kind === 'text' && environment.maxTextLength !== undefined && send.text.length > environment.maxTextLength) {
-        recordRejectedSend(environment, toolCallId, input, 'send_text_too_long');
-        throw new Error(
-          `text length ${send.text.length} exceeds the configured limit of ${environment.maxTextLength} characters`,
-        );
-      }
-      if (send.kind === 'text' && environment.disallowBlankLines && /\n[ \t]*\n/.test(send.text)) {
-        recordRejectedSend(environment, toolCallId, input, 'send_blank_lines');
-        throw new Error('text must not contain blank lines; separate paragraphs with single newlines');
+      let mention: { readonly text: string; readonly entity: MessageEntity; readonly url: string } | null = null;
+      let sendText = '';
+      if (send.kind === 'text') {
+        if (!firstTextSent) {
+          mention = alarmMention(environment.context.alarm);
+        }
+        if (mention === null) {
+          sendText = send.text;
+        } else if (send.parse_mode === 'MarkdownV2') {
+          // Telegram rejects `entities` together with `parse_mode`, so a
+          // MarkdownV2 first contact encodes the target mention as an inline
+          // `[text](tg://user?id=...)` link and keeps parse_mode intact.
+          sendText = `[${escapeMarkdownV2LinkText(mention.text)}](${mention.url}) ${send.text}`;
+        } else {
+          sendText = `${mention.text} ${send.text}`;
+        }
+        if (environment.maxTextLength !== undefined && sendText.length > environment.maxTextLength) {
+          recordRejectedSend(environment, toolCallId, input, 'send_text_too_long');
+          throw new Error(
+            `text length ${sendText.length} exceeds the configured limit of ${environment.maxTextLength} characters`,
+          );
+        }
+        if (environment.disallowBlankLines && /\n[ \t]*\n/.test(sendText)) {
+          recordRejectedSend(environment, toolCallId, input, 'send_blank_lines');
+          throw new Error('text must not contain blank lines; separate paragraphs with single newlines');
+        }
       }
       const stickerFileId = send.kind === 'sticker' ? environment.stickerCapabilities.get(send.sticker_ref) : undefined;
       if (send.kind === 'sticker' && stickerFileId === undefined) {
@@ -159,6 +203,9 @@ export function createSendTool(
           ? {}
           : { reply_parameters: { message_id: Number(send.reply_to_message_id) } }),
         ...(send.kind === 'text' && send.parse_mode !== undefined ? { parse_mode: send.parse_mode } : {}),
+        ...(send.kind === 'text' && mention !== null && send.parse_mode !== 'MarkdownV2'
+          ? { entities: [mention.entity] }
+          : {}),
       };
       const startedAt = performance.now();
       try {
@@ -166,7 +213,7 @@ export function createSendTool(
         while (true) {
           try {
             if (send.kind === 'text') {
-              response = await environment.api.sendMessage(environment.context.chatId.toString(), send.text, options);
+              response = await environment.api.sendMessage(environment.context.chatId.toString(), sendText, options);
             } else if (stickerFileId !== undefined) {
               response = await environment.api.sendSticker(
                 environment.context.chatId.toString(),
@@ -205,8 +252,11 @@ export function createSendTool(
               "UPDATE telegram_sends SET state = 'success', telegram_message_id = ?, response_json = ?, finished_at = ? WHERE id = ?",
             )
             .run(BigInt(response.message_id), JSON.stringify({ message_id: response.message_id }), now, pending.sendId);
-          recordOutgoingMessage(environment, response, send, stickerFileId ?? null, targetConversationId, now);
+          recordOutgoingMessage(environment, response, send, stickerFileId ?? null, targetConversationId, sendText, now);
         });
+        if (mention !== null) {
+          firstTextSent = true;
+        }
         return {
           content: [{ type: 'text', text: `Sent Telegram message ${response.message_id}` }],
           details: { telegramMessageId: String(response.message_id) },
@@ -257,6 +307,7 @@ function recordOutgoingMessage(
   input: SendToolInput,
   stickerFileId: string | null,
   conversationId: bigint,
+  sentText: string,
   recordedAt: string,
 ): void {
   environment.store.db
@@ -296,7 +347,7 @@ function recordOutgoingMessage(
       messageId,
       sender.id,
       input.kind,
-      input.kind === 'text' ? input.text : null,
+      input.kind === 'text' ? sentText : null,
       input.reply_to_message_id === undefined ? null : BigInt(input.reply_to_message_id),
       recordedAt,
       JSON.stringify({ message_id: response.message_id, kind: input.kind }),

@@ -1,8 +1,8 @@
 # Admin Panel
 
-Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析、已配置 Sticker Set 的可搜索索引，以及 Agent 短期记忆（`memories`）。后端在 `src/admin/`，前端在 `apps/admin/`（Rsbuild + React + Ant Design + TanStack Query + TanStack Router）。
+Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析、已配置 Sticker Set 的可搜索索引、Agent 短期记忆（`memories`）以及 Alarm（闹钟 / 延迟调用）。后端在 `src/admin/`，前端在 `apps/admin/`（Rsbuild + React + Ant Design + TanStack Query + TanStack Router）。
 
-审计数据只读；记忆管理、Bot 管理员列表管理、模型热切换、解除睡眠与取消挂起会话是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume`、`/cut_topic` 等 Bot 管理员命令的 Telegram 用户，热切换 agent 模型，或唤醒/取消挂起会话。面板不能改写配置文件、不能重跑 Invocation 或删除审计记录。
+审计数据只读；记忆管理、Bot 管理员列表管理、模型热切换、解除睡眠、取消挂起会话与取消 pending Alarm 是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume`、`/cut_topic` 等 Bot 管理员命令的 Telegram 用户，热切换 agent 模型，唤醒/取消挂起会话，或取消尚未触发的 Alarm。面板不能改写配置文件、不能重跑 Invocation 或删除审计记录。
 
 ## 配置
 
@@ -73,6 +73,8 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 | `GET /messages/:id` | 全部 Revision 与媒体（含视觉描述） |
 | `GET /sticker-sets` | Set 同步状态与索引进度 |
 | `GET /stickers` | 已配置 Sticker Set 的可搜索索引条目与分析元数据 |
+| `GET /alarms` | Alarm 审计列表，可按 `state`（`pending`/`firing`/`fired`/`cancelled`）、`chat`（Telegram Chat ID）与 `target`（目标 Telegram User ID）过滤；`pending` 按 `scheduled_at, id` 升序置顶，非 pending 历史按最近状态时间/id 倒序 |
+| `DELETE /alarms/:id` | 原子取消 `pending` Alarm（`pending → cancelled`），记录当前面板管理员账号与 `admin_cancelled` 原因，并唤醒 Scheduler；不存在返回 404，非 pending 返回 409 |
 | `GET /memories` | 记忆列表，可按 `chat`（Telegram Chat ID）与 `state`（`active`/`expired`/`long_ttl`）过滤 |
 | `GET /memories/chats` | 已知 Chat 列表（记忆创建表单的选项来源） |
 | `POST /memories` | 创建记忆：`chat_id`、可选 `message_thread_id`（默认 0）、`content`（1–150 字符）、可选 `ttl_seconds`（默认 1 天） |
@@ -94,7 +96,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 输入校验在 `src/admin/audit.ts`：`state`/`set` 必须匹配 `^[A-Za-z0-9._-]{1,64}$`，`chat`/`cursor` 必须是整数，`search` 最长 100 字符且 `LIKE` 通配符经过转义。非法输入返回 400 与稳定错误码（`invalid_limit`、`invalid_state`、`invalid_cursor`…）。所有查询使用绑定参数。
 
-SQLite `bigint` ID 在 JSON 中字符串化，Token/计数等小整数转 `number`。
+SQLite `bigint` ID 在 JSON 中字符串化，Token/计数等小整数转 `number`。Alarm 列表项额外把 `message_thread_id`、目标 User ID、conversation ID 与关联 Invocation ID 全部字符串化，展开详情展示完整 summary、原始 UTC 计划时间、conversation ID、Telegram Chat ID、thread ID、目标 User ID、创建/触发/取消时间、取消者、取消原因、Invocation 结果、`admin_cancelled` 标记与 `updated_at`。`DELETE /api/alarms/:id` 只能取消 `pending`；`firing` 与其它终态返回 409 `alarm_not_pending`，不存在返回 404 `not_found`，跨站与认证规则沿用现有 Admin 写端点。
 
 ## 静态资源
 
@@ -122,7 +124,7 @@ bun run admin:dev     # Rsbuild dev server，/api 代理到 ADMIN_API_TARGET
 | `src/queries.ts` | TanStack Query option 工厂（列表用 infinite query） |
 | `src/routes.tsx` | 认证门、登录/初始化卡片、Layout 与路由树 |
 | `src/components.tsx` | `queryState()` 占位渲染、JSON 块、状态 Tag |
-| `src/pages/*.tsx` | Overview、Tool sessions、Messages、Memories、Bot admins、Sticker Set 索引、Model 切换、Usage chart |
+| `src/pages/*.tsx` | Overview、Tool sessions、Alarms、Messages、Memories、Bot admins、Sticker Set 索引、Model 切换、Usage chart |
 
 `queryState()` 是普通函数而非组件：调用方依赖 `null` 判断是否渲染真实数据，JSX 元素永远不为 `null`。
 
@@ -153,6 +155,7 @@ Bot 管理员列表（迁移 `src/migrations/008_bot_admins.sql`）：
 
 ```bash
 bun test test/admin.test.ts
+bun test test/alarm.test.ts
 bun test test/memory.test.ts
 bun run check
 bun run admin:build
@@ -160,6 +163,8 @@ bun run admin:build
 
 `test/admin.test.ts` 覆盖：首次初始化与登录态转换、弱密码拒绝且不写入用户、`setup` 重复调用冲突、错误凭据与未知用户的统一 401、跨站 `POST` 拒绝、Overview 睡眠/手动唤醒与管理员暂停状态、审计三大视图的字段与过滤、非法 `limit`/`state` 的 400、审计路由写操作 405、静态资源回退与目录穿越拒绝、`admin.host` 非回环时配置加载失败。
 
+`test/alarm.test.ts` 覆盖：Alarm Tool schema/时间边界/目标授权/配额/审计、UTC 归一化与原 Topic 归属、到期 claim/排序/优先级/同 Chat 串行/动态唤醒、pause/chat/topic 移除取消且不预留预算、token gate + zzz bypass 而普通 Invocation 仍阻塞、恢复与所有终态不重试、临时 prompt 不落消息历史、首次文本 mention 与 Sticker 拒绝/后续发送/长度/空行/MarkdownV2 行为、retention，以及 Admin Alarm 列表分页/过滤/排序/bigint 序列化/Invocation 链接、认证/Origin/方法/404/409/wake 行为。
+
 `test/memory.test.ts` 覆盖：记忆持久化与 TTL 过期、跨 Conversation 隔离与删除幂等、Tool 审计与 150 字符硬限制、system prompt 注入顺序与过滤、管理 API 的 CRUD/聊天过滤/`long_ttl` 与 `expired` 标记/参数校验/404 与 405、`purgeExpiredData` 清理过期记忆。
 
-浏览器冒烟应确认：初始化表单 → Overview 统计、Bot 睡眠/手动唤醒与管理员暂停状态 → Tool session 详情六个 Tab，默认 Overview 按时间显示收到的消息与 `send` 内容 → 消息搜索与详情 Revision、媒体分析 → 已配置 Sticker Set 与 `index_state` 过滤 → Memories 页面按群聊与状态过滤、新建/编辑/删除记忆、长 TTL 记忆显示 warning → Bot admins 页面添加/移除管理员与 `telegram.admins` 种子展示 → Model 页面查看当前/默认模型、切换后 `/status` 立即反映新模型、恢复默认 → 登出后深链接回落登录页 → 重新登录恢复。
+浏览器冒烟应确认：初始化表单 → Overview 统计、Bot 睡眠/手动唤醒与管理员暂停状态 → Tool session 详情六个 Tab，默认 Overview 按时间显示收到的消息与 `send` 内容 → Alarms 页面按状态/Chat/Target 过滤、pending 优先列表、展开完整诊断、关联 Tool session 链接、pending-only 二次确认取消与 409 冲突提示 → 消息搜索与详情 Revision、媒体分析 → 已配置 Sticker Set 与 `index_state` 过滤 → Memories 页面按群聊与状态过滤、新建/编辑/删除记忆、长 TTL 记忆显示 warning → Bot admins 页面添加/移除管理员与 `telegram.admins` 种子展示 → Model 页面查看当前/默认模型、切换后 `/status` 立即反映新模型、恢复默认 → 登出后深链接回落登录页 → 重新登录恢复。

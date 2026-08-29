@@ -2,6 +2,7 @@
 node_modules/
 coverage/
 dist/
+docs/plan/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

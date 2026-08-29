@@ -120,6 +120,7 @@ export class AgentRuntime {
       model.input.includes('image'),
       { provider: model.provider, model: model.id },
     );
+    const isAlarm = provisionalContext.alarm !== null;
     const deadline = Date.now() + this.#config.agent.timeout_seconds * 1000;
     let sleepRequested = false;
     const zzz = createZzzTool({
@@ -135,7 +136,7 @@ export class AgentRuntime {
       throw new Error(`Invocation ${invocationId} chat is no longer configured`);
     }
     const initialBudget = readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens);
-    let zzzExposed = isLowDailyTokenBudget(initialBudget);
+    let zzzExposed = !isAlarm && isLowDailyTokenBudget(initialBudget);
     if (zzzExposed) {
       this.#logZzzExposure(invocationId, provisionalContext.chatId, initialBudget);
     }
@@ -201,6 +202,7 @@ export class AgentRuntime {
       },
       streamFn: async (model, modelContext, options) => {
         if (
+          !isAlarm &&
           isDailyTokenBudgetReached(readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens))
         ) {
           modelBudgetBlocked = true;
@@ -249,7 +251,7 @@ export class AgentRuntime {
       toolExecution: 'sequential',
       maxRetryDelayMs: Math.max(0, deadline - Date.now()),
       beforeToolCall: async ({ toolCall }) => {
-        if (toolCall.name !== 'zzz' && (sleepRequested || activeSleepUntil(this.#store.db) !== null)) {
+        if (toolCall.name !== 'zzz' && !isAlarm && (sleepRequested || activeSleepUntil(this.#store.db) !== null)) {
           return { block: true, reason: 'The bot is sleeping', terminate: true };
         }
         if (
@@ -268,7 +270,7 @@ export class AgentRuntime {
         return undefined;
       },
       shouldStopAfterTurn: async (turn) => {
-        if (sleepRequested || activeSleepUntil(this.#store.db) !== null) {
+        if (!isAlarm && (sleepRequested || activeSleepUntil(this.#store.db) !== null)) {
           return true;
         }
         if (turns >= this.#config.agent.max_turns || closing) {
@@ -300,7 +302,7 @@ export class AgentRuntime {
         let nextTools = turn.context.tools;
         let toolsChanged = false;
         const budget = readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens);
-        const shouldExposeZzz = isLowDailyTokenBudget(budget);
+        const shouldExposeZzz = !isAlarm && isLowDailyTokenBudget(budget);
         if (shouldExposeZzz !== zzzExposed) {
           zzzExposed = shouldExposeZzz;
           nextTools = shouldExposeZzz

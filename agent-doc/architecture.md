@@ -15,7 +15,8 @@ Config + SecretStore
         ├─ StickerService
         ├─ McpManager
         ├─ AgentRuntime
-        └─ BucketScheduler
+        ├─ BucketScheduler
+        └─ Alarm persistence (alarms table / alarm tool)
 ```
 
 启动顺序有语义：先加载并校验配置与权限，再取得单实例锁、迁移数据库、连接 Telegram、同步 Sticker Set；随后排空 Telegram pending updates，按 Chat 创建 startup catch-up Invocation；最后启动 MCP、Scheduler 和常规 long polling。关闭时停止 Bot，等待 Scheduler，停止 Sticker/MCP 服务，关闭数据库并释放锁。
@@ -76,6 +77,7 @@ send Tool → Telegram API → 审计
 | `agent-runtime.ts` | Pi Agent 循环、多模态/文本回退输入、模型/Tool 预算、调用审计 |
 | `send-tool.ts` | 文本/Sticker 发送、Reply 授权、重试与副作用审计 |
 | `memory.ts` | Conversation 级短期记忆存储、`add_memory`/`delete_memory` Tool 与 TTL 过期清理 |
+| `alarm.ts` | Deferred Invocation：`alarm` Tool、授权/时间/配额校验与 pending Alarm 持久化 |
 | `media.ts` | Telegram 图片直传准备、普通图片回退分析、Sticker 代表帧、标准化与视觉缓存 |
 | `stickers.ts` | Set 同步、后台单并发索引、FTS 搜索和发送能力 |
 | `mcp.ts` | Server 生命周期、Tool 注册、策略、大小限制和预算 |
@@ -95,6 +97,7 @@ send Tool → Telegram API → 审计
 
 - 进程启动时恢复未完成 Bucket/Invocation。
 - 小于 5 分钟的工作可重新排队；更旧工作标记为过期或恢复失败，避免无限重放。
+- 到期 Alarm 先原子 `pending → firing` 再创建 Invocation；进程恢复遗留 `firing` 关闭为 `fired`/`outcome_unknown`，绝不退回 `pending`。
 - 同一 Chat 最多一个 queued/running Invocation；Invocation 完成后，该 Chat 仍 collecting 的 Bucket deadline 重算为 `max(finished_at, started_at + bucket_window_seconds)`。
 - 一旦 Tool 产生不可逆副作用，未知结果不得盲目重试；状态进入 `outcome_unknown` 供审计处理。
 

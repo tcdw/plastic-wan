@@ -6,6 +6,7 @@ import {
   getOverview,
   getSession,
   getUsage,
+  listAlarms,
   listBotAdmins,
   listInvocations,
   listMemories,
@@ -69,6 +70,10 @@ export function stickersQuery(filters: ListFilters) {
 
 export function memoriesQuery(filters: ListFilters) {
   return infiniteList("memories", listMemories, filters);
+}
+
+export function alarmsQuery(filters: ListFilters) {
+  return infiniteList("alarms", listAlarms, filters);
 }
 
 export const memoryChatsQuery = queryOptions({

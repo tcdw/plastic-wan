@@ -12,6 +12,7 @@ import { App as AntApp, Button, Card, Layout, Menu, Space, Typography } from "an
 import { createFirstAdmin, login, logout, updateCredentials, type Credentials } from "./api.ts";
 import { CredentialsForm, queryState } from "./components.tsx";
 import { AdminsPage } from "./pages/admins.tsx";
+import { AlarmsPage } from "./pages/alarms.tsx";
 import { InvocationDetailPage, InvocationsPage } from "./pages/invocations.tsx";
 import { MemoriesPage } from "./pages/memories.tsx";
 import { MessageDetailPage, MessagesPage } from "./pages/messages.tsx";
@@ -23,6 +24,7 @@ import { sessionQuery } from "./queries.ts";
 const MENU_ITEMS = [
   { key: "/", label: <Link to="/">Overview</Link> },
   { key: "/invocations", label: <Link to="/invocations">Tool sessions</Link> },
+  { key: "/alarms", label: <Link to="/alarms">Alarms</Link> },
   { key: "/messages", label: <Link to="/messages">Messages</Link> },
   { key: "/memories", label: <Link to="/memories">Memories</Link> },
   { key: "/admins", label: <Link to="/admins">Bot admins</Link> },
@@ -164,6 +166,8 @@ const invocationDetailRoute = createRoute({
   },
 });
 
+const alarmsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/alarms", component: AlarmsPage });
+
 const messagesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/messages", component: MessagesPage });
 
 const memoriesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/memories", component: MemoriesPage });
@@ -187,6 +191,7 @@ export const routeTree = rootRoute.addChildren([
   overviewRoute,
   invocationsRoute,
   invocationDetailRoute,
+  alarmsRoute,
   messagesRoute,
   memoriesRoute,
   adminsRoute,

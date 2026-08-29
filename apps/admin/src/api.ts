@@ -29,6 +29,13 @@ export interface ChatSummary {
   readonly message_thread_id: number;
 }
 
+export interface AlarmChatSummary {
+  readonly telegram_chat_id: string;
+  readonly type: string;
+  readonly title: string | null;
+  readonly message_thread_id: string;
+}
+
 export interface InvocationListItem {
   readonly id: string;
   readonly state: string;
@@ -257,6 +264,28 @@ export interface MemoryUpdate {
   readonly ttl_seconds?: number;
 }
 
+export interface AlarmListItem {
+  readonly id: string;
+  readonly conversation_id: string;
+  readonly state: string;
+  readonly scheduled_at: string;
+  readonly created_at: string;
+  readonly created_by_invocation_id: string | null;
+  readonly fired_at: string | null;
+  readonly invocation_id: string | null;
+  readonly invocation_outcome: string | null;
+  readonly completion_reason: string | null;
+  readonly cancelled_at: string | null;
+  readonly cancelled_by: string | null;
+  readonly admin_cancelled: boolean;
+  readonly cancel_reason: string | null;
+  readonly updated_at: string;
+  readonly target_user_id: string;
+  readonly target_display_name: string;
+  readonly summary: string;
+  readonly chat: AlarmChatSummary;
+}
+
 export interface BotAdminEntry {
   readonly telegram_user_id: string;
   readonly display_name: string;
@@ -372,6 +401,7 @@ export interface ListFilters {
   readonly chat?: string | undefined;
   readonly set?: string | undefined;
   readonly search?: string | undefined;
+  readonly target?: string | undefined;
 }
 
 export interface Credentials {
@@ -405,7 +435,7 @@ function listPath(path: string, filters: ListFilters): string {
   const params = new URLSearchParams();
   if (filters.limit !== undefined) params.set("limit", String(filters.limit));
   if (filters.cursor !== undefined && filters.cursor !== null) params.set("cursor", filters.cursor);
-  for (const key of ["state", "chat", "set", "search"] as const) {
+  for (const key of ["state", "chat", "set", "search", "target"] as const) {
     const value = filters[key];
     if (value !== undefined && value.length > 0) params.set(key, value);
   }
@@ -466,6 +496,14 @@ export function listStickers(filters: ListFilters): Promise<Page<StickerEntry>> 
 
 export function listMemories(filters: ListFilters): Promise<Page<MemoryEntry>> {
   return call<Page<MemoryEntry>>(listPath("/memories", filters));
+}
+
+export function listAlarms(filters: ListFilters): Promise<Page<AlarmListItem>> {
+  return call<Page<AlarmListItem>>(listPath("/alarms", filters));
+}
+
+export function cancelAlarm(id: string): Promise<{ status: string }> {
+  return call<{ status: string }>(`/alarms/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function listMemoryChats(): Promise<{ items: readonly MemoryChatOption[] }> {

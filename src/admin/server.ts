@@ -7,6 +7,7 @@ import { type AgentModelOption, type AgentModelSwitcher, ModelSwitchError } from
 import type { BucketScheduler } from '../scheduler.ts';
 import { wakeFromSleep } from '../sleep.ts';
 import { addBotAdmin, listBotAdmins, parseAdminUserId, removeBotAdmin } from './admins.ts';
+import { cancelAlarm, listAlarms, parseAlarmId } from './alarm-admin.ts';
 import {
   AdminQueryError,
   getInvocation,
@@ -209,6 +210,7 @@ export class AdminServer {
       chat: url.searchParams.get('chat'),
       set: url.searchParams.get('set'),
       search: url.searchParams.get('search'),
+      target: url.searchParams.get('target'),
     };
     if (route === 'memories' && request.method === 'GET') {
       return json(listMemories(database, query, this.#memoryWarningDays));
@@ -245,6 +247,12 @@ export class AdminServer {
       removeBotAdmin(database, parseAdminUserId(segments[1] ?? '', 'admin_id'));
       return json({ status: 'ok' });
     }
+    if (segments[0] === 'alarms' && segments.length === 2 && request.method === 'DELETE') {
+      const id = parseAlarmId(segments[1] ?? '');
+      const result = cancelAlarm(database, id, session.username);
+      this.#scheduler?.wake();
+      return json(result);
+    }
     if (route === 'model') {
       const switcher = this.#modelSwitcher;
       if (switcher === undefined) {
@@ -269,6 +277,9 @@ export class AdminServer {
     }
     if (route === 'overview') {
       return json(overview(database));
+    }
+    if (route === 'alarms') {
+      return json(listAlarms(database, query));
     }
     if (route === 'usage') {
       const daysParam = url.searchParams.get('days');

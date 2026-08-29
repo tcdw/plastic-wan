@@ -73,6 +73,15 @@ interface StartupMessageRow {
   readonly telegram_date: string;
 }
 
+interface AlarmDueRow {
+  readonly id: bigint;
+  readonly conversation_id: bigint;
+  readonly chat_id: bigint;
+  readonly telegram_chat_id: bigint;
+  readonly message_thread_id: bigint;
+  readonly scheduled_at: string;
+}
+
 export class BucketScheduler {
   readonly #store: SqliteStore;
   readonly #config: RawConfig;
@@ -174,6 +183,28 @@ export class BucketScheduler {
             "UPDATE invocations SET state = 'aborted', completion_reason = 'recovery_age', finished_at = ? WHERE bucket_id = ? AND state = 'queued'",
           )
           .run(nowIso, bucket.id);
+      }
+      // A firing alarm owns a claimed invocation. Recovery never returns it to
+      // pending: any queued result invocation is aborted, and the alarm closes as
+      // fired with an outcome_unknown result so it can never re-send.
+      const firing = this.#store.db
+        .query<{ id: bigint; invocation_id: bigint | null }, []>(
+          "SELECT id, invocation_id FROM alarms WHERE state = 'firing'",
+        )
+        .all();
+      for (const alarm of firing) {
+        if (alarm.invocation_id !== null) {
+          this.#store.db
+            .query(
+              "UPDATE invocations SET state = 'aborted', completion_reason = 'process_restart', finished_at = ? WHERE id = ? AND state = 'queued'",
+            )
+            .run(nowIso, alarm.invocation_id);
+        }
+        this.#store.db
+          .query(
+            "UPDATE alarms SET state = 'fired', invocation_outcome = 'outcome_unknown', completion_reason = 'outcome_unknown', updated_at = ? WHERE id = ? AND state = 'firing'",
+          )
+          .run(nowIso, alarm.id);
       }
     });
   }
@@ -321,8 +352,97 @@ export class BucketScheduler {
     });
   }
 
+  processAlarmsDue(now = new Date()): bigint[] {
+    const nowIso = now.toISOString();
+    return this.#store.transaction(() => {
+      const due = this.#store.db
+        .query<AlarmDueRow, [string]>(
+          `SELECT a.id, a.conversation_id, v.chat_id, c.telegram_chat_id, v.message_thread_id, a.scheduled_at
+           FROM alarms a
+           JOIN conversations v ON v.id = a.conversation_id
+           JOIN chats c ON c.id = v.chat_id
+           WHERE a.state = 'pending' AND a.scheduled_at <= ?
+           ORDER BY a.scheduled_at, a.id`,
+        )
+        .all(nowIso);
+      const invocations: bigint[] = [];
+      for (const alarm of due) {
+        const cancelReason = this.#alarmCancelReason(alarm);
+        if (cancelReason !== undefined) {
+          this.#cancelAlarm(alarm.id, cancelReason, nowIso);
+          continue;
+        }
+        if (this.#chatRunning(alarm.chat_id)) {
+          continue;
+        }
+        const claimed = this.#store.db
+          .query(
+            "UPDATE alarms SET state = 'firing', fired_at = ?, updated_at = ? WHERE id = ? AND state = 'pending'",
+          )
+          .run(nowIso, nowIso, alarm.id);
+        if (claimed.changes !== 1) {
+          continue;
+        }
+        invocations.push(this.#insertAlarmInvocation(alarm, now));
+      }
+      return invocations;
+    });
+  }
+
+  #alarmCancelReason(alarm: AlarmDueRow): string | undefined {
+    const chatConfig = resolveChatConfig(this.#config, this.#store.db, alarm.telegram_chat_id);
+    if (chatConfig === undefined) {
+      return 'chat_removed';
+    }
+    if (isChatPaused(this.#store.db, alarm.chat_id)) {
+      return 'chat_paused';
+    }
+    if (
+      chatConfig.topic_ids !== undefined &&
+      !chatConfig.topic_ids.some((topicId) => BigInt(topicId) === alarm.message_thread_id)
+    ) {
+      return 'topic_removed';
+    }
+    return undefined;
+  }
+
+  #chatRunning(chatId: bigint): boolean {
+    return (
+      this.#store.db
+        .query<{ present: bigint }, [bigint]>(
+          `SELECT 1 AS present FROM invocations i
+           JOIN conversations v ON v.id = i.conversation_id
+           WHERE v.chat_id = ? AND i.state = 'running'
+           LIMIT 1`,
+        )
+        .get(chatId) !== null
+    );
+  }
+
+  #cancelAlarm(alarmId: bigint, reason: string, nowIso: string): void {
+    this.#store.db
+      .query(
+        "UPDATE alarms SET state = 'cancelled', cancelled_at = ?, cancel_reason = ?, admin_cancelled = 0, updated_at = ? WHERE id = ? AND state = 'pending'",
+      )
+      .run(nowIso, reason, nowIso, alarmId);
+  }
+
+  #insertAlarmInvocation(alarm: AlarmDueRow, now: Date): bigint {
+    const timestamp = now.toISOString();
+    const bucket = this.#store.db
+      .query(
+        "INSERT INTO buckets(conversation_id, state, kind, first_received_at, deadline_at, queued_at, created_at, updated_at) VALUES (?, 'queued', 'realtime', ?, ?, ?, ?, ?)",
+      )
+      .run(alarm.conversation_id, timestamp, timestamp, timestamp, timestamp, timestamp);
+    const bucketId = BigInt(bucket.lastInsertRowid);
+    const invocationId = this.#insertInvocation(bucketId, alarm.conversation_id, now, true);
+    this.#store.db.query('UPDATE alarms SET invocation_id = ? WHERE id = ?').run(invocationId, alarm.id);
+    return invocationId;
+  }
+
   async #loop(): Promise<void> {
     while (this.#running) {
+      this.processAlarmsDue();
       this.processDue();
       this.#launchQueued();
       const delay = this.#nextDelayMilliseconds();
@@ -343,7 +463,8 @@ export class BucketScheduler {
   }
 
   #nextDelayMilliseconds(): number {
-    const row = this.#store.db
+    const deadlines: number[] = [];
+    const bucket = this.#store.db
       .query<{ deadline_at: string }, []>(
         `SELECT b.deadline_at FROM buckets b
          JOIN conversations v ON v.id = b.conversation_id
@@ -356,10 +477,30 @@ export class BucketScheduler {
          ORDER BY b.deadline_at, b.id LIMIT 1`,
       )
       .get();
-    if (row === null) {
+    if (bucket !== null) {
+      deadlines.push(Date.parse(bucket.deadline_at));
+    }
+    const alarm = this.#store.db
+      .query<{ scheduled_at: string }, []>(
+        `SELECT a.scheduled_at FROM alarms a
+         JOIN conversations v ON v.id = a.conversation_id
+         WHERE a.state = 'pending'
+           AND NOT EXISTS (
+             SELECT 1 FROM invocations i
+             JOIN conversations v2 ON v2.id = i.conversation_id
+             WHERE v2.chat_id = v.chat_id AND i.state IN ('queued', 'running')
+           )
+         ORDER BY a.scheduled_at, a.id LIMIT 1`,
+      )
+      .get();
+    if (alarm !== null) {
+      deadlines.push(Date.parse(alarm.scheduled_at));
+    }
+    if (deadlines.length === 0) {
       return 60_000;
     }
-    return Math.max(0, Math.min(60_000, Date.parse(row.deadline_at) - Date.now()));
+    const next = Math.min(...deadlines);
+    return Math.max(0, Math.min(60_000, next - Date.now()));
   }
 
   #queueBucket(bucket: BucketRow, now: Date, sleepUntil: string | null): bigint | undefined {
@@ -526,7 +667,6 @@ export class BucketScheduler {
     const sleepUntil = activeSleepUntil(this.#store.db);
     if (sleepUntil !== null) {
       this.#skipQueuedInvocations(sleepUntil, new Date());
-      return;
     }
     while (this.#running && this.#active.size < this.#config.agent.max_concurrency) {
       const invocation = this.#store.transaction(() => {
@@ -535,13 +675,15 @@ export class BucketScheduler {
             `SELECT i.id, i.bucket_id, i.conversation_id FROM invocations i
              JOIN buckets b ON b.id = i.bucket_id
              JOIN conversations v ON v.id = i.conversation_id
+             LEFT JOIN alarms a ON a.invocation_id = i.id AND a.state = 'firing'
              WHERE i.state = 'queued' AND b.deadline_at <= ?
                AND NOT EXISTS (
                  SELECT 1 FROM invocations r
                  JOIN conversations v2 ON v2.id = r.conversation_id
                  WHERE v2.chat_id = v.chat_id AND r.state = 'running'
                )
-             ORDER BY i.id LIMIT 1`,
+             ORDER BY CASE WHEN a.id IS NOT NULL THEN 0 ELSE 1 END, i.id
+             LIMIT 1`,
           )
           .get(new Date().toISOString());
         if (candidate === null) {
@@ -574,6 +716,7 @@ export class BucketScheduler {
            JOIN conversations v ON v.id = i.conversation_id
            JOIN chats c ON c.id = v.chat_id
            WHERE i.state = 'queued'
+             AND NOT EXISTS (SELECT 1 FROM alarms a WHERE a.invocation_id = i.id AND a.state = 'firing')
            ORDER BY i.id`,
         )
         .all();
@@ -667,11 +810,17 @@ export class BucketScheduler {
                AND state = 'collecting' AND deadline_at < ?`,
           )
           .run(nextDeadline, nowIso, chat.chat_id, nextDeadline);
+        this.#store.db
+          .query(
+            "UPDATE alarms SET state = 'fired', invocation_outcome = ?, completion_reason = ?, updated_at = ? WHERE invocation_id = ? AND state = 'firing'",
+          )
+          .run(outcome.state, outcome.reason, nowIso, invocation.id);
       });
       persisted = true;
     } finally {
       this.#active.delete(invocation.id.toString());
       if (persisted) {
+        this.processAlarmsDue(finishedAt);
         this.processDue(finishedAt);
       }
       this.#logInvocationDiagnostic(

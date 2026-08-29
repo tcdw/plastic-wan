@@ -248,6 +248,11 @@ export function purgeExpiredData(database: Database, config: RawConfig, now = ne
       database
         .query("DELETE FROM model_calls WHERE invocation_id IS NULL AND state <> 'pending' AND created_at < ?")
         .run(cutoff);
+      database
+        .query(
+          "DELETE FROM alarms WHERE state IN ('fired', 'cancelled') AND COALESCE(fired_at, cancelled_at, updated_at) < ?",
+        )
+        .run(cutoff);
       database.query('DELETE FROM daily_usage WHERE utc_date < ?').run(cutoff.slice(0, 10));
     })
     .immediate();

@@ -52,6 +52,8 @@ interface InvocationMessageRow {
   readonly conversation_id: bigint;
   readonly message_thread_id: bigint;
   readonly sequence_no: bigint;
+  readonly message_id: bigint;
+  readonly revision_id: bigint;
   readonly snapshot_json: string;
 }
 
@@ -67,6 +69,20 @@ interface StickerCatalogRow {
   readonly emoji: string | null;
 }
 
+interface AlarmIdentityRow {
+  readonly id: bigint;
+  readonly target_user_id: bigint;
+  readonly target_display_name: string;
+  readonly summary: string;
+}
+
+interface SenderIdentityRow {
+  readonly message_id: bigint;
+  readonly telegram_id: bigint;
+  readonly display_name: string;
+  readonly username: string | null;
+}
+
 
 export interface ReplyTarget {
   readonly conversationId: bigint;
@@ -75,6 +91,16 @@ export interface ReplyTarget {
 export interface DirectImage {
   readonly mediaId: bigint;
   readonly imageRef: string;
+}
+export interface VisibleSender {
+  readonly userId: bigint;
+  readonly displayName: string;
+  readonly username: string | null;
+}
+export interface AlarmContext {
+  readonly userId: bigint;
+  readonly displayName: string;
+  readonly summary: string;
 }
 export interface InvocationContext {
   readonly invocationId: bigint;
@@ -86,6 +112,8 @@ export interface InvocationContext {
   readonly imageCapabilities: ReadonlyMap<string, bigint>;
   readonly directImages: readonly DirectImage[];
   readonly replyTargets: ReadonlyMap<string, ReplyTarget>;
+  readonly visibleSenders: ReadonlyMap<string, VisibleSender>;
+  readonly alarm: AlarmContext | null;
   readonly omittedNewMessages: number;
 }
 
@@ -100,6 +128,8 @@ export function previewContext(): InvocationContext {
     imageCapabilities: new Map(),
     directImages: [],
     replyTargets: new Map(),
+    visibleSenders: new Map(),
+    alarm: null,
     omittedNewMessages: 0,
   };
 }
@@ -141,6 +171,19 @@ export class ContextBuilder {
     if (chatConfig === undefined) {
       throw new Error(`Invocation chat ${identity.telegram_chat_id} is no longer configured`);
     }
+    const alarmIdentity = this.#store.db
+      .query<AlarmIdentityRow, [bigint]>(
+        'SELECT id, target_user_id, target_display_name, summary FROM alarms WHERE invocation_id = ?',
+      )
+      .get(invocationId);
+    const alarm: AlarmContext | null =
+      alarmIdentity === null
+        ? null
+        : {
+            userId: alarmIdentity.target_user_id,
+            displayName: alarmIdentity.target_display_name,
+            summary: alarmIdentity.summary,
+          };
     const timezone = chatConfig.timezone ?? this.#config.timezone;
     const participation =
       identity.chat_type === 'private'
@@ -150,6 +193,10 @@ export class ContextBuilder {
       identity.bucket_kind === 'startup_catch_up'
         ? "Startup catch-up: these are the latest configured number of messages across this chat and may span forum topics. Each new message includes message_thread_id. When responding to a specific topic, reply to a visible message from that topic; an un-replied send targets the newest message's topic."
         : '';
+    const alarmTask =
+      alarm === null
+        ? ''
+        : `This invocation was triggered by an alarm you scheduled earlier.\n\nImmediate task: follow up with Telegram user ${alarm.userId.toString()} (display name: ${alarm.displayName}) in this conversation.\n\nContext for why you scheduled this alarm (this is a task description, NOT the message text to send):\n${alarm.summary}\n\nMention the target user and handle this naturally using your normal conversational style. Do not explain the alarm or scheduling mechanism unless it is actually relevant.`;
     const currentTime = new Intl.DateTimeFormat('en-CA', {
       timeZone: timezone,
       dateStyle: 'full',
@@ -176,6 +223,7 @@ export class ContextBuilder {
       renderPromptTemplate(this.#config.agent.system_prompt, templateValues),
       participation,
       catchUp,
+      alarmTask,
       renderPromptTemplate(chatConfig.instructions, templateValues),
       this.#memoryPrompt(identity.conversation_id),
       `Current time in ${timezone}: ${currentTime}`,
@@ -184,7 +232,8 @@ export class ContextBuilder {
       .join('\n\n');
     const rows = this.#store.db
       .query<InvocationMessageRow, [bigint]>(
-        `SELECT im.section, im.sequence_no, im.snapshot_json, m.conversation_id, v.message_thread_id
+        `SELECT im.section, im.sequence_no, im.message_id, im.revision_id, im.snapshot_json,
+                m.conversation_id, v.message_thread_id
          FROM invocation_messages im
          JOIN messages m ON m.id = im.message_id
          JOIN conversations v ON v.id = m.conversation_id
@@ -192,10 +241,28 @@ export class ContextBuilder {
          ORDER BY im.sequence_no`,
       )
       .all(invocationId);
+    const senderRows = this.#store.db
+      .query<SenderIdentityRow, [bigint]>(
+        `SELECT im.message_id, s.telegram_id, s.display_name, s.username
+         FROM invocation_messages im
+         JOIN message_revisions r ON r.id = im.revision_id
+         JOIN senders s ON s.id = r.sender_id
+         WHERE im.invocation_id = ? AND s.telegram_type = 'user'`,
+      )
+      .all(invocationId);
+    const senderByMessage = new Map<string, VisibleSender>();
+    for (const sender of senderRows) {
+      senderByMessage.set(sender.message_id.toString(), {
+        userId: sender.telegram_id,
+        displayName: sender.display_name,
+        username: sender.username,
+      });
+    }
     const capabilities = new Map<string, bigint>();
     const mediaIds = new Map<string, bigint>();
     const prepared = rows.map((row) => ({
       section: row.section,
+      messageId: row.message_id,
       snapshot: this.#prepareSnapshot(row.snapshot_json, capabilities, mediaIds, supportsImages),
       target: { conversationId: row.conversation_id, threadId: row.message_thread_id },
     }));
@@ -286,6 +353,13 @@ export class ContextBuilder {
           return [{ mediaId, imageRef: media.imageRef }];
         })
       : [];
+    const visibleSenders = new Map<string, VisibleSender>();
+    for (const entry of [...selectedHistory, ...selectedCurrent]) {
+      const sender = senderByMessage.get(entry.messageId.toString());
+      if (sender !== undefined) {
+        visibleSenders.set(sender.userId.toString(), sender);
+      }
+    }
     return {
       invocationId,
       conversationId: identity.conversation_id,
@@ -296,6 +370,8 @@ export class ContextBuilder {
       imageCapabilities: capabilities,
       directImages,
       replyTargets,
+      visibleSenders,
+      alarm,
       omittedNewMessages,
     };
   }

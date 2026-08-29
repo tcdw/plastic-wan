@@ -125,6 +125,17 @@ Context
 
 管理员调大预算后可在 Admin Overview 手动解除睡眠；`POST /api/wake` 原子删除该键并唤醒 Scheduler，重复调用幂等。已因睡眠跳过的 Bucket 不会重放，后续到期 Bucket 与新消息恢复正常调度。
 
+## Alarm / Deferred Invocation
+
+Agent 通过 `alarm` Tool 创建一个绑定当前 conversation 的未来 Invocation，而不是延迟发送预生成文本：
+
+1. Tool 校验 `target_user_id` 必须是当前 Invocation 实际可见消息中的 Telegram **user** sender（sender_chat 与任意 ID 拒绝）、`summary` 为 1–500 字符任务说明、`datetime` 为带显式 offset/`Z` 的绝对时间且严格未来、不超 365 天；同一 Invocation 最多成功创建 3 个。
+2. 成功创建是副作用，写入 `alarms`（含原 conversation/Forum Topic、目标 ID 与显示名快照、UTC deadline、`created_by_invocation_id`），并返回 Alarm ID/scheduled UTC。
+3. Scheduler 的动态等待同时考虑最近 Bucket deadline 与最近 pending Alarm `scheduled_at`；到期 Alarm 在 Chat 空闲时原子 `pending → firing`，再创建不携带任何 Telegram Update/Message/Revision 的真实 `alarm` Invocation。
+4. Alarm Invocation 仍走普通 Context/Agent/send pipeline；系统提示临时加入任务说明（summary 是任务描述，不是待发送文本），首次成功文本 `send` 自动在开头加入目标用户的 Telegram text mention。
+5. Alarm Invocation 绕过 Chat 每日调用预留、全局每日 Token gate 与预算触发的 `zzz`/sleep，且不暴露 `zzz`；仍受 pause、Chat/Topic 配置、同 Chat 串行、并发、timeout、最大轮次/Tool/send、capability 与 Telegram 错误约束。
+6. Invocation 无论何种终态都关闭 Alarm 且不重试；进程恢复遗留 `firing` 关闭为 `fired`/`outcome_unknown`。到期时 Chat/Topic 停用、移出配置或 pause 则置 `cancelled` 并记录稳定原因。
+
 ## send Tool
 
 `send` 是唯一 Telegram 输出边界，支持：

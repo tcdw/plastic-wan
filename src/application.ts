@@ -2,6 +2,7 @@ import { Bot, type Context } from 'grammy';
 import { seedConfigAdmins } from './admin/admins.ts';
 import { AdminServer } from './admin/server.ts';
 import { AgentRuntime } from './agent-runtime.ts';
+import { createAlarmTool } from './alarm.ts';
 import { BOT_COMMANDS, BotCommandService, type ParsedCommand, registerBotCommands } from './bot-commands.ts';
 import { KeyedSemaphore } from './concurrency.ts';
 import { assertConfigPermissions, loadConfig } from './config.ts';
@@ -115,6 +116,7 @@ export async function serve(configPath: string): Promise<void> {
         stickerService.createSearchTool(context, state.stickerCapabilities),
         ...createMemoryTools(memoryStore, context),
         createWebFetchTool({ store: webFetchStore, context, invocationDeadline: deadline }),
+        createAlarmTool({ store: webFetchStore, context }),
         ...mcpManager.createTools(context, deadline),
       ],
     });
@@ -130,6 +132,7 @@ export async function serve(configPath: string): Promise<void> {
         stickerService.createSearchTool(preview, new Map()),
         ...createMemoryTools(memoryStore, preview),
         createWebFetchTool({ store: webFetchStore, context: preview, invocationDeadline: Number.MAX_SAFE_INTEGER }),
+        createAlarmTool({ store: webFetchStore, context: preview }),
         ...mcpTools,
       ]),
     );

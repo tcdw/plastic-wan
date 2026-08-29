@@ -116,6 +116,7 @@ bun run admin:dev
 - TypeScript ESM，运行时为 Bun；本地源码导入保留 `.ts` 后缀。
 - 2 空格缩进、分号、双引号、尾随逗号；沿用现有文件格式。
 - `strict`、`noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`、`noImplicitReturns` 必须保持通过。
+- `bun run lint` 需要保持通过，如果存在问题需要先使用 `bun run lint:fix` 进行自动修复，如果无法自动修复需要尝试进行手动修改。
 - 配置和外部响应在边界处使用 TypeBox 校验；不要把未经校验的 `unknown` 转成业务类型。
 - SQLite ID 使用 `bigint`；Telegram JSON 中需要字符串化的 ID 不得经过不安全 `number` 转换。
 - 不新增第二套 Provider、调度、审计或进程执行约定；复用现有模块。

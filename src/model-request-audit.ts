@@ -15,7 +15,7 @@ export function serializeModelRequestForAudit(payload: unknown): string {
 
 export function scrubModelRequestAuditJson(json: string): ScrubbedModelRequestAudit {
   let replacements = 0;
-  let encodedCharacters = 0;
+  let _encodedCharacters = 0;
   let decodedBytes = 0;
   const parsed: unknown = JSON.parse(json);
   const scrubbed = JSON.stringify(parsed, (_key, value: unknown) => {
@@ -33,7 +33,7 @@ export function scrubModelRequestAuditJson(json: string): ScrubbedModelRequestAu
     const encoded = value.slice(prefix[0].length);
     const bytes = Buffer.from(encoded, 'base64');
     replacements += 1;
-    encodedCharacters += encoded.length;
+    _encodedCharacters += encoded.length;
     decodedBytes += bytes.byteLength;
     return {
       __plasticwan_audit_omission__: 'base64_image',

@@ -301,9 +301,7 @@ async function readTextBody(response: Response, maxBytes: number): Promise<{ tex
     try {
       const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, bytes.byteLength - dropped));
       return { text, truncated };
-    } catch {
-      continue;
-    }
+    } catch {}
   }
   throw new WebFetchError('invalid_text_encoding', 'Response is not valid UTF-8');
 }

@@ -83,7 +83,6 @@ interface SenderIdentityRow {
   readonly username: string | null;
 }
 
-
 export interface ReplyTarget {
   readonly conversationId: bigint;
   readonly threadId: bigint;

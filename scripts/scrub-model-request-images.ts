@@ -33,9 +33,7 @@ function parseOptions(argv: readonly string[]): Options {
     throw new Error(`Unknown argument: ${argument ?? ''}`);
   }
   if (database === undefined || database.length === 0) {
-    throw new Error(
-      'Usage: bun run scripts/scrub-model-request-images.ts --database <path> [--no-backup]',
-    );
+    throw new Error('Usage: bun run scripts/scrub-model-request-images.ts --database <path> [--no-backup]');
   }
   return { database: resolve(database), backup };
 }
@@ -86,10 +84,7 @@ async function main(): Promise<void> {
       database = undefined;
       const backupDir = join(dataDir, 'backups');
       await mkdir(backupDir, { recursive: true, mode: 0o700 });
-      backupPath = join(
-        backupDir,
-        `before-request-image-scrub-${timestampForFile()}-${basename(options.database)}`,
-      );
+      backupPath = join(backupDir, `before-request-image-scrub-${timestampForFile()}-${basename(options.database)}`);
       await copyFile(options.database, backupPath);
       database = new Database(options.database, { create: false, strict: true, safeIntegers: true });
       database.exec('PRAGMA journal_mode = WAL;');
@@ -119,9 +114,7 @@ async function main(): Promise<void> {
       }
       database
         .transaction(() => {
-          const update = database?.query(
-            'UPDATE model_calls SET request_json = ? WHERE id = ? AND request_json = ?',
-          );
+          const update = database?.query('UPDATE model_calls SET request_json = ? WHERE id = ? AND request_json = ?');
           if (update === undefined) {
             throw new Error('Database closed during migration');
           }

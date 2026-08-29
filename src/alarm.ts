@@ -39,12 +39,14 @@ class AlarmQuotaError extends Error {
  * quota, so success is an atomic side effect that returns the alarm id and its
  * UTC deadline.
  */
-export function createAlarmTool(environment: AlarmToolEnvironment): AgentTool<typeof AlarmInputSchema, AlarmToolDetails> {
+export function createAlarmTool(
+  environment: AlarmToolEnvironment,
+): AgentTool<typeof AlarmInputSchema, AlarmToolDetails> {
   return {
     name: 'alarm',
     label: 'Schedule follow-up',
     description:
-      "Schedule a deferred agent invocation in this conversation. target_user_id must be a Telegram user sender visible in the current context. summary is a 1-500 character task note for your future self, NOT the message text to send. datetime must be an absolute ISO 8601 time with an explicit Z or +-HH:MM offset, strictly in the future and no more than 365 days ahead. At most 3 alarms may be created per invocation.",
+      'Schedule a deferred agent invocation in this conversation. target_user_id must be a Telegram user sender visible in the current context. summary is a 1-500 character task note for your future self, NOT the message text to send. datetime must be an absolute ISO 8601 time with an explicit Z or +-HH:MM offset, strictly in the future and no more than 365 days ahead. At most 3 alarms may be created per invocation.',
     parameters: AlarmInputSchema,
     executionMode: 'sequential',
     execute: async (toolCallId, input, _signal) => {
@@ -109,7 +111,14 @@ export function createAlarmTool(environment: AlarmToolEnvironment): AgentTool<ty
           scheduledAt: parsedDatetime.scheduledAt,
           now,
         });
-        finishToolCall(environment.store.db, auditId, 'success', `alarm_id=${created.id.toString()} scheduled_at=${created.scheduledAt}`, null, { now });
+        finishToolCall(
+          environment.store.db,
+          auditId,
+          'success',
+          `alarm_id=${created.id.toString()} scheduled_at=${created.scheduledAt}`,
+          null,
+          { now },
+        );
         return {
           content: [
             {
@@ -147,9 +156,7 @@ function insertAlarm(
   return store.transaction(() => {
     const count =
       store.db
-        .query<{ count: bigint }, [bigint]>(
-          'SELECT COUNT(*) AS count FROM alarms WHERE created_by_invocation_id = ?',
-        )
+        .query<{ count: bigint }, [bigint]>('SELECT COUNT(*) AS count FROM alarms WHERE created_by_invocation_id = ?')
         .get(context.invocationId)?.count ?? 0n;
     if (count >= BigInt(ALARM_MAX_PER_INVOCATION)) {
       throw new AlarmQuotaError();

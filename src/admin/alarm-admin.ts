@@ -76,15 +76,16 @@ JOIN chats ch ON ch.id = c.chat_id`;
 export function listAlarms(db: Database, query: ListQuery): Page<AlarmAdminItem> {
   const limit = parseLimit(query.limit);
   const state = parseState(query.state);
-  const chatId = query.chat === undefined || query.chat === null || query.chat.length === 0
-    ? undefined
-    : parseId(query.chat, 'chat');
-  const targetId = query.target === undefined || query.target === null || query.target.length === 0
-    ? undefined
-    : parsePositiveId(query.target, 'target');
-  const cursor = query.cursor === undefined || query.cursor === null || query.cursor.length === 0
-    ? null
-    : parseCursor(query.cursor);
+  const chatId =
+    query.chat === undefined || query.chat === null || query.chat.length === 0
+      ? undefined
+      : parseId(query.chat, 'chat');
+  const targetId =
+    query.target === undefined || query.target === null || query.target.length === 0
+      ? undefined
+      : parsePositiveId(query.target, 'target');
+  const cursor =
+    query.cursor === undefined || query.cursor === null || query.cursor.length === 0 ? null : parseCursor(query.cursor);
 
   const wantsPending = state === undefined || state === 'pending';
   const wantsTerminal = state === undefined || state !== 'pending';

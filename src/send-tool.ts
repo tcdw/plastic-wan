@@ -252,7 +252,15 @@ export function createSendTool(
               "UPDATE telegram_sends SET state = 'success', telegram_message_id = ?, response_json = ?, finished_at = ? WHERE id = ?",
             )
             .run(BigInt(response.message_id), JSON.stringify({ message_id: response.message_id }), now, pending.sendId);
-          recordOutgoingMessage(environment, response, send, stickerFileId ?? null, targetConversationId, sendText, now);
+          recordOutgoingMessage(
+            environment,
+            response,
+            send,
+            stickerFileId ?? null,
+            targetConversationId,
+            sendText,
+            now,
+          );
         });
         if (mention !== null) {
           firstTextSent = true;

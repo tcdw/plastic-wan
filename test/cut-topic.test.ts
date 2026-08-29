@@ -182,9 +182,8 @@ describe('cut_topic', () => {
     expect(command).toEqual({ name: 'cut_topic', messageId: 12n });
     expect(commands.run(command!, FIRST_CHAT, ALICE)).toContain('已切掉');
     expect(
-      store.db
-        .query<{ telegram_message_id: bigint }, []>('SELECT telegram_message_id FROM chat_context_cutoffs')
-        .get()?.telegram_message_id,
+      store.db.query<{ telegram_message_id: bigint }, []>('SELECT telegram_message_id FROM chat_context_cutoffs').get()
+        ?.telegram_message_id,
     ).toBe(12n);
 
     const history = invocationHistory(
@@ -217,16 +216,13 @@ describe('cut_topic', () => {
     const second = ingestion.ingest(commandUpdate(4, 13, FIRST_CHAT), at(34)).command;
     commands.run(second!, FIRST_CHAT, ALICE);
     expect(
-      store.db
-        .query<{ telegram_message_id: bigint }, []>('SELECT telegram_message_id FROM chat_context_cutoffs')
-        .get()?.telegram_message_id,
+      store.db.query<{ telegram_message_id: bigint }, []>('SELECT telegram_message_id FROM chat_context_cutoffs').get()
+        ?.telegram_message_id,
     ).toBe(13n);
 
     // A message arriving after the second cut stays eligible for later sessions.
     ingestion.ingest(groupUpdate(5, 14, 'between', FIRST_CHAT), at(50));
-    expect(invocationHistory(store, ingestion, scheduler, FIRST_CHAT, 6, 15, 'new topic', at(66))).toEqual([
-      'between',
-    ]);
+    expect(invocationHistory(store, ingestion, scheduler, FIRST_CHAT, 6, 15, 'new topic', at(66))).toEqual(['between']);
     store.close();
   });
 
@@ -295,15 +291,13 @@ describe('cut_topic', () => {
     }));
     const recreatedCommands = new BotCommandService(store, loaded.config, reopened);
     expect(
-      store.db
-        .query<{ telegram_message_id: bigint }, []>('SELECT telegram_message_id FROM chat_context_cutoffs')
-        .get()?.telegram_message_id,
+      store.db.query<{ telegram_message_id: bigint }, []>('SELECT telegram_message_id FROM chat_context_cutoffs').get()
+        ?.telegram_message_id,
     ).toBe(11n);
     recreatedCommands.run({ name: 'cut_topic', messageId: 20n }, FIRST_CHAT, ALICE);
     expect(
-      store.db
-        .query<{ telegram_message_id: bigint }, []>('SELECT telegram_message_id FROM chat_context_cutoffs')
-        .get()?.telegram_message_id,
+      store.db.query<{ telegram_message_id: bigint }, []>('SELECT telegram_message_id FROM chat_context_cutoffs').get()
+        ?.telegram_message_id,
     ).toBe(20n);
     expect(
       invocationHistory(

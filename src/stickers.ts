@@ -214,9 +214,7 @@ export class StickerService {
               input.set === undefined
                 ? undefined
                 : this.#store.db
-                    .query<{ id: bigint }, [string]>(
-                      'SELECT id FROM sticker_sets WHERE alias = ? AND configured = 1',
-                    )
+                    .query<{ id: bigint }, [string]>('SELECT id FROM sticker_sets WHERE alias = ? AND configured = 1')
                     .get(input.set)?.id;
             if (input.set !== undefined && setId === undefined) {
               throw new Error('Unknown or disabled sticker set alias');

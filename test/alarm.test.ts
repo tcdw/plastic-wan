@@ -147,7 +147,13 @@ function insertAlarm(
   store: SqliteStore,
   conversationId: bigint,
   scheduledAt: string,
-  options: { targetUserId?: bigint; displayName?: string; summary?: string; state?: string; invocationId?: bigint } = {},
+  options: {
+    targetUserId?: bigint;
+    displayName?: string;
+    summary?: string;
+    state?: string;
+    invocationId?: bigint;
+  } = {},
 ): bigint {
   const created = store.db
     .query(
@@ -177,10 +183,22 @@ describe('alarm tool', () => {
     const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
     const context = builder.build(invocationId, 200_000, 0, 32768);
 
-    expect(Compile(AlarmInputSchema).Check({ target_user_id: '42', summary: 'x', datetime: futureIso(3600_000) })).toBe(true);
-    expect(Compile(AlarmInputSchema).Check({ target_user_id: '42', summary: '', datetime: futureIso(3600_000) })).toBe(false);
-    expect(Compile(AlarmInputSchema).Check({ target_user_id: '42', summary: 'x'.repeat(501), datetime: futureIso(3600_000) })).toBe(false);
-    expect(Compile(AlarmInputSchema).Check({ target_user_id: '0', summary: 'x', datetime: futureIso(3600_000) })).toBe(false);
+    expect(Compile(AlarmInputSchema).Check({ target_user_id: '42', summary: 'x', datetime: futureIso(3600_000) })).toBe(
+      true,
+    );
+    expect(Compile(AlarmInputSchema).Check({ target_user_id: '42', summary: '', datetime: futureIso(3600_000) })).toBe(
+      false,
+    );
+    expect(
+      Compile(AlarmInputSchema).Check({
+        target_user_id: '42',
+        summary: 'x'.repeat(501),
+        datetime: futureIso(3600_000),
+      }),
+    ).toBe(false);
+    expect(Compile(AlarmInputSchema).Check({ target_user_id: '0', summary: 'x', datetime: futureIso(3600_000) })).toBe(
+      false,
+    );
 
     const scheduled = futureIso(3_600_000);
     const tool = createAlarmTool({ store, context });
@@ -219,24 +237,29 @@ describe('alarm tool', () => {
       tool.execute('unauthorized', { target_user_id: '999', summary: 'x', datetime: futureIso(3600_000) }),
     ).rejects.toThrow('not visible');
     expect(
-      store.db.query<{ error_code: string | null }, []>("SELECT error_code FROM tool_calls WHERE tool_call_id = 'unauthorized'").get()
-        ?.error_code,
+      store.db
+        .query<{ error_code: string | null }, []>(
+          "SELECT error_code FROM tool_calls WHERE tool_call_id = 'unauthorized'",
+        )
+        .get()?.error_code,
     ).toBe('alarm_target_not_authorized');
 
     await expect(
       tool.execute('past', { target_user_id: '42', summary: 'x', datetime: futureIso(-1000) }),
     ).rejects.toThrow('datetime is invalid');
     expect(
-      store.db.query<{ error_code: string | null }, []>("SELECT error_code FROM tool_calls WHERE tool_call_id = 'past'").get()
-        ?.error_code,
+      store.db
+        .query<{ error_code: string | null }, []>("SELECT error_code FROM tool_calls WHERE tool_call_id = 'past'")
+        .get()?.error_code,
     ).toBe('alarm_datetime_not_future');
 
     await expect(
       tool.execute('far', { target_user_id: '42', summary: 'x', datetime: futureIso(366 * 86_400_000) }),
     ).rejects.toThrow('datetime is invalid');
     expect(
-      store.db.query<{ error_code: string | null }, []>("SELECT error_code FROM tool_calls WHERE tool_call_id = 'far'").get()
-        ?.error_code,
+      store.db
+        .query<{ error_code: string | null }, []>("SELECT error_code FROM tool_calls WHERE tool_call_id = 'far'")
+        .get()?.error_code,
     ).toBe('alarm_datetime_too_far');
 
     for (let index = 0; index < 3; index += 1) {
@@ -250,8 +273,9 @@ describe('alarm tool', () => {
       tool.execute('quota-3', { target_user_id: '42', summary: 'fourth', datetime: futureIso(5 * 3_600_000) }),
     ).rejects.toThrow('quota');
     expect(
-      store.db.query<{ error_code: string | null }, []>("SELECT error_code FROM tool_calls WHERE tool_call_id = 'quota-3'").get()
-        ?.error_code,
+      store.db
+        .query<{ error_code: string | null }, []>("SELECT error_code FROM tool_calls WHERE tool_call_id = 'quota-3'")
+        .get()?.error_code,
     ).toBe('alarm_quota_exceeded');
     expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM alarms').get()?.count).toBe(3n);
     store.close();
@@ -264,12 +288,16 @@ describe('alarm scheduler', () => {
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
-    if (conversation === null) throw new Error('Expected conversation');
+    if (conversation === null) {
+      throw new Error('Expected conversation');
+    }
     const alarmId = insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z');
     const invocations = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
     expect(invocations).toHaveLength(1);
     const alarm = store.db
-      .query<{ state: string; invocation_id: bigint | null }, [bigint]>('SELECT state, invocation_id FROM alarms WHERE id = ?')
+      .query<{ state: string; invocation_id: bigint | null }, [bigint]>(
+        'SELECT state, invocation_id FROM alarms WHERE id = ?',
+      )
       .get(alarmId);
     expect(alarm?.state).toBe('firing');
     expect(alarm?.invocation_id).toBe(invocations[0]);
@@ -277,7 +305,9 @@ describe('alarm scheduler', () => {
     expect(context.alarm?.userId).toBe(42n);
     expect(context.systemPrompt).toContain('test alarm');
     const newCount = store.db
-      .query<{ count: bigint }, [bigint]>("SELECT COUNT(*) AS count FROM invocation_messages WHERE invocation_id = ? AND section = 'new'")
+      .query<{ count: bigint }, [bigint]>(
+        "SELECT COUNT(*) AS count FROM invocation_messages WHERE invocation_id = ? AND section = 'new'",
+      )
       .get(invocations[0] ?? 0n)?.count;
     expect(newCount).toBe(0n);
     store.close();
@@ -286,11 +316,21 @@ describe('alarm scheduler', () => {
   test('cancels due alarms for pause, chat removal, and topic removal without reserving budget', async () => {
     const { store, scheduler } = await setup();
     const conversation = ensureConversation(store);
-    const chat = store.db.query<{ chat_id: bigint }, [bigint]>('SELECT chat_id FROM conversations WHERE id = ?').get(conversation);
+    const chat = store.db
+      .query<{ chat_id: bigint }, [bigint]>('SELECT chat_id FROM conversations WHERE id = ?')
+      .get(conversation);
     const pausedAlarm = insertAlarm(store, conversation, '2026-08-14T23:59:00.000Z');
-    store.db.query('INSERT INTO chat_pause(chat_id, paused_at) VALUES (?, ?)').run(chat?.chat_id ?? 0n, new Date().toISOString());
+    store.db
+      .query('INSERT INTO chat_pause(chat_id, paused_at) VALUES (?, ?)')
+      .run(chat?.chat_id ?? 0n, new Date().toISOString());
     scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
-    expect(store.db.query<{ state: string; cancel_reason: string | null }, [bigint]>('SELECT state, cancel_reason FROM alarms WHERE id = ?').get(pausedAlarm)).toEqual({ state: 'cancelled', cancel_reason: 'chat_paused' });
+    expect(
+      store.db
+        .query<{ state: string; cancel_reason: string | null }, [bigint]>(
+          'SELECT state, cancel_reason FROM alarms WHERE id = ?',
+        )
+        .get(pausedAlarm),
+    ).toEqual({ state: 'cancelled', cancel_reason: 'chat_paused' });
 
     const removedChat = store.db
       .query<{ id: bigint }, [string]>(
@@ -304,8 +344,18 @@ describe('alarm scheduler', () => {
       .get(removedChat?.id ?? 0n, new Date().toISOString(), new Date().toISOString());
     const removedAlarm = insertAlarm(store, removedConversation?.id ?? 0n, '2026-08-14T23:59:00.000Z');
     scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
-    expect(store.db.query<{ state: string; cancel_reason: string | null }, [bigint]>('SELECT state, cancel_reason FROM alarms WHERE id = ?').get(removedAlarm)).toEqual({ state: 'cancelled', cancel_reason: 'chat_removed' });
-    expect(store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM daily_usage WHERE metric = 'agent_invocations'").get()?.count).toBe(0n);
+    expect(
+      store.db
+        .query<{ state: string; cancel_reason: string | null }, [bigint]>(
+          'SELECT state, cancel_reason FROM alarms WHERE id = ?',
+        )
+        .get(removedAlarm),
+    ).toEqual({ state: 'cancelled', cancel_reason: 'chat_removed' });
+    expect(
+      store.db
+        .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM daily_usage WHERE metric = 'agent_invocations'")
+        .get()?.count,
+    ).toBe(0n);
     store.close();
   });
 
@@ -314,12 +364,22 @@ describe('alarm scheduler', () => {
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
-    if (conversation === null) throw new Error('Expected conversation');
+    if (conversation === null) {
+      throw new Error('Expected conversation');
+    }
     const alarmId = insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z', { state: 'firing' });
     scheduler.recover(new Date('2026-08-15T00:00:00.000Z'));
-    expect(store.db.query<{ state: string; invocation_outcome: string | null }, [bigint]>('SELECT state, invocation_outcome FROM alarms WHERE id = ?').get(alarmId)).toEqual({ state: 'fired', invocation_outcome: 'outcome_unknown' });
+    expect(
+      store.db
+        .query<{ state: string; invocation_outcome: string | null }, [bigint]>(
+          'SELECT state, invocation_outcome FROM alarms WHERE id = ?',
+        )
+        .get(alarmId),
+    ).toEqual({ state: 'fired', invocation_outcome: 'outcome_unknown' });
     scheduler.recover(new Date('2026-08-15T00:00:01.000Z'));
-    expect(store.db.query<{ state: string }, [bigint]>('SELECT state FROM alarms WHERE id = ?').get(alarmId)?.state).toBe('fired');
+    expect(
+      store.db.query<{ state: string }, [bigint]>('SELECT state FROM alarms WHERE id = ?').get(alarmId)?.state,
+    ).toBe('fired');
     store.close();
   });
 });
@@ -330,7 +390,9 @@ describe('alarm runtime budget bypass', () => {
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
-    if (conversation === null) throw new Error('Expected conversation');
+    if (conversation === null) {
+      throw new Error('Expected conversation');
+    }
     // Exhaust the daily token budget for the real UTC date.
     const today = new Date().toISOString().slice(0, 10);
     store.db
@@ -341,7 +403,9 @@ describe('alarm runtime budget bypass', () => {
 
     insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z');
     const [alarmInvocation] = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
-    if (alarmInvocation === undefined) throw new Error('Expected alarm invocation');
+    if (alarmInvocation === undefined) {
+      throw new Error('Expected alarm invocation');
+    }
 
     const faux = fauxProvider({
       provider: 'agent',
@@ -365,17 +429,29 @@ describe('alarm runtime budget bypass', () => {
       bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
       modelGate: new KeyedSemaphore(),
     });
-    expect(await runtime.run(alarmInvocation, new AbortController().signal)).toEqual({ state: 'completed', reason: 'completed' });
+    expect(await runtime.run(alarmInvocation, new AbortController().signal)).toEqual({
+      state: 'completed',
+      reason: 'completed',
+    });
 
     // Release the alarm invocation so the same chat can schedule a normal bucket.
-    store.db.query("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?").run(new Date().toISOString(), alarmInvocation);
     store.db
-      .query("UPDATE buckets SET state = 'completed', finished_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+      .query("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), alarmInvocation);
+    store.db
+      .query(
+        "UPDATE buckets SET state = 'completed', finished_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
+      )
       .run(new Date().toISOString(), alarmInvocation);
     ingestion.ingest(update(2, 11, 'next'), new Date('2026-08-15T00:00:30.000Z'));
     const [normalInvocation] = scheduler.processDue(new Date('2026-08-15T00:00:45.000Z'));
-    if (normalInvocation === undefined) throw new Error('Expected normal invocation');
-    expect(await runtime.run(normalInvocation, new AbortController().signal)).toEqual({ state: 'failed', reason: 'daily_token_budget' });
+    if (normalInvocation === undefined) {
+      throw new Error('Expected normal invocation');
+    }
+    expect(await runtime.run(normalInvocation, new AbortController().signal)).toEqual({
+      state: 'failed',
+      reason: 'daily_token_budget',
+    });
     store.close();
   });
 });
@@ -386,10 +462,14 @@ describe('alarm send mention', () => {
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
-    if (conversation === null) throw new Error('Expected conversation');
+    if (conversation === null) {
+      throw new Error('Expected conversation');
+    }
     insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z', { displayName: 'Alice' });
     const [alarmInvocation] = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
-    if (alarmInvocation === undefined) throw new Error('Expected alarm invocation');
+    if (alarmInvocation === undefined) {
+      throw new Error('Expected alarm invocation');
+    }
     const context = builder.build(alarmInvocation, 200_000, 0, 32768);
     expect(context.alarm).not.toBe(null);
 
@@ -433,7 +513,7 @@ describe('alarm admin', () => {
     const pending1 = insertAlarm(store, conversation, '2026-08-15T02:00:00.000Z', { summary: 'pending 1' });
     const pending2 = insertAlarm(store, conversation, '2026-08-15T01:00:00.000Z', { summary: 'pending 2' });
     const fired = insertAlarm(store, conversation, '2026-08-15T00:30:00.000Z', { state: 'fired', summary: 'fired' });
-    store.db.query("UPDATE alarms SET fired_at = ? WHERE id = ?").run('2026-08-15T00:30:00.000Z', fired);
+    store.db.query('UPDATE alarms SET fired_at = ? WHERE id = ?').run('2026-08-15T00:30:00.000Z', fired);
 
     const first = listAlarms(store.db, { limit: '2' });
     expect(first.items.map((item) => item.id)).toEqual([pending2.toString(), pending1.toString()]);
@@ -467,11 +547,17 @@ describe('alarm admin', () => {
     const pending = insertAlarm(store, conversation, '2026-08-15T01:00:00.000Z');
     expect(cancelAlarm(store.db, pending, 'owner')).toEqual({ status: 'cancelled' });
     const row = store.db
-      .query<{ state: string; cancelled_by: string | null; admin_cancelled: bigint; cancel_reason: string | null }, [bigint]>(
-        'SELECT state, cancelled_by, admin_cancelled, cancel_reason FROM alarms WHERE id = ?',
-      )
+      .query<
+        { state: string; cancelled_by: string | null; admin_cancelled: bigint; cancel_reason: string | null },
+        [bigint]
+      >('SELECT state, cancelled_by, admin_cancelled, cancel_reason FROM alarms WHERE id = ?')
       .get(pending);
-    expect(row).toEqual({ state: 'cancelled', cancelled_by: 'owner', admin_cancelled: 1n, cancel_reason: 'admin_cancelled' });
+    expect(row).toEqual({
+      state: 'cancelled',
+      cancelled_by: 'owner',
+      admin_cancelled: 1n,
+      cancel_reason: 'admin_cancelled',
+    });
     expect(() => cancelAlarm(store.db, pending, 'owner')).toThrow('Only pending alarms can be cancelled');
     expect(() => cancelAlarm(store.db, 999999n, 'owner')).toThrow('does not exist');
     store.close();
@@ -485,7 +571,9 @@ describe('alarm scheduling behavior', () => {
     ingestion.ingest(update(1, 10, 'hello'), received);
     const normalInvocation = processDue(scheduler, new Date(received.getTime() + 15_000));
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
-    if (conversation === null) throw new Error('Expected conversation');
+    if (conversation === null) {
+      throw new Error('Expected conversation');
+    }
     insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z');
 
     const launched: bigint[] = [];
@@ -510,7 +598,9 @@ describe('alarm scheduling behavior', () => {
     const alarmInvocation = store.db
       .query<{ invocation_id: bigint }, []>("SELECT invocation_id FROM alarms WHERE state IN ('firing', 'fired')")
       .get()?.invocation_id;
-    if (alarmInvocation === undefined) throw new Error('Expected alarm invocation');
+    if (alarmInvocation === undefined) {
+      throw new Error('Expected alarm invocation');
+    }
     // While the alarm is still running, the queued normal invocation must wait.
     expect(
       store.db.query<{ state: string }, [bigint]>('SELECT state FROM invocations WHERE id = ?').get(normalInvocation)
@@ -531,7 +621,9 @@ describe('alarm scheduling behavior', () => {
     ingestion.ingest(update(1, 10, 'hello'), received);
     const normalInvocation = processDue(scheduler, new Date(received.getTime() + 15_000));
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
-    if (conversation === null) throw new Error('Expected conversation');
+    if (conversation === null) {
+      throw new Error('Expected conversation');
+    }
     insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z');
     enterSleep(store.db);
 
@@ -546,7 +638,9 @@ describe('alarm scheduling behavior', () => {
     const alarmInvocation = store.db
       .query<{ invocation_id: bigint }, []>("SELECT invocation_id FROM alarms WHERE state = 'fired'")
       .get()?.invocation_id;
-    if (alarmInvocation === undefined) throw new Error('Expected alarm invocation');
+    if (alarmInvocation === undefined) {
+      throw new Error('Expected alarm invocation');
+    }
     expect(launched).toEqual([alarmInvocation]);
     expect(
       store.db.query<{ state: string }, [bigint]>('SELECT state FROM invocations WHERE id = ?').get(normalInvocation)
@@ -560,25 +654,39 @@ describe('alarm scheduling behavior', () => {
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
-    store.db.query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?").run(received.toISOString(), invocationId);
     store.db
-      .query("UPDATE buckets SET state = 'running', started_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+      .query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
+      .run(received.toISOString(), invocationId);
+    store.db
+      .query(
+        "UPDATE buckets SET state = 'running', started_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
+      )
       .run(received.toISOString(), invocationId);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
-    if (conversation === null) throw new Error('Expected conversation');
+    if (conversation === null) {
+      throw new Error('Expected conversation');
+    }
     const alarmId = insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z');
 
     expect(scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'))).toEqual([]);
-    expect(store.db.query<{ state: string }, [bigint]>('SELECT state FROM alarms WHERE id = ?').get(alarmId)?.state).toBe('pending');
+    expect(
+      store.db.query<{ state: string }, [bigint]>('SELECT state FROM alarms WHERE id = ?').get(alarmId)?.state,
+    ).toBe('pending');
 
-    store.db.query("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?").run('2026-08-15T00:00:01.000Z', invocationId);
     store.db
-      .query("UPDATE buckets SET state = 'completed', finished_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+      .query("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
+      .run('2026-08-15T00:00:01.000Z', invocationId);
+    store.db
+      .query(
+        "UPDATE buckets SET state = 'completed', finished_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
+      )
       .run('2026-08-15T00:00:01.000Z', invocationId);
 
     const claimed = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:01.000Z'));
     expect(claimed).toHaveLength(1);
-    expect(store.db.query<{ state: string }, [bigint]>('SELECT state FROM alarms WHERE id = ?').get(alarmId)?.state).toBe('firing');
+    expect(
+      store.db.query<{ state: string }, [bigint]>('SELECT state FROM alarms WHERE id = ?').get(alarmId)?.state,
+    ).toBe('firing');
     store.close();
   });
 
@@ -587,15 +695,24 @@ describe('alarm scheduling behavior', () => {
     const conversation = ensureConversation(store);
     const alarmId = insertAlarm(store, conversation, '2026-08-14T23:59:00.000Z');
     const [invocationId] = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
-    if (invocationId === undefined) throw new Error('Expected claimed alarm invocation');
+    if (invocationId === undefined) {
+      throw new Error('Expected claimed alarm invocation');
+    }
 
     const now = new Date().toISOString();
     store.db
-      .query("INSERT INTO bot_admins(telegram_user_id, display_name, added_by, created_at, updated_at) VALUES (42, 'Alice', 'config', ?, ?)")
+      .query(
+        "INSERT INTO bot_admins(telegram_user_id, display_name, added_by, created_at, updated_at) VALUES (42, 'Alice', 'config', ?, ?)",
+      )
       .run(now, now);
     const commands = new BotCommandService(store, loaded.config, scheduler);
     expect(
-      commands.run({ name: 'pause' }, 123456789n, { id: 42n, name: 'Alice', username: null }, new Date('2026-08-15T00:00:00.000Z')),
+      commands.run(
+        { name: 'pause' },
+        123456789n,
+        { id: 42n, name: 'Alice', username: null },
+        new Date('2026-08-15T00:00:00.000Z'),
+      ),
     ).toContain('已暂停');
 
     const alarm = store.db
@@ -605,9 +722,11 @@ describe('alarm scheduling behavior', () => {
       .get(alarmId);
     expect(alarm).toEqual({ state: 'cancelled', cancel_reason: 'chat_paused', admin_cancelled: 0n });
     expect(
-      store.db.query<{ state: string; completion_reason: string | null }, [bigint]>(
-        'SELECT state, completion_reason FROM invocations WHERE id = ?',
-      ).get(invocationId),
+      store.db
+        .query<{ state: string; completion_reason: string | null }, [bigint]>(
+          'SELECT state, completion_reason FROM invocations WHERE id = ?',
+        )
+        .get(invocationId),
     ).toEqual({ state: 'aborted', completion_reason: 'chat_paused' });
     store.close();
   });
@@ -649,13 +768,19 @@ describe('alarm retention', () => {
     const firing = insertAlarm(store, conversation, '2026-01-01T00:00:00.000Z', { state: 'firing' });
     const fired = insertAlarm(store, conversation, '2026-01-01T00:00:00.000Z', { state: 'fired' });
     const cancelled = insertAlarm(store, conversation, '2026-01-01T00:00:00.000Z', { state: 'cancelled' });
-    store.db.query("UPDATE alarms SET fired_at = ?, updated_at = ? WHERE id = ?").run('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', fired);
-    store.db.query("UPDATE alarms SET cancelled_at = ?, updated_at = ? WHERE id = ?").run('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', cancelled);
+    store.db
+      .query('UPDATE alarms SET fired_at = ?, updated_at = ? WHERE id = ?')
+      .run('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', fired);
+    store.db
+      .query('UPDATE alarms SET cancelled_at = ?, updated_at = ? WHERE id = ?')
+      .run('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', cancelled);
 
     purgeExpiredData(store.db, loaded.config, new Date('2026-03-01T00:00:00.000Z'));
     const ids = [pending, firing, fired, cancelled];
     const states = store.db
-      .query<{ id: bigint; state: string }, bigint[]>('SELECT id, state FROM alarms WHERE id IN (?, ?, ?, ?) ORDER BY id')
+      .query<{ id: bigint; state: string }, bigint[]>(
+        'SELECT id, state FROM alarms WHERE id IN (?, ?, ?, ?) ORDER BY id',
+      )
       .all(...ids);
     expect(states.map((row) => row.state)).toEqual(['pending', 'firing']);
     store.close();
@@ -668,10 +793,14 @@ describe('alarm send mention', () => {
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
-    if (conversation === null) throw new Error('Expected conversation');
+    if (conversation === null) {
+      throw new Error('Expected conversation');
+    }
     insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z', { displayName: 'Alice' });
     const [alarmInvocation] = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
-    if (alarmInvocation === undefined) throw new Error('Expected alarm invocation');
+    if (alarmInvocation === undefined) {
+      throw new Error('Expected alarm invocation');
+    }
     const context = builder.build(alarmInvocation, 200_000, 0, 32768);
 
     const requests: Array<{ text: string; options: Parameters<TelegramSendApi['sendMessage']>[2] }> = [];
@@ -680,7 +809,12 @@ describe('alarm send mention', () => {
       sendMessage: async (_chatId, text, options) => {
         calls += 1;
         if (calls === 1) {
-          throw new GrammyError('Bad Request', { ok: false, error_code: 400, description: 'bad request', parameters: {} } as never, 'sendMessage', {});
+          throw new GrammyError(
+            'Bad Request',
+            { ok: false, error_code: 400, description: 'bad request', parameters: {} } as never,
+            'sendMessage',
+            {},
+          );
         }
         requests.push({ text, options });
         return { message_id: 500 + calls, date: 1_700_000_100 + calls, chat: { id: 123456789 } };
@@ -708,7 +842,11 @@ describe('alarm send mention', () => {
       { type: 'text_link', offset: 0, length: 6, url: 'tg://user?id=42' },
     ]);
     expect(
-      store.db.query<{ state: string; error_code: string | null }, []>("SELECT state, error_code FROM tool_calls WHERE tool_call_id = 'fail-1'").get(),
+      store.db
+        .query<{ state: string; error_code: string | null }, []>(
+          "SELECT state, error_code FROM tool_calls WHERE tool_call_id = 'fail-1'",
+        )
+        .get(),
     ).toEqual({ state: 'error', error_code: 'telegram_400' });
     store.close();
   });
@@ -718,10 +856,14 @@ describe('alarm send mention', () => {
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
-    if (conversation === null) throw new Error('Expected conversation');
+    if (conversation === null) {
+      throw new Error('Expected conversation');
+    }
     insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z', { displayName: 'Back\\slash!ok[test]' });
     const [alarmInvocation] = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
-    if (alarmInvocation === undefined) throw new Error('Expected alarm invocation');
+    if (alarmInvocation === undefined) {
+      throw new Error('Expected alarm invocation');
+    }
     const context = builder.build(alarmInvocation, 200_000, 0, 32768);
 
     const requests: Array<{ text: string; options: Parameters<TelegramSendApi['sendMessage']>[2] }> = [];
@@ -755,10 +897,14 @@ describe('alarm send mention', () => {
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
-    if (conversation === null) throw new Error('Expected conversation');
+    if (conversation === null) {
+      throw new Error('Expected conversation');
+    }
     insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z', { displayName: 'Alice' });
     const [alarmInvocation] = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
-    if (alarmInvocation === undefined) throw new Error('Expected alarm invocation');
+    if (alarmInvocation === undefined) {
+      throw new Error('Expected alarm invocation');
+    }
     const context = builder.build(alarmInvocation, 200_000, 0, 32768);
 
     let sendCalls = 0;
@@ -795,12 +941,22 @@ describe('alarm admin HTTP', () => {
     const conversation = ensureConversation(store);
     const pending = insertAlarm(store, conversation, '2026-08-15T01:00:00.000Z');
     let wakeCalls = 0;
-    const fakeScheduler = { wake: () => { wakeCalls += 1; } };
-    const server = new AdminServer({ store, config: loaded.config, scheduler: fakeScheduler as unknown as BucketScheduler });
+    const fakeScheduler = {
+      wake: () => {
+        wakeCalls += 1;
+      },
+    };
+    const server = new AdminServer({
+      store,
+      config: loaded.config,
+      scheduler: fakeScheduler as unknown as BucketScheduler,
+    });
     try {
       expect((await server.handle(adminRequest('/api/alarms'))).status).toBe(401);
 
-      const created = await server.handle(adminPost('/api/auth/setup', { username: 'owner', password: ADMIN_PASSWORD }));
+      const created = await server.handle(
+        adminPost('/api/auth/setup', { username: 'owner', password: ADMIN_PASSWORD }),
+      );
       const cookie = adminSessionCookie(created);
 
       const list = await readJson(await server.handle(adminRequest('/api/alarms', { headers: { cookie } })));
@@ -813,7 +969,9 @@ describe('alarm admin HTTP', () => {
       const method = await server.handle(adminPost('/api/alarms', {}, cookie));
       expect(method.status).toBe(405);
 
-      const missing = await server.handle(adminRequest('/api/alarms/999999', { method: 'DELETE', headers: { cookie } }));
+      const missing = await server.handle(
+        adminRequest('/api/alarms/999999', { method: 'DELETE', headers: { cookie } }),
+      );
       expect(missing.status).toBe(404);
       expect(await readJson(missing)).toMatchObject({ error: 'not_found' });
 

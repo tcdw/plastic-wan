@@ -376,9 +376,7 @@ export class BucketScheduler {
           continue;
         }
         const claimed = this.#store.db
-          .query(
-            "UPDATE alarms SET state = 'firing', fired_at = ?, updated_at = ? WHERE id = ? AND state = 'pending'",
-          )
+          .query("UPDATE alarms SET state = 'firing', fired_at = ?, updated_at = ? WHERE id = ? AND state = 'pending'")
           .run(nowIso, nowIso, alarm.id);
         if (claimed.changes !== 1) {
           continue;

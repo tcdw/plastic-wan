@@ -14,6 +14,7 @@ import { KeyedSemaphore } from './concurrency.ts';
 import type { RawConfig } from './config.ts';
 import { ContextBuilder, type InvocationContext } from './context-builder.ts';
 import { type SqliteStore, resolveChatConfig } from './database.ts';
+import { serializeModelRequestForAudit } from './model-request-audit.ts';
 import type { AgentModelSwitcher } from './model-switch.ts';
 import type { ModelRegistry } from './providers.ts';
 import type { InvocationOutcome } from './scheduler.ts';
@@ -219,9 +220,9 @@ export class AgentRuntime {
             maxTokens: model.maxTokens,
             maxRetries: 2,
             maxRetryDelayMs: Math.max(0, deadline - Date.now()),
-            // Snapshot audit: capture the exact provider request payload and the
-            // HTTP response status so the rendered context (figure markers,
-            // capability refs) and transport outcome stay inspectable.
+            // Snapshot audit: capture the provider request payload without
+            // retaining inline image bytes, plus the HTTP response status, so
+            // rendered context and transport outcome stay inspectable.
             onPayload: (payload) => {
               this.#recordModelCallRequest(callId, payload);
               return undefined;
@@ -431,7 +432,7 @@ export class AgentRuntime {
     try {
       this.#store.db
         .query('UPDATE model_calls SET request_json = ? WHERE id = ? AND request_json IS NULL')
-        .run(JSON.stringify(payload ?? null), callId);
+        .run(serializeModelRequestForAudit(payload), callId);
     } catch {
       // Snapshotting is best-effort auditing; never break the model call itself.
     }

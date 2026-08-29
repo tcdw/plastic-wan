@@ -70,12 +70,12 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 | 表 | 用途 |
 | --- | --- |
-| `model_calls` | Provider/Model、角色、Token、成本、耗时、错误码、经 `SecretStore` 脱敏的完整错误详情和每次请求附带的工具名（`tools_json`） |
+| `model_calls` | Provider/Model、角色、Token、成本、耗时、错误码、经 `SecretStore` 脱敏的完整错误详情、请求/响应审计快照和每次请求附带的工具名（`tools_json`） |
 | `tool_calls` | Tool 参数、结果、状态、副作用标记和错误码 |
 | `telegram_sends` | 文本/Sticker 发送请求、Telegram 结果和未知结果 |
 | `daily_usage` | Chat/全局资源预算计数 |
 
-`invocations.tool_registry_hash` 之外还有 `tool_registry_json`：本次 Invocation 实际展示给模型的完整工具快照（`name`/`label`/`description`）。`model_calls.tools_json` 记录该次请求真正附带的工具名数组——Agent 循环在 context 接近上限时会把工具裁剪到只剩 `send`，因此同一 Invocation 内不同请求的工具列表可能不同；这两列共同回答“模型当时能看到哪些工具”。`side_effect_started` 和 `outcome_unknown` 用于阻止不可逆 Tool 的盲目重试。审计记录应保留稳定错误码；不要依赖解析自由文本错误。
+`invocations.tool_registry_hash` 之外还有 `tool_registry_json`：本次 Invocation 实际展示给模型的完整工具快照（`name`/`label`/`description`）。`model_calls.tools_json` 记录该次请求真正附带的工具名数组——Agent 循环在 context 接近上限时会把工具裁剪到只剩 `send`，因此同一 Invocation 内不同请求的工具列表可能不同；这两列共同回答“模型当时能看到哪些工具”。`model_calls.request_json` 保存 Provider 请求审计快照，但不会复制 `data:image/*;base64,...` 图片正文；对应字符串会替换为包含 MIME、Base64 字符数、解码字节数与 SHA-256 的结构化摘要，真实 Provider 请求不受影响。`side_effect_started` 和 `outcome_unknown` 用于阻止不可逆 Tool 的盲目重试。审计记录应保留稳定错误码；不要依赖解析自由文本错误。
 
 ### 媒体与 Sticker
 

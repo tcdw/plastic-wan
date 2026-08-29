@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -258,8 +259,16 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
     provider: 'agent',
     models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
   });
+  const inlineImageBytes = Buffer.from('provider inline image bytes');
+  const inlineImageDataUrl = `data:image/jpeg;base64,${inlineImageBytes.toString('base64')}`;
   faux.setResponses([
-    (context) => {
+    (context, options) => {
+      const providerPayload = {
+        model: 'agent-model',
+        messages: [{ content: [{ type: 'image_url', image_url: { url: inlineImageDataUrl } }] }],
+      };
+      options?.onPayload?.(providerPayload, faux.getModel());
+      expect(providerPayload.messages[0]?.content[0]?.image_url.url).toBe(inlineImageDataUrl);
       const user = context.messages[0];
       expect(user?.role).toBe('user');
       if (user?.role !== 'user' || typeof user.content === 'string') {
@@ -318,6 +327,31 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
     store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM model_calls WHERE role = 'vision_chat'").get()
       ?.count,
   ).toBe(0n);
+  const requestJson = store.db
+    .query<{ request_json: string | null }, []>(
+      "SELECT request_json FROM model_calls WHERE role = 'agent' AND request_json IS NOT NULL ORDER BY id LIMIT 1",
+    )
+    .get()?.request_json;
+  expect(requestJson).not.toContain(inlineImageDataUrl);
+  expect(requestJson === null || requestJson === undefined ? null : JSON.parse(requestJson)).toMatchObject({
+    messages: [
+      {
+        content: [
+          {
+            image_url: {
+              url: {
+                __plasticwan_audit_omission__: 'base64_image',
+                mime_type: 'image/jpeg',
+                encoded_characters: inlineImageBytes.toString('base64').length,
+                decoded_bytes: inlineImageBytes.byteLength,
+                sha256: createHash('sha256').update(inlineImageBytes).digest('hex'),
+              },
+            },
+          },
+        ],
+      },
+    ],
+  });
   expect(await readdir(loaded.config.paths.media_cache)).toEqual([]);
   store.close();
 });

@@ -107,11 +107,18 @@ export function createSendTool(
   environment: SendToolEnvironment,
 ): AgentTool<typeof SendInputSchema, { telegramMessageId: string }> {
   let firstTextSent = false;
+  const textConstraints = [
+    environment.maxTextLength === undefined
+      ? 'Text must fit the schema limit.'
+      : `Text must not exceed ${environment.maxTextLength} characters.`,
+    environment.disallowBlankLines ? 'Text must not contain blank lines; use single newlines between paragraphs.' : '',
+  ]
+    .filter((part) => part.length > 0)
+    .join(' ');
   return {
     name: 'send',
     label: 'Send to Telegram',
-    description:
-      "Send one plain-text message, one Telegram MarkdownV2 text message, or one sticker to this invocation's Telegram chat. For text, kind may be omitted; omit parse_mode for plain text, or set parse_mode to MarkdownV2 only when text follows Telegram MarkdownV2 escaping rules. For a sticker send, kind MUST be sticker and sticker_ref MUST be a stk_ value returned by search_stickers in THIS invocation; the img_ image_ref values shown in the context are for read_image only and will be rejected. Reply targets must be visible in this invocation.",
+    description: `Publish exactly one warranted user-visible Telegram message or sticker. Use this only after deciding the new messages or an alarm task require a reply, clarification, or confirmation; do not use it merely because the tool is available, to answer history-only content, or to publish private reasoning. Keep the message concise and self-contained. For text, kind may be omitted; omit parse_mode for plain text, or set parse_mode to MarkdownV2 only when the text is correctly escaped. ${textConstraints} For a sticker, kind must be sticker and sticker_ref must be a stk_ value returned by search_stickers in this invocation; img_ refs cannot be sent. Set reply_to_message_id only to a visible message, preferring the relevant new message. Success means Telegram accepted the send; if the tool fails or reports an unknown outcome, do not claim it was sent and do not blindly retry.`,
     parameters: SendInputSchema,
     executionMode: 'sequential',
     execute: async (toolCallId, input, signal) => {

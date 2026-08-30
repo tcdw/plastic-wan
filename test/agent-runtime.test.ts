@@ -3,12 +3,15 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai';
+import Type from 'typebox';
 import type { Update } from 'grammy/types';
 import sharp from 'sharp';
 import { AgentRuntime } from '../src/agent-runtime.ts';
 import { KeyedSemaphore } from '../src/concurrency.ts';
 import { loadConfig } from '../src/config.ts';
+import { previewContext } from '../src/context-builder.ts';
 import { SqliteStore } from '../src/database.ts';
 import { type MediaDownloader, MediaService } from '../src/media.ts';
 import { AgentModelSwitcher } from '../src/model-switch.ts';
@@ -125,12 +128,53 @@ test('a fresh Agent publishes only through send and audits model usage', async (
     .get(invocationId);
   expect(registryRow?.tool_registry_json).toContain('"name":"send"');
   expect(registryRow?.tool_registry_json).toContain('"label":"Send to Telegram"');
-  expect(registryRow?.tool_registry_json).toContain('Send one plain-text message');
+  expect(registryRow?.tool_registry_json).toContain('Publish exactly one warranted user-visible Telegram message');
   expect(
     store.db
       .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM agent_messages WHERE role = 'harness_nudge'")
       .get()?.count,
   ).toBe(0n);
+  store.close();
+});
+
+test('counts tool descriptions in registry limits', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-tool-budget-'));
+  directories.push(directory);
+  const configPath = join(directory, 'config.jsonc');
+  await writeTestConfig(directory, configPath);
+  const loaded = await loadConfig(configPath);
+  const store = await SqliteStore.open(loaded.config);
+  const models = createModels();
+  const faux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'tiny-context', input: ['text'], contextWindow: 1_000, maxTokens: 100 }],
+  });
+  models.setProvider(faux.provider);
+  const model = faux.getModel();
+  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const runtime = new AgentRuntime({
+    store,
+    config: loaded.config,
+    secrets: new SecretStore(),
+    registry,
+    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    telegramApi: {
+      sendMessage: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
+      sendSticker: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
+    },
+    bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+  });
+  const oversizedDescriptionTool: AgentTool = {
+    name: 'large_description',
+    label: 'Large description',
+    description: 'x'.repeat(500),
+    parameters: Type.Object({}, { additionalProperties: false }),
+    execute: async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} }),
+  };
+
+  expect(() => runtime.validateAdditionalTools(previewContext(), [oversizedDescriptionTool])).toThrow(
+    'Tool registry exceeds 10%',
+  );
   store.close();
 });
 

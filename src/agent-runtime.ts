@@ -157,14 +157,11 @@ export class AgentRuntime {
       ...(this.#additionalTools?.(provisionalContext, state, deadline) ?? []),
       ...(zzzExposed ? [zzz] : []),
     ];
-    const schemaCharacters = preliminaryTools.reduce(
-      (total, tool) => total + JSON.stringify(tool.parameters).length,
-      0,
-    );
+    const preliminaryToolDefinitionCharacters = estimateToolRegistryCharacters(preliminaryTools);
     const context = this.#contextBuilder.build(
       invocationId,
       model.contextWindow,
-      schemaCharacters,
+      preliminaryToolDefinitionCharacters,
       model.maxTokens,
       model.input.includes('image'),
       { provider: model.provider, model: model.id },
@@ -182,13 +179,14 @@ export class AgentRuntime {
     });
     const tools = [send, ...(this.#additionalTools?.(context, state, deadline) ?? []), ...(zzzExposed ? [zzz] : [])];
     validateToolRegistry(tools, model.contextWindow);
+    const toolDefinitionCharacters = estimateToolRegistryCharacters(tools);
     this.#recordToolRegistry(invocationId, tools);
     const timeoutSignal = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
     const signal = AbortSignal.any([schedulerSignal, timeoutSignal]);
     let turns = 0;
     let toolCalls = 0;
     let estimatedInputTokens = Math.ceil(
-      (context.systemPrompt.length + context.userPrompt.length + schemaCharacters) / 4,
+      (context.systemPrompt.length + context.userPrompt.length + toolDefinitionCharacters) / 4,
     );
     let closing = false;
     let modelBudgetBlocked = false;
@@ -313,7 +311,7 @@ export class AgentRuntime {
           this.#recordToolRegistry(invocationId, nextTools);
           if (shouldExposeZzz) {
             this.#logZzzExposure(invocationId, context.chatId, budget);
-            estimatedInputTokens += Math.ceil(JSON.stringify(zzz.parameters).length / 4);
+            estimatedInputTokens += Math.ceil(estimateToolDefinitionCharacters(zzz) / 4);
           }
           toolsChanged = true;
         }
@@ -391,7 +389,13 @@ export class AgentRuntime {
 
   #recordToolRegistry(invocationId: bigint, tools: readonly AgentTool[]): void {
     const toolRegistryHash = createHash('sha256')
-      .update(tools.map((tool) => `${tool.name}:${JSON.stringify(tool.parameters)}`).join('\n'))
+      .update(
+        tools
+          .map((tool) =>
+            JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }),
+          )
+          .join('\n'),
+      )
       .digest('hex');
     const toolRegistry = tools.map((tool) => ({ name: tool.name, label: tool.label, description: tool.description }));
     this.#store.db
@@ -501,11 +505,23 @@ export class AgentRuntime {
   }
 }
 
+function estimateToolDefinitionCharacters(tool: AgentTool): number {
+  return JSON.stringify({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+  }).length;
+}
+
+function estimateToolRegistryCharacters(tools: readonly AgentTool[]): number {
+  return tools.reduce((total, tool) => total + estimateToolDefinitionCharacters(tool), 0);
+}
+
 function validateToolRegistry(tools: readonly AgentTool[], contextWindow: number): void {
   if (tools.length > 64) {
     throw new Error(`Tool registry has ${tools.length} tools; maximum is 64`);
   }
-  const characters = tools.reduce((total, tool) => total + JSON.stringify(tool.parameters).length, 0);
+  const characters = estimateToolRegistryCharacters(tools);
   if (characters / 4 > contextWindow * 0.1) {
     throw new Error('Tool registry exceeds 10% of the model context window');
   }

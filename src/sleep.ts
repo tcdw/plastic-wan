@@ -111,7 +111,7 @@ export function createZzzTool(options: {
     name: 'zzz',
     label: 'Sleep',
     description:
-      'You are very sleepy now. If the current conversation is at a natural stopping point, use this tool to go to sleep.',
+      'You are very sleepy now. Use this only when the current conversation is at a natural stopping point and no useful response, clarification, or required side effect remains. Do not use it to abandon an unfinished user request. Calling it ends normal participation until the sleep period expires.',
     parameters: ZzzInputSchema,
     executionMode: 'sequential',
     execute: async (toolCallId, input) => {

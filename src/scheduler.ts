@@ -1,3 +1,4 @@
+import { AGENT_PROMPT_VERSION } from './agent-protocol.ts';
 import type { RawConfig } from './config.ts';
 import { type SqliteStore, isChatPaused, resolveChatConfig } from './database.ts';
 import { activeSleepUntil } from './sleep.ts';
@@ -541,7 +542,7 @@ export class BucketScheduler {
       .query(
         "INSERT INTO invocations(bucket_id, conversation_id, state, config_hash, prompt_version, created_at) VALUES (?, ?, 'queued', ?, ?, ?)",
       )
-      .run(bucketId, conversationId, this.#configHash, 1n, now.toISOString());
+      .run(bucketId, conversationId, this.#configHash, AGENT_PROMPT_VERSION, now.toISOString());
     const invocationId = BigInt(created.lastInsertRowid);
     this.#snapshotInvocation(invocationId, bucketId, conversationId, includeHistory);
     return invocationId;

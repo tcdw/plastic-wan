@@ -81,7 +81,7 @@ first session      = T + telegram.bucket_window_seconds
 
 `ContextBuilder` 生成：
 
-- `systemPrompt`：安全边界、图片处理说明、全局 Prompt、私聊/群聊参与策略、Chat instructions、记忆列表、隐藏 internal context 历史、当前时间。
+- `systemPrompt`：代码固化的 Core Agent Protocol、图片/Sticker 能力说明、运维侧人格 Prompt、私聊/群聊模式、Chat instructions、记忆列表、隐藏 internal context 历史、当前时间。Core Protocol 规定消息分区、沉默判断、Tool 选择原则与副作用成功判定；人格 Prompt 只负责身份和表达风格。
 - `userPrompt`：仅列出已允许且索引成功 Sticker 的 `<untrusted_sticker_catalog>`（`sticker_id:emoji`），随后是最近 history 与本 Bucket new messages。
 - `directImages`：当 `agent` 模型支持 image 时，选中消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容。
 - `visibleReplyMessageIds`：本次允许 Reply 的 Telegram Message ID。
@@ -96,7 +96,7 @@ first session      = T + telegram.bucket_window_seconds
 
 私聊策略提示模型积极参与；群聊提示只在有明确价值时发言。它是行为偏好，不绕过 Tool 或预算授权。
 
-Context 受模型窗口限制：为系统提示、Tool Schema、历史、新消息和输出保留空间。超过 `context_stop_ratio` 后停止继续 Tool 循环，避免下一轮超窗。
+Context 受模型窗口限制：为系统提示、完整 Tool 定义（名称、描述与参数 Schema）、历史、新消息和输出保留空间。Tool description 不只是能力清单，还应说明何时使用、何时不用、必要调用顺序和成功判定。超过 `context_stop_ratio` 后停止继续 Tool 循环，避免下一轮超窗。
 
 ## Agent 循环
 

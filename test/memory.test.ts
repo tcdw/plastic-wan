@@ -128,6 +128,11 @@ test('add_memory and delete_memory audit tool calls and respect conversation sco
     if (addTool === undefined || deleteTool === undefined) {
       throw new Error('Expected both memory tools');
     }
+    expect(addTool.description).toContain('Use when a user explicitly asks you to remember something');
+    expect(addTool.description).toContain('do not store ordinary chat summaries');
+    expect(addTool.description).toContain('On failure, do not claim it was saved');
+    expect(deleteTool.description).toContain('when the note is wrong or obsolete');
+    expect(deleteTool.description).toContain('Never guess an id');
 
     const added = await addTool.execute(
       'call-1',

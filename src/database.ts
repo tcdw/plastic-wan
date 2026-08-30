@@ -175,6 +175,25 @@ export function purgeExpiredData(database: Database, config: RawConfig, now = ne
         .run(cutoff);
       database
         .query(`
+      DELETE FROM internal_contexts
+      WHERE invocation_id IN (
+        SELECT id
+        FROM invocations
+        WHERE state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'skipped_budget')
+          AND COALESCE(finished_at, created_at) < ?
+      )
+         OR source_agent_message_id IN (
+           SELECT am.id
+           FROM agent_messages am
+           JOIN invocations i ON i.id = am.invocation_id
+           WHERE i.state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'skipped_budget')
+             AND COALESCE(i.finished_at, i.created_at) < ?
+         )
+         OR created_at < ?
+    `)
+        .run(cutoff, cutoff, cutoff);
+      database
+        .query(`
       DELETE FROM invocations
       WHERE state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'skipped_budget')
         AND COALESCE(finished_at, created_at) < ?

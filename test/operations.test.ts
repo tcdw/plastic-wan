@@ -64,6 +64,61 @@ test('retention scrubs referenced history and backup keeps seven consistent copi
     .get(newInvocation);
   expect(historyBefore?.snapshot_json).toContain('old private text');
 
+  store.db
+    .query(
+      `INSERT INTO internal_contexts(
+         conversation_id, invocation_id, source_agent_message_id, kind, version, observed_at, payload_json, created_at
+       ) VALUES (
+         (SELECT conversation_id FROM invocations WHERE id = ?),
+         ?,
+         NULL,
+         'alarm_list',
+         1,
+         ?,
+         ?,
+         ?
+       )`,
+    )
+    .run(
+      oldInvocation,
+      oldInvocation,
+      oldReceived.toISOString(),
+      JSON.stringify({
+        kind: 'alarm_list',
+        version: 1,
+        observed_at: oldReceived.toISOString(),
+        items: [{ id: 'old-alarm', scheduled_at: '2026-01-02T00:00:00.000Z', summary: 'old summary' }],
+      }),
+      oldReceived.toISOString(),
+    );
+  store.db
+    .query(
+      `INSERT INTO internal_contexts(
+         conversation_id, invocation_id, source_agent_message_id, kind, version, observed_at, payload_json, created_at
+       ) VALUES (
+         (SELECT conversation_id FROM invocations WHERE id = ?),
+         ?,
+         NULL,
+         'alarm_list',
+         1,
+         ?,
+         ?,
+         ?
+       )`,
+    )
+    .run(
+      newInvocation,
+      newInvocation,
+      newReceived.toISOString(),
+      JSON.stringify({
+        kind: 'alarm_list',
+        version: 1,
+        observed_at: newReceived.toISOString(),
+        items: [{ id: 'new-alarm', scheduled_at: '2026-02-16T00:00:00.000Z', summary: 'new summary' }],
+      }),
+      newReceived.toISOString(),
+    );
+
   purgeExpiredData(store.db, loaded.config, newReceived);
   expect(
     store.db
@@ -79,6 +134,20 @@ test('retention scrubs referenced history and backup keeps seven consistent copi
     store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM telegram_updates WHERE update_id = 1').get()
       ?.count,
   ).toBe(0n);
+  expect(
+    store.db
+      .query<{ count: bigint }, []>(
+        "SELECT COUNT(*) AS count FROM internal_contexts WHERE payload_json LIKE '%old-alarm%'",
+      )
+      .get()?.count,
+  ).toBe(0n);
+  expect(
+    store.db
+      .query<{ count: bigint }, []>(
+        "SELECT COUNT(*) AS count FROM internal_contexts WHERE payload_json LIKE '%new-alarm%'",
+      )
+      .get()?.count,
+  ).toBe(1n);
   const scrubbed = store.db
     .query<{ text: string | null; raw: string }, []>(
       'SELECT r.text, r.raw_fragment_json AS raw FROM message_revisions r JOIN messages m ON m.id = r.message_id WHERE m.telegram_message_id = 10',

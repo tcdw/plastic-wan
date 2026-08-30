@@ -49,9 +49,10 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 | `invocations` | 一次 Agent 运行、配置哈希、计数和终态 |
 | `invocation_messages` | 冻结的 `history`/`new` Message Revision 快照 |
 | `agent_messages` | Agent 内部 transcript；Assistant 文本不等于 Telegram 发送 |
-| `alarms` | Deferred Invocation：conversation、目标用户与显示名快照、summary、UTC deadline、生命周期状态、关联 Invocation 与取消审计 |
+| `internal_contexts` | Conversation 级 durable hidden working context：版本化 kind/payload、observed_at、关联 conversation / invocation / source agent message |
+| `alarms` | Deferred Invocation：conversation、创建者 user ID、目标用户与显示名快照、summary、UTC deadline、生命周期状态、关联 Invocation 与取消审计 |
 
-`invocation_messages` 是可重放边界。消息在 Invocation 创建后被编辑，只影响未来 Context，不改写已经冻结的快照。
+`invocation_messages` 是可重放边界。消息在 Invocation 创建后被编辑，只影响未来 Context，不改写已经冻结的快照。`internal_contexts` 则保存同一 Conversation 中先前 Tool 结果产生的隐藏观察；当前实现由 `list_alarm` 持久化 `alarm_list`/`v1`，payload 内含稳定 `kind` discriminator、`version`、`observed_at` 与有序 `items`（`id`/`scheduled_at`/`summary`），并通过 `source_agent_message_id` 关联产生该观察的内部 transcript 行。`alarms.created_by_user_id` 是可信 owner：新建 alarm 时由应用从冻结 invocation 的最新 `new` user sender 写入；迁移历史行允许为 `NULL`，这些旧行不会被用户 list/delete。
 
 ### 短期记忆
 
@@ -126,6 +127,7 @@ MCP Tool 调用本身复用 `tool_calls`，预算复用 `daily_usage`。
 - 删除无引用 Sender、过期普通图片分析、独立 Doctor 模型调用与旧预算日期。
 - Sticker 长期视觉索引不按普通图片策略删除。
 - `alarms` 的 `pending`/`firing` 行保留（未来仍需执行）；`fired`/`cancelled` 终态行随在线审计窗口清理。
+- `internal_contexts` 不是长期 memory，也不单独配置 TTL；它随在线会话窗口清理，默认保留到 `created_at < now - retention.online_days` 时删除。
 
 不要把 `DELETE FROM messages WHERE received_at < ...` 当作等价实现；外键和冻结快照要求分阶段清理。
 

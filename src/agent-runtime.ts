@@ -13,7 +13,7 @@ import {
 import { KeyedSemaphore } from './concurrency.ts';
 import type { RawConfig } from './config.ts';
 import { ContextBuilder, type InvocationContext } from './context-builder.ts';
-import { type SqliteStore, resolveChatConfig } from './database.ts';
+import { resolveChatConfig, type SqliteStore } from './database.ts';
 import { serializeModelRequestForAudit } from './model-request-audit.ts';
 import type { AgentModelSwitcher } from './model-switch.ts';
 import type { ModelRegistry } from './providers.ts';
@@ -23,10 +23,10 @@ import { createSendTool, type TelegramSendApi } from './send-tool.ts';
 import {
   activeSleepUntil,
   createZzzTool,
+  type DailyTokenBudget,
   isDailyTokenBudgetReached,
   isLowDailyTokenBudget,
   readDailyTokenBudget,
-  type DailyTokenBudget,
 } from './sleep.ts';
 
 export interface ToolRuntimeState {
@@ -294,7 +294,7 @@ export class AgentRuntime {
           if (!hasToolCalls && text.length >= SEND_NUDGE_MIN_TEXT_CHARS) {
             nudged = true;
             agent.steer({ role: 'user', content: [{ type: 'text', text: SEND_NUDGE_TEXT }], timestamp: Date.now() });
-            this.#recordAgentMessage(invocationId, 'harness_nudge', SEND_NUDGE_TEXT);
+            this.recordAgentMessage(invocationId, 'harness_nudge', SEND_NUDGE_TEXT);
           }
         }
         return false;
@@ -344,14 +344,14 @@ export class AgentRuntime {
           .filter((entry) => entry.type === 'text')
           .map((entry) => entry.text)
           .join('');
-        this.#recordAgentMessage(invocationId, 'assistant', text);
+        this.recordAgentMessage(invocationId, 'assistant', text);
       } else if (event.message.role === 'toolResult') {
         const text = event.message.content
           .filter((entry) => entry.type === 'text')
           .map((entry) => entry.text)
           .join('');
         estimatedInputTokens += Math.ceil(text.length / 4);
-        this.#recordAgentMessage(invocationId, 'tool_result', text);
+        this.recordAgentMessage(invocationId, 'tool_result', text);
       }
     });
     const abortAgent = (): void => agent.abort();
@@ -485,18 +485,19 @@ export class AgentRuntime {
       .run(errorCode, this.#secrets.redactError(error), new Date().toISOString(), callId);
   }
 
-  #recordAgentMessage(invocationId: bigint, role: 'assistant' | 'tool_result' | 'harness_nudge', text: string): void {
+  recordAgentMessage(invocationId: bigint, role: 'assistant' | 'tool_result' | 'harness_nudge', text: string): bigint {
     const sequence =
       this.#store.db
         .query<{ value: bigint }, [bigint]>(
           'SELECT COALESCE(MAX(sequence_no), 0) + 1 AS value FROM agent_messages WHERE invocation_id = ?',
         )
         .get(invocationId)?.value ?? 1n;
-    this.#store.db
+    const created = this.#store.db
       .query(
         "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, ?, ?, ?, '', ?)",
       )
       .run(invocationId, sequence, role, text, new Date().toISOString());
+    return BigInt(created.lastInsertRowid);
   }
 }
 

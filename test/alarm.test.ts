@@ -5,11 +5,12 @@ import { join } from 'node:path';
 import { GrammyError } from 'grammy';
 import type { Update } from 'grammy/types';
 import { Compile } from 'typebox/compile';
-import { createModels, fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai';
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, type Tool } from '@earendil-works/pi-ai';
+import { getJsonSchemaToolParameters } from '@earendil-works/pi-ai/api/constrained-sampling';
 import { AdminServer } from '../src/admin/server.ts';
 import { cancelAlarm, listAlarms } from '../src/admin/alarm-admin.ts';
 import { AgentRuntime } from '../src/agent-runtime.ts';
-import { AlarmInputSchema, createAlarmTool } from '../src/alarm.ts';
+import { AlarmInputSchema, createAlarmTool, createListAlarmTool } from '../src/alarm.ts';
 import { BotCommandService } from '../src/bot-commands.ts';
 import { KeyedSemaphore } from '../src/concurrency.ts';
 import { loadConfig } from '../src/config.ts';
@@ -157,12 +158,13 @@ function insertAlarm(
 ): bigint {
   const created = store.db
     .query(
-      `INSERT INTO alarms(conversation_id, target_user_id, target_display_name, summary, scheduled_at, created_at,
-                          state, invocation_id, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO alarms(conversation_id, target_user_id, created_by_user_id, target_display_name, summary,
+                          scheduled_at, created_at, state, invocation_id, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       conversationId,
+      options.targetUserId ?? 42n,
       options.targetUserId ?? 42n,
       options.displayName ?? 'Alice',
       options.summary ?? 'test alarm',
@@ -209,11 +211,12 @@ describe('alarm tool', () => {
     });
     expect(result.details.scheduled_at).toBe(scheduled);
     const row = store.db
-      .query<{ state: string; target_user_id: bigint; scheduled_at: string }, [string]>(
-        'SELECT state, target_user_id, scheduled_at FROM alarms WHERE id = ?',
-      )
+      .query<
+        { state: string; target_user_id: bigint; created_by_user_id: bigint | null; scheduled_at: string },
+        [string]
+      >('SELECT state, target_user_id, created_by_user_id, scheduled_at FROM alarms WHERE id = ?')
       .get(result.details.id);
-    expect(row).toEqual({ state: 'pending', target_user_id: 42n, scheduled_at: scheduled });
+    expect(row).toEqual({ state: 'pending', target_user_id: 42n, created_by_user_id: 42n, scheduled_at: scheduled });
     const audit = store.db
       .query<{ state: string; error_code: string | null; result_text: string | null }, []>(
         'SELECT state, error_code, result_text FROM tool_calls',
@@ -278,6 +281,152 @@ describe('alarm tool', () => {
         .get()?.error_code,
     ).toBe('alarm_quota_exceeded');
     expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM alarms').get()?.count).toBe(3n);
+    store.close();
+  });
+
+  test('list_alarm parameters schema is a strict empty object accepted by provider adapters', async () => {
+    const { store, ingestion, scheduler, builder } = await setup();
+    const received = new Date('2026-08-15T00:00:00.000Z');
+    ingestion.ingest(update(1, 10, 'hello'), received);
+    const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
+    const context = builder.build(invocationId, 200_000, 0, 32768);
+    const tool = createListAlarmTool({
+      store,
+      context,
+      runtime: {
+        recordAgentMessage: (currentInvocationId, role, text) => {
+          const created = store.db
+            .query(
+              "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, 1, ?, ?, '', ?)",
+            )
+            .run(currentInvocationId, role, text, '2026-08-15T00:00:15.000Z');
+          return BigInt(created.lastInsertRowid);
+        },
+      },
+    });
+
+    // Regression for invocation 9542: `Invalid schema for function 'list_alarm':
+    // schema must be a JSON Schema of type object, got type null`.
+    const schema = tool.parameters as unknown as Record<string, unknown>;
+    expect(schema.type).toBe('object');
+    expect(schema.properties).toEqual({});
+    expect(schema.additionalProperties).toBe(false);
+    // The same transformation provider adapters apply before sending tools.
+    expect(getJsonSchemaToolParameters(tool as Tool, undefined)).toEqual(schema);
+    expect(() => getJsonSchemaToolParameters(tool as Tool, true)).not.toThrow();
+    const strictSchema = getJsonSchemaToolParameters(tool as Tool, true) as Record<string, unknown>;
+    expect(strictSchema.type).toBe('object');
+    expect(strictSchema.required).toEqual([]);
+    expect(strictSchema.additionalProperties).toBe(false);
+
+    // An empty-object tool call passes runtime argument validation, and the
+    // audit trail records the empty-object arguments instead of null.
+    const validator = Compile(tool.parameters);
+    expect(validator.Check({})).toBe(true);
+    expect(validator.Check({ user_id: '42' })).toBe(false);
+    const result = await tool.execute('schema-call', {});
+    expect(result.details.items).toEqual([]);
+    const audit = store.db
+      .query<{ arguments_json: string; state: string; error_code: string | null }, [string]>(
+        'SELECT arguments_json, state, error_code FROM tool_calls WHERE tool_call_id = ?',
+      )
+      .get('schema-call');
+    expect(audit?.state).toBe('success');
+    expect(audit?.error_code).toBe(null);
+    expect(audit?.arguments_json).toBe('{}');
+    store.close();
+  });
+
+  test('the agent runtime presents list_alarm with an object schema to the model', async () => {
+    const { store, loaded, ingestion, scheduler } = await setup();
+    const received = new Date('2026-08-15T00:00:00.000Z');
+    ingestion.ingest(update(1, 10, '我有哪些闹钟'), received);
+    const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
+
+    const faux = fauxProvider({
+      provider: 'agent',
+      models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
+    });
+    faux.setResponses([
+      (context, options) => {
+        // Mirror what real adapters do: capture the provider payload for audit.
+        options?.onPayload?.(
+          { model: 'agent-model', messages: context.messages, tools: context.tools },
+          faux.getModel(),
+        );
+        void options?.onResponse?.({ status: 200, headers: {} }, faux.getModel());
+        return fauxAssistantMessage(fauxToolCall('list_alarm', {}), { stopReason: 'toolUse' });
+      },
+      fauxAssistantMessage('listed'),
+    ]);
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const model = faux.getModel();
+    const registry = { models, agentModel: model, visionModel: model };
+    const runtime = new AgentRuntime({
+      store,
+      config: loaded.config,
+      secrets: new SecretStore(),
+      registry,
+      modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+      telegramApi: {
+        sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
+        sendSticker: async () => ({ message_id: 501, date: 1_700_000_101, chat: { id: 123456789 } }),
+      },
+      bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+      modelGate: new KeyedSemaphore(),
+      additionalTools: (context) => [
+        createListAlarmTool({
+          store,
+          context,
+          runtime: {
+            recordAgentMessage: (currentInvocationId, role, text) => {
+              const sequence =
+                store.db
+                  .query<{ value: bigint }, [bigint]>(
+                    'SELECT COALESCE(MAX(sequence_no), 0) + 1 AS value FROM agent_messages WHERE invocation_id = ?',
+                  )
+                  .get(currentInvocationId)?.value ?? 1n;
+              const created = store.db
+                .query(
+                  "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, ?, ?, ?, '', ?)",
+                )
+                .run(currentInvocationId, sequence, role, text, '2026-08-15T00:00:15.000Z');
+              return BigInt(created.lastInsertRowid);
+            },
+          },
+        }),
+      ],
+    });
+    expect(await runtime.run(invocationId, new AbortController().signal)).toEqual({
+      state: 'completed',
+      reason: 'completed',
+    });
+
+    const presented = store.db
+      .query<{ tools_json: string }, []>("SELECT tools_json FROM model_calls WHERE role = 'agent' ORDER BY id LIMIT 1")
+      .get();
+    expect(presented?.tools_json).toBe(JSON.stringify(['send', 'list_alarm']));
+    const auditPayload = store.db
+      .query<{ request_json: string | null }, []>(
+        "SELECT request_json FROM model_calls WHERE role = 'agent' AND request_json IS NOT NULL ORDER BY id LIMIT 1",
+      )
+      .get();
+    const payload = JSON.parse(auditPayload?.request_json ?? 'null') as { tools?: Array<Record<string, unknown>> };
+    const listAlarmTool = payload.tools?.find((entry) => entry.name === 'list_alarm');
+    expect(listAlarmTool?.parameters).toEqual({
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    });
+    // The faux tool call id is generated; match by tool name instead.
+    const listAudit = store.db
+      .query<{ arguments_json: string; state: string }, []>(
+        "SELECT arguments_json, state FROM tool_calls WHERE tool_name = 'list_alarm' LIMIT 1",
+      )
+      .get();
+    expect(listAudit?.state).toBe('success');
+    expect(listAudit?.arguments_json).toBe('{}');
     store.close();
   });
 });

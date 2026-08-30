@@ -1,7 +1,8 @@
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import type { RawConfig } from './config.ts';
-import { type SqliteStore, resolveChatConfig } from './database.ts';
+import { resolveChatConfig, type SqliteStore } from './database.ts';
+import { listRecentInternalContexts, renderInternalContextsPrompt } from './internal-context.ts';
 import { MemoryStore } from './memory.ts';
 import { type PromptTemplateModel, type PromptTemplateValues, renderPromptTemplate } from './prompt-template.ts';
 
@@ -44,6 +45,7 @@ const MessageSnapshotSchema = Type.Object(
   Strict,
 );
 const snapshotValidator = Compile(MessageSnapshotSchema);
+const INTERNAL_CONTEXT_LIMIT = 8;
 
 type MessageSnapshot = Static<typeof MessageSnapshotSchema>;
 
@@ -112,6 +114,7 @@ export interface InvocationContext {
   readonly directImages: readonly DirectImage[];
   readonly replyTargets: ReadonlyMap<string, ReplyTarget>;
   readonly visibleSenders: ReadonlyMap<string, VisibleSender>;
+  readonly callerUserId: bigint | null;
   readonly alarm: AlarmContext | null;
   readonly omittedNewMessages: number;
 }
@@ -128,6 +131,7 @@ export function previewContext(): InvocationContext {
     directImages: [],
     replyTargets: new Map(),
     visibleSenders: new Map(),
+    callerUserId: null,
     alarm: null,
     omittedNewMessages: 0,
   };
@@ -225,6 +229,7 @@ export class ContextBuilder {
       alarmTask,
       renderPromptTemplate(chatConfig.instructions, templateValues),
       this.#memoryPrompt(identity.conversation_id),
+      this.#internalContextPrompt(identity.conversation_id),
       `Current time in ${timezone}: ${currentTime}`,
     ]
       .filter((part) => part.length > 0)
@@ -359,6 +364,11 @@ export class ContextBuilder {
         visibleSenders.set(sender.userId.toString(), sender);
       }
     }
+    const callerUserId =
+      [...selectedCurrent]
+        .toReversed()
+        .map((entry) => senderByMessage.get(entry.messageId.toString())?.userId ?? null)
+        .find((userId) => userId !== null) ?? null;
     return {
       invocationId,
       conversationId: identity.conversation_id,
@@ -370,6 +380,7 @@ export class ContextBuilder {
       directImages,
       replyTargets,
       visibleSenders,
+      callerUserId,
       alarm,
       omittedNewMessages,
     };
@@ -400,6 +411,11 @@ export class ContextBuilder {
       ...memories.map((entry) => `- ${entry.id}: ${entry.content}`),
       '</memory_list>',
     ].join('\n');
+  }
+
+  #internalContextPrompt(conversationId: bigint): string {
+    const records = listRecentInternalContexts(this.#store.db, conversationId, INTERNAL_CONTEXT_LIMIT).reverse();
+    return renderInternalContextsPrompt(records);
   }
 
   #prepareSnapshot(

@@ -81,7 +81,7 @@ first session      = T + telegram.bucket_window_seconds
 
 `ContextBuilder` 生成：
 
-- `systemPrompt`：安全边界、图片处理说明、全局 Prompt、私聊/群聊参与策略、Chat instructions、记忆列表、当前时间。
+- `systemPrompt`：安全边界、图片处理说明、全局 Prompt、私聊/群聊参与策略、Chat instructions、记忆列表、隐藏 internal context 历史、当前时间。
 - `userPrompt`：仅列出已允许且索引成功 Sticker 的 `<untrusted_sticker_catalog>`（`sticker_id:emoji`），随后是最近 history 与本 Bucket new messages。
 - `directImages`：当 `agent` 模型支持 image 时，选中消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容。
 - `visibleReplyMessageIds`：本次允许 Reply 的 Telegram Message ID。
@@ -89,6 +89,8 @@ first session      = T + telegram.bucket_window_seconds
 - `omittedNewMessages`：因 Context 上限省略的新消息数量。
 
 当前 Conversation 全部有效记忆按创建时间升序注入（`<memory_list>` 块）：固定 Prompt → 记忆列表 → 当前时间。新增记忆等价于列表末尾 append，不重排已有项，尽量保留 Provider prefix cache；TTL 到期与 `delete_memory` 只破坏删除位置之后的缓存前缀。
+
+同一 Conversation 最近的 `internal_contexts` 也会作为隐藏 `<internal_context_history>` 块注入 system prompt，而不是 user prompt；当列表为空时不注入该块，避免空提示开销。该块显式说明这些内容是历史 Tool 观察、不会发送到 Telegram、不是当前数据库权威；当前实现主要保存 `list_alarm` 结果的有序映射，让后续 invocation 能把“第二个”解析回稳定 alarm ID，并在真正 `delete_alarm` 时重新做数据库 ownership / pending 校验。
 
 当前时间必须留在 system prompt 最末：它每次 Invocation 都变，放在记忆列表之前会让缓存前缀在时间戳处就断掉，记忆的 append-only 顺序也就白费了。
 
@@ -127,14 +129,15 @@ Context
 
 ## Alarm / Deferred Invocation
 
-Agent 通过 `alarm` Tool 创建一个绑定当前 conversation 的未来 Invocation，而不是延迟发送预生成文本：
+Agent 通过 `alarm` Tool 创建一个绑定当前 conversation 的未来 Invocation，而不是延迟发送预生成文本。另有 `list_alarm`/`delete_alarm`：前者只从可信 invocation 身份列出当前调用者自己仍可操作的 pending alarms，并把结果以 durable hidden internal context 保存；后者只允许把该调用者自己的 pending alarm 原子置为现有终态 `cancelled`，对不存在 / 他人所有 / 状态变化统一返回 `alarm_not_found`：
 
 1. Tool 校验 `target_user_id` 必须是当前 Invocation 实际可见消息中的 Telegram **user** sender（sender_chat 与任意 ID 拒绝）、`summary` 为 1–500 字符任务说明、`datetime` 为带显式 offset/`Z` 的绝对时间且严格未来、不超 365 天；同一 Invocation 最多成功创建 3 个。
-2. 成功创建是副作用，写入 `alarms`（含原 conversation/Forum Topic、目标 ID 与显示名快照、UTC deadline、`created_by_invocation_id`），并返回 Alarm ID/scheduled UTC。
-3. Scheduler 的动态等待同时考虑最近 Bucket deadline 与最近 pending Alarm `scheduled_at`；到期 Alarm 在 Chat 空闲时原子 `pending → firing`，再创建不携带任何 Telegram Update/Message/Revision 的真实 `alarm` Invocation。
-4. Alarm Invocation 仍走普通 Context/Agent/send pipeline；系统提示临时加入任务说明（summary 是任务描述，不是待发送文本），首次成功文本 `send` 自动在开头加入目标用户的 Telegram text mention。
-5. Alarm Invocation 绕过 Chat 每日调用预留、全局每日 Token gate 与预算触发的 `zzz`/sleep，且不暴露 `zzz`；仍受 pause、Chat/Topic 配置、同 Chat 串行、并发、timeout、最大轮次/Tool/send、capability 与 Telegram 错误约束。
-6. Invocation 无论何种终态都关闭 Alarm 且不重试；进程恢复遗留 `firing` 关闭为 `fired`/`outcome_unknown`。到期时 Chat/Topic 停用、移出配置或 pause 则置 `cancelled` 并记录稳定原因。
+2. Alarm 的 owner 是“创建者”而不是 target。创建者来自冻结 invocation 的 `new` 区段中**最新一条** Telegram user sender；不会扫描 `visibleSenders` 做唯一值猜测。若 `new` 区段里没有可靠 user sender（例如 alarm invocation、sender_chat、仅 bot/service），`alarm`/`list_alarm`/`delete_alarm` 全部 fail closed，返回 `alarm_caller_not_available`。
+3. 成功创建是副作用，写入 `alarms`（含原 conversation/Forum Topic、目标 ID 与显示名快照、UTC deadline、`created_by_user_id`、`created_by_invocation_id`），并返回 Alarm ID/scheduled UTC。历史旧行若 `created_by_user_id IS NULL`，不会被用户列出或删除；不会把 target 冒充 creator 回填。
+4. Scheduler 的动态等待同时考虑最近 Bucket deadline 与最近 pending Alarm `scheduled_at`；到期 Alarm 在 Chat 空闲时原子 `pending → firing`，再创建不携带任何 Telegram Update/Message/Revision 的真实 `alarm` Invocation。
+5. Alarm Invocation 仍走普通 Context/Agent/send pipeline；系统提示临时加入任务说明（summary 是任务描述，不是待发送文本），首次成功文本 `send` 自动在开头加入目标用户的 Telegram text mention。
+6. Alarm Invocation 绕过 Chat 每日调用预留、全局每日 Token gate 与预算触发的 `zzz`/sleep，且不暴露 `zzz`；仍受 pause、Chat/Topic 配置、同 Chat 串行、并发、timeout、最大轮次/Tool/send、capability 与 Telegram 错误约束。
+7. Invocation 无论何种终态都关闭 Alarm 且不重试；进程恢复遗留 `firing` 关闭为 `fired`/`outcome_unknown`。到期时 Chat/Topic 停用、移出配置或 pause 则置 `cancelled` 并记录稳定原因。
 
 ## send Tool
 

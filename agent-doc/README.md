@@ -15,7 +15,7 @@
 | --- | --- |
 | 理解整体进程、模块和信任边界 | [architecture.md](architecture.md) |
 | 修改 JSONC、Provider、Chat/Topic、Sticker Set 或 MCP | [configuration.md](configuration.md) |
-| 修改 SQLite、迁移、保留、备份或审计 | [data-layer.md](data-layer.md) |
+| 修改 SQLite、迁移、保留、备份或审计（含 durable internal context） | [data-layer.md](data-layer.md) |
 | 修改 Telegram 入库、调度、Context、Tool 或媒体 | [telegram-agent-flow.md](telegram-agent-flow.md) |
 | 实现/排查 Alarm 与 Deferred Invocation | [telegram-agent-flow.md](telegram-agent-flow.md)、[design/20260828 闹钟系统.md](design/20260828%20闹钟系统.md) |
 | 本地启动、安装媒体依赖、部署或排障 | [operations.md](operations.md) |

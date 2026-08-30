@@ -1,8 +1,8 @@
 import { Bot, type Context } from 'grammy';
 import { seedConfigAdmins } from './admin/admins.ts';
 import { AdminServer } from './admin/server.ts';
-import { AgentRuntime } from './agent-runtime.ts';
-import { createAlarmTool } from './alarm.ts';
+import { AgentRuntime, type AdditionalToolFactory } from './agent-runtime.ts';
+import { createAlarmTool, createDeleteAlarmTool, createListAlarmTool, type AgentMessageRecorder } from './alarm.ts';
 import { BOT_COMMANDS, BotCommandService, type ParsedCommand, registerBotCommands } from './bot-commands.ts';
 import { KeyedSemaphore } from './concurrency.ts';
 import { assertConfigPermissions, loadConfig } from './config.ts';
@@ -97,7 +97,23 @@ export async function serve(configPath: string): Promise<void> {
     const mcpManager = new McpManager(store, loaded.config, secrets);
     mcp = mcpManager;
     const memoryStore = new MemoryStore(store.db);
-    const runtime = new AgentRuntime({
+    let runtime: AgentRuntime;
+    const alarmToolRuntime: AgentMessageRecorder = {
+      recordAgentMessage(invocationId, role, text) {
+        return runtime.recordAgentMessage(invocationId, role, text);
+      },
+    };
+    const additionalTools: AdditionalToolFactory = (context, state, deadline) => [
+      media.createReadImageTool(context, deadline),
+      stickerService.createSearchTool(context, state.stickerCapabilities),
+      ...createMemoryTools(memoryStore, context),
+      createWebFetchTool({ store: webFetchStore, context, invocationDeadline: deadline }),
+      createAlarmTool({ store: webFetchStore, context }),
+      createListAlarmTool({ store: webFetchStore, context, runtime: alarmToolRuntime }),
+      createDeleteAlarmTool({ store: webFetchStore, context }),
+      ...mcpManager.createTools(context, deadline),
+    ];
+    runtime = new AgentRuntime({
       store,
       config: loaded.config,
       secrets,
@@ -111,14 +127,7 @@ export async function serve(configPath: string): Promise<void> {
       },
       modelGate,
       directImageLoader: (context, signal) => media.loadDirectImages(context.directImages, signal),
-      additionalTools: (context, state, deadline) => [
-        media.createReadImageTool(context, deadline),
-        stickerService.createSearchTool(context, state.stickerCapabilities),
-        ...createMemoryTools(memoryStore, context),
-        createWebFetchTool({ store: webFetchStore, context, invocationDeadline: deadline }),
-        createAlarmTool({ store: webFetchStore, context }),
-        ...mcpManager.createTools(context, deadline),
-      ],
+      additionalTools,
     });
     const startedScheduler = new BucketScheduler(store, loaded.config, loaded.hash, (invocationId, signal) =>
       runtime.run(invocationId, signal),
@@ -133,6 +142,12 @@ export async function serve(configPath: string): Promise<void> {
         ...createMemoryTools(memoryStore, preview),
         createWebFetchTool({ store: webFetchStore, context: preview, invocationDeadline: Number.MAX_SAFE_INTEGER }),
         createAlarmTool({ store: webFetchStore, context: preview }),
+        createListAlarmTool({
+          store: webFetchStore,
+          context: preview,
+          runtime: alarmToolRuntime,
+        }),
+        createDeleteAlarmTool({ store: webFetchStore, context: preview }),
         ...mcpTools,
       ]),
     );

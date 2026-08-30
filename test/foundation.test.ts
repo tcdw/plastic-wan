@@ -190,7 +190,7 @@ describe('database', () => {
     const version = store.db
       .query<{ version: bigint }, []>('SELECT MAX(version) AS version FROM schema_migrations')
       .get();
-    expect(version?.version).toBe(13n);
+    expect(version?.version).toBe(14n);
     store.close();
 
     const backupPath = await backupDatabase(config);

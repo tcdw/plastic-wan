@@ -13,12 +13,14 @@ import {
   McpError,
   type MessageExtraInfo,
 } from '@modelcontextprotocol/sdk/types.js';
+import { and, eq, sql } from 'drizzle-orm';
 import Type, { type TUnsafe } from 'typebox';
 import Compile from 'typebox/compile';
 import { AsyncSemaphore } from './concurrency.ts';
 import type { McpServerConfig, RawConfig, SecretRef } from './config.ts';
 import { type InvocationContext, previewContext } from './context-builder.ts';
 import { finishToolCall, rejectToolCall, type SqliteStore } from './database.ts';
+import { dailyUsage, mcpServerState, toolCalls } from './schema.ts';
 import type { SecretStore } from './secrets.ts';
 
 const ARGUMENT_MAX_BYTES = 32_768;
@@ -385,7 +387,7 @@ export class McpManager {
     }
     const server = this.#servers.get(definition.serverAlias);
     if (server === undefined) {
-      finishToolCall(this.#store.db, started.auditId, 'error', null, 'server_unconfigured', {
+      finishToolCall(this.#store.orm, started.auditId, 'error', null, 'server_unconfigured', {
         startedAt: performance.now(),
         pendingOnly: true,
       });
@@ -396,7 +398,7 @@ export class McpManager {
     try {
       release = await server.semaphore.acquire(outerSignal ?? new AbortController().signal);
     } catch {
-      finishToolCall(this.#store.db, started.auditId, 'error', null, 'aborted_before_request', {
+      finishToolCall(this.#store.orm, started.auditId, 'error', null, 'aborted_before_request', {
         startedAt,
         pendingOnly: true,
       });
@@ -421,13 +423,13 @@ export class McpManager {
       }
       const text = truncateUtf8(JSON.stringify(result), definition.resultMaxBytes);
       if ('isError' in result && result.isError === true) {
-        finishToolCall(this.#store.db, started.auditId, 'error', text, 'mcp_tool_error', {
+        finishToolCall(this.#store.orm, started.auditId, 'error', text, 'mcp_tool_error', {
           startedAt,
           pendingOnly: true,
         });
         throw new KnownToolError(text);
       }
-      finishToolCall(this.#store.db, started.auditId, 'success', text, null, { startedAt, pendingOnly: true });
+      finishToolCall(this.#store.orm, started.auditId, 'success', text, null, { startedAt, pendingOnly: true });
       return {
         content: [{ type: 'text', text }],
         details: { server: definition.serverAlias, tool: definition.originalName },
@@ -441,7 +443,7 @@ export class McpManager {
         error.code !== ErrorCode.ConnectionClosed &&
         error.code !== ErrorCode.RequestTimeout;
       const state = known ? 'error' : 'outcome_unknown';
-      finishToolCall(this.#store.db, started.auditId, state, null, classifyMcpError(error), {
+      finishToolCall(this.#store.orm, started.auditId, state, null, classifyMcpError(error), {
         startedAt,
         pendingOnly: true,
       });
@@ -489,22 +491,25 @@ export class McpManager {
       const blocked =
         chatUsed >= BigInt(definition.policy.perChatDailyCalls) ||
         globalUsed >= BigInt(definition.policy.globalDailyCalls);
-      const created = this.#store.db
-        .query(
-          'INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, state, side_effect, error_code, created_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        )
-        .run(
-          context.invocationId,
+      const created = this.#store.orm
+        .insert(toolCalls)
+        .values({
+          invocationId: context.invocationId,
           toolCallId,
-          definition.exposedName,
+          toolName: definition.exposedName,
           argumentsJson,
-          blocked ? 'blocked_budget' : 'pending',
-          definition.policy.readOnly ? 0 : 1,
-          blocked ? 'blocked_budget' : null,
-          now,
-          blocked ? now : null,
-        );
-      const auditId = BigInt(created.lastInsertRowid);
+          state: blocked ? 'blocked_budget' : 'pending',
+          sideEffect: !definition.policy.readOnly,
+          errorCode: blocked ? 'blocked_budget' : null,
+          createdAt: now,
+          finishedAt: blocked ? now : null,
+        })
+        .returning({ id: toolCalls.id })
+        .get();
+      if (created === undefined) {
+        throw new Error('tool_calls insert returned no row');
+      }
+      const auditId = created.id;
       if (blocked) {
         return { auditId, blocked: true };
       }
@@ -522,7 +527,7 @@ export class McpManager {
     errorCode: string,
   ): void {
     rejectToolCall(
-      this.#store.db,
+      this.#store.orm,
       invocationId,
       toolCallId,
       definition.exposedName,
@@ -534,20 +539,33 @@ export class McpManager {
 
   #usage(date: string, scope: string, resource: string): bigint {
     return (
-      this.#store.db
-        .query<{ amount: bigint }, [string, string, string]>(
-          "SELECT amount FROM daily_usage WHERE utc_date = ? AND scope = ? AND resource = ? AND metric = 'tool_calls'",
+      this.#store.orm
+        .select({ amount: dailyUsage.amount })
+        .from(dailyUsage)
+        .where(
+          and(
+            eq(dailyUsage.utcDate, date),
+            eq(dailyUsage.scope, scope),
+            eq(dailyUsage.resource, resource),
+            eq(dailyUsage.metric, 'tool_calls'),
+          ),
         )
-        .get(date, scope, resource)?.amount ?? 0n
+        .get()?.amount ?? 0n
     );
   }
 
   #incrementUsage(date: string, scope: string, resource: string, now: string): void {
-    this.#store.db
-      .query(
-        "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, ?, ?, 'tool_calls', 1, ?) ON CONFLICT(utc_date, scope, resource, metric) DO UPDATE SET amount = amount + 1, updated_at = excluded.updated_at",
-      )
-      .run(date, scope, resource, now);
+    this.#store.orm
+      .insert(dailyUsage)
+      .values({ utcDate: date, scope, resource, metric: 'tool_calls', amount: 1n, updatedAt: now })
+      .onConflictDoUpdate({
+        target: [dailyUsage.utcDate, dailyUsage.scope, dailyUsage.resource, dailyUsage.metric],
+        set: {
+          amount: sql`${dailyUsage.amount} + 1`,
+          updatedAt: sql`excluded.updated_at`,
+        },
+      })
+      .run();
   }
 
   #scheduleReconnect(server: ManagedServer): void {
@@ -558,9 +576,15 @@ export class McpManager {
     const waitMs = Math.min(RECONNECT_MAX_MS, 1_000 * 2 ** Math.min(attempt, 6));
     server.reconnectAttempt += 1;
     const next = new Date(Date.now() + waitMs).toISOString();
-    this.#store.db
-      .query('UPDATE mcp_server_state SET reconnect_attempt = ?, next_reconnect_at = ?, updated_at = ? WHERE alias = ?')
-      .run(BigInt(server.reconnectAttempt), next, new Date().toISOString(), server.config.alias);
+    this.#store.orm
+      .update(mcpServerState)
+      .set({
+        reconnectAttempt: BigInt(server.reconnectAttempt),
+        nextReconnectAt: next,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(mcpServerState.alias, server.config.alias))
+      .run();
     server.reconnectTimer = setTimeout(() => {
       server.reconnectTimer = undefined;
       void (async () => {
@@ -610,11 +634,17 @@ export class McpManager {
             )
             .digest('hex')
         : null;
-    this.#store.db
-      .query(
-        'INSERT INTO mcp_server_state(alias, state, registry_hash, reconnect_attempt, next_reconnect_at, error_code, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?) ON CONFLICT(alias) DO UPDATE SET state = excluded.state, registry_hash = COALESCE(excluded.registry_hash, mcp_server_state.registry_hash), reconnect_attempt = excluded.reconnect_attempt, next_reconnect_at = excluded.next_reconnect_at, error_code = excluded.error_code, updated_at = excluded.updated_at',
-      )
-      .run(server.config.alias, state, hash, BigInt(server.reconnectAttempt), errorCode, now);
+    this.#store.orm.run(sql`
+      INSERT INTO mcp_server_state(alias, state, registry_hash, reconnect_attempt, next_reconnect_at, error_code, updated_at)
+      VALUES (${server.config.alias}, ${state}, ${hash}, ${BigInt(server.reconnectAttempt)}, NULL, ${errorCode}, ${now})
+      ON CONFLICT(alias) DO UPDATE SET
+        state = excluded.state,
+        registry_hash = COALESCE(excluded.registry_hash, mcp_server_state.registry_hash),
+        reconnect_attempt = excluded.reconnect_attempt,
+        next_reconnect_at = excluded.next_reconnect_at,
+        error_code = excluded.error_code,
+        updated_at = excluded.updated_at
+    `);
   }
 }
 

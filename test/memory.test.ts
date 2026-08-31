@@ -71,7 +71,7 @@ async function fixture(): Promise<Fixture> {
 test('memories persist per conversation, expire by TTL, and purge expired rows', async () => {
   const { store, loaded, conversationId } = await fixture();
   try {
-    const memory = new MemoryStore(store.db);
+    const memory = new MemoryStore(store.orm);
     const now = new Date('2026-08-15T12:00:00.000Z');
     const first = memory.add(conversationId, 'remember one', 86_400, now);
     expect(first.id).toMatch(/^mem_[a-f0-9]{32}$/);
@@ -103,12 +103,12 @@ test('memories persist per conversation, expire by TTL, and purge expired rows',
 
     // purgeExpiredData also cleans expired rows during retention purging.
     memory.add(conversationId, 'ephemeral', 60, new Date('2026-08-15T15:00:00.000Z'));
-    purgeExpiredData(store.db, loaded.config, new Date('2026-08-15T15:00:30.000Z'));
+    purgeExpiredData(store.orm, loaded.config, new Date('2026-08-15T15:00:30.000Z'));
     expect(
       store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM memories WHERE content = 'ephemeral'").get()
         ?.count,
     ).toBe(1n);
-    purgeExpiredData(store.db, loaded.config, new Date('2026-08-15T15:01:01.000Z'));
+    purgeExpiredData(store.orm, loaded.config, new Date('2026-08-15T15:01:01.000Z'));
     expect(
       store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM memories WHERE content = 'ephemeral'").get()
         ?.count,
@@ -121,7 +121,7 @@ test('memories persist per conversation, expire by TTL, and purge expired rows',
 test('add_memory and delete_memory audit tool calls and respect conversation scope', async () => {
   const { store, loaded, conversationId, invocationId } = await fixture();
   try {
-    const memory = new MemoryStore(store.db);
+    const memory = new MemoryStore(store.orm);
     const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768, false);
     expect(context.conversationId).toBe(conversationId);
     const [addTool, deleteTool] = createMemoryTools(memory, context);
@@ -171,7 +171,7 @@ test('add_memory and delete_memory audit tool calls and respect conversation sco
 
     // delete_memory removes only its own conversation's memory.
     const foreignConversation = secondConversation(store, conversationId);
-    const foreign = new MemoryStore(store.db).add(foreignConversation, 'foreign note', 86_400);
+    const foreign = new MemoryStore(store.orm).add(foreignConversation, 'foreign note', 86_400);
     const foreignDelete = await deleteTool.execute('call-3', { id: foreign.id }, new AbortController().signal);
     expect(foreignDelete.details.id).toBe(foreign.id);
     expect(
@@ -203,7 +203,7 @@ test('add_memory and delete_memory audit tool calls and respect conversation sco
 test('the system prompt injects active memories in creation order', async () => {
   const { store, loaded, conversationId, invocationId } = await fixture();
   try {
-    const memory = new MemoryStore(store.db);
+    const memory = new MemoryStore(store.orm);
     const now = new Date('2026-08-15T12:00:00.000Z');
     const first = memory.add(conversationId, 'first note', 30 * 86_400, now);
     const second = memory.add(conversationId, 'second note', 30 * 86_400, new Date('2026-08-15T12:00:05.000Z'));

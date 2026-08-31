@@ -52,7 +52,7 @@ async function setup(
   await writeTestConfig(directory, configPath, testConfigJsonc(directory, transform));
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
-  seedConfigAdmins(store.db, loaded.config.telegram.admins ?? [], new Date('2026-08-15T00:00:00.000Z'));
+  seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? [], new Date('2026-08-15T00:00:00.000Z'));
   const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, handler);
   return {
     loaded,

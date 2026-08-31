@@ -23,6 +23,20 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 4. 更新依赖新字段的查询与测试。
 5. 验证从空数据库和旧版本数据库升级。
 
+## 查询层（Drizzle）
+
+业务查询统一走 `SqliteStore.orm`（drizzle-orm 0.45.2 `bun-sqlite` 驱动的同步 API）；`store.db` 仅供连接层自身（迁移、备份、`VACUUM INTO`）、`doctor.ts` 探针与测试验证断言使用。表定义在 [src/schema.ts](../src/schema.ts)，是迁移终态的类型化映射——新增迁移必须同步更新它。
+
+约定：
+
+- 只用同步方法 `.all()/.get()/.run()/.values()`；禁止 `await orm...`（bun 原生事务回调是同步的）。
+- 事务：模块持有 `SqliteStore` 时用 `store.transaction(fn)`（IMMEDIATE）；仅持有 `Orm` 时用 `orm.transaction(fn, { behavior: 'immediate' })`。
+- SQLite dialect 没有 bigint 列模式：ID/计数值列用 `sqliteBigInt`（customType，读写 `bigint`），自增主键用 `sqliteBigIntId`（insert 可省略 id，新 id 用 `.returning({ id }).get()`）；0/1 标志列用 `integer(..., { mode: 'boolean' })`。
+- 该驱动把 `.run()` 的类型标为 `void`（运行时返回 `{ changes, lastInsertRowid }`）；需要 `changes` 时用 `asRunResult`（`database.ts`）。
+- 复杂 SQL（多表 JOIN、子查询、`NOT EXISTS`、`COALESCE`、FTS5 `MATCH`/`bm25()`、动态拼列）保留 `sql` 模板：`orm.all<Row>(sql\`...\`)`；`${}` 一律是绑定参数（禁止拼 SQL 字符串；受控常量片段用 `sql.raw`）。FTS5 虚拟表 `sticker_search` 不进 schema，只能走 `sql` 模板。
+- 驱动陷阱：`orm.get(sql\`...\`)` 对裸 SQL 返回列值数组而非对象——单行裸 SQL 用 `.all<Row>(sql\`...\`).at(0)` 判 `undefined`。
+- 测试中的裸 SQL 审计断言保留原样：验证层独立于被验证的实现是本仓库的测试惯例。
+
 ## 表组
 
 ### 配置与 Telegram 接入

@@ -12,7 +12,7 @@
 
 | 类别 | 位置 |
 | --- | --- |
-| `bun:sqlite` | `database.ts`、`doctor.ts`、`memory.ts`、`sleep.ts`、`stickers.ts`、`admin/*`（多为 type-only）、`operations.test.ts` |
+| `bun:sqlite` | `database.ts`（连接/迁移/备份层）、`doctor.ts`（探针）、`operations.test.ts`（备份只读验证）；业务查询层已迁移至 Drizzle（见 Phase 2） |
 | `Bun.file` / `Bun.write` / `Bun.BunFile` | `config.ts`、`database.ts`、`media.ts`、`admin/server.ts`、`tui/configure.ts`、`doctor.ts` |
 | `Bun.JSONC.parse` | `config.ts` |
 | `Bun.spawn` / `Bun.Subprocess` | `doctor.ts`、`media.ts`（FFmpeg/Lottie 外部链路）、`secrets.ts`（command SecretRef） |
@@ -51,13 +51,14 @@
 - [ ] 锁文件切换为 `pnpm-lock.yaml`；CI/deploy 文档同步安装命令。
 - 验收：`pnpm install && pnpm build` 通过；`serve` 在 Bun 下照常启动。
 
-### Phase 2 — 数据访问层：bun:sqlite + Drizzle
+### Phase 2 — 数据访问层：bun:sqlite + Drizzle ✅（2026-09-01 完成）
 
-- [ ] 新增 Drizzle schema（表定义逐列对齐现有库结构，含 FTS5/trigram 相关处理方式确认——虚拟表可能需要 `sql` 原语声明）。
-- [ ] 保留现有 `.sql` 迁移 runner；Drizzle 仅作查询层，不接管迁移。
-- [ ] 改造调用方：`database.ts`、`memory.ts`、`admin/audit.ts`、`admin/auth.ts`、`admin/admins.ts`、`admin/memory-admin.ts`、`admin/operations.ts`、`doctor.ts` 探针；事务 API 映射（`db.transaction()`）。
-- [ ] **bigint 核验**：现库以 `safeIntegers: true` 保证 Telegram ID 走 `bigint`；确认 Drizzle bun-sqlite 会话下 bigint 列映射（`integer({ mode: 'bigint' })`）不回落为 Number。
-- 验收：全量测试绿；Admin 审计查询分页正确；备份/保留清理不受影响。
+- [x] 新增 Drizzle schema（[src/schema.ts](../src/schema.ts)：31 张表逐列对齐迁移终态；FTS5 `sticker_search` 虚拟表不进 schema，查询走 `sql` 模板）。
+- [x] 保留现有 `.sql` 迁移 runner；Drizzle 仅作查询层，不接管迁移（未引入 drizzle-kit）。
+- [x] 改造调用方：全部业务模块（ingestion、media、scheduler、bot-commands、startup-catch-up、send-tool、agent-runtime、mcp、memory、sleep、alarm、internal-context、stickers、admin 全部）。事务映射：`store.transaction(fn)` 保持 bun 原生 IMMEDIATE，drizzle 语句在其内执行；仅持有 `Orm` 的函数用 `orm.transaction(fn, { behavior: 'immediate' })`。
+- [x] **bigint 核验**：drizzle SQLite dialect 无 `integer({ mode: 'bigint' })`（备选被否决），改用 `customType` 自制 `sqliteBigInt`/`sqliteBigIntId`（读写均 `bigint`，主键变体允许省略自增 id）；精度/行为测试固化在 [test/schema.test.ts](../test/schema.test.ts)。
+- 实施要点：只用 drizzle 同步 API（`.all()/.get()/.run()/.values()`，与同步事务回调兼容）；该 driver 把 `.run()` 类型标为 `void`，取 `changes` 用 `asRunResult`；裸 `sql` 单行查询须 `.all<Row>(sql\`…\`).at(0)`（`orm.get(sql)` 返回列值数组）；sql 模板内的 `${}` 一律是绑定参数，常量 SQL 片段须 `sql.raw`。测试的裸 SQL 审计断言保留（验证层惯例）。
+- 验收：✅ 全量 `bun test` 168/168 绿；`bun run check`、`bun run lint` 零错误；备份/保留清理、Admin 审计分页、FTS5 搜索测试全部通过。`bun:sqlite` import 面收敛为 `database.ts`（连接/迁移/备份）、`doctor.ts`（探针）、`scripts/scrub-model-request-images.ts`（维护脚本）、`operations.test.ts`（备份验证）。
 
 ### Phase 3 — 运行时无关化（每项独立提交，均在 Bun 上回归）
 
@@ -98,7 +99,7 @@
 
 | 风险 | 影响 | 缓解 |
 | --- | --- | --- |
-| `node:sqlite` bigint 回落 Number | Telegram ID 精度损坏（数据损坏级） | Phase 2 先在 Drizzle 层固定 bigint 映射并在 Bun 上写精度测试；切换时刻仅换驱动再复测；兜底 better-sqlite3 |
+| `node:sqlite` bigint 回落 Number | Telegram ID 精度损坏（数据损坏级） | ✅ Phase 2 已在 Drizzle 层固定 bigint 映射（customType）并在 Bun 上写了精度/行为测试（`test/schema.test.ts`）；切换时刻仅换驱动再复测；兜底 better-sqlite3 |
 | Argon2 库参数不一致 | 存量密码无法登录 | PHC 字符串自描述参数；切换前用真实账号回归 |
 | Hono 与 Bun.serve 行为差（idleTimeout、请求体上限、错误响应形状） | Admin Panel 可用性 | Phase 3 用现有 admin 测试 + 手动面板冒烟覆盖 |
 | drizzle bun-sqlite 驱动维护节奏 | Phase 2–5 过渡期维护负担 | 过渡期短；驱动仅一处引用，随时可切 |

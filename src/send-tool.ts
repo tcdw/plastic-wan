@@ -1,10 +1,22 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { and, eq, lt, sql } from 'drizzle-orm';
 import { GrammyError, HttpError } from 'grammy';
 import type { MessageEntity } from 'grammy/types';
 import Type, { type Static } from 'typebox';
 import type { InvocationContext } from './context-builder.ts';
-import type { SqliteStore } from './database.ts';
+import { asRunResult, rejectToolCall, type SqliteStore } from './database.ts';
+import {
+  chats,
+  invocations,
+  media,
+  messageRevisions,
+  messages,
+  senders,
+  stickers,
+  telegramSends,
+  toolCalls,
+} from './schema.ts';
 
 export const SendInputSchema = Type.Object(
   {
@@ -171,39 +183,64 @@ export function createSendTool(
       }
       const pending = environment.store.transaction(() => {
         const now = new Date().toISOString();
-        const tool = environment.store.db
-          .query(
-            "INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, state, side_effect, created_at) VALUES (?, ?, 'send', ?, 'pending', 1, ?)",
-          )
-          .run(environment.context.invocationId, toolCallId, JSON.stringify(send), now);
-        const toolId = BigInt(tool.lastInsertRowid);
-        const quota = environment.store.db
-          .query(
-            'UPDATE invocations SET sends_used = sends_used + 1, side_effect_started = 1 WHERE id = ? AND sends_used < ?',
-          )
-          .run(environment.context.invocationId, BigInt(environment.maxSends));
+        const createdToolCall = environment.store.orm
+          .insert(toolCalls)
+          .values({
+            invocationId: environment.context.invocationId,
+            toolCallId,
+            toolName: 'send',
+            argumentsJson: JSON.stringify(send),
+            state: 'pending',
+            sideEffect: true,
+            createdAt: now,
+          })
+          .returning({ id: toolCalls.id })
+          .get();
+        if (createdToolCall === undefined) {
+          throw new Error('tool_calls insert returned no row');
+        }
+        const toolId = createdToolCall.id;
+        const quota = asRunResult(
+          environment.store.orm
+            .update(invocations)
+            .set({ sendsUsed: sql`${invocations.sendsUsed} + 1`, sideEffectStarted: true })
+            .where(
+              and(
+                eq(invocations.id, environment.context.invocationId),
+                lt(invocations.sendsUsed, BigInt(environment.maxSends)),
+              ),
+            )
+            .run(),
+        );
         if (quota.changes === 0) {
-          environment.store.db
-            .query("UPDATE tool_calls SET state = 'error', error_code = 'send_limit', finished_at = ? WHERE id = ?")
-            .run(now, toolId);
+          environment.store.orm
+            .update(toolCalls)
+            .set({ state: 'error', errorCode: 'send_limit', finishedAt: now })
+            .where(eq(toolCalls.id, toolId))
+            .run();
           return { toolId, sendId: null };
         }
-        const sendInsert = environment.store.db
-          .query(
-            "INSERT INTO telegram_sends(tool_call_id, conversation_id, kind, request_json, state, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
-          )
-          .run(
-            toolId,
-            targetConversationId,
-            send.kind,
-            JSON.stringify({ kind: send.kind, reply_to_message_id: send.reply_to_message_id ?? null }),
-            now,
-          );
-        return { toolId, sendId: BigInt(sendInsert.lastInsertRowid) };
+        const createdSend = environment.store.orm
+          .insert(telegramSends)
+          .values({
+            toolCallId: toolId,
+            conversationId: targetConversationId,
+            kind: send.kind,
+            requestJson: JSON.stringify({ kind: send.kind, reply_to_message_id: send.reply_to_message_id ?? null }),
+            state: 'pending',
+            createdAt: now,
+          })
+          .returning({ id: telegramSends.id })
+          .get();
+        if (createdSend === undefined) {
+          throw new Error('telegram_sends insert returned no row');
+        }
+        return { toolId, sendId: createdSend.id };
       });
       if (pending.sendId === null) {
         throw new Error(`send limit of ${environment.maxSends} reached`);
       }
+      const sendId = pending.sendId;
       const options = {
         ...(targetThreadId === 0n ? {} : { message_thread_id: Number(targetThreadId) }),
         ...(send.reply_to_message_id === undefined
@@ -244,21 +281,26 @@ export function createSendTool(
         }
         environment.store.transaction(() => {
           const now = new Date().toISOString();
-          environment.store.db
-            .query(
-              "UPDATE tool_calls SET state = 'success', result_text = ?, duration_ms = ?, finished_at = ? WHERE id = ?",
-            )
-            .run(
-              `telegram_message_id=${response.message_id}`,
-              BigInt(Math.round(performance.now() - startedAt)),
-              now,
-              pending.toolId,
-            );
-          environment.store.db
-            .query(
-              "UPDATE telegram_sends SET state = 'success', telegram_message_id = ?, response_json = ?, finished_at = ? WHERE id = ?",
-            )
-            .run(BigInt(response.message_id), JSON.stringify({ message_id: response.message_id }), now, pending.sendId);
+          environment.store.orm
+            .update(toolCalls)
+            .set({
+              state: 'success',
+              resultText: `telegram_message_id=${response.message_id}`,
+              durationMs: BigInt(Math.round(performance.now() - startedAt)),
+              finishedAt: now,
+            })
+            .where(eq(toolCalls.id, pending.toolId))
+            .run();
+          environment.store.orm
+            .update(telegramSends)
+            .set({
+              state: 'success',
+              telegramMessageId: BigInt(response.message_id),
+              responseJson: JSON.stringify({ message_id: response.message_id }),
+              finishedAt: now,
+            })
+            .where(eq(telegramSends.id, sendId))
+            .run();
           recordOutgoingMessage(
             environment,
             response,
@@ -289,12 +331,21 @@ export function createSendTool(
         environment.store.transaction(() => {
           const now = new Date().toISOString();
           const state = unknown ? 'outcome_unknown' : 'error';
-          environment.store.db
-            .query('UPDATE tool_calls SET state = ?, error_code = ?, duration_ms = ?, finished_at = ? WHERE id = ?')
-            .run(state, errorCode, BigInt(Math.round(performance.now() - startedAt)), now, pending.toolId);
-          environment.store.db
-            .query('UPDATE telegram_sends SET state = ?, error_code = ?, finished_at = ? WHERE id = ?')
-            .run(state, errorCode, now, pending.sendId);
+          environment.store.orm
+            .update(toolCalls)
+            .set({
+              state,
+              errorCode,
+              durationMs: BigInt(Math.round(performance.now() - startedAt)),
+              finishedAt: now,
+            })
+            .where(eq(toolCalls.id, pending.toolId))
+            .run();
+          environment.store.orm
+            .update(telegramSends)
+            .set({ state, errorCode, finishedAt: now })
+            .where(eq(telegramSends.id, sendId))
+            .run();
         });
         throw new Error(unknown ? 'Telegram send outcome is unknown' : `Telegram send failed: ${errorCode}`);
       }
@@ -308,12 +359,15 @@ function recordRejectedSend(
   input: unknown,
   errorCode: string,
 ): void {
-  const now = new Date().toISOString();
-  environment.store.db
-    .query(
-      "INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, state, side_effect, error_code, created_at, finished_at) VALUES (?, ?, 'send', ?, 'error', 1, ?, ?, ?)",
-    )
-    .run(environment.context.invocationId, toolCallId, JSON.stringify(input), errorCode, now, now);
+  rejectToolCall(
+    environment.store.orm,
+    environment.context.invocationId,
+    toolCallId,
+    'send',
+    JSON.stringify(input),
+    true,
+    errorCode,
+  );
 }
 
 function recordOutgoingMessage(
@@ -325,60 +379,96 @@ function recordOutgoingMessage(
   sentText: string,
   recordedAt: string,
 ): void {
-  environment.store.db
-    .query(
-      "INSERT INTO senders(telegram_type, telegram_id, display_name, username, is_bot, updated_at) VALUES ('user', ?, ?, ?, 1, ?) ON CONFLICT(telegram_type, telegram_id) DO UPDATE SET display_name = excluded.display_name, username = excluded.username, is_bot = 1, updated_at = excluded.updated_at",
-    )
-    .run(environment.bot.id, environment.bot.displayName, environment.bot.username, recordedAt);
-  const sender = environment.store.db
-    .query<{ id: bigint }, [bigint]>("SELECT id FROM senders WHERE telegram_type = 'user' AND telegram_id = ?")
-    .get(environment.bot.id);
-  if (sender === null) {
+  environment.store.orm
+    .insert(senders)
+    .values({
+      telegramType: 'user',
+      telegramId: environment.bot.id,
+      displayName: environment.bot.displayName,
+      username: environment.bot.username,
+      isBot: true,
+      updatedAt: recordedAt,
+    })
+    .onConflictDoUpdate({
+      target: [senders.telegramType, senders.telegramId],
+      set: {
+        displayName: sql`excluded.display_name`,
+        username: sql`excluded.username`,
+        isBot: true,
+        updatedAt: sql`excluded.updated_at`,
+      },
+    })
+    .run();
+  const sender = environment.store.orm
+    .select({ id: senders.id })
+    .from(senders)
+    .where(and(eq(senders.telegramType, 'user'), eq(senders.telegramId, environment.bot.id)))
+    .get();
+  if (sender === undefined) {
     throw new Error('Bot sender row is missing after upsert');
   }
-  const chat = environment.store.db
-    .query<{ id: bigint }, [bigint]>('SELECT id FROM chats WHERE telegram_chat_id = ?')
-    .get(environment.context.chatId);
-  if (chat === null) {
+  const chat = environment.store.orm
+    .select({ id: chats.id })
+    .from(chats)
+    .where(eq(chats.telegramChatId, environment.context.chatId))
+    .get();
+  if (chat === undefined) {
     throw new Error('Outgoing chat row does not exist');
   }
-  const created = environment.store.db
-    .query(
-      'INSERT INTO messages(conversation_id, chat_id, telegram_message_id, visible, sent_by_bot, telegram_date, received_at) VALUES (?, ?, ?, 1, 1, ?, ?)',
-    )
-    .run(
+  const createdMessage = environment.store.orm
+    .insert(messages)
+    .values({
       conversationId,
-      chat.id,
-      BigInt(response.message_id),
-      new Date(response.date * 1000).toISOString(),
-      recordedAt,
-    );
-  const messageId = BigInt(created.lastInsertRowid);
-  const revision = environment.store.db
-    .query(
-      'INSERT INTO message_revisions(message_id, revision_no, sender_id, kind, text, reply_to_message_id, created_at, raw_fragment_json) VALUES (?, 1, ?, ?, ?, ?, ?, ?)',
-    )
-    .run(
+      chatId: chat.id,
+      telegramMessageId: BigInt(response.message_id),
+      visible: true,
+      sentByBot: true,
+      telegramDate: new Date(response.date * 1000).toISOString(),
+      receivedAt: recordedAt,
+    })
+    .returning({ id: messages.id })
+    .get();
+  if (createdMessage === undefined) {
+    throw new Error('messages insert returned no row');
+  }
+  const messageId = createdMessage.id;
+  const createdRevision = environment.store.orm
+    .insert(messageRevisions)
+    .values({
       messageId,
-      sender.id,
-      input.kind,
-      input.kind === 'text' ? sentText : null,
-      input.reply_to_message_id === undefined ? null : BigInt(input.reply_to_message_id),
-      recordedAt,
-      JSON.stringify({ message_id: response.message_id, kind: input.kind }),
-    );
-  const revisionId = BigInt(revision.lastInsertRowid);
-  environment.store.db.query('UPDATE messages SET current_revision_id = ? WHERE id = ?').run(revisionId, messageId);
+      revisionNo: 1n,
+      senderId: sender.id,
+      kind: input.kind,
+      text: input.kind === 'text' ? sentText : null,
+      replyToMessageId: input.reply_to_message_id === undefined ? null : BigInt(input.reply_to_message_id),
+      createdAt: recordedAt,
+      rawFragmentJson: JSON.stringify({ message_id: response.message_id, kind: input.kind }),
+    })
+    .returning({ id: messageRevisions.id })
+    .get();
+  if (createdRevision === undefined) {
+    throw new Error('message_revisions insert returned no row');
+  }
+  const revisionId = createdRevision.id;
+  environment.store.orm.update(messages).set({ currentRevisionId: revisionId }).where(eq(messages.id, messageId)).run();
   if (input.kind === 'sticker' && stickerFileId !== null) {
-    const sticker = environment.store.db
-      .query<{ file_unique_id: string }, [string]>('SELECT file_unique_id FROM stickers WHERE file_id = ?')
-      .get(stickerFileId);
-    if (sticker !== null) {
-      environment.store.db
-        .query(
-          "INSERT INTO media(revision_id, kind, file_id, file_unique_id, mime_type, telegram_json) VALUES (?, 'sticker', ?, ?, 'image/webp', ?)",
-        )
-        .run(revisionId, stickerFileId, sticker.file_unique_id, JSON.stringify({ sent: true }));
+    const sticker = environment.store.orm
+      .select({ fileUniqueId: stickers.fileUniqueId })
+      .from(stickers)
+      .where(eq(stickers.fileId, stickerFileId))
+      .get();
+    if (sticker !== undefined) {
+      environment.store.orm
+        .insert(media)
+        .values({
+          revisionId,
+          kind: 'sticker',
+          fileId: stickerFileId,
+          fileUniqueId: sticker.fileUniqueId,
+          mimeType: 'image/webp',
+          telegramJson: JSON.stringify({ sent: true }),
+        })
+        .run();
     }
   }
 }

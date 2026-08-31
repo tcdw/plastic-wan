@@ -80,7 +80,7 @@ async function setup(): Promise<{
   );
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
-  seedConfigAdmins(store.db, loaded.config.telegram.admins ?? []);
+  seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? []);
   const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
     state: 'completed',
     reason: 'done',

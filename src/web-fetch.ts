@@ -87,7 +87,7 @@ export function createWebFetchTool(
     execute: async (toolCallId, input, outerSignal) => {
       const startedAt = performance.now();
       const auditId = startToolCall(
-        options.store.db,
+        options.store.orm,
         options.context.invocationId,
         toolCallId,
         'web_fetch',
@@ -112,14 +112,14 @@ export function createWebFetchTool(
         const bodyLimit = RESULT_MAX_BYTES - Buffer.byteLength(header) - Buffer.byteLength(TRUNCATION_MARKER);
         const body = await readTextBody(fetched.response, Math.max(0, bodyLimit));
         const text = `${header}${body.text}${body.truncated ? TRUNCATION_MARKER : ''}`;
-        finishToolCall(options.store.db, auditId, 'success', text, null, { startedAt, pendingOnly: true });
+        finishToolCall(options.store.orm, auditId, 'success', text, null, { startedAt, pendingOnly: true });
         return {
           content: [{ type: 'text', text }],
           details: { url: fetched.url, status: fetched.response.status, truncated: body.truncated },
         };
       } catch (error) {
         const failure = normalizeError(error, outerSignal, timeoutSignal);
-        finishToolCall(options.store.db, auditId, 'error', null, failure.code, { startedAt, pendingOnly: true });
+        finishToolCall(options.store.orm, auditId, 'error', null, failure.code, { startedAt, pendingOnly: true });
         throw new Error(`web_fetch failed: ${failure.message}`);
       }
     },

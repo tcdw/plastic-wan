@@ -2,13 +2,13 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, type Tool } from '@earendil-works/pi-ai';
+import { getJsonSchemaToolParameters } from '@earendil-works/pi-ai/api/constrained-sampling';
 import { GrammyError } from 'grammy';
 import type { Update } from 'grammy/types';
 import { Compile } from 'typebox/compile';
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, type Tool } from '@earendil-works/pi-ai';
-import { getJsonSchemaToolParameters } from '@earendil-works/pi-ai/api/constrained-sampling';
-import { AdminServer } from '../src/admin/server.ts';
 import { cancelAlarm, listAlarms } from '../src/admin/alarm-admin.ts';
+import { AdminServer } from '../src/admin/server.ts';
 import { AgentRuntime } from '../src/agent-runtime.ts';
 import { AlarmInputSchema, createAlarmTool, createListAlarmTool } from '../src/alarm.ts';
 import { BotCommandService } from '../src/bot-commands.ts';
@@ -670,10 +670,10 @@ describe('alarm admin', () => {
     const fired = insertAlarm(store, conversation, '2026-08-15T00:30:00.000Z', { state: 'fired', summary: 'fired' });
     store.db.query('UPDATE alarms SET fired_at = ? WHERE id = ?').run('2026-08-15T00:30:00.000Z', fired);
 
-    const first = listAlarms(store.db, { limit: '2' });
+    const first = listAlarms(store.orm, { limit: '2' });
     expect(first.items.map((item) => item.id)).toEqual([pending2.toString(), pending1.toString()]);
     expect(first.next_cursor).not.toBe(null);
-    const second = listAlarms(store.db, { limit: '2', cursor: first.next_cursor });
+    const second = listAlarms(store.orm, { limit: '2', cursor: first.next_cursor });
     expect(second.items.map((item) => item.id)).toEqual([fired.toString()]);
     expect(second.next_cursor).toBe(null);
     store.close();
@@ -684,14 +684,14 @@ describe('alarm admin', () => {
     const conversation = ensureConversation(store);
     insertAlarm(store, conversation, '2026-08-15T01:00:00.000Z', { summary: 'mine', targetUserId: 42n });
     insertAlarm(store, conversation, '2026-08-15T02:00:00.000Z', { summary: 'other', targetUserId: 7n });
-    const mine = listAlarms(store.db, { target: '42' });
+    const mine = listAlarms(store.orm, { target: '42' });
     expect(mine.items).toHaveLength(1);
     expect(mine.items[0]?.target_user_id).toBe('42');
     expect(mine.items[0]?.chat.message_thread_id).toBe('0');
     expect(mine.items[0]?.conversation_id).toBe(conversation.toString());
-    const pending = listAlarms(store.db, { state: 'pending' });
+    const pending = listAlarms(store.orm, { state: 'pending' });
     expect(pending.items).toHaveLength(2);
-    const fired = listAlarms(store.db, { state: 'fired' });
+    const fired = listAlarms(store.orm, { state: 'fired' });
     expect(fired.items).toHaveLength(0);
     store.close();
   });
@@ -700,7 +700,7 @@ describe('alarm admin', () => {
     const { store } = await setup();
     const conversation = ensureConversation(store);
     const pending = insertAlarm(store, conversation, '2026-08-15T01:00:00.000Z');
-    expect(cancelAlarm(store.db, pending, 'owner')).toEqual({ status: 'cancelled' });
+    expect(cancelAlarm(store.orm, pending, 'owner')).toEqual({ status: 'cancelled' });
     const row = store.db
       .query<
         { state: string; cancelled_by: string | null; admin_cancelled: bigint; cancel_reason: string | null },
@@ -713,8 +713,8 @@ describe('alarm admin', () => {
       admin_cancelled: 1n,
       cancel_reason: 'admin_cancelled',
     });
-    expect(() => cancelAlarm(store.db, pending, 'owner')).toThrow('Only pending alarms can be cancelled');
-    expect(() => cancelAlarm(store.db, 999999n, 'owner')).toThrow('does not exist');
+    expect(() => cancelAlarm(store.orm, pending, 'owner')).toThrow('Only pending alarms can be cancelled');
+    expect(() => cancelAlarm(store.orm, 999999n, 'owner')).toThrow('does not exist');
     store.close();
   });
 });
@@ -780,7 +780,7 @@ describe('alarm scheduling behavior', () => {
       throw new Error('Expected conversation');
     }
     insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z');
-    enterSleep(store.db);
+    enterSleep(store.orm);
 
     const launched: bigint[] = [];
     const recording = new BucketScheduler(store, loaded.config, loaded.hash, async (id) => {
@@ -930,7 +930,7 @@ describe('alarm retention', () => {
       .query('UPDATE alarms SET cancelled_at = ?, updated_at = ? WHERE id = ?')
       .run('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', cancelled);
 
-    purgeExpiredData(store.db, loaded.config, new Date('2026-03-01T00:00:00.000Z'));
+    purgeExpiredData(store.orm, loaded.config, new Date('2026-03-01T00:00:00.000Z'));
     const ids = [pending, firing, fired, cancelled];
     const states = store.db
       .query<{ id: bigint; state: string }, bigint[]>(

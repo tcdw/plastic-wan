@@ -10,6 +10,7 @@ import {
   type Models,
   type Usage,
 } from '@earendil-works/pi-ai';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { KeyedSemaphore } from './concurrency.ts';
 import type { RawConfig } from './config.ts';
 import { ContextBuilder, type InvocationContext } from './context-builder.ts';
@@ -18,6 +19,7 @@ import { serializeModelRequestForAudit } from './model-request-audit.ts';
 import type { AgentModelSwitcher } from './model-switch.ts';
 import type { ModelRegistry } from './providers.ts';
 import type { InvocationOutcome } from './scheduler.ts';
+import { agentMessages, dailyUsage, invocations, modelCalls, toolCalls as toolCallsTable } from './schema.ts';
 import type { SecretStore } from './secrets.ts';
 import { createSendTool, type TelegramSendApi } from './send-tool.ts';
 import {
@@ -125,18 +127,18 @@ export class AgentRuntime {
     const deadline = Date.now() + this.#config.agent.timeout_seconds * 1000;
     let sleepRequested = false;
     const zzz = createZzzTool({
-      db: this.#store.db,
+      orm: this.#store.orm,
       invocationId,
       chatId: provisionalContext.chatId,
       onSleep: () => {
         sleepRequested = true;
       },
     });
-    const chat = resolveChatConfig(this.#config, this.#store.db, provisionalContext.chatId);
+    const chat = resolveChatConfig(this.#config, this.#store.orm, provisionalContext.chatId);
     if (chat === undefined) {
       throw new Error(`Invocation ${invocationId} chat is no longer configured`);
     }
-    const initialBudget = readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens);
+    const initialBudget = readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens);
     let zzzExposed = !isAlarm && isLowDailyTokenBudget(initialBudget);
     if (zzzExposed) {
       this.#logZzzExposure(invocationId, provisionalContext.chatId, initialBudget);
@@ -202,7 +204,7 @@ export class AgentRuntime {
       streamFn: async (model, modelContext, options) => {
         if (
           !isAlarm &&
-          isDailyTokenBudgetReached(readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens))
+          isDailyTokenBudgetReached(readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens))
         ) {
           modelBudgetBlocked = true;
           return errorStream(model, 'daily_token_budget');
@@ -250,12 +252,12 @@ export class AgentRuntime {
       toolExecution: 'sequential',
       maxRetryDelayMs: Math.max(0, deadline - Date.now()),
       beforeToolCall: async ({ toolCall }) => {
-        if (toolCall.name !== 'zzz' && !isAlarm && (sleepRequested || activeSleepUntil(this.#store.db) !== null)) {
+        if (toolCall.name !== 'zzz' && !isAlarm && (sleepRequested || activeSleepUntil(this.#store.orm) !== null)) {
           return { block: true, reason: 'The bot is sleeping', terminate: true };
         }
         if (
           toolCall.name === 'zzz' &&
-          !isLowDailyTokenBudget(readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens))
+          !isLowDailyTokenBudget(readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens))
         ) {
           return { block: true, reason: 'You are no longer sleepy' };
         }
@@ -263,13 +265,15 @@ export class AgentRuntime {
         if (toolCalls > this.#config.agent.max_tool_calls) {
           return { block: true, reason: 'Invocation tool-call limit reached', terminate: true };
         }
-        this.#store.db
-          .query('UPDATE invocations SET tool_calls_used = ? WHERE id = ?')
-          .run(BigInt(toolCalls), invocationId);
+        this.#store.orm
+          .update(invocations)
+          .set({ toolCallsUsed: BigInt(toolCalls) })
+          .where(eq(invocations.id, invocationId))
+          .run();
         return undefined;
       },
       shouldStopAfterTurn: async (turn) => {
-        if (!isAlarm && (sleepRequested || activeSleepUntil(this.#store.db) !== null)) {
+        if (!isAlarm && (sleepRequested || activeSleepUntil(this.#store.orm) !== null)) {
           return true;
         }
         if (turns >= this.#config.agent.max_turns || closing) {
@@ -300,7 +304,7 @@ export class AgentRuntime {
       prepareNextTurnWithContext: async (turn) => {
         let nextTools = turn.context.tools;
         let toolsChanged = false;
-        const budget = readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens);
+        const budget = readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens);
         const shouldExposeZzz = !isAlarm && isLowDailyTokenBudget(budget);
         if (shouldExposeZzz !== zzzExposed) {
           zzzExposed = shouldExposeZzz;
@@ -329,7 +333,11 @@ export class AgentRuntime {
     const unsubscribe = agent.subscribe((event) => {
       if (event.type === 'turn_end') {
         turns += 1;
-        this.#store.db.query('UPDATE invocations SET turns_used = ? WHERE id = ?').run(BigInt(turns), invocationId);
+        this.#store.orm
+          .update(invocations)
+          .set({ turnsUsed: BigInt(turns) })
+          .where(eq(invocations.id, invocationId))
+          .run();
       }
       if (event.type === 'tool_execution_end' && event.toolName === 'send') {
         sendUsed = true;
@@ -360,11 +368,12 @@ export class AgentRuntime {
       await agent.prompt(context.userPrompt, [...directImages]);
       if (signal.aborted) {
         const unknown =
-          this.#store.db
-            .query<{ present: bigint }, [bigint]>(
-              "SELECT 1 AS present FROM tool_calls WHERE invocation_id = ? AND state = 'outcome_unknown' LIMIT 1",
-            )
-            .get(invocationId) !== null;
+          this.#store.orm
+            .select({ id: toolCallsTable.id })
+            .from(toolCallsTable)
+            .where(and(eq(toolCallsTable.invocationId, invocationId), eq(toolCallsTable.state, 'outcome_unknown')))
+            .limit(1)
+            .get() !== undefined;
         outcome = {
           state: unknown ? 'outcome_unknown' : 'aborted',
           reason: timeoutSignal.aborted ? 'timeout' : 'aborted',
@@ -398,9 +407,11 @@ export class AgentRuntime {
       )
       .digest('hex');
     const toolRegistry = tools.map((tool) => ({ name: tool.name, label: tool.label, description: tool.description }));
-    this.#store.db
-      .query('UPDATE invocations SET tool_registry_hash = ?, tool_registry_json = ? WHERE id = ?')
-      .run(toolRegistryHash, JSON.stringify(toolRegistry), invocationId);
+    this.#store.orm
+      .update(invocations)
+      .set({ toolRegistryHash, toolRegistryJson: JSON.stringify(toolRegistry) })
+      .where(eq(invocations.id, invocationId))
+      .run();
   }
 
   #logZzzExposure(invocationId: bigint, chatId: bigint, budget: DailyTokenBudget): void {
@@ -425,18 +436,32 @@ export class AgentRuntime {
   }
 
   #startModelCall(invocationId: bigint, model: Model<Api>, tools: readonly string[]): bigint {
-    const created = this.#store.db
-      .query(
-        "INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, tools_json, created_at) VALUES (?, 'agent', ?, ?, 1, 'pending', ?, ?)",
-      )
-      .run(invocationId, model.provider, model.id, JSON.stringify(tools), new Date().toISOString());
-    return BigInt(created.lastInsertRowid);
+    const created = this.#store.orm
+      .insert(modelCalls)
+      .values({
+        invocationId,
+        role: 'agent',
+        provider: model.provider,
+        model: model.id,
+        attempt: 1n,
+        state: 'pending',
+        toolsJson: JSON.stringify(tools),
+        createdAt: new Date().toISOString(),
+      })
+      .returning({ id: modelCalls.id })
+      .get();
+    if (created === undefined) {
+      throw new Error('model_calls insert returned no row');
+    }
+    return created.id;
   }
   #recordModelCallRequest(callId: bigint, payload: unknown): void {
     try {
-      this.#store.db
-        .query('UPDATE model_calls SET request_json = ? WHERE id = ? AND request_json IS NULL')
-        .run(serializeModelRequestForAudit(payload), callId);
+      this.#store.orm
+        .update(modelCalls)
+        .set({ requestJson: serializeModelRequestForAudit(payload) })
+        .where(and(eq(modelCalls.id, callId), isNull(modelCalls.requestJson)))
+        .run();
     } catch {
       // Snapshotting is best-effort auditing; never break the model call itself.
     }
@@ -444,9 +469,11 @@ export class AgentRuntime {
 
   #recordModelCallResponse(callId: bigint, response: { status: number; headers: Record<string, string> }): void {
     try {
-      this.#store.db
-        .query('UPDATE model_calls SET response_json = ? WHERE id = ? AND response_json IS NULL')
-        .run(JSON.stringify({ status: response.status }), callId);
+      this.#store.orm
+        .update(modelCalls)
+        .set({ responseJson: JSON.stringify({ status: response.status }) })
+        .where(and(eq(modelCalls.id, callId), isNull(modelCalls.responseJson)))
+        .run();
     } catch {
       // Snapshotting is best-effort auditing; never break the model call itself.
     }
@@ -456,52 +483,80 @@ export class AgentRuntime {
     this.#store.transaction(() => {
       const usage = message.usage;
       const now = new Date().toISOString();
-      this.#store.db
-        .query(
-          'UPDATE model_calls SET state = ?, input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_write_tokens = ?, total_tokens = ?, cost = ?, error_code = ?, error_detail = ?, finished_at = ? WHERE id = ?',
-        )
-        .run(
-          message.stopReason === 'error' || message.stopReason === 'aborted' ? 'error' : 'success',
-          BigInt(usage.input),
-          BigInt(usage.output),
-          BigInt(usage.cacheRead),
-          BigInt(usage.cacheWrite),
-          BigInt(usage.totalTokens),
-          usage.cost.total,
-          message.stopReason === 'error' ? 'model_error' : message.stopReason === 'aborted' ? 'model_aborted' : null,
-          message.errorMessage === undefined ? null : this.#secrets.redact(message.errorMessage),
-          now,
-          callId,
-        );
-      this.#store.db
-        .query(
-          "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', ?, ?) ON CONFLICT(utc_date, scope, resource, metric) DO UPDATE SET amount = amount + excluded.amount, updated_at = excluded.updated_at",
-        )
-        .run(now.slice(0, 10), chatId.toString(), BigInt(usage.totalTokens), now);
+      this.#store.orm
+        .update(modelCalls)
+        .set({
+          state: message.stopReason === 'error' || message.stopReason === 'aborted' ? 'error' : 'success',
+          inputTokens: BigInt(usage.input),
+          outputTokens: BigInt(usage.output),
+          cacheReadTokens: BigInt(usage.cacheRead),
+          cacheWriteTokens: BigInt(usage.cacheWrite),
+          totalTokens: BigInt(usage.totalTokens),
+          cost: usage.cost.total,
+          errorCode:
+            message.stopReason === 'error' ? 'model_error' : message.stopReason === 'aborted' ? 'model_aborted' : null,
+          errorDetail: message.errorMessage === undefined ? null : this.#secrets.redact(message.errorMessage),
+          finishedAt: now,
+        })
+        .where(eq(modelCalls.id, callId))
+        .run();
+      this.#store.orm
+        .insert(dailyUsage)
+        .values({
+          utcDate: now.slice(0, 10),
+          scope: 'chat',
+          resource: chatId.toString(),
+          metric: 'model_tokens',
+          amount: BigInt(usage.totalTokens),
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [dailyUsage.utcDate, dailyUsage.scope, dailyUsage.resource, dailyUsage.metric],
+          set: {
+            amount: sql`${dailyUsage.amount} + excluded.amount`,
+            updatedAt: sql`excluded.updated_at`,
+          },
+        })
+        .run();
     });
   }
 
   #failModelCall(callId: bigint, errorCode: string, error: unknown): void {
-    this.#store.db
-      .query(
-        "UPDATE model_calls SET state = 'error', error_code = ?, error_detail = ?, finished_at = ? WHERE id = ? AND state = 'pending'",
-      )
-      .run(errorCode, this.#secrets.redactError(error), new Date().toISOString(), callId);
+    this.#store.orm
+      .update(modelCalls)
+      .set({
+        state: 'error',
+        errorCode,
+        errorDetail: this.#secrets.redactError(error),
+        finishedAt: new Date().toISOString(),
+      })
+      .where(and(eq(modelCalls.id, callId), eq(modelCalls.state, 'pending')))
+      .run();
   }
 
   recordAgentMessage(invocationId: bigint, role: 'assistant' | 'tool_result' | 'harness_nudge', text: string): bigint {
     const sequence =
-      this.#store.db
-        .query<{ value: bigint }, [bigint]>(
-          'SELECT COALESCE(MAX(sequence_no), 0) + 1 AS value FROM agent_messages WHERE invocation_id = ?',
+      this.#store.orm
+        .all<{ value: bigint }>(
+          sql`SELECT COALESCE(MAX(sequence_no), 0) + 1 AS value FROM agent_messages WHERE invocation_id = ${invocationId}`,
         )
-        .get(invocationId)?.value ?? 1n;
-    const created = this.#store.db
-      .query(
-        "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, ?, ?, ?, '', ?)",
-      )
-      .run(invocationId, sequence, role, text, new Date().toISOString());
-    return BigInt(created.lastInsertRowid);
+        .at(0)?.value ?? 1n;
+    const created = this.#store.orm
+      .insert(agentMessages)
+      .values({
+        invocationId,
+        sequenceNo: sequence,
+        role,
+        text,
+        thinkingText: '',
+        createdAt: new Date().toISOString(),
+      })
+      .returning({ id: agentMessages.id })
+      .get();
+    if (created === undefined) {
+      throw new Error('agent_messages insert returned no row');
+    }
+    return created.id;
   }
 }
 

@@ -1,9 +1,10 @@
-import type { Database } from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { and, eq, gt, sql } from 'drizzle-orm';
 import Type from 'typebox';
-import { finishToolCall, startToolCall } from './database.ts';
+import { type Orm, asRunResult, finishToolCall, startToolCall } from './database.ts';
 import type { InvocationContext } from './context-builder.ts';
+import { memories } from './schema.ts';
 
 export const DEFAULT_MEMORY_TTL_SECONDS = 86_400;
 export const MEMORY_MAX_CONTENT_LENGTH = 150;
@@ -44,23 +45,27 @@ export function newMemoryId(): string {
  * never accumulates rows that can no longer be injected.
  */
 export class MemoryStore {
-  readonly db: Database;
+  readonly orm: Orm;
 
-  constructor(db: Database) {
-    this.db = db;
+  constructor(orm: Orm) {
+    this.orm = orm;
   }
 
   /** All non-expired memories of one conversation, strictly in creation order. */
   listActive(conversationId: bigint, now = new Date()): MemoryRecord[] {
-    return this.db
-      .query<MemoryRecord, [bigint, string]>(
-        `SELECT id, conversation_id AS conversationId, content, created_at AS createdAt,
-                expires_at AS expiresAt, updated_at AS updatedAt
-         FROM memories
-         WHERE conversation_id = ? AND expires_at > ?
-         ORDER BY created_at, id`,
-      )
-      .all(conversationId, now.toISOString());
+    return this.orm
+      .select({
+        id: memories.id,
+        conversationId: memories.conversationId,
+        content: memories.content,
+        createdAt: memories.createdAt,
+        expiresAt: memories.expiresAt,
+        updatedAt: memories.updatedAt,
+      })
+      .from(memories)
+      .where(and(eq(memories.conversationId, conversationId), gt(memories.expiresAt, now.toISOString())))
+      .orderBy(memories.createdAt, memories.id)
+      .all();
   }
 
   add(conversationId: bigint, content: string, ttlSeconds: number, now = new Date()): MemoryRecord {
@@ -73,30 +78,41 @@ export class MemoryStore {
       expiresAt: new Date(now.getTime() + ttlSeconds * 1_000).toISOString(),
       updatedAt: timestamp,
     };
-    this.db
-      .transaction(() => {
-        this.db.query('DELETE FROM memories WHERE expires_at <= ?').run(timestamp);
-        this.db
-          .query(
-            'INSERT INTO memories(id, conversation_id, content, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-          )
-          .run(record.id, conversationId, content, timestamp, record.expiresAt, timestamp);
-      })
-      .immediate();
+    this.orm.transaction(
+      () => {
+        this.orm.run(sql`DELETE FROM memories WHERE expires_at <= ${timestamp}`);
+        this.orm
+          .insert(memories)
+          .values({
+            id: record.id,
+            conversationId,
+            content,
+            createdAt: timestamp,
+            expiresAt: record.expiresAt,
+            updatedAt: timestamp,
+          })
+          .run();
+      },
+      { behavior: 'immediate' },
+    );
     return record;
   }
 
   /** Deletes by id within one conversation. Idempotent: false when nothing was deleted. */
   remove(id: string, conversationId: bigint, now = new Date()): boolean {
-    return this.db
-      .transaction(() => {
-        this.db.query('DELETE FROM memories WHERE expires_at <= ?').run(now.toISOString());
-        const result = this.db
-          .query('DELETE FROM memories WHERE id = ? AND conversation_id = ?')
-          .run(id, conversationId);
+    return this.orm.transaction(
+      () => {
+        this.orm.run(sql`DELETE FROM memories WHERE expires_at <= ${now.toISOString()}`);
+        const result = asRunResult(
+          this.orm
+            .delete(memories)
+            .where(and(eq(memories.id, id), eq(memories.conversationId, conversationId)))
+            .run(),
+        );
         return result.changes === 1;
-      })
-      .immediate();
+      },
+      { behavior: 'immediate' },
+    );
   }
 }
 
@@ -123,7 +139,7 @@ function createAddMemoryTool(
     execute: async (toolCallId, input, _signal) => {
       const now = new Date();
       const toolId = startToolCall(
-        store.db,
+        store.orm,
         context.invocationId,
         toolCallId,
         'add_memory',
@@ -138,7 +154,7 @@ function createAddMemoryTool(
           input.ttl_seconds ?? DEFAULT_MEMORY_TTL_SECONDS,
           now,
         );
-        finishToolCall(store.db, toolId, 'success', `memory_id=${record.id} expires_at=${record.expiresAt}`, null, {
+        finishToolCall(store.orm, toolId, 'success', `memory_id=${record.id} expires_at=${record.expiresAt}`, null, {
           now,
         });
         return {
@@ -146,7 +162,7 @@ function createAddMemoryTool(
           details: { id: record.id, expires_at: record.expiresAt },
         };
       } catch (error) {
-        finishToolCall(store.db, toolId, 'error', null, 'memory_error', { now });
+        finishToolCall(store.orm, toolId, 'error', null, 'memory_error', { now });
         throw error;
       }
     },
@@ -167,7 +183,7 @@ function createDeleteMemoryTool(
     execute: async (toolCallId, input, _signal) => {
       const now = new Date();
       const toolId = startToolCall(
-        store.db,
+        store.orm,
         context.invocationId,
         toolCallId,
         'delete_memory',
@@ -178,7 +194,7 @@ function createDeleteMemoryTool(
       try {
         const deleted = store.remove(input.id, context.conversationId, now);
         const result = deleted ? `memory_id=${input.id} deleted` : `memory_id=${input.id} absent`;
-        finishToolCall(store.db, toolId, 'success', result, null, { now });
+        finishToolCall(store.orm, toolId, 'success', result, null, { now });
         return {
           content: [
             { type: 'text', text: deleted ? `Memory ${input.id} deleted` : `Memory ${input.id} was already gone` },
@@ -186,7 +202,7 @@ function createDeleteMemoryTool(
           details: { id: input.id },
         };
       } catch (error) {
-        finishToolCall(store.db, toolId, 'error', null, 'memory_error', { now });
+        finishToolCall(store.orm, toolId, 'error', null, 'memory_error', { now });
         throw error;
       }
     },

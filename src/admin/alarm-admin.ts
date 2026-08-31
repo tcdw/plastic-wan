@@ -1,7 +1,7 @@
-import type { Database } from 'bun:sqlite';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
+import type { Orm } from '../database.ts';
+import { alarms } from '../schema.ts';
 import { AdminQueryError, type ListQuery, type Page, parseId, parseLimit } from './audit.ts';
-
-type Bindings = (string | bigint)[];
 
 const ALARM_STATES = new Set(['pending', 'firing', 'fired', 'cancelled']);
 const TERMINAL_STATES = ['firing', 'fired', 'cancelled'] as const;
@@ -73,7 +73,7 @@ FROM alarms a
 JOIN conversations c ON c.id = a.conversation_id
 JOIN chats ch ON ch.id = c.chat_id`;
 
-export function listAlarms(db: Database, query: ListQuery): Page<AlarmAdminItem> {
+export function listAlarms(orm: Orm, query: ListQuery): Page<AlarmAdminItem> {
   const limit = parseLimit(query.limit);
   const state = parseState(query.state);
   const chatId =
@@ -92,7 +92,7 @@ export function listAlarms(db: Database, query: ListQuery): Page<AlarmAdminItem>
   const segment: 'p' | 't' = wantsPending ? (cursor?.segment ?? 'p') : 't';
 
   if (segment === 'p') {
-    const pending = fetchPending(db, limit + 1, cursor?.segment === 'p' ? cursor : null, chatId, targetId);
+    const pending = fetchPending(orm, limit + 1, cursor?.segment === 'p' ? cursor : null, chatId, targetId);
     if (pending.length > limit) {
       return pageFromRows(pending, limit);
     }
@@ -100,11 +100,11 @@ export function listAlarms(db: Database, query: ListQuery): Page<AlarmAdminItem>
       return pageFromRows(pending, limit);
     }
     const remaining = limit - pending.length;
-    const terminal = fetchTerminal(db, remaining + 1, null, chatId, targetId, state);
+    const terminal = fetchTerminal(orm, remaining + 1, null, chatId, targetId, state);
     return pageFromRows([...pending, ...terminal], limit);
   }
 
-  const terminal = fetchTerminal(db, limit + 1, cursor?.segment === 't' ? cursor : null, chatId, targetId, state);
+  const terminal = fetchTerminal(orm, limit + 1, cursor?.segment === 't' ? cursor : null, chatId, targetId, state);
   return pageFromRows(terminal, limit);
 }
 
@@ -121,23 +121,33 @@ function cursorForRow(row: AlarmListRow): string {
   return encodeCursor(row.state === 'pending' ? 'p' : 't', row);
 }
 
-export function cancelAlarm(db: Database, id: bigint, adminUsername: string, now = new Date()): { status: string } {
-  return db
-    .transaction(() => {
-      const row = db.query<{ state: string }, [bigint]>('SELECT state FROM alarms WHERE id = ?').get(id);
-      if (row === null) {
+export function cancelAlarm(orm: Orm, id: bigint, adminUsername: string, now = new Date()): { status: string } {
+  return orm.transaction(
+    () => {
+      const row = orm.select({ state: alarms.state }).from(alarms).where(eq(alarms.id, id)).get();
+      if (row === undefined) {
         throw new AdminQueryError('not_found', 'Alarm does not exist', 404);
       }
       if (row.state !== 'pending') {
         throw new AdminQueryError('alarm_not_pending', 'Only pending alarms can be cancelled', 409);
       }
       const timestamp = now.toISOString();
-      db.query(
-        "UPDATE alarms SET state = 'cancelled', cancelled_at = ?, cancelled_by = ?, admin_cancelled = 1, cancel_reason = 'admin_cancelled', updated_at = ? WHERE id = ? AND state = 'pending'",
-      ).run(timestamp, adminUsername, timestamp, id);
+      orm
+        .update(alarms)
+        .set({
+          state: 'cancelled',
+          cancelledAt: timestamp,
+          cancelledBy: adminUsername,
+          adminCancelled: true,
+          cancelReason: 'admin_cancelled',
+          updatedAt: timestamp,
+        })
+        .where(and(eq(alarms.id, id), eq(alarms.state, 'pending')))
+        .run();
       return { status: 'cancelled' };
-    })
-    .immediate();
+    },
+    { behavior: 'immediate' },
+  );
 }
 
 export function parseAlarmId(value: string): bigint {
@@ -148,69 +158,51 @@ export function parseAlarmId(value: string): bigint {
 }
 
 function fetchPending(
-  db: Database,
+  orm: Orm,
   count: number,
   cursor: AlarmCursor | null,
   chatId: bigint | undefined,
   targetId: bigint | undefined,
 ): AlarmListRow[] {
-  const conditions = ["a.state = 'pending'"];
-  const parameters: Bindings = [];
+  const conditions: SQL[] = [sql`a.state = 'pending'`];
   if (cursor !== null) {
-    conditions.push('(a.scheduled_at > ? OR (a.scheduled_at = ? AND a.id > ?))');
-    parameters.push(cursor.key, cursor.key, cursor.id);
+    conditions.push(sql`(a.scheduled_at > ${cursor.key} OR (a.scheduled_at = ${cursor.key} AND a.id > ${cursor.id}))`);
   }
-  appendFilters(conditions, parameters, chatId, targetId);
-  parameters.push(BigInt(count));
-  return db
-    .query<AlarmListRow, Bindings>(
-      `${ALARM_SELECT} WHERE ${conditions.join(' AND ')} ORDER BY a.scheduled_at, a.id LIMIT ?`,
-    )
-    .all(...parameters);
+  appendFilters(conditions, chatId, targetId);
+  return orm.all<AlarmListRow>(
+    sql`${sql.raw(ALARM_SELECT)} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY a.scheduled_at, a.id LIMIT ${BigInt(count)}`,
+  );
 }
 
 function fetchTerminal(
-  db: Database,
+  orm: Orm,
   count: number,
   cursor: AlarmCursor | null,
   chatId: bigint | undefined,
   targetId: bigint | undefined,
   state: string | undefined,
 ): AlarmListRow[] {
-  const conditions = [`a.state IN (${TERMINAL_STATES.map((value) => `'${value}'`).join(', ')})`];
-  const parameters: Bindings = [];
+  const conditions: SQL[] = [sql.raw(`a.state IN (${TERMINAL_STATES.map((value) => `'${value}'`).join(', ')})`)];
   if (state !== undefined) {
-    conditions.push('a.state = ?');
-    parameters.push(state);
+    conditions.push(sql`a.state = ${state}`);
   }
   if (cursor !== null) {
     conditions.push(
-      '(COALESCE(a.fired_at, a.cancelled_at, a.updated_at) < ? OR (COALESCE(a.fired_at, a.cancelled_at, a.updated_at) = ? AND a.id < ?))',
+      sql`(COALESCE(a.fired_at, a.cancelled_at, a.updated_at) < ${cursor.key} OR (COALESCE(a.fired_at, a.cancelled_at, a.updated_at) = ${cursor.key} AND a.id < ${cursor.id}))`,
     );
-    parameters.push(cursor.key, cursor.key, cursor.id);
   }
-  appendFilters(conditions, parameters, chatId, targetId);
-  parameters.push(BigInt(count));
-  return db
-    .query<AlarmListRow, Bindings>(
-      `${ALARM_SELECT} WHERE ${conditions.join(' AND ')} ORDER BY COALESCE(a.fired_at, a.cancelled_at, a.updated_at) DESC, a.id DESC LIMIT ?`,
-    )
-    .all(...parameters);
+  appendFilters(conditions, chatId, targetId);
+  return orm.all<AlarmListRow>(
+    sql`${sql.raw(ALARM_SELECT)} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY COALESCE(a.fired_at, a.cancelled_at, a.updated_at) DESC, a.id DESC LIMIT ${BigInt(count)}`,
+  );
 }
 
-function appendFilters(
-  conditions: string[],
-  parameters: Bindings,
-  chatId: bigint | undefined,
-  targetId: bigint | undefined,
-): void {
+function appendFilters(conditions: SQL[], chatId: bigint | undefined, targetId: bigint | undefined): void {
   if (chatId !== undefined) {
-    conditions.push('ch.telegram_chat_id = ?');
-    parameters.push(chatId);
+    conditions.push(sql`ch.telegram_chat_id = ${chatId}`);
   }
   if (targetId !== undefined) {
-    conditions.push('a.target_user_id = ?');
-    parameters.push(targetId);
+    conditions.push(sql`a.target_user_id = ${targetId}`);
   }
 }
 

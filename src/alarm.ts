@@ -1,8 +1,10 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { and, eq, sql } from 'drizzle-orm';
 import Type, { type Static } from 'typebox';
 import type { InvocationContext } from './context-builder.ts';
-import { finishToolCall, rejectToolCall, startToolCall, type SqliteStore } from './database.ts';
+import { asRunResult, finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from './database.ts';
 import { type AlarmListInternalContextPayload, insertInternalContext } from './internal-context.ts';
+import { alarms } from './schema.ts';
 
 const ALARM_SUMMARY_MAX_LENGTH = 500;
 const ALARM_MAX_PER_INVOCATION = 3;
@@ -91,7 +93,7 @@ export function createAlarmTool(
       const targetUserId = parseTargetUserId(input.target_user_id);
       if (targetUserId === null) {
         rejectToolCall(
-          environment.store.db,
+          environment.store.orm,
           environment.context.invocationId,
           toolCallId,
           'alarm',
@@ -105,7 +107,7 @@ export function createAlarmTool(
       const sender = environment.context.visibleSenders.get(targetUserId.toString());
       if (sender === undefined) {
         rejectToolCall(
-          environment.store.db,
+          environment.store.orm,
           environment.context.invocationId,
           toolCallId,
           'alarm',
@@ -119,7 +121,7 @@ export function createAlarmTool(
       const callerUserId = environment.context.callerUserId;
       if (callerUserId === null) {
         rejectToolCall(
-          environment.store.db,
+          environment.store.orm,
           environment.context.invocationId,
           toolCallId,
           'alarm',
@@ -133,7 +135,7 @@ export function createAlarmTool(
       const parsedDatetime = parseAlarmDatetime(input.datetime, now);
       if (!parsedDatetime.ok) {
         rejectToolCall(
-          environment.store.db,
+          environment.store.orm,
           environment.context.invocationId,
           toolCallId,
           'alarm',
@@ -145,7 +147,7 @@ export function createAlarmTool(
         throw new Error('alarm datetime is invalid');
       }
       const auditId = startToolCall(
-        environment.store.db,
+        environment.store.orm,
         environment.context.invocationId,
         toolCallId,
         'alarm',
@@ -163,7 +165,7 @@ export function createAlarmTool(
           now,
         });
         finishToolCall(
-          environment.store.db,
+          environment.store.orm,
           auditId,
           'success',
           `alarm_id=${created.id.toString()} scheduled_at=${created.scheduledAt}`,
@@ -181,10 +183,10 @@ export function createAlarmTool(
         };
       } catch (error) {
         if (error instanceof AlarmQuotaError) {
-          finishToolCall(environment.store.db, auditId, 'error', null, 'alarm_quota_exceeded', { now });
+          finishToolCall(environment.store.orm, auditId, 'error', null, 'alarm_quota_exceeded', { now });
           throw new Error(`alarm quota of ${ALARM_MAX_PER_INVOCATION} per invocation reached`);
         }
-        finishToolCall(environment.store.db, auditId, 'error', null, 'alarm_error', { now });
+        finishToolCall(environment.store.orm, auditId, 'error', null, 'alarm_error', { now });
         throw error;
       }
     },
@@ -207,7 +209,7 @@ export function createListAlarmTool(
       const callerUserId = dependencies.context.callerUserId;
       if (callerUserId === null) {
         rejectToolCall(
-          dependencies.store.db,
+          dependencies.store.orm,
           dependencies.context.invocationId,
           toolCallId,
           'list_alarm',
@@ -219,7 +221,7 @@ export function createListAlarmTool(
         throw new Error('list_alarm is unavailable because the current caller identity is not reliably known');
       }
       const auditId = startToolCall(
-        dependencies.store.db,
+        dependencies.store.orm,
         dependencies.context.invocationId,
         toolCallId,
         'list_alarm',
@@ -242,7 +244,7 @@ export function createListAlarmTool(
             : `count=${details.items.length} ${details.items
                 .map((item, index) => `${index + 1}:${item.id}@${item.scheduled_at}`)
                 .join(' ')}`;
-        finishToolCall(dependencies.store.db, auditId, 'success', resultText, null, { now });
+        finishToolCall(dependencies.store.orm, auditId, 'success', resultText, null, { now });
         const agentMessageId = dependencies.runtime.recordAgentMessage(
           dependencies.context.invocationId,
           'tool_result',
@@ -259,7 +261,7 @@ export function createListAlarmTool(
           details,
         };
       } catch (error) {
-        finishToolCall(dependencies.store.db, auditId, 'error', null, 'alarm_error', { now });
+        finishToolCall(dependencies.store.orm, auditId, 'error', null, 'alarm_error', { now });
         throw error;
       }
     },
@@ -282,7 +284,7 @@ export function createDeleteAlarmTool(
       const callerUserId = dependencies.context.callerUserId;
       if (callerUserId === null) {
         rejectToolCall(
-          dependencies.store.db,
+          dependencies.store.orm,
           dependencies.context.invocationId,
           toolCallId,
           'delete_alarm',
@@ -296,7 +298,7 @@ export function createDeleteAlarmTool(
       const alarmId = parseTargetUserId(input.id);
       if (alarmId === null) {
         rejectToolCall(
-          dependencies.store.db,
+          dependencies.store.orm,
           dependencies.context.invocationId,
           toolCallId,
           'delete_alarm',
@@ -308,7 +310,7 @@ export function createDeleteAlarmTool(
         throw new Error('alarm not found');
       }
       const auditId = startToolCall(
-        dependencies.store.db,
+        dependencies.store.orm,
         dependencies.context.invocationId,
         toolCallId,
         'delete_alarm',
@@ -325,11 +327,11 @@ export function createDeleteAlarmTool(
           now,
         );
         if (deleted === null) {
-          finishToolCall(dependencies.store.db, auditId, 'error', null, 'alarm_not_found', { now });
+          finishToolCall(dependencies.store.orm, auditId, 'error', null, 'alarm_not_found', { now });
           throw new Error('alarm not found');
         }
         finishToolCall(
-          dependencies.store.db,
+          dependencies.store.orm,
           auditId,
           'success',
           `alarm_id=${deleted.id} state=cancelled cancelled_at=${deleted.cancelled_at}`,
@@ -344,7 +346,7 @@ export function createDeleteAlarmTool(
         if (error instanceof Error && error.message === 'alarm not found') {
           throw error;
         }
-        finishToolCall(dependencies.store.db, auditId, 'error', null, 'alarm_error', { now });
+        finishToolCall(dependencies.store.orm, auditId, 'error', null, 'alarm_error', { now });
         throw error;
       }
     },
@@ -367,43 +369,55 @@ function insertAlarm(
 ): { readonly id: bigint; readonly scheduledAt: string } {
   return store.transaction(() => {
     const count =
-      store.db
-        .query<{ count: bigint }, [bigint]>('SELECT COUNT(*) AS count FROM alarms WHERE created_by_invocation_id = ?')
-        .get(context.invocationId)?.count ?? 0n;
+      store.orm
+        .select({ count: sql<bigint>`count(*)` })
+        .from(alarms)
+        .where(eq(alarms.createdByInvocationId, context.invocationId))
+        .get()?.count ?? 0n;
     if (count >= BigInt(ALARM_MAX_PER_INVOCATION)) {
       throw new AlarmQuotaError();
     }
     const timestamp = input.now.toISOString();
-    const created = store.db
-      .query(
-        `INSERT INTO alarms(conversation_id, target_user_id, created_by_user_id, target_display_name, summary,
-                            scheduled_at, created_at, created_by_invocation_id, state, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-      )
-      .run(
-        context.conversationId,
-        input.targetUserId,
-        input.createdByUserId,
-        input.displayName,
-        input.summary,
-        input.scheduledAt,
-        timestamp,
-        context.invocationId,
-        timestamp,
-      );
-    return { id: BigInt(created.lastInsertRowid), scheduledAt: input.scheduledAt };
+    const created = store.orm
+      .insert(alarms)
+      .values({
+        conversationId: context.conversationId,
+        targetUserId: input.targetUserId,
+        createdByUserId: input.createdByUserId,
+        targetDisplayName: input.displayName,
+        summary: input.summary,
+        scheduledAt: input.scheduledAt,
+        createdAt: timestamp,
+        createdByInvocationId: context.invocationId,
+        state: 'pending',
+        updatedAt: timestamp,
+      })
+      .returning({ id: alarms.id })
+      .get();
+    if (created === undefined) {
+      throw new Error('alarms insert returned no row');
+    }
+    return { id: created.id, scheduledAt: input.scheduledAt };
   });
 }
 
 function listPendingAlarms(store: SqliteStore, conversationId: bigint, callerUserId: bigint): PendingAlarmRow[] {
-  return store.db
-    .query<PendingAlarmRow, [bigint, bigint]>(
-      `SELECT id, scheduled_at, summary
-       FROM alarms
-       WHERE conversation_id = ? AND created_by_user_id = ? AND state = 'pending'
-       ORDER BY scheduled_at, id`,
+  return store.orm
+    .select({
+      id: alarms.id,
+      scheduled_at: alarms.scheduledAt,
+      summary: alarms.summary,
+    })
+    .from(alarms)
+    .where(
+      and(
+        eq(alarms.conversationId, conversationId),
+        eq(alarms.createdByUserId, callerUserId),
+        eq(alarms.state, 'pending'),
+      ),
     )
-    .all(conversationId, callerUserId);
+    .orderBy(alarms.scheduledAt, alarms.id)
+    .all();
 }
 
 function cancelPendingAlarm(
@@ -415,18 +429,27 @@ function cancelPendingAlarm(
 ): DeleteAlarmToolDetails | null {
   return store.transaction(() => {
     const cancelledAt = now.toISOString();
-    const updated = store.db
-      .query(
-        `UPDATE alarms
-         SET state = 'cancelled',
-             cancelled_at = ?,
-             cancelled_by = 'agent',
-             admin_cancelled = 0,
-             cancel_reason = ?,
-             updated_at = ?
-         WHERE id = ? AND conversation_id = ? AND created_by_user_id = ? AND state = 'pending'`,
-      )
-      .run(cancelledAt, DELETE_REASON_USER_REQUEST, cancelledAt, alarmId, conversationId, callerUserId);
+    const updated = asRunResult(
+      store.orm
+        .update(alarms)
+        .set({
+          state: 'cancelled',
+          cancelledAt,
+          cancelledBy: 'agent',
+          adminCancelled: false,
+          cancelReason: DELETE_REASON_USER_REQUEST,
+          updatedAt: cancelledAt,
+        })
+        .where(
+          and(
+            eq(alarms.id, alarmId),
+            eq(alarms.conversationId, conversationId),
+            eq(alarms.createdByUserId, callerUserId),
+            eq(alarms.state, 'pending'),
+          ),
+        )
+        .run(),
+    );
     if (updated.changes !== 1) {
       return null;
     }
@@ -452,7 +475,7 @@ function persistAlarmListInternalContext(
     observed_at: observedAt,
     items: [...items],
   };
-  insertInternalContext(store.db, {
+  insertInternalContext(store.orm, {
     conversationId: context.conversationId,
     invocationId: context.invocationId,
     sourceAgentMessageId,

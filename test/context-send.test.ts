@@ -111,7 +111,7 @@ describe('invocation context', () => {
       state: 'completed',
       reason: 'done',
     }));
-    const memory = new MemoryStore(store.db);
+    const memory = new MemoryStore(store.orm);
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 1, 'hello'), received);
     const invocationId = processOne(scheduler, new Date(received.getTime() + 15_000));

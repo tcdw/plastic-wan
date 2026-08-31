@@ -119,7 +119,7 @@ test('retention scrubs referenced history and backup keeps seven consistent copi
       newReceived.toISOString(),
     );
 
-  purgeExpiredData(store.db, loaded.config, newReceived);
+  purgeExpiredData(store.orm, loaded.config, newReceived);
   expect(
     store.db
       .query<{ count: bigint }, [bigint]>('SELECT COUNT(*) AS count FROM invocations WHERE id = ?')

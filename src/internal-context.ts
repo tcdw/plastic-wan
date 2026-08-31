@@ -1,6 +1,8 @@
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
-import type { Database } from 'bun:sqlite';
+import { desc, eq } from 'drizzle-orm';
+import type { Orm } from './database.ts';
+import { internalContexts } from './schema.ts';
 
 const Strict = { additionalProperties: false } as const;
 
@@ -29,21 +31,13 @@ const payloadValidator = Compile(internalContextPayloadUnion);
 export type AlarmListInternalContextPayload = Static<typeof AlarmListInternalContextPayloadSchema>;
 export type InternalContextPayload = Static<typeof internalContextPayloadUnion>;
 
-interface InternalContextRow {
-  readonly id: bigint;
-  readonly kind: string;
-  readonly version: bigint;
-  readonly observed_at: string;
-  readonly payload_json: string;
-}
-
 export interface InternalContextRecord {
   readonly id: bigint;
   readonly payload: InternalContextPayload;
 }
 
 export function insertInternalContext(
-  db: Database,
+  orm: Orm,
   input: {
     readonly conversationId: bigint;
     readonly invocationId: bigint;
@@ -55,50 +49,51 @@ export function insertInternalContext(
     readonly createdAt: string;
   },
 ): bigint {
-  const created = db
-    .query(
-      `INSERT INTO internal_contexts(
-         conversation_id, invocation_id, source_agent_message_id, kind, version, observed_at, payload_json, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      input.conversationId,
-      input.invocationId,
-      input.sourceAgentMessageId,
-      input.kind,
-      BigInt(input.version),
-      input.observedAt,
-      input.payloadJson,
-      input.createdAt,
-    );
-  return BigInt(created.lastInsertRowid);
+  const created = orm
+    .insert(internalContexts)
+    .values({
+      conversationId: input.conversationId,
+      invocationId: input.invocationId,
+      sourceAgentMessageId: input.sourceAgentMessageId,
+      kind: input.kind,
+      version: BigInt(input.version),
+      observedAt: input.observedAt,
+      payloadJson: input.payloadJson,
+      createdAt: input.createdAt,
+    })
+    .returning({ id: internalContexts.id })
+    .get();
+  if (created === undefined) {
+    throw new Error('internal_contexts insert returned no row');
+  }
+  return created.id;
 }
 
-export function listRecentInternalContexts(
-  db: Database,
-  conversationId: bigint,
-  limit: number,
-): InternalContextRecord[] {
-  const rows = db
-    .query<InternalContextRow, [bigint, bigint]>(
-      `SELECT id, kind, version, observed_at, payload_json
-       FROM internal_contexts
-       WHERE conversation_id = ?
-       ORDER BY observed_at DESC, id DESC
-       LIMIT ?`,
-    )
-    .all(conversationId, BigInt(limit));
+export function listRecentInternalContexts(orm: Orm, conversationId: bigint, limit: number): InternalContextRecord[] {
+  const rows = orm
+    .select({
+      id: internalContexts.id,
+      kind: internalContexts.kind,
+      version: internalContexts.version,
+      observedAt: internalContexts.observedAt,
+      payloadJson: internalContexts.payloadJson,
+    })
+    .from(internalContexts)
+    .where(eq(internalContexts.conversationId, conversationId))
+    .orderBy(desc(internalContexts.observedAt), desc(internalContexts.id))
+    .limit(limit)
+    .all();
   return rows.flatMap((row) => {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(row.payload_json);
+      parsed = JSON.parse(row.payloadJson);
     } catch {
       throw new Error(`Internal context ${row.id.toString()} contains invalid JSON`);
     }
     if (!payloadValidator.Check(parsed)) {
       throw new Error(`Internal context ${row.id.toString()} has unsupported payload schema`);
     }
-    if (parsed.kind !== row.kind || BigInt(parsed.version) !== row.version || parsed.observed_at !== row.observed_at) {
+    if (parsed.kind !== row.kind || BigInt(parsed.version) !== row.version || parsed.observed_at !== row.observedAt) {
       throw new Error(`Internal context ${row.id.toString()} metadata does not match payload`);
     }
     return [{ id: row.id, payload: parsed } satisfies InternalContextRecord];

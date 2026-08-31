@@ -34,6 +34,7 @@ plastic-wan/
 │   ├── stickers.ts         # Sticker Set 同步、索引、搜索
 │   ├── mcp.ts              # MCP 生命周期、策略、预算与审计
 │   ├── database.ts         # SQLite、迁移、保留与备份
+│   ├── schema.ts           # Drizzle 查询层表定义（与 migrations 终态对齐）
 │   ├── config.ts           # 严格 JSONC Schema 与语义校验
 │   ├── providers.ts        # Pi AI Provider/Model 注册
 │   ├── doctor.ts           # 真实依赖与外部连接诊断
@@ -119,6 +120,7 @@ bun run admin:dev
 - `bun run lint` 需要保持通过，如果存在问题需要先使用 `bun run lint:fix` 进行自动修复，如果无法自动修复需要尝试进行手动修改。
 - 配置和外部响应在边界处使用 TypeBox 校验；不要把未经校验的 `unknown` 转成业务类型。
 - SQLite ID 使用 `bigint`；Telegram JSON 中需要字符串化的 ID 不得经过不安全 `number` 转换。
+- 业务查询走 `store.orm`（Drizzle 同步 API；表定义在 `src/schema.ts`，新增迁移必须同步更新）；`store.db` 仅限连接层、doctor 探针与测试验证断言。复杂 SQL 与 FTS5 用 `sql` 模板，值一律绑定参数。
 - 不新增第二套 Provider、调度、审计或进程执行约定；复用现有模块。
 - 清理式切换：迁移所有调用方并删除旧路径，不保留兼容别名或隐藏 fallback。
 - Admin Panel 后端复用 `SqliteStore`，审计查询只读；记忆增删改查与 Bot 管理员列表管理是仅有的管理写入例外。

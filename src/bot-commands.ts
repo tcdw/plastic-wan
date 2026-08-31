@@ -1,10 +1,12 @@
 import type { Message } from 'grammy/types';
+import { and, eq, sql } from 'drizzle-orm';
 import { isBotAdmin } from './admin/admins.ts';
 import type { RawConfig } from './config.ts';
-import type { SqliteStore } from './database.ts';
+import { type SqliteStore, isChatPaused, resolveChatConfig } from './database.ts';
 import type { AgentModelOption, AgentModelSwitcher } from './model-switch.ts';
 import type { BucketScheduler } from './scheduler.ts';
 import { readDailyTokenBudget } from './sleep.ts';
+import { botAdmins, chatContextCutoffs, chatPause, chats, dailyUsage } from './schema.ts';
 
 export interface ParsedCommand {
   readonly name: 'pause' | 'resume' | 'status' | 'model' | 'cut_topic';
@@ -112,16 +114,22 @@ export class BotCommandService {
   }
 
   #adminGate(sender: CommandSender | null): boolean {
-    if (sender === null || !isBotAdmin(this.#store.db, sender.id)) {
+    if (sender === null || !isBotAdmin(this.#store.orm, sender.id)) {
       return false;
     }
     const timestamp = new Date().toISOString();
     // Keep the panel list readable: refresh the display name of acting admins.
-    this.#store.db
-      .query(
-        "INSERT INTO bot_admins(telegram_user_id, display_name, added_by, created_at, updated_at) VALUES (?, ?, 'telegram', ?, ?) ON CONFLICT(telegram_user_id) DO UPDATE SET display_name = excluded.display_name, updated_at = excluded.updated_at",
-      )
-      .run(sender.id, sender.name, timestamp, timestamp);
+    this.#store.orm
+      .insert(botAdmins)
+      .values({
+        telegramUserId: sender.id,
+        displayName: sender.name,
+        addedBy: 'telegram',
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      })
+      .onConflictDoUpdate({ target: botAdmins.telegramUserId, set: { displayName: sender.name, updatedAt: timestamp } })
+      .run();
     return true;
   }
 
@@ -132,35 +140,29 @@ export class BotCommandService {
     }
     const timestamp = now.toISOString();
     this.#store.transaction(() => {
-      this.#store.db
-        .query(
-          'INSERT INTO chat_pause(chat_id, paused_at) VALUES (?, ?) ON CONFLICT(chat_id) DO UPDATE SET paused_at = excluded.paused_at',
-        )
-        .run(chatId, timestamp);
-      this.#store.db
-        .query(
-          `UPDATE buckets SET state = 'expired', error_code = 'chat_paused', finished_at = ?, updated_at = ?
-           WHERE state IN ('collecting', 'queued') AND conversation_id IN (SELECT id FROM conversations WHERE chat_id = ?)`,
-        )
-        .run(timestamp, timestamp, chatId);
+      this.#store.orm
+        .insert(chatPause)
+        .values({ chatId, pausedAt: timestamp })
+        .onConflictDoUpdate({ target: chatPause.chatId, set: { pausedAt: timestamp } })
+        .run();
+      this.#store.orm.run(
+        sql`UPDATE buckets SET state = 'expired', error_code = 'chat_paused', finished_at = ${timestamp}, updated_at = ${timestamp}
+           WHERE state IN ('collecting', 'queued') AND conversation_id IN (SELECT id FROM conversations WHERE chat_id = ${chatId})`,
+      );
       // A claimed alarm whose queued invocation is being aborted must close as
       // cancelled/chat_paused rather than stay `firing` until a later restart.
-      this.#store.db
-        .query(
-          `UPDATE alarms SET state = 'cancelled', cancelled_at = ?, cancel_reason = 'chat_paused', admin_cancelled = 0, updated_at = ?
+      this.#store.orm.run(
+        sql`UPDATE alarms SET state = 'cancelled', cancelled_at = ${timestamp}, cancel_reason = 'chat_paused', admin_cancelled = 0, updated_at = ${timestamp}
            WHERE state = 'firing' AND invocation_id IN (
              SELECT i.id FROM invocations i
              JOIN conversations v ON v.id = i.conversation_id
-             WHERE i.state = 'queued' AND v.chat_id = ?
+             WHERE i.state = 'queued' AND v.chat_id = ${chatId}
            )`,
-        )
-        .run(timestamp, timestamp, chatId);
-      this.#store.db
-        .query(
-          `UPDATE invocations SET state = 'aborted', completion_reason = 'chat_paused', finished_at = ?
-           WHERE state = 'queued' AND conversation_id IN (SELECT id FROM conversations WHERE chat_id = ?)`,
-        )
-        .run(timestamp, chatId);
+      );
+      this.#store.orm.run(
+        sql`UPDATE invocations SET state = 'aborted', completion_reason = 'chat_paused', finished_at = ${timestamp}
+           WHERE state = 'queued' AND conversation_id IN (SELECT id FROM conversations WHERE chat_id = ${chatId})`,
+      );
     });
     this.#scheduler.pauseChat(chatId);
     return '已暂停本群互动，发送 /resume 可恢复。';
@@ -171,7 +173,7 @@ export class BotCommandService {
     if (chatId === null) {
       throw new Error(`Chat ${telegramChatId} has no stored row`);
     }
-    this.#store.db.query('DELETE FROM chat_pause WHERE chat_id = ?').run(chatId);
+    this.#store.orm.delete(chatPause).where(eq(chatPause.chatId, chatId)).run();
     return '已恢复本群互动。';
   }
 
@@ -188,12 +190,14 @@ export class BotCommandService {
       throw new Error(`Chat ${telegramChatId} has no stored row`);
     }
     const timestamp = new Date().toISOString();
-    this.#store.db
-      .query(
-        `INSERT INTO chat_context_cutoffs(chat_id, telegram_message_id, created_at, updated_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT(chat_id) DO UPDATE SET telegram_message_id = excluded.telegram_message_id, updated_at = excluded.updated_at`,
-      )
-      .run(chatId, messageId, timestamp, timestamp);
+    this.#store.orm
+      .insert(chatContextCutoffs)
+      .values({ chatId, telegramMessageId: messageId, createdAt: timestamp, updatedAt: timestamp })
+      .onConflictDoUpdate({
+        target: chatContextCutoffs.chatId,
+        set: { telegramMessageId: messageId, updatedAt: timestamp },
+      })
+      .run();
     return '已切掉此消息及更早的历史，仅对之后的新会话生效。';
   }
 
@@ -259,38 +263,43 @@ export class BotCommandService {
     const date = now.toISOString().slice(0, 10);
     const chatId = this.#internalChatId(telegramChatId);
     const tokens =
-      this.#store.db
-        .query<{ amount: bigint }, [string, string]>(
-          "SELECT amount FROM daily_usage WHERE utc_date = ? AND scope = 'chat' AND resource = ? AND metric = 'model_tokens'",
+      this.#store.orm
+        .select({ amount: dailyUsage.amount })
+        .from(dailyUsage)
+        .where(
+          and(
+            eq(dailyUsage.utcDate, date),
+            eq(dailyUsage.scope, 'chat'),
+            eq(dailyUsage.resource, telegramChatId.toString()),
+            eq(dailyUsage.metric, 'model_tokens'),
+          ),
         )
-        .get(date, telegramChatId.toString())?.amount ?? 0n;
-    const dailyBudget = readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens, now);
+        .get()?.amount ?? 0n;
+    const dailyBudget = readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens, now);
     const dailyBudgetBasisPoints =
       (dailyBudget.usedTokens * 10_000n + dailyBudget.maxTokens / 2n) / dailyBudget.maxTokens;
     const dailyBudgetPercentage = `${dailyBudgetBasisPoints / 100n}.${(dailyBudgetBasisPoints % 100n).toString().padStart(2, '0')}%`;
     const tokenBreakdown =
       chatId === null
         ? null
-        : this.#store.db
-            .query<
-              { readTokens: bigint; writeTokens: bigint; cacheReadTokens: bigint; cacheWriteTokens: bigint },
-              [bigint, string]
-            >(
-              `SELECT COALESCE(SUM(model_calls.input_tokens), 0) AS readTokens,
+        : this.#store.orm
+            .all<{
+              readTokens: bigint;
+              writeTokens: bigint;
+              cacheReadTokens: bigint;
+              cacheWriteTokens: bigint;
+            }>(
+              sql`SELECT COALESCE(SUM(model_calls.input_tokens), 0) AS readTokens,
                       COALESCE(SUM(model_calls.output_tokens), 0) AS writeTokens,
                       COALESCE(SUM(model_calls.cache_read_tokens), 0) AS cacheReadTokens,
                       COALESCE(SUM(model_calls.cache_write_tokens), 0) AS cacheWriteTokens
                FROM model_calls
                JOIN invocations ON invocations.id = model_calls.invocation_id
-               WHERE invocations.conversation_id IN (SELECT id FROM conversations WHERE chat_id = ?)
-                 AND substr(model_calls.finished_at, 1, 10) = ?`,
+               WHERE invocations.conversation_id IN (SELECT id FROM conversations WHERE chat_id = ${chatId})
+                 AND substr(model_calls.finished_at, 1, 10) = ${date}`,
             )
-            .get(chatId, date);
-    const paused =
-      chatId !== null &&
-      this.#store.db
-        .query<{ present: bigint }, [bigint]>('SELECT 1 AS present FROM chat_pause WHERE chat_id = ?')
-        .get(chatId) !== null;
+            .at(0);
+    const paused = chatId !== null && isChatPaused(this.#store.orm, chatId);
     const effective = this.#modelSwitcher?.current() ?? {
       provider: this.#config.agent.provider,
       model: this.#config.agent.model,
@@ -313,23 +322,12 @@ export class BotCommandService {
 
   #internalChatId(telegramChatId: bigint): bigint | null {
     return (
-      this.#store.db
-        .query<{ id: bigint }, [bigint]>('SELECT id FROM chats WHERE telegram_chat_id = ?')
-        .get(telegramChatId)?.id ?? null
+      this.#store.orm.select({ id: chats.id }).from(chats).where(eq(chats.telegramChatId, telegramChatId)).get()?.id ??
+      null
     );
   }
 
   #chatConfig(telegramChatId: bigint): RawConfig['telegram']['chats'][number] | undefined {
-    const direct = this.#config.telegram.chats.find((chat) => BigInt(chat.id) === telegramChatId);
-    if (direct !== undefined) {
-      return direct;
-    }
-    const migration = this.#store.db
-      .query<{ old_chat_id: bigint }, [bigint]>('SELECT old_chat_id FROM chat_migrations WHERE new_chat_id = ?')
-      .get(telegramChatId);
-    if (migration === null) {
-      return undefined;
-    }
-    return this.#config.telegram.chats.find((chat) => BigInt(chat.id) === migration.old_chat_id);
+    return resolveChatConfig(this.#config, this.#store.orm, telegramChatId);
   }
 }

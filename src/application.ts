@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { Bot, type Context } from 'grammy';
 import { seedConfigAdmins } from './admin/admins.ts';
 import { AdminServer } from './admin/server.ts';
@@ -16,6 +17,7 @@ import { createModelRegistry } from './providers.ts';
 import { BucketScheduler } from './scheduler.ts';
 import { SecretStore } from './secrets.ts';
 import { runStartupCatchUp } from './startup-catch-up.ts';
+import { appState } from './schema.ts';
 import { StickerService } from './stickers.ts';
 import { TelegramIngestion } from './telegram-ingestion.ts';
 import { createWebFetchTool } from './web-fetch.ts';
@@ -56,7 +58,7 @@ export async function serve(configPath: string): Promise<void> {
     lock = await ServeLock.acquire(loaded.config.data_dir);
     store = await SqliteStore.open(loaded.config);
     const webFetchStore = store;
-    seedConfigAdmins(store.db, loaded.config.telegram.admins ?? []);
+    seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? []);
     bot = new Bot(token);
     const registry = await createModelRegistry(loaded.config, secrets);
     const modelSwitcher = new AgentModelSwitcher(loaded.config, registry.models);
@@ -72,13 +74,17 @@ export async function serve(configPath: string): Promise<void> {
       });
     }
     const initialized =
-      store.db.query<{ value: string }, []>("SELECT value FROM app_state WHERE key = 'telegram_initialized'").get() !==
-      null;
+      store.orm
+        .select({ value: appState.value })
+        .from(appState)
+        .where(eq(appState.key, 'telegram_initialized'))
+        .get() !== undefined;
     await bot.api.deleteWebhook({ drop_pending_updates: !initialized });
     if (!initialized) {
-      store.db
-        .query("INSERT INTO app_state(key, value, updated_at) VALUES ('telegram_initialized', '1', ?)")
-        .run(new Date().toISOString());
+      store.orm
+        .insert(appState)
+        .values({ key: 'telegram_initialized', value: '1', updatedAt: new Date().toISOString() })
+        .run();
     }
     const ingestion = new TelegramIngestion(store, loaded.config, me);
     const modelGate = new KeyedSemaphore();
@@ -96,7 +102,7 @@ export async function serve(configPath: string): Promise<void> {
     stickerService.start();
     const mcpManager = new McpManager(store, loaded.config, secrets);
     mcp = mcpManager;
-    const memoryStore = new MemoryStore(store.db);
+    const memoryStore = new MemoryStore(store.orm);
     let runtime: AgentRuntime;
     const alarmToolRuntime: AgentMessageRecorder = {
       recordAgentMessage(invocationId, role, text) {

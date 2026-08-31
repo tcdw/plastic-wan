@@ -1,6 +1,8 @@
 import type { Update } from 'grammy/types';
+import { eq } from 'drizzle-orm';
 import type { SqliteStore } from './database.ts';
 import { type BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from './scheduler.ts';
+import { appState } from './schema.ts';
 import type { TelegramIngestion } from './telegram-ingestion.ts';
 
 interface GetUpdatesOptions {
@@ -34,13 +36,21 @@ export async function runStartupCatchUp(options: StartupCatchUpOptions): Promise
   const currentTime = options.now ?? (() => new Date());
   const requestedStart = currentTime();
   const startedAt = options.store.transaction(() => {
-    options.store.db
-      .query('INSERT INTO app_state(key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING')
-      .run(STARTUP_CATCH_UP_STATE_KEY, requestedStart.toISOString(), requestedStart.toISOString());
-    const state = options.store.db
-      .query<{ value: string }, [string]>('SELECT value FROM app_state WHERE key = ?')
-      .get(STARTUP_CATCH_UP_STATE_KEY);
-    if (state === null || !Number.isFinite(Date.parse(state.value))) {
+    options.store.orm
+      .insert(appState)
+      .values({
+        key: STARTUP_CATCH_UP_STATE_KEY,
+        value: requestedStart.toISOString(),
+        updatedAt: requestedStart.toISOString(),
+      })
+      .onConflictDoNothing({ target: appState.key })
+      .run();
+    const state = options.store.orm
+      .select({ value: appState.value })
+      .from(appState)
+      .where(eq(appState.key, STARTUP_CATCH_UP_STATE_KEY))
+      .get();
+    if (state === undefined || !Number.isFinite(Date.parse(state.value))) {
       throw new Error('Startup catch-up state is missing or invalid');
     }
     return new Date(state.value);

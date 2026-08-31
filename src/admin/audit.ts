@@ -1,11 +1,23 @@
-import type { Database } from 'bun:sqlite';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
+import type { Orm } from '../database.ts';
+import {
+  agentMessages,
+  dailyUsage,
+  invocationMessages,
+  media,
+  mediaAnalyses,
+  messageRevisions,
+  messages,
+  modelCalls,
+  senders,
+  telegramSends,
+  toolCalls,
+} from '../schema.ts';
 import { storedSleepUntil } from '../sleep.ts';
 
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_SEARCH_LENGTH = 100;
-
-type Bindings = (string | number | bigint | null)[];
 
 const num = (value: unknown): number | null => (value === null ? null : Number(value));
 const bit = (value: unknown): boolean => value === 1n;
@@ -67,69 +79,11 @@ interface InvocationListRow {
   readonly total_cost: number | null;
 }
 
-interface ToolCallRow {
-  readonly id: bigint;
-  readonly tool_call_id: string;
-  readonly tool_name: string;
-  readonly arguments_json: string;
-  readonly result_text: string | null;
-  readonly state: string;
-  readonly side_effect: bigint;
-  readonly error_code: string | null;
-  readonly duration_ms: bigint | null;
-  readonly created_at: string;
-  readonly finished_at: string | null;
-}
-
-interface ModelCallRow {
-  readonly id: bigint;
-  readonly role: string;
-  readonly provider: string;
-  readonly model: string;
-  readonly attempt: bigint;
-  readonly state: string;
-  readonly input_tokens: bigint | null;
-  readonly output_tokens: bigint | null;
-  readonly cache_read_tokens: bigint | null;
-  readonly cache_write_tokens: bigint | null;
-  readonly total_tokens: bigint | null;
-  readonly cost: number | null;
-  readonly duration_ms: bigint | null;
-  readonly error_code: string | null;
-  readonly error_detail: string | null;
-  readonly request_json: string | null;
-  readonly response_json: string | null;
-  readonly created_at: string;
-  readonly finished_at: string | null;
-  readonly tools_json: string | null;
-}
-
-interface AgentMessageRow {
-  readonly sequence_no: bigint;
-  readonly role: string;
-  readonly text: string;
-  readonly created_at: string;
-}
-
-interface SendRow {
-  readonly id: bigint;
-  readonly tool_call_id: string;
-  readonly kind: string;
-  readonly request_json: string;
-  readonly state: string;
-  readonly telegram_message_id: bigint | null;
-  readonly error_code: string | null;
-  readonly created_at: string;
-  readonly finished_at: string | null;
-}
-
-interface ContextMessageRow {
-  readonly section: string;
-  readonly sequence_no: bigint;
-  readonly message_id: bigint;
-  readonly revision_id: bigint;
-  readonly omitted_before: bigint;
-  readonly snapshot_json: string;
+interface InvocationDetailRow extends InvocationListRow {
+  readonly prompt_version: bigint;
+  readonly tool_registry_hash: string | null;
+  readonly tool_registry_json: string | null;
+  readonly bucket_id: bigint;
 }
 
 interface MessageListRow {
@@ -154,35 +108,6 @@ interface MessageListRow {
   readonly sender_is_bot: bigint | null;
   readonly revision_count: bigint;
   readonly media_count: bigint;
-}
-
-interface RevisionRow {
-  readonly id: bigint;
-  readonly revision_no: bigint;
-  readonly kind: string;
-  readonly text: string | null;
-  readonly caption: string | null;
-  readonly reply_to_message_id: bigint | null;
-  readonly reply_snapshot_json: string | null;
-  readonly forward_origin_json: string | null;
-  readonly media_group_id: string | null;
-  readonly service_json: string | null;
-  readonly created_at: string;
-  readonly sender_display_name: string | null;
-  readonly sender_username: string | null;
-}
-
-interface MediaRow {
-  readonly id: bigint;
-  readonly revision_id: bigint;
-  readonly kind: string;
-  readonly file_unique_id: string;
-  readonly mime_type: string | null;
-  readonly file_size: bigint | null;
-  readonly width: bigint | null;
-  readonly height: bigint | null;
-  readonly analysis_state: string | null;
-  readonly analysis_description: string | null;
 }
 
 interface StickerSetRow {
@@ -228,23 +153,18 @@ interface CountRow {
   readonly count: bigint;
 }
 
-export function listInvocations(db: Database, query: ListQuery): Page<Record<string, unknown>> {
+export function listInvocations(orm: Orm, query: ListQuery): Page<Record<string, unknown>> {
   const limit = parseLimit(query.limit);
-  const conditions: string[] = [];
-  const parameters: Bindings = [];
-  appendCursor(conditions, parameters, 'i.id', query.cursor);
+  const conditions: SQL[] = [];
+  appendCursor(conditions, sql`i.id`, query.cursor);
   if (query.state !== undefined && query.state !== null && query.state.length > 0) {
-    conditions.push('i.state = ?');
-    parameters.push(assertToken(query.state, 'state'));
+    conditions.push(sql`i.state = ${assertToken(query.state, 'state')}`);
   }
   if (query.chat !== undefined && query.chat !== null && query.chat.length > 0) {
-    conditions.push('ch.telegram_chat_id = ?');
-    parameters.push(parseId(query.chat, 'chat'));
+    conditions.push(sql`ch.telegram_chat_id = ${parseId(query.chat, 'chat')}`);
   }
-  parameters.push(BigInt(limit + 1));
-  const rows = db
-    .query<InvocationListRow, Bindings>(
-      `SELECT i.id, i.state, i.created_at, i.started_at, i.finished_at, i.completion_reason, i.error_code,
+  const rows =
+    orm.all<InvocationListRow>(sql`SELECT i.id, i.state, i.created_at, i.started_at, i.finished_at, i.completion_reason, i.error_code,
               i.sends_used, i.tool_calls_used, i.turns_used, i.side_effect_started, i.config_hash,
               ch.telegram_chat_id, ch.type AS chat_type, ch.title AS chat_title, ch.username AS chat_username,
               c.message_thread_id,
@@ -254,11 +174,9 @@ export function listInvocations(db: Database, query: ListQuery): Page<Record<str
        FROM invocations i
        JOIN conversations c ON c.id = i.conversation_id
        JOIN chats ch ON ch.id = c.chat_id
-       ${where(conditions)}
+       ${whereSql(conditions)}
        ORDER BY i.id DESC
-       LIMIT ?`,
-    )
-    .all(...parameters);
+       LIMIT ${BigInt(limit + 1)}`);
   return page(rows, limit, (row) => ({
     id: row.id.toString(),
     state: row.state,
@@ -279,18 +197,9 @@ export function listInvocations(db: Database, query: ListQuery): Page<Record<str
   }));
 }
 
-export function getInvocation(db: Database, id: bigint): Record<string, unknown> | null {
-  const invocation = db
-    .query<
-      InvocationListRow & {
-        readonly prompt_version: bigint;
-        readonly tool_registry_hash: string | null;
-        readonly tool_registry_json: string | null;
-        readonly bucket_id: bigint;
-      },
-      [bigint]
-    >(
-      `SELECT i.id, i.state, i.created_at, i.started_at, i.finished_at, i.completion_reason, i.error_code,
+export function getInvocation(orm: Orm, id: bigint): Record<string, unknown> | null {
+  const invocation = orm
+    .all<InvocationDetailRow>(sql`SELECT i.id, i.state, i.created_at, i.started_at, i.finished_at, i.completion_reason, i.error_code,
               i.sends_used, i.tool_calls_used, i.turns_used, i.side_effect_started, i.config_hash,
               i.prompt_version, i.tool_registry_hash, i.tool_registry_json, i.bucket_id,
               ch.telegram_chat_id, ch.type AS chat_type, ch.title AS chat_title, ch.username AS chat_username,
@@ -301,48 +210,97 @@ export function getInvocation(db: Database, id: bigint): Record<string, unknown>
        FROM invocations i
        JOIN conversations c ON c.id = i.conversation_id
        JOIN chats ch ON ch.id = c.chat_id
-       WHERE i.id = ?`,
-    )
-    .get(id);
-  if (invocation === null) {
+       WHERE i.id = ${id}`)
+    .at(0);
+  if (invocation === undefined) {
     return null;
   }
-  const toolCalls = db
-    .query<ToolCallRow, [bigint]>(
-      `SELECT id, tool_call_id, tool_name, arguments_json, result_text, state, side_effect, error_code,
-              duration_ms, created_at, finished_at
-       FROM tool_calls WHERE invocation_id = ? ORDER BY id`,
-    )
-    .all(id);
-  const modelCalls = db
-    .query<ModelCallRow, [bigint]>(
-      `SELECT id, role, provider, model, attempt, state, input_tokens, output_tokens, cache_read_tokens,
-              cache_write_tokens, total_tokens, cost, duration_ms, error_code, error_detail, request_json,
-              response_json, created_at, finished_at, tools_json
-       FROM model_calls WHERE invocation_id = ? ORDER BY id`,
-    )
-    .all(id);
-  const agentMessages = db
-    .query<AgentMessageRow, [bigint]>(
-      'SELECT sequence_no, role, text, created_at FROM agent_messages WHERE invocation_id = ? ORDER BY sequence_no',
-    )
-    .all(id);
-  const sends = db
-    .query<SendRow, [bigint]>(
-      `SELECT s.id, tc.tool_call_id, s.kind, s.request_json, s.state, s.telegram_message_id, s.error_code,
-              s.created_at, s.finished_at
-       FROM telegram_sends s
-       JOIN tool_calls tc ON tc.id = s.tool_call_id
-       WHERE tc.invocation_id = ?
-       ORDER BY s.id`,
-    )
-    .all(id);
-  const contextMessages = db
-    .query<ContextMessageRow, [bigint]>(
-      `SELECT section, sequence_no, message_id, revision_id, omitted_before, snapshot_json
-       FROM invocation_messages WHERE invocation_id = ? ORDER BY sequence_no`,
-    )
-    .all(id);
+  const toolCallRows = orm
+    .select({
+      id: toolCalls.id,
+      toolCallId: toolCalls.toolCallId,
+      toolName: toolCalls.toolName,
+      argumentsJson: toolCalls.argumentsJson,
+      resultText: toolCalls.resultText,
+      state: toolCalls.state,
+      sideEffect: toolCalls.sideEffect,
+      errorCode: toolCalls.errorCode,
+      durationMs: toolCalls.durationMs,
+      createdAt: toolCalls.createdAt,
+      finishedAt: toolCalls.finishedAt,
+    })
+    .from(toolCalls)
+    .where(eq(toolCalls.invocationId, id))
+    .orderBy(toolCalls.id)
+    .all();
+  const modelCallRows = orm
+    .select({
+      id: modelCalls.id,
+      role: modelCalls.role,
+      provider: modelCalls.provider,
+      model: modelCalls.model,
+      attempt: modelCalls.attempt,
+      state: modelCalls.state,
+      inputTokens: modelCalls.inputTokens,
+      outputTokens: modelCalls.outputTokens,
+      cacheReadTokens: modelCalls.cacheReadTokens,
+      cacheWriteTokens: modelCalls.cacheWriteTokens,
+      totalTokens: modelCalls.totalTokens,
+      cost: modelCalls.cost,
+      durationMs: modelCalls.durationMs,
+      errorCode: modelCalls.errorCode,
+      errorDetail: modelCalls.errorDetail,
+      requestJson: modelCalls.requestJson,
+      responseJson: modelCalls.responseJson,
+      createdAt: modelCalls.createdAt,
+      finishedAt: modelCalls.finishedAt,
+      toolsJson: modelCalls.toolsJson,
+    })
+    .from(modelCalls)
+    .where(eq(modelCalls.invocationId, id))
+    .orderBy(modelCalls.id)
+    .all();
+  const agentMessageRows = orm
+    .select({
+      sequenceNo: agentMessages.sequenceNo,
+      role: agentMessages.role,
+      text: agentMessages.text,
+      createdAt: agentMessages.createdAt,
+    })
+    .from(agentMessages)
+    .where(eq(agentMessages.invocationId, id))
+    .orderBy(agentMessages.sequenceNo)
+    .all();
+  const sendRows = orm
+    .select({
+      id: telegramSends.id,
+      toolCallId: toolCalls.toolCallId,
+      kind: telegramSends.kind,
+      requestJson: telegramSends.requestJson,
+      state: telegramSends.state,
+      telegramMessageId: telegramSends.telegramMessageId,
+      errorCode: telegramSends.errorCode,
+      createdAt: telegramSends.createdAt,
+      finishedAt: telegramSends.finishedAt,
+    })
+    .from(telegramSends)
+    .innerJoin(toolCalls, eq(telegramSends.toolCallId, toolCalls.id))
+    .where(eq(toolCalls.invocationId, id))
+    .orderBy(telegramSends.id)
+    .all();
+  const contextMessageRows = orm
+    .select({
+      section: invocationMessages.section,
+      sequenceNo: invocationMessages.sequenceNo,
+      messageId: invocationMessages.messageId,
+      revisionId: invocationMessages.revisionId,
+      omittedBefore: invocationMessages.omittedBefore,
+      snapshotJson: invocationMessages.snapshotJson,
+    })
+    .from(invocationMessages)
+    .where(eq(invocationMessages.invocationId, id))
+    .orderBy(invocationMessages.sequenceNo)
+    .all();
   return {
     id: invocation.id.toString(),
     bucket_id: invocation.bucket_id.toString(),
@@ -363,70 +321,70 @@ export function getInvocation(db: Database, id: bigint): Record<string, unknown>
     chat: chatSummary(invocation),
     total_tokens: Number(invocation.total_tokens),
     total_cost: invocation.total_cost,
-    tool_calls: toolCalls.map((row) => ({
+    tool_calls: toolCallRows.map((row) => ({
       id: row.id.toString(),
-      tool_call_id: row.tool_call_id,
-      tool_name: row.tool_name,
-      arguments_json: row.arguments_json,
-      result_text: row.result_text,
+      tool_call_id: row.toolCallId,
+      tool_name: row.toolName,
+      arguments_json: row.argumentsJson,
+      result_text: row.resultText,
       state: row.state,
-      side_effect: bit(row.side_effect),
-      error_code: row.error_code,
-      duration_ms: num(row.duration_ms),
-      created_at: row.created_at,
-      finished_at: row.finished_at,
+      side_effect: row.sideEffect,
+      error_code: row.errorCode,
+      duration_ms: num(row.durationMs),
+      created_at: row.createdAt,
+      finished_at: row.finishedAt,
     })),
-    model_calls: modelCalls.map((row) => ({
+    model_calls: modelCallRows.map((row) => ({
       id: row.id.toString(),
       role: row.role,
       provider: row.provider,
       model: row.model,
       attempt: Number(row.attempt),
       state: row.state,
-      input_tokens: num(row.input_tokens),
-      output_tokens: num(row.output_tokens),
-      cache_read_tokens: num(row.cache_read_tokens),
-      cache_write_tokens: num(row.cache_write_tokens),
-      total_tokens: num(row.total_tokens),
+      input_tokens: num(row.inputTokens),
+      output_tokens: num(row.outputTokens),
+      cache_read_tokens: num(row.cacheReadTokens),
+      cache_write_tokens: num(row.cacheWriteTokens),
+      total_tokens: num(row.totalTokens),
       cost: row.cost,
-      duration_ms: num(row.duration_ms),
-      error_code: row.error_code,
-      error_detail: row.error_detail,
-      request_json: row.request_json,
-      response_json: row.response_json,
-      created_at: row.created_at,
-      finished_at: row.finished_at,
-      tools: parseStringArray(row.tools_json),
+      duration_ms: num(row.durationMs),
+      error_code: row.errorCode,
+      error_detail: row.errorDetail,
+      request_json: row.requestJson,
+      response_json: row.responseJson,
+      created_at: row.createdAt,
+      finished_at: row.finishedAt,
+      tools: parseStringArray(row.toolsJson),
     })),
-    agent_messages: agentMessages.map((row) => ({
-      sequence_no: Number(row.sequence_no),
+    agent_messages: agentMessageRows.map((row) => ({
+      sequence_no: Number(row.sequenceNo),
       role: row.role,
       text: row.text,
-      created_at: row.created_at,
+      created_at: row.createdAt,
     })),
-    telegram_sends: sends.map((row) => ({
+    telegram_sends: sendRows.map((row) => ({
       id: row.id.toString(),
-      tool_call_id: row.tool_call_id,
+      tool_call_id: row.toolCallId,
       kind: row.kind,
-      request_json: row.request_json,
+      request_json: row.requestJson,
       state: row.state,
-      telegram_message_id: row.telegram_message_id === null ? null : row.telegram_message_id.toString(),
-      error_code: row.error_code,
-      created_at: row.created_at,
-      finished_at: row.finished_at,
+      telegram_message_id: row.telegramMessageId === null ? null : row.telegramMessageId.toString(),
+      error_code: row.errorCode,
+      created_at: row.createdAt,
+      finished_at: row.finishedAt,
     })),
-    context_messages: contextMessages.map((row) => ({
+    context_messages: contextMessageRows.map((row) => ({
       section: row.section,
-      sequence_no: Number(row.sequence_no),
-      message_id: row.message_id.toString(),
-      revision_id: row.revision_id.toString(),
-      omitted_before: Number(row.omitted_before),
-      snapshot_json: row.snapshot_json,
+      sequence_no: Number(row.sequenceNo),
+      message_id: row.messageId.toString(),
+      revision_id: row.revisionId.toString(),
+      omitted_before: Number(row.omittedBefore),
+      snapshot_json: row.snapshotJson,
     })),
   };
 }
 
-const MESSAGE_SELECT = `SELECT m.id, m.telegram_message_id, m.telegram_date, m.received_at, m.visible, m.sent_by_bot,
+const MESSAGE_SELECT = sql`SELECT m.id, m.telegram_message_id, m.telegram_date, m.received_at, m.visible, m.sent_by_bot,
               ch.telegram_chat_id, ch.type AS chat_type, ch.title AS chat_title, c.message_thread_id,
               r.revision_no, r.kind, r.text, r.caption, r.reply_to_message_id, r.media_group_id,
               sd.display_name AS sender_display_name, sd.username AS sender_username, sd.is_bot AS sender_is_bot,
@@ -438,27 +396,23 @@ const MESSAGE_SELECT = `SELECT m.id, m.telegram_message_id, m.telegram_date, m.r
        LEFT JOIN message_revisions r ON r.id = m.current_revision_id
        LEFT JOIN senders sd ON sd.id = r.sender_id`;
 
-export function listMessages(db: Database, query: ListQuery): Page<Record<string, unknown>> {
+export function listMessages(orm: Orm, query: ListQuery): Page<Record<string, unknown>> {
   const limit = parseLimit(query.limit);
-  const conditions: string[] = [];
-  const parameters: Bindings = [];
-  appendCursor(conditions, parameters, 'm.id', query.cursor);
+  const conditions: SQL[] = [];
+  appendCursor(conditions, sql`m.id`, query.cursor);
   if (query.chat !== undefined && query.chat !== null && query.chat.length > 0) {
-    conditions.push('ch.telegram_chat_id = ?');
-    parameters.push(parseId(query.chat, 'chat'));
+    conditions.push(sql`ch.telegram_chat_id = ${parseId(query.chat, 'chat')}`);
   }
   if (query.search !== undefined && query.search !== null && query.search.length > 0) {
     if (query.search.length > MAX_SEARCH_LENGTH) {
       throw new AdminQueryError('invalid_search', 'Search text is too long');
     }
-    conditions.push("(r.text LIKE ? ESCAPE '\\' OR r.caption LIKE ? ESCAPE '\\')");
     const like = `%${query.search.replace(/[\\%_]/g, '\\$&')}%`;
-    parameters.push(like, like);
+    conditions.push(sql`(r.text LIKE ${like} ESCAPE '\\' OR r.caption LIKE ${like} ESCAPE '\\')`);
   }
-  parameters.push(BigInt(limit + 1));
-  const rows = db
-    .query<MessageListRow, Bindings>(`${MESSAGE_SELECT} ${where(conditions)} ORDER BY m.id DESC LIMIT ?`)
-    .all(...parameters);
+  const rows = orm.all<MessageListRow>(
+    sql`${MESSAGE_SELECT} ${whereSql(conditions)} ORDER BY m.id DESC LIMIT ${BigInt(limit + 1)}`,
+  );
   return page(rows, limit, (row) => ({
     id: row.id.toString(),
     telegram_message_id: row.telegram_message_id.toString(),
@@ -487,33 +441,54 @@ export function listMessages(db: Database, query: ListQuery): Page<Record<string
   }));
 }
 
-export function getMessage(db: Database, id: bigint): Record<string, unknown> | null {
-  const message = db.query<MessageListRow, [bigint]>(`${MESSAGE_SELECT} WHERE m.id = ?`).get(id);
-  if (message === null) {
+export function getMessage(orm: Orm, id: bigint): Record<string, unknown> | null {
+  const message = orm.all<MessageListRow>(sql`${MESSAGE_SELECT} WHERE m.id = ${id}`).at(0);
+  if (message === undefined) {
     return null;
   }
-  const revisions = db
-    .query<RevisionRow, [bigint]>(
-      `SELECT r.id, r.revision_no, r.kind, r.text, r.caption, r.reply_to_message_id, r.reply_snapshot_json,
-              r.forward_origin_json, r.media_group_id, r.service_json, r.created_at,
-              sd.display_name AS sender_display_name, sd.username AS sender_username
-       FROM message_revisions r
-       LEFT JOIN senders sd ON sd.id = r.sender_id
-       WHERE r.message_id = ?
-       ORDER BY r.revision_no`,
+  const revisionRows = orm
+    .select({
+      id: messageRevisions.id,
+      revisionNo: messageRevisions.revisionNo,
+      kind: messageRevisions.kind,
+      text: messageRevisions.text,
+      caption: messageRevisions.caption,
+      replyToMessageId: messageRevisions.replyToMessageId,
+      replySnapshotJson: messageRevisions.replySnapshotJson,
+      forwardOriginJson: messageRevisions.forwardOriginJson,
+      mediaGroupId: messageRevisions.mediaGroupId,
+      serviceJson: messageRevisions.serviceJson,
+      createdAt: messageRevisions.createdAt,
+      senderDisplayName: senders.displayName,
+      senderUsername: senders.username,
+    })
+    .from(messageRevisions)
+    .leftJoin(senders, eq(messageRevisions.senderId, senders.id))
+    .where(eq(messageRevisions.messageId, id))
+    .orderBy(messageRevisions.revisionNo)
+    .all();
+  const mediaRows = orm
+    .select({
+      id: media.id,
+      revisionId: media.revisionId,
+      kind: media.kind,
+      fileUniqueId: media.fileUniqueId,
+      mimeType: media.mimeType,
+      fileSize: media.fileSize,
+      width: media.width,
+      height: media.height,
+      analysisState: mediaAnalyses.state,
+      analysisDescription: mediaAnalyses.description,
+    })
+    .from(media)
+    .innerJoin(messageRevisions, eq(media.revisionId, messageRevisions.id))
+    .leftJoin(
+      mediaAnalyses,
+      and(eq(mediaAnalyses.fileUniqueId, media.fileUniqueId), eq(mediaAnalyses.state, 'success')),
     )
-    .all(id);
-  const media = db
-    .query<MediaRow, [bigint]>(
-      `SELECT md.id, md.revision_id, md.kind, md.file_unique_id, md.mime_type, md.file_size, md.width, md.height,
-              ma.state AS analysis_state, ma.description AS analysis_description
-       FROM media md
-       JOIN message_revisions r ON r.id = md.revision_id
-       LEFT JOIN media_analyses ma ON ma.file_unique_id = md.file_unique_id AND ma.state = 'success'
-       WHERE r.message_id = ?
-       ORDER BY md.id`,
-    )
-    .all(id);
+    .where(eq(messageRevisions.messageId, id))
+    .orderBy(media.id)
+    .all();
   return {
     id: message.id.toString(),
     telegram_message_id: message.telegram_message_id.toString(),
@@ -527,51 +502,46 @@ export function getMessage(db: Database, id: bigint): Record<string, unknown> | 
       title: message.chat_title,
       message_thread_id: Number(message.message_thread_id),
     },
-    revisions: revisions.map((row) => ({
+    revisions: revisionRows.map((row) => ({
       id: row.id.toString(),
-      revision_no: Number(row.revision_no),
+      revision_no: Number(row.revisionNo),
       kind: row.kind,
       text: row.text,
       caption: row.caption,
-      reply_to_message_id: row.reply_to_message_id === null ? null : row.reply_to_message_id.toString(),
-      reply_snapshot_json: row.reply_snapshot_json,
-      forward_origin_json: row.forward_origin_json,
-      media_group_id: row.media_group_id,
-      service_json: row.service_json,
-      created_at: row.created_at,
+      reply_to_message_id: row.replyToMessageId === null ? null : row.replyToMessageId.toString(),
+      reply_snapshot_json: row.replySnapshotJson,
+      forward_origin_json: row.forwardOriginJson,
+      media_group_id: row.mediaGroupId,
+      service_json: row.serviceJson,
+      created_at: row.createdAt,
       sender:
-        row.sender_display_name === null
-          ? null
-          : { display_name: row.sender_display_name, username: row.sender_username },
+        row.senderDisplayName === null ? null : { display_name: row.senderDisplayName, username: row.senderUsername },
     })),
-    media: media.map((row) => ({
+    media: mediaRows.map((row) => ({
       id: row.id.toString(),
-      revision_id: row.revision_id.toString(),
+      revision_id: row.revisionId.toString(),
       kind: row.kind,
-      file_unique_id: row.file_unique_id,
-      mime_type: row.mime_type,
-      file_size: num(row.file_size),
+      file_unique_id: row.fileUniqueId,
+      mime_type: row.mimeType,
+      file_size: num(row.fileSize),
       width: num(row.width),
       height: num(row.height),
-      analysis_state: row.analysis_state,
-      analysis_description: row.analysis_description,
+      analysis_state: row.analysisState,
+      analysis_description: row.analysisDescription,
     })),
   };
 }
 
-export function listStickerSets(db: Database): readonly Record<string, unknown>[] {
-  const rows = db
-    .query<StickerSetRow, []>(
-      `SELECT ss.id, ss.alias, ss.telegram_name, ss.title, ss.configured, ss.sync_state, ss.last_synced_at,
+export function listStickerSets(orm: Orm): readonly Record<string, unknown>[] {
+  const rows =
+    orm.all<StickerSetRow>(sql`SELECT ss.id, ss.alias, ss.telegram_name, ss.title, ss.configured, ss.sync_state, ss.last_synced_at,
               ss.error_code, ss.updated_at,
               (SELECT COUNT(*) FROM stickers s WHERE s.sticker_set_id = ss.id AND s.active = 1) AS sticker_count,
               (SELECT COUNT(*) FROM stickers s WHERE s.sticker_set_id = ss.id AND s.active = 1 AND s.index_state = 'success') AS indexed_count,
               (SELECT COUNT(*) FROM stickers s WHERE s.sticker_set_id = ss.id AND s.active = 1 AND s.index_state IN ('pending', 'running')) AS pending_count,
               (SELECT COUNT(*) FROM stickers s WHERE s.sticker_set_id = ss.id AND s.active = 1 AND s.index_state = 'error') AS error_count
        FROM sticker_sets ss
-       ORDER BY ss.configured DESC, ss.alias`,
-    )
-    .all();
+       ORDER BY ss.configured DESC, ss.alias`);
   return rows.map((row) => ({
     id: row.id.toString(),
     alias: row.alias,
@@ -589,42 +559,34 @@ export function listStickerSets(db: Database): readonly Record<string, unknown>[
   }));
 }
 
-export function listStickers(db: Database, query: ListQuery): Page<Record<string, unknown>> {
+export function listStickers(orm: Orm, query: ListQuery): Page<Record<string, unknown>> {
   const limit = parseLimit(query.limit);
-  const conditions: string[] = [];
-  const parameters: Bindings = [];
-  appendCursor(conditions, parameters, 's.id', query.cursor);
+  const conditions: SQL[] = [];
+  appendCursor(conditions, sql`s.id`, query.cursor);
   if (query.set !== undefined && query.set !== null && query.set.length > 0) {
-    conditions.push('ss.alias = ?');
-    parameters.push(assertToken(query.set, 'set'));
+    conditions.push(sql`ss.alias = ${assertToken(query.set, 'set')}`);
   }
   if (query.state !== undefined && query.state !== null && query.state.length > 0) {
-    conditions.push('s.index_state = ?');
-    parameters.push(assertToken(query.state, 'state'));
+    conditions.push(sql`s.index_state = ${assertToken(query.state, 'state')}`);
   }
   if (query.search !== undefined && query.search !== null && query.search.length > 0) {
     if (query.search.length > MAX_SEARCH_LENGTH) {
       throw new AdminQueryError('invalid_search', 'Search text is too long');
     }
-    conditions.push("(ma.description LIKE ? ESCAPE '\\' OR s.emoji LIKE ? ESCAPE '\\')");
     const like = `%${query.search.replace(/[\\%_]/g, '\\$&')}%`;
-    parameters.push(like, like);
+    conditions.push(sql`(ma.description LIKE ${like} ESCAPE '\\' OR s.emoji LIKE ${like} ESCAPE '\\')`);
   }
-  parameters.push(BigInt(limit + 1));
-  const rows = db
-    .query<StickerRow, Bindings>(
-      `SELECT s.id, ss.alias AS set_alias, s.file_unique_id, s.emoji, s.format, s.active, s.index_state,
+  const rows =
+    orm.all<StickerRow>(sql`SELECT s.id, ss.alias AS set_alias, s.file_unique_id, s.emoji, s.format, s.active, s.index_state,
               s.failure_count, s.next_retry_at, s.updated_at,
               ma.id AS analysis_id, ma.state AS analysis_state, ma.analysis_version, ma.provider, ma.model,
               ma.prompt_version, ma.description, ma.metadata_json, ma.updated_at AS analysis_updated_at
        FROM stickers s
        JOIN sticker_sets ss ON ss.id = s.sticker_set_id
        LEFT JOIN media_analyses ma ON ma.id = s.current_analysis_id
-       ${where(conditions)}
+       ${whereSql(conditions)}
        ORDER BY s.id DESC
-       LIMIT ?`,
-    )
-    .all(...parameters);
+       LIMIT ${BigInt(limit + 1)}`);
   return page(rows, limit, (row) => ({
     id: row.id.toString(),
     set_alias: row.set_alias,
@@ -653,45 +615,45 @@ export function listStickers(db: Database, query: ListQuery): Page<Record<string
   }));
 }
 
-export function overview(db: Database, now = new Date()): Record<string, unknown> {
+export function overview(orm: Orm, now = new Date()): Record<string, unknown> {
   const today = now.toISOString().slice(0, 10);
-  const invocationStates = db
-    .query<CountRow, []>('SELECT state AS label, COUNT(*) AS count FROM invocations GROUP BY state ORDER BY state')
+  const invocationStates = orm.all<CountRow>(
+    sql`SELECT state AS label, COUNT(*) AS count FROM invocations GROUP BY state ORDER BY state`,
+  );
+  const stickerStates = orm.all<CountRow>(
+    sql`SELECT index_state AS label, COUNT(*) AS count FROM stickers WHERE active = 1 GROUP BY index_state ORDER BY index_state`,
+  );
+  const toolNames = orm.all<CountRow>(
+    sql`SELECT tool_name AS label, COUNT(*) AS count FROM tool_calls GROUP BY tool_name ORDER BY count DESC LIMIT 10`,
+  );
+  const usageRows = orm
+    .select({
+      resource: dailyUsage.resource,
+      metric: dailyUsage.metric,
+      scope: dailyUsage.scope,
+      amount: dailyUsage.amount,
+    })
+    .from(dailyUsage)
+    .where(eq(dailyUsage.utcDate, today))
+    .orderBy(dailyUsage.resource, dailyUsage.metric, dailyUsage.scope)
     .all();
-  const stickerStates = db
-    .query<CountRow, []>(
-      'SELECT index_state AS label, COUNT(*) AS count FROM stickers WHERE active = 1 GROUP BY index_state ORDER BY index_state',
-    )
-    .all();
-  const toolNames = db
-    .query<CountRow, []>(
-      'SELECT tool_name AS label, COUNT(*) AS count FROM tool_calls GROUP BY tool_name ORDER BY count DESC LIMIT 10',
-    )
-    .all();
-  const usage = db
-    .query<{ resource: string; metric: string; scope: string; amount: bigint }, [string]>(
-      'SELECT resource, metric, scope, amount FROM daily_usage WHERE utc_date = ? ORDER BY resource, metric, scope',
-    )
-    .all(today);
-  const storedSleep = storedSleepUntil(db);
+  const storedSleep = storedSleepUntil(orm);
   const sleepUntil = storedSleep !== null && storedSleep > now.toISOString() ? storedSleep : null;
-  const pausedChats = db
-    .query<PausedChatRow, []>(
-      `SELECT c.telegram_chat_id, c.type, c.title, c.username, p.paused_at
+  const pausedChats = orm.all<PausedChatRow>(sql`SELECT c.telegram_chat_id, c.type, c.title, c.username, p.paused_at
        FROM chat_pause p JOIN chats c ON c.id = p.chat_id
-       ORDER BY p.paused_at, c.telegram_chat_id`,
-    )
-    .all();
-  const messageCount = db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get();
-  const analysisCount = db
-    .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM media_analyses WHERE state = 'success'")
+       ORDER BY p.paused_at, c.telegram_chat_id`);
+  const messageCount = orm.select({ count: sql<bigint>`count(*)` }).from(messages).get();
+  const analysisCount = orm
+    .select({ count: sql<bigint>`count(*)` })
+    .from(mediaAnalyses)
+    .where(eq(mediaAnalyses.state, 'success'))
     .get();
   return {
     generated_at: now.toISOString(),
     invocation_states: invocationStates.map((row) => ({ label: row.label, count: Number(row.count) })),
     sticker_index_states: stickerStates.map((row) => ({ label: row.label, count: Number(row.count) })),
     top_tools: toolNames.map((row) => ({ label: row.label, count: Number(row.count) })),
-    daily_usage: usage.map((row) => ({
+    daily_usage: usageRows.map((row) => ({
       resource: row.resource,
       metric: row.metric,
       scope: row.scope,
@@ -742,21 +704,16 @@ export function page<Row extends { readonly id: bigint | string }, Item>(
   };
 }
 
-export function where(conditions: readonly string[]): string {
-  return conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`;
+/** SQL-chunk WHERE builder for drizzle `sql` templates; binds every value. */
+function whereSql(conditions: readonly SQL[]): SQL {
+  return conditions.length === 0 ? sql.empty() : sql` WHERE ${sql.join([...conditions], sql` AND `)}`;
 }
 
-function appendCursor(
-  conditions: string[],
-  parameters: Bindings,
-  column: string,
-  cursor: string | null | undefined,
-): void {
+function appendCursor(conditions: SQL[], column: SQL, cursor: string | null | undefined): void {
   if (cursor === undefined || cursor === null || cursor.length === 0) {
     return;
   }
-  conditions.push(`${column} < ?`);
-  parameters.push(parseId(cursor, 'cursor'));
+  conditions.push(sql`${column} < ${parseId(cursor, 'cursor')}`);
 }
 
 export function parseId(value: string, label: string): bigint {
@@ -851,7 +808,7 @@ export interface UsagePoint {
   readonly agent_invocations: number;
 }
 
-export function usage(db: Database, days: number, now = new Date()): UsageSeries {
+export function usage(orm: Orm, days: number, now = new Date()): UsageSeries {
   const result: UsagePoint[] = [];
   const today = new Date(now);
   for (let i = days - 1; i >= 0; i--) {
@@ -867,14 +824,14 @@ export function usage(db: Database, days: number, now = new Date()): UsageSeries
   }
   const firstDate = new Date(today);
   firstDate.setUTCDate(today.getUTCDate() - (days - 1));
-  const rows = db
-    .query<{ utc_date: string; metric: string; total: bigint }, [string, string]>(
-      `SELECT utc_date, metric, SUM(amount) AS total
+  const rows = orm.all<{
+    utc_date: string;
+    metric: string;
+    total: bigint;
+  }>(sql`SELECT utc_date, metric, SUM(amount) AS total
        FROM daily_usage
-       WHERE utc_date >= ? AND utc_date <= ? AND metric IN ('model_tokens', 'vision_tokens', 'tool_calls', 'agent_invocations')
-       GROUP BY utc_date, metric`,
-    )
-    .all(firstDate.toISOString().slice(0, 10), today.toISOString().slice(0, 10));
+       WHERE utc_date >= ${firstDate.toISOString().slice(0, 10)} AND utc_date <= ${today.toISOString().slice(0, 10)} AND metric IN ('model_tokens', 'vision_tokens', 'tool_calls', 'agent_invocations')
+       GROUP BY utc_date, metric`);
   const byDate = new Map<string, UsagePoint>();
   for (const point of result) {
     byDate.set(point.date, point);

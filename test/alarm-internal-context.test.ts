@@ -459,7 +459,7 @@ describe('alarm internal context and ownership', () => {
 
     const reopenedForPurge = await SqliteStore.open(loaded.config, false);
     const { purgeExpiredData } = await import('../src/database.ts');
-    purgeExpiredData(reopenedForPurge.db, loaded.config, new Date('2026-10-01T00:00:00.000Z'));
+    purgeExpiredData(reopenedForPurge.orm, loaded.config, new Date('2026-10-01T00:00:00.000Z'));
     expect(
       reopenedForPurge.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM internal_contexts').get()?.count,
     ).toBe(0n);

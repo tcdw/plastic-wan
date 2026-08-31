@@ -146,7 +146,7 @@ export class ContextBuilder {
   constructor(store: SqliteStore, config: RawConfig) {
     this.#store = store;
     this.#config = config;
-    this.#memory = new MemoryStore(store.db);
+    this.#memory = new MemoryStore(store.orm);
   }
 
   build(
@@ -171,7 +171,7 @@ export class ContextBuilder {
     if (identity === null) {
       throw new Error(`Invocation ${invocationId} does not exist`);
     }
-    const chatConfig = resolveChatConfig(this.#config, this.#store.db, identity.telegram_chat_id);
+    const chatConfig = resolveChatConfig(this.#config, this.#store.orm, identity.telegram_chat_id);
     if (chatConfig === undefined) {
       throw new Error(`Invocation chat ${identity.telegram_chat_id} is no longer configured`);
     }
@@ -415,7 +415,7 @@ export class ContextBuilder {
   }
 
   #internalContextPrompt(conversationId: bigint): string {
-    const records = listRecentInternalContexts(this.#store.db, conversationId, INTERNAL_CONTEXT_LIMIT).reverse();
+    const records = listRecentInternalContexts(this.#store.orm, conversationId, INTERNAL_CONTEXT_LIMIT).reverse();
     return renderInternalContextsPrompt(records);
   }
 

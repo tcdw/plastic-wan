@@ -1,5 +1,7 @@
-import type { Database } from 'bun:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
+import { eq, sql } from 'drizzle-orm';
+import { type Orm, asRunResult } from '../database.ts';
+import { adminSessions, adminUsers } from '../schema.ts';
 
 const SESSION_TOKEN_BYTES = 32;
 const MAX_FAILED_ATTEMPTS = 10;
@@ -33,28 +35,28 @@ export class AdminAuthError extends Error {
 
 interface UserRow {
   readonly id: bigint;
-  readonly password_hash: string;
+  readonly passwordHash: string;
 }
 
 interface SessionRow {
   readonly id: bigint;
-  readonly user_id: bigint;
+  readonly userId: bigint;
   readonly username: string;
-  readonly expires_at: string;
+  readonly expiresAt: string;
 }
 
 export class AdminAuth {
-  readonly #db: Database;
+  readonly #orm: Orm;
   readonly #ttlMs: number;
   readonly #failures = new Map<string, { count: number; lockedUntil: number }>();
 
-  constructor(db: Database, sessionTtlHours: number) {
-    this.#db = db;
+  constructor(orm: Orm, sessionTtlHours: number) {
+    this.#orm = orm;
     this.#ttlMs = sessionTtlHours * 3_600_000;
   }
 
   setupRequired(): boolean {
-    const row = this.#db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM admin_users').get();
+    const row = this.#orm.select({ count: sql<bigint>`count(*)` }).from(adminUsers).get();
     return (row?.count ?? 0n) === 0n;
   }
 
@@ -62,43 +64,60 @@ export class AdminAuth {
     assertCredentials(credentials);
     const passwordHash = await Bun.password.hash(credentials.password, HASH_OPTIONS);
     const iso = now.toISOString();
-    const userId = this.#db
-      .transaction(() => {
+    const userId = this.#orm.transaction(
+      () => {
         if (!this.setupRequired()) {
           throw new AdminAuthError(409, 'setup_complete', 'Administrator account already exists');
         }
-        const created = this.#db
-          .query(
-            'INSERT INTO admin_users(username, password_hash, created_at, updated_at, last_login_at) VALUES (?, ?, ?, ?, ?)',
-          )
-          .run(credentials.username, passwordHash, iso, iso, iso);
-        return BigInt(created.lastInsertRowid);
-      })
-      .immediate();
+        const created = this.#orm
+          .insert(adminUsers)
+          .values({
+            username: credentials.username,
+            passwordHash,
+            createdAt: iso,
+            updatedAt: iso,
+            lastLoginAt: iso,
+          })
+          .returning({ id: adminUsers.id })
+          .get();
+        if (created === undefined) {
+          throw new Error('admin_users insert returned no row');
+        }
+        return created.id;
+      },
+      { behavior: 'immediate' },
+    );
     return this.#createSession(userId, now);
   }
   async changeCredentials(userId: bigint, credentials: AdminCredentials, now = new Date()): Promise<string> {
     assertCredentials(credentials);
     const passwordHash = await Bun.password.hash(credentials.password, HASH_OPTIONS);
     const iso = now.toISOString();
-    return this.#db
-      .transaction(() => {
-        const existing = this.#db
-          .query<{ id: bigint }, [string]>('SELECT id FROM admin_users WHERE username = ?')
-          .get(credentials.username);
-        if (existing !== null && existing.id !== userId) {
+    return this.#orm.transaction(
+      () => {
+        const existing = this.#orm
+          .select({ id: adminUsers.id })
+          .from(adminUsers)
+          .where(eq(adminUsers.username, credentials.username))
+          .get();
+        if (existing !== undefined && existing.id !== userId) {
           throw new AdminAuthError(409, 'username_taken', 'Username is already in use');
         }
-        const updated = this.#db
-          .query('UPDATE admin_users SET username = ?, password_hash = ?, updated_at = ? WHERE id = ?')
-          .run(credentials.username, passwordHash, iso, userId);
+        const updated = asRunResult(
+          this.#orm
+            .update(adminUsers)
+            .set({ username: credentials.username, passwordHash, updatedAt: iso })
+            .where(eq(adminUsers.id, userId))
+            .run(),
+        );
         if (updated.changes === 0) {
           throw new AdminAuthError(401, 'unauthenticated', 'Admin session is required');
         }
-        this.#db.query('DELETE FROM admin_sessions WHERE user_id = ?').run(userId);
+        this.#orm.delete(adminSessions).where(eq(adminSessions.userId, userId)).run();
         return this.#createSession(userId, now);
-      })
-      .immediate();
+      },
+      { behavior: 'immediate' },
+    );
   }
 
   async login(credentials: AdminCredentials, now = new Date(), clientKey = 'unknown'): Promise<string> {
@@ -109,17 +128,19 @@ export class AdminAuth {
     if (failure !== undefined && failure.lockedUntil > now.getTime()) {
       throw new AdminAuthError(429, 'too_many_attempts', 'Too many failed attempts; retry later');
     }
-    const row = this.#db
-      .query<UserRow, [string]>('SELECT id, password_hash FROM admin_users WHERE username = ?')
-      .get(username);
+    const row = this.#orm
+      .select({ id: adminUsers.id, passwordHash: adminUsers.passwordHash })
+      .from(adminUsers)
+      .where(eq(adminUsers.username, username))
+      .get() satisfies UserRow | undefined;
     let verified = false;
-    if (row === null) {
+    if (row === undefined) {
       // Burn comparable time on unknown usernames so response latency does not leak account existence.
       await Bun.password.hash(password.length === 0 ? 'absent-account-placeholder' : password, HASH_OPTIONS);
     } else {
-      verified = await Bun.password.verify(password, row.password_hash);
+      verified = await Bun.password.verify(password, row.passwordHash);
     }
-    if (row === null || !verified) {
+    if (row === undefined || !verified) {
       const count = (failure?.count ?? 0) + 1;
       this.#failures.set(failureKey, {
         count,
@@ -128,9 +149,11 @@ export class AdminAuth {
       throw new AdminAuthError(401, 'invalid_credentials', 'Invalid username or password');
     }
     this.#failures.delete(failureKey);
-    this.#db
-      .query('UPDATE admin_users SET last_login_at = ?, updated_at = ? WHERE id = ?')
-      .run(now.toISOString(), now.toISOString(), row.id);
+    this.#orm
+      .update(adminUsers)
+      .set({ lastLoginAt: now.toISOString(), updatedAt: now.toISOString() })
+      .where(eq(adminUsers.id, row.id))
+      .run();
     return this.#createSession(row.id, now);
   }
 
@@ -138,33 +161,40 @@ export class AdminAuth {
     if (token.length === 0) {
       return null;
     }
-    const row = this.#db
-      .query<SessionRow, [string]>(
-        `SELECT s.id, s.user_id, u.username, s.expires_at
-         FROM admin_sessions s JOIN admin_users u ON u.id = s.user_id
-         WHERE s.token_hash = ?`,
-      )
-      .get(hashToken(token));
-    if (row === null) {
+    const row = this.#orm
+      .select({
+        id: adminSessions.id,
+        userId: adminSessions.userId,
+        username: adminUsers.username,
+        expiresAt: adminSessions.expiresAt,
+      })
+      .from(adminSessions)
+      .innerJoin(adminUsers, eq(adminUsers.id, adminSessions.userId))
+      .where(eq(adminSessions.tokenHash, hashToken(token)))
+      .get() satisfies SessionRow | undefined;
+    if (row === undefined) {
       return null;
     }
-    if (row.expires_at <= now.toISOString()) {
-      this.#db.query('DELETE FROM admin_sessions WHERE id = ?').run(row.id);
+    if (row.expiresAt <= now.toISOString()) {
+      this.#orm.delete(adminSessions).where(eq(adminSessions.id, row.id)).run();
       return null;
     }
-    this.#db.query('UPDATE admin_sessions SET last_seen_at = ? WHERE id = ?').run(now.toISOString(), row.id);
-    return { userId: row.user_id, username: row.username, expiresAt: row.expires_at };
+    this.#orm.update(adminSessions).set({ lastSeenAt: now.toISOString() }).where(eq(adminSessions.id, row.id)).run();
+    return { userId: row.userId, username: row.username, expiresAt: row.expiresAt };
   }
 
   logout(token: string): void {
     if (token.length === 0) {
       return;
     }
-    this.#db.query('DELETE FROM admin_sessions WHERE token_hash = ?').run(hashToken(token));
+    this.#orm
+      .delete(adminSessions)
+      .where(eq(adminSessions.tokenHash, hashToken(token)))
+      .run();
   }
 
   purgeExpired(now = new Date()): void {
-    this.#db.query('DELETE FROM admin_sessions WHERE expires_at <= ?').run(now.toISOString());
+    this.#orm.run(sql`DELETE FROM admin_sessions WHERE expires_at <= ${now.toISOString()}`);
   }
 
   get sessionTtlMs(): number {
@@ -175,11 +205,16 @@ export class AdminAuth {
     this.purgeExpired(now);
     const token = randomBytes(SESSION_TOKEN_BYTES).toString('base64url');
     const iso = now.toISOString();
-    this.#db
-      .query(
-        'INSERT INTO admin_sessions(user_id, token_hash, created_at, expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?)',
-      )
-      .run(userId, hashToken(token), iso, new Date(now.getTime() + this.#ttlMs).toISOString(), iso);
+    this.#orm
+      .insert(adminSessions)
+      .values({
+        userId,
+        tokenHash: hashToken(token),
+        createdAt: iso,
+        expiresAt: new Date(now.getTime() + this.#ttlMs).toISOString(),
+        lastSeenAt: iso,
+      })
+      .run();
     return token;
   }
 }

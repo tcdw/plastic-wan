@@ -122,7 +122,7 @@ Memory 内容是模型自己写入的持久化数据，按 Conversation 隔离�
 | --- | --- |
 | grammY | Telegram long polling 与 API |
 | Pi Agent Core / Pi AI | Agent 循环、模型和 Provider 抽象 |
-| Bun SQLite | 持久化、状态机与审计 |
+| Bun SQLite + Drizzle ORM | 持久化、状态机与审计（连接层 bun:sqlite，业务查询 Drizzle；见 data-layer.md） |
 | Sharp | 图片解码、缩放和格式转换 |
 | FFmpeg / FFprobe | 视频 Sticker 中间帧提取 |
 | python-lottie | TGS 代表帧先导出 SVG，再由 Sharp 转 PNG/JPEG |

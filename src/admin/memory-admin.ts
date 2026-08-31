@@ -1,4 +1,5 @@
-import type { Database } from 'bun:sqlite';
+import { and, desc, eq, gt, lt, lte, type SQL } from 'drizzle-orm';
+import { asRunResult, type Orm } from '../database.ts';
 import {
   DEFAULT_MEMORY_TTL_SECONDS,
   MEMORY_ID_PATTERN,
@@ -7,9 +8,8 @@ import {
   MEMORY_TTL_MIN_SECONDS,
   newMemoryId,
 } from '../memory.ts';
-import { AdminQueryError, type ListQuery, type Page, page, parseId, parseLimit, where } from './audit.ts';
-
-type Bindings = (string | bigint)[];
+import { chats, conversations, memories } from '../schema.ts';
+import { AdminQueryError, type ListQuery, type Page, page, parseId, parseLimit } from './audit.ts';
 
 export interface MemoryAdminItem {
   readonly id: string;
@@ -62,60 +62,66 @@ interface MemoryListRow {
   readonly message_thread_id: bigint;
 }
 
-const MEMORY_LIST_SELECT = `SELECT m.id, m.conversation_id, m.content, m.created_at, m.expires_at, m.updated_at,
-       ch.telegram_chat_id, ch.type AS chat_type, ch.title AS chat_title, c.message_thread_id
-FROM memories m
-JOIN conversations c ON c.id = m.conversation_id
-JOIN chats ch ON ch.id = c.chat_id`;
+const MEMORY_LIST_FIELDS = {
+  id: memories.id,
+  conversation_id: memories.conversationId,
+  content: memories.content,
+  created_at: memories.createdAt,
+  expires_at: memories.expiresAt,
+  updated_at: memories.updatedAt,
+  telegram_chat_id: chats.telegramChatId,
+  chat_type: chats.type,
+  chat_title: chats.title,
+  message_thread_id: conversations.messageThreadId,
+};
 
-export function listMemories(
-  db: Database,
-  query: ListQuery,
-  warningDays: number,
-  now = new Date(),
-): Page<MemoryAdminItem> {
+export function listMemories(orm: Orm, query: ListQuery, warningDays: number, now = new Date()): Page<MemoryAdminItem> {
   const limit = parseLimit(query.limit);
-  const conditions: string[] = [];
-  const parameters: Bindings = [];
+  const conditions: SQL[] = [];
   const nowIso = now.toISOString();
   if (query.cursor !== undefined && query.cursor !== null && query.cursor.length > 0) {
     if (!new RegExp(MEMORY_ID_PATTERN).test(query.cursor)) {
       throw new AdminQueryError('invalid_cursor', 'cursor must be a memory id');
     }
-    conditions.push('m.id < ?');
-    parameters.push(query.cursor);
+    conditions.push(lt(memories.id, query.cursor));
   }
   if (query.chat !== undefined && query.chat !== null && query.chat.length > 0) {
-    conditions.push('ch.telegram_chat_id = ?');
-    parameters.push(parseId(query.chat, 'chat'));
+    conditions.push(eq(chats.telegramChatId, parseId(query.chat, 'chat')));
   }
   const warningIso = new Date(now.getTime() + warningDays * 86_400_000).toISOString();
   if (query.state !== undefined && query.state !== null && query.state.length > 0) {
     if (query.state === 'active') {
-      conditions.push('m.expires_at > ?');
-      parameters.push(nowIso);
+      conditions.push(gt(memories.expiresAt, nowIso));
     } else if (query.state === 'expired') {
-      conditions.push('m.expires_at <= ?');
-      parameters.push(nowIso);
+      conditions.push(lte(memories.expiresAt, nowIso));
     } else if (query.state === 'long_ttl') {
-      conditions.push('m.expires_at > ?');
-      parameters.push(warningIso);
+      conditions.push(gt(memories.expiresAt, warningIso));
     } else {
       throw new AdminQueryError('invalid_state', 'state must be active, expired, or long_ttl');
     }
   }
-  parameters.push(BigInt(limit + 1));
-  const rows = db
-    .query<MemoryListRow, Bindings>(`${MEMORY_LIST_SELECT} ${where(conditions)} ORDER BY m.id DESC LIMIT ?`)
-    .all(...parameters);
+  const rows = orm
+    .select(MEMORY_LIST_FIELDS)
+    .from(memories)
+    .innerJoin(conversations, eq(conversations.id, memories.conversationId))
+    .innerJoin(chats, eq(chats.id, conversations.chatId))
+    .where(and(...conditions))
+    .orderBy(desc(memories.id))
+    .limit(limit + 1)
+    .all();
   return page(rows, limit, (row) => toItem(row, nowIso, warningIso));
 }
 
-export function listMemoryChats(db: Database): readonly MemoryChatOption[] {
-  return db
-    .query<{ telegram_chat_id: bigint; type: string; title: string | null; username: string | null }, []>(
-      'SELECT telegram_chat_id, type, title, username FROM chats ORDER BY telegram_chat_id',
-    )
+export function listMemoryChats(orm: Orm): readonly MemoryChatOption[] {
+  return orm
+    .select({
+      telegram_chat_id: chats.telegramChatId,
+      type: chats.type,
+      title: chats.title,
+      username: chats.username,
+    })
+    .from(chats)
+    .orderBy(chats.telegramChatId)
     .all()
     .map((row) => ({
       telegram_chat_id: row.telegram_chat_id.toString(),
@@ -125,68 +131,82 @@ export function listMemoryChats(db: Database): readonly MemoryChatOption[] {
     }));
 }
 
-export function createMemory(
-  db: Database,
-  body: CreateMemoryBody,
-  warningDays: number,
-  now = new Date(),
-): MemoryAdminItem {
+export function createMemory(orm: Orm, body: CreateMemoryBody, warningDays: number, now = new Date()): MemoryAdminItem {
   const timestamp = now.toISOString();
   const expiresAt = new Date(now.getTime() + body.ttlSeconds * 1_000).toISOString();
   const id = newMemoryId();
-  db.transaction(() => {
-    const chat = db.query<{ id: bigint }, [bigint]>('SELECT id FROM chats WHERE telegram_chat_id = ?').get(body.chatId);
-    if (chat === null) {
-      throw new AdminQueryError('chat_not_found', 'This chat has not been seen by the bot', 404);
-    }
-    const existing = db
-      .query<{ id: bigint }, [bigint, number]>(
-        'SELECT id FROM conversations WHERE chat_id = ? AND message_thread_id = ?',
-      )
-      .get(chat.id, body.threadId);
-    const conversationId =
-      existing?.id ??
-      BigInt(
-        db
-          .query('INSERT INTO conversations(chat_id, message_thread_id, created_at, updated_at) VALUES (?, ?, ?, ?)')
-          .run(chat.id, body.threadId, timestamp, timestamp).lastInsertRowid,
-      );
-    db.query('DELETE FROM memories WHERE expires_at <= ?').run(timestamp);
-    db.query(
-      'INSERT INTO memories(id, conversation_id, content, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(id, conversationId, body.content, timestamp, expiresAt, timestamp);
-  }).immediate();
-  return getItem(db, id, timestamp, warningDays, now);
+  orm.transaction(
+    () => {
+      const chat = orm.select({ id: chats.id }).from(chats).where(eq(chats.telegramChatId, body.chatId)).get();
+      if (chat === undefined) {
+        throw new AdminQueryError('chat_not_found', 'This chat has not been seen by the bot', 404);
+      }
+      const existing = orm
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(and(eq(conversations.chatId, chat.id), eq(conversations.messageThreadId, BigInt(body.threadId))))
+        .get();
+      let conversationId: bigint;
+      if (existing !== undefined) {
+        conversationId = existing.id;
+      } else {
+        const created = orm
+          .insert(conversations)
+          .values({
+            chatId: chat.id,
+            messageThreadId: BigInt(body.threadId),
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          })
+          .returning({ id: conversations.id })
+          .get();
+        if (created === undefined) {
+          throw new Error('conversations insert returned no row');
+        }
+        conversationId = created.id;
+      }
+      orm.delete(memories).where(lte(memories.expiresAt, timestamp)).run();
+      orm
+        .insert(memories)
+        .values({
+          id,
+          conversationId,
+          content: body.content,
+          createdAt: timestamp,
+          expiresAt,
+          updatedAt: timestamp,
+        })
+        .run();
+    },
+    { behavior: 'immediate' },
+  );
+  return getItem(orm, id, timestamp, warningDays, now);
 }
 
 export function updateMemory(
-  db: Database,
+  orm: Orm,
   id: string,
   body: UpdateMemoryBody,
   warningDays: number,
   now = new Date(),
 ): MemoryAdminItem {
   const timestamp = now.toISOString();
-  const sets: string[] = ['updated_at = ?'];
-  const parameters: Bindings = [timestamp];
-  if (body.content !== undefined) {
-    sets.push('content = ?');
-    parameters.push(body.content);
-  }
-  if (body.ttlSeconds !== undefined) {
-    sets.push('expires_at = ?');
-    parameters.push(new Date(now.getTime() + body.ttlSeconds * 1_000).toISOString());
-  }
-  parameters.push(id);
-  const updated = db.query(`UPDATE memories SET ${sets.join(', ')} WHERE id = ?`).run(...parameters).changes;
-  if (updated === 0) {
+  const set = {
+    updatedAt: timestamp,
+    ...(body.content !== undefined ? { content: body.content } : {}),
+    ...(body.ttlSeconds !== undefined
+      ? { expiresAt: new Date(now.getTime() + body.ttlSeconds * 1_000).toISOString() }
+      : {}),
+  };
+  const updated = asRunResult(orm.update(memories).set(set).where(eq(memories.id, id)).run());
+  if (updated.changes === 0) {
     throw new AdminQueryError('not_found', 'Memory does not exist', 404);
   }
-  return getItem(db, id, timestamp, warningDays, now);
+  return getItem(orm, id, timestamp, warningDays, now);
 }
 
-export function deleteMemory(db: Database, id: string): void {
-  const result = db.query('DELETE FROM memories WHERE id = ?').run(id);
+export function deleteMemory(orm: Orm, id: string): void {
+  const result = asRunResult(orm.delete(memories).where(eq(memories.id, id)).run());
   if (result.changes === 0) {
     throw new AdminQueryError('not_found', 'Memory does not exist', 404);
   }
@@ -272,9 +292,15 @@ function parseTtlSeconds(value: unknown): number | undefined {
   return value;
 }
 
-function getItem(db: Database, id: string, nowIso: string, warningDays: number, now: Date): MemoryAdminItem {
-  const row = db.query<MemoryListRow, [string]>(`${MEMORY_LIST_SELECT} WHERE m.id = ?`).get(id);
-  if (row === null) {
+function getItem(orm: Orm, id: string, nowIso: string, warningDays: number, now: Date): MemoryAdminItem {
+  const row = orm
+    .select(MEMORY_LIST_FIELDS)
+    .from(memories)
+    .innerJoin(conversations, eq(conversations.id, memories.conversationId))
+    .innerJoin(chats, eq(chats.id, conversations.chatId))
+    .where(eq(memories.id, id))
+    .get();
+  if (row === undefined) {
     throw new Error('Memory row vanished after write');
   }
   const warningIso = new Date(now.getTime() + warningDays * 86_400_000).toISOString();

@@ -356,7 +356,7 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
       throw new Error('Expected the chat row');
     }
     store.db.query('INSERT INTO chat_pause(chat_id, paused_at) VALUES (?, ?)').run(chat.id, iso);
-    const sleeping = enterSleep(store.db);
+    const sleeping = enterSleep(store.orm);
 
     const overview = await readJson(await server.handle(request('/api/overview', { headers })));
     expect(overview.invocation_states).toContainEqual({ label: 'completed', count: 1 });

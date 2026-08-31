@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   createModels,
+  type FauxProviderHandle,
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
-  type FauxProviderHandle,
 } from '@earendil-works/pi-ai';
 import type { Update } from 'grammy/types';
 import { AgentRuntime } from '../src/agent-runtime.ts';
@@ -15,10 +15,10 @@ import { type LoadedConfig, loadConfig } from '../src/config.ts';
 import { SqliteStore } from '../src/database.ts';
 import { AgentModelSwitcher } from '../src/model-switch.ts';
 import type { ModelRegistry } from '../src/providers.ts';
-import { SecretStore } from '../src/secrets.ts';
 import { BucketScheduler } from '../src/scheduler.ts';
-import { activeSleepUntil, enterSleep, SLEEP_STATE_KEY } from '../src/sleep.ts';
+import { SecretStore } from '../src/secrets.ts';
 import type { TelegramSendApi } from '../src/send-tool.ts';
+import { activeSleepUntil, enterSleep, SLEEP_STATE_KEY } from '../src/sleep.ts';
 import { TelegramIngestion } from '../src/telegram-ingestion.ts';
 import { writeTestConfig } from './helpers.ts';
 
@@ -166,7 +166,7 @@ test('adds zzz at the next turn boundary when a running session crosses the thre
   ]);
   await runtime.run(invocationId, new AbortController().signal);
   expect(modelToolLists(store)).toEqual([['send'], ['send', 'zzz']]);
-  expect(activeSleepUntil(store.db)).not.toBeNull();
+  expect(activeSleepUntil(store.orm)).not.toBeNull();
   store.close();
 });
 
@@ -177,7 +177,7 @@ test('zzz enters sleeping and ends without another model turn', async () => {
     state: 'completed',
     reason: 'completed',
   });
-  expect(activeSleepUntil(store.db)).not.toBeNull();
+  expect(activeSleepUntil(store.orm)).not.toBeNull();
   expect(modelToolLists(store)).toHaveLength(1);
   expect(
     store.db
@@ -198,7 +198,7 @@ test('sleeping skips both due and already queued agent sessions', async () => {
   });
   const now = new Date();
   ingestion.ingest(update, now);
-  enterSleep(store.db, new Date(now.getTime() + 16_000));
+  enterSleep(store.orm, new Date(now.getTime() + 16_000));
   expect(scheduler.processDue(new Date(now.getTime() + 15_000))).toEqual([]);
 
   const secondUpdate = structuredClone(update);
@@ -208,14 +208,14 @@ test('sleeping skips both due and already queued agent sessions', async () => {
   secondUpdate.update_id = 2;
   secondUpdate.message.message_id = 11;
   const secondReceived = new Date(now.getTime() + 17_000);
-  activeSleepUntil(store.db, new Date(now.getTime() + 16_500));
+  activeSleepUntil(store.orm, new Date(now.getTime() + 16_500));
   store.db.query('DELETE FROM app_state WHERE key = ?').run(SLEEP_STATE_KEY);
   ingestion.ingest(secondUpdate, secondReceived);
   const [queuedId] = scheduler.processDue(new Date(secondReceived.getTime() + 15_000));
   if (queuedId === undefined) {
     throw new Error('Expected a queued invocation');
   }
-  enterSleep(store.db, new Date(secondReceived.getTime() + 16_000));
+  enterSleep(store.orm, new Date(secondReceived.getTime() + 16_000));
   scheduler.start(new Date(secondReceived.getTime() + 16_000));
   await scheduler.stop();
   expect(
@@ -226,19 +226,19 @@ test('sleeping skips both due and already queued agent sessions', async () => {
 
 test('sleeping persists across reopening the SQLite store', async () => {
   const { loaded, store } = await openStore('plasticwan-sleep-restart-');
-  const expected = enterSleep(store.db).sleepUntil;
+  const expected = enterSleep(store.orm).sleepUntil;
   store.close();
   const reopened = await SqliteStore.open(loaded.config);
-  expect(activeSleepUntil(reopened.db)).toBe(expected);
+  expect(activeSleepUntil(reopened.orm)).toBe(expected);
   reopened.close();
 });
 
 test('the next UTC budget period wakes the bot after its minimum sleep', async () => {
   const { loaded, store } = await openStore();
-  const slept = enterSleep(store.db, new Date('2026-08-15T01:00:00.000Z'));
+  const slept = enterSleep(store.orm, new Date('2026-08-15T01:00:00.000Z'));
   expect(slept.sleepUntil).toBe('2026-08-16T00:00:00.000Z');
-  expect(activeSleepUntil(store.db, new Date('2026-08-15T23:59:59.999Z'))).toBe(slept.sleepUntil);
-  expect(activeSleepUntil(store.db, new Date('2026-08-16T00:00:00.000Z'))).toBeNull();
+  expect(activeSleepUntil(store.orm, new Date('2026-08-15T23:59:59.999Z'))).toBe(slept.sleepUntil);
+  expect(activeSleepUntil(store.orm, new Date('2026-08-16T00:00:00.000Z'))).toBeNull();
   expect(store.db.query('SELECT value FROM app_state WHERE key = ?').get(SLEEP_STATE_KEY)).toBeNull();
   const awakeAt = new Date('2026-08-16T00:00:00.001Z');
   const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
@@ -254,7 +254,7 @@ test('the next UTC budget period wakes the bot after its minimum sleep', async (
 test('repeated concurrent sleep requests keep one unchanged state', async () => {
   const { store } = await openStore();
   const now = new Date('2026-08-15T20:00:00.000Z');
-  const transitions = await Promise.all(Array.from({ length: 8 }, async () => enterSleep(store.db, now)));
+  const transitions = await Promise.all(Array.from({ length: 8 }, async () => enterSleep(store.orm, now)));
   expect(transitions.filter((transition) => transition.entered)).toHaveLength(1);
   expect(new Set(transitions.map((transition) => transition.sleepUntil)).size).toBe(1);
   expect(

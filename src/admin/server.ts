@@ -88,7 +88,7 @@ export class AdminServer {
     this.#store = options.store;
     this.#config = options.config;
     this.#admin = admin;
-    this.#auth = new AdminAuth(options.store.db, admin.session_ttl_hours);
+    this.#auth = new AdminAuth(options.store.orm, admin.session_ttl_hours);
     this.#scheduler = options.scheduler;
     this.#modelSwitcher = options.modelSwitcher;
     this.#staticDir = resolve(admin.static_dir ?? join(import.meta.dir, '..', '..', 'apps', 'admin', 'dist'));
@@ -191,18 +191,17 @@ export class AdminServer {
       return json({ status: 'ok' }, 200, this.#sessionCookie(token));
     }
     if (route === 'cancel-pending-sessions' && request.method === 'POST') {
-      const result = cancelPendingSessions(this.#store.db, new Date());
+      const result = cancelPendingSessions(this.#store.orm, new Date());
       this.#scheduler?.wake();
       return json(result);
     }
     if (route === 'wake' && request.method === 'POST') {
-      const wasSleeping = wakeFromSleep(this.#store.db);
+      const wasSleeping = wakeFromSleep(this.#store.orm);
       if (wasSleeping) {
         this.#scheduler?.wake();
       }
       return json({ status: 'awake', was_sleeping: wasSleeping });
     }
-    const database = this.#store.db;
     const query: ListQuery = {
       limit: url.searchParams.get('limit'),
       cursor: url.searchParams.get('cursor'),
@@ -213,14 +212,14 @@ export class AdminServer {
       target: url.searchParams.get('target'),
     };
     if (route === 'memories' && request.method === 'GET') {
-      return json(listMemories(database, query, this.#memoryWarningDays));
+      return json(listMemories(this.#store.orm, query, this.#memoryWarningDays));
     }
     if (route === 'memories' && request.method === 'POST') {
       const body = parseCreateMemoryBody(await readJsonObject(request));
-      return json(createMemory(database, body, this.#memoryWarningDays));
+      return json(createMemory(this.#store.orm, body, this.#memoryWarningDays));
     }
     if (route === 'memories/chats' && request.method === 'GET') {
-      return json({ items: listMemoryChats(database) });
+      return json({ items: listMemoryChats(this.#store.orm) });
     }
     if (segments[0] === 'memories' && segments.length === 2) {
       if (segments[1] === 'chats') {
@@ -229,27 +228,27 @@ export class AdminServer {
       const id = parseMemoryId(segments[1] ?? '');
       if (request.method === 'PUT') {
         const body = parseUpdateMemoryBody(await readJsonObject(request));
-        return json(updateMemory(database, id, body, this.#memoryWarningDays));
+        return json(updateMemory(this.#store.orm, id, body, this.#memoryWarningDays));
       }
       if (request.method === 'DELETE') {
-        deleteMemory(database, id);
+        deleteMemory(this.#store.orm, id);
         return json({ status: 'ok' });
       }
     }
     if (route === 'admins' && request.method === 'GET') {
-      return json({ items: listBotAdmins(database) });
+      return json({ items: listBotAdmins(this.#store.orm) });
     }
     if (route === 'admins' && request.method === 'POST') {
       const body = await readJsonObject(request);
-      return json(addBotAdmin(database, parseAdminUserId(body.telegram_user_id), 'admin-panel'));
+      return json(addBotAdmin(this.#store.orm, parseAdminUserId(body.telegram_user_id), 'admin-panel'));
     }
     if (segments[0] === 'admins' && segments.length === 2 && request.method === 'DELETE') {
-      removeBotAdmin(database, parseAdminUserId(segments[1] ?? '', 'admin_id'));
+      removeBotAdmin(this.#store.orm, parseAdminUserId(segments[1] ?? '', 'admin_id'));
       return json({ status: 'ok' });
     }
     if (segments[0] === 'alarms' && segments.length === 2 && request.method === 'DELETE') {
       const id = parseAlarmId(segments[1] ?? '');
-      const result = cancelAlarm(database, id, session.username);
+      const result = cancelAlarm(this.#store.orm, id, session.username);
       this.#scheduler?.wake();
       return json(result);
     }
@@ -276,10 +275,10 @@ export class AdminServer {
       return json({ error: 'method_not_allowed', message: 'Audit routes are read-only' }, 405);
     }
     if (route === 'overview') {
-      return json(overview(database));
+      return json(overview(this.#store.orm));
     }
     if (route === 'alarms') {
-      return json(listAlarms(database, query));
+      return json(listAlarms(this.#store.orm, query));
     }
     if (route === 'usage') {
       const daysParam = url.searchParams.get('days');
@@ -287,27 +286,27 @@ export class AdminServer {
       if (!Number.isInteger(days) || days < 1 || days > 90) {
         return json({ error: 'invalid_days', message: 'days must be an integer between 1 and 90' }, 400);
       }
-      return json(usage(database, days));
+      return json(usage(this.#store.orm, days));
     }
     if (route === 'invocations') {
-      return json(listInvocations(database, query));
+      return json(listInvocations(this.#store.orm, query));
     }
     if (segments[0] === 'invocations' && segments.length === 2) {
-      const found = getInvocation(database, parseId(segments[1] ?? '', 'id'));
+      const found = getInvocation(this.#store.orm, parseId(segments[1] ?? '', 'id'));
       return found === null ? json({ error: 'not_found', message: 'Invocation does not exist' }, 404) : json(found);
     }
     if (route === 'messages') {
-      return json(listMessages(database, query));
+      return json(listMessages(this.#store.orm, query));
     }
     if (segments[0] === 'messages' && segments.length === 2) {
-      const found = getMessage(database, parseId(segments[1] ?? '', 'id'));
+      const found = getMessage(this.#store.orm, parseId(segments[1] ?? '', 'id'));
       return found === null ? json({ error: 'not_found', message: 'Message does not exist' }, 404) : json(found);
     }
     if (route === 'sticker-sets') {
-      return json({ items: listStickerSets(database) });
+      return json({ items: listStickerSets(this.#store.orm) });
     }
     if (route === 'stickers') {
-      return json(listStickers(database, query));
+      return json(listStickers(this.#store.orm, query));
     }
     return json({ error: 'not_found', message: 'Unknown admin API route' }, 404);
   }

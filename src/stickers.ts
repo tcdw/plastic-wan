@@ -1,11 +1,12 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import type { SQLQueryBindings } from 'bun:sqlite';
+import { and, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import type { RawConfig } from './config.ts';
 import type { InvocationContext } from './context-builder.ts';
 import { finishToolCall, startToolCall, type SqliteStore } from './database.ts';
 import type { MediaService, StickerIndexAnalysis } from './media.ts';
+import { mediaAnalyses, stickerSets, stickers } from './schema.ts';
 
 const StickerSetResponseSchema = Type.Object(
   {
@@ -59,7 +60,7 @@ interface SearchRow {
   readonly id: bigint;
   readonly file_id: string;
   readonly emoji: string | null;
-  readonly description: string;
+  readonly description: string | null;
 }
 
 export interface StickerServiceOptions {
@@ -88,25 +89,43 @@ export class StickerService {
   async sync(): Promise<void> {
     const configured = this.#config.telegram.sticker_sets ?? [];
     this.#store.transaction(() => {
+      const orm = this.#store.orm;
       const now = new Date().toISOString();
-      this.#store.db.query('UPDATE sticker_sets SET configured = 0, updated_at = ?').run(now);
+      orm.update(stickerSets).set({ configured: false, updatedAt: now }).run();
       for (const set of configured) {
-        this.#store.db
-          .query(
-            "INSERT INTO sticker_sets(alias, telegram_name, configured, sync_state, updated_at) VALUES (?, ?, 1, 'pending', ?) ON CONFLICT(alias) DO UPDATE SET telegram_name = excluded.telegram_name, configured = 1, sync_state = 'pending', updated_at = excluded.updated_at",
-          )
-          .run(set.alias, set.name, now);
+        orm
+          .insert(stickerSets)
+          .values({
+            alias: set.alias,
+            telegramName: set.name,
+            configured: true,
+            syncState: 'pending',
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: stickerSets.alias,
+            set: {
+              telegramName: sql`excluded.telegram_name`,
+              configured: true,
+              syncState: 'pending',
+              updatedAt: sql`excluded.updated_at`,
+            },
+          })
+          .run();
       }
-      this.#store.db
-        .query(
-          'UPDATE stickers SET active = 0 WHERE sticker_set_id IN (SELECT id FROM sticker_sets WHERE configured = 0)',
+      orm
+        .update(stickers)
+        .set({ active: false })
+        .where(
+          inArray(
+            stickers.stickerSetId,
+            orm.select({ id: stickerSets.id }).from(stickerSets).where(eq(stickerSets.configured, false)),
+          ),
         )
         .run();
-      this.#store.db
-        .query(
-          'DELETE FROM sticker_search WHERE sticker_id IN (SELECT CAST(s.id AS TEXT) FROM stickers s JOIN sticker_sets ss ON ss.id = s.sticker_set_id WHERE ss.configured = 0)',
-        )
-        .run();
+      orm.run(
+        sql`DELETE FROM sticker_search WHERE sticker_id IN (SELECT CAST(s.id AS TEXT) FROM stickers s JOIN sticker_sets ss ON ss.id = s.sticker_set_id WHERE ss.configured = 0)`,
+      );
     });
     for (const set of configured) {
       try {
@@ -116,11 +135,11 @@ export class StickerService {
         }
         this.#store.transaction(() => this.#applyStickerSet(set.alias, response));
       } catch {
-        this.#store.db
-          .query(
-            "UPDATE sticker_sets SET sync_state = 'error', error_code = 'telegram_sync', updated_at = ? WHERE alias = ?",
-          )
-          .run(new Date().toISOString(), set.alias);
+        this.#store.orm
+          .update(stickerSets)
+          .set({ syncState: 'error', errorCode: 'telegram_sync', updatedAt: new Date().toISOString() })
+          .where(eq(stickerSets.alias, set.alias))
+          .run();
       }
     }
   }
@@ -143,42 +162,50 @@ export class StickerService {
   }
 
   async runOne(now = new Date(), signal = new AbortController().signal): Promise<boolean> {
-    const sticker = this.#store.db
-      .query<{ id: bigint; emoji: string | null }, [string]>(
-        `SELECT s.id, s.emoji FROM stickers s
-         JOIN sticker_sets ss ON ss.id = s.sticker_set_id
-         WHERE s.active = 1 AND ss.configured = 1 AND s.index_state IN ('pending', 'error')
-           AND (s.next_retry_at IS NULL OR s.next_retry_at <= ?)
-         ORDER BY s.id LIMIT 1`,
+    const orm = this.#store.orm;
+    const sticker = orm
+      .select({ id: stickers.id, emoji: stickers.emoji })
+      .from(stickers)
+      .innerJoin(stickerSets, eq(stickers.stickerSetId, stickerSets.id))
+      .where(
+        and(
+          eq(stickers.active, true),
+          eq(stickerSets.configured, true),
+          inArray(stickers.indexState, ['pending', 'error']),
+          or(isNull(stickers.nextRetryAt), lte(stickers.nextRetryAt, now.toISOString())),
+        ),
       )
-      .get(now.toISOString());
-    if (sticker === null) {
+      .orderBy(stickers.id)
+      .limit(1)
+      .get();
+    if (sticker === undefined) {
       return false;
     }
-    this.#store.db
-      .query("UPDATE stickers SET index_state = 'running', updated_at = ? WHERE id = ?")
-      .run(now.toISOString(), sticker.id);
+    orm
+      .update(stickers)
+      .set({ indexState: 'running', updatedAt: now.toISOString() })
+      .where(eq(stickers.id, sticker.id))
+      .run();
     try {
       const analysis = await this.#media.analyzeStickerForIndex(sticker.id, signal);
       this.#publishIndex(sticker.id, sticker.emoji, analysis);
     } catch {
       this.#store.transaction(() => {
         const current =
-          this.#store.db
-            .query<{ failure_count: bigint }, [bigint]>('SELECT failure_count FROM stickers WHERE id = ?')
-            .get(sticker.id)?.failure_count ?? 0n;
+          orm.select({ failureCount: stickers.failureCount }).from(stickers).where(eq(stickers.id, sticker.id)).get()
+            ?.failureCount ?? 0n;
         const failureCount = current + 1n;
         const delaySeconds = Math.min(21_600, 60 * 2 ** Math.min(8, Number(failureCount - 1n)));
-        this.#store.db
-          .query(
-            "UPDATE stickers SET index_state = 'error', failure_count = ?, next_retry_at = ?, updated_at = ? WHERE id = ?",
-          )
-          .run(
+        orm
+          .update(stickers)
+          .set({
+            indexState: 'error',
             failureCount,
-            new Date(now.getTime() + delaySeconds * 1000).toISOString(),
-            new Date().toISOString(),
-            sticker.id,
-          );
+            nextRetryAt: new Date(now.getTime() + delaySeconds * 1000).toISOString(),
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(stickers.id, sticker.id))
+          .run();
       });
     }
     return true;
@@ -198,7 +225,7 @@ export class StickerService {
       execute: async (toolCallId, input) => {
         const started = performance.now();
         const toolId = startToolCall(
-          this.#store.db,
+          this.#store.orm,
           context.invocationId,
           toolCallId,
           'search_stickers',
@@ -213,9 +240,11 @@ export class StickerService {
             const setId =
               input.set === undefined
                 ? undefined
-                : this.#store.db
-                    .query<{ id: bigint }, [string]>('SELECT id FROM sticker_sets WHERE alias = ? AND configured = 1')
-                    .get(input.set)?.id;
+                : this.#store.orm
+                    .select({ id: stickerSets.id })
+                    .from(stickerSets)
+                    .where(and(eq(stickerSets.alias, input.set), eq(stickerSets.configured, true)))
+                    .get()?.id;
             if (input.set !== undefined && setId === undefined) {
               throw new Error('Unknown or disabled sticker set alias');
             }
@@ -232,10 +261,10 @@ export class StickerService {
             };
           });
           const resultText = JSON.stringify(results);
-          finishToolCall(this.#store.db, toolId, 'success', resultText, null, { startedAt: started });
+          finishToolCall(this.#store.orm, toolId, 'success', resultText, null, { startedAt: started });
           return { content: [{ type: 'text', text: resultText }], details: { count: results.length } };
         } catch (error) {
-          finishToolCall(this.#store.db, toolId, 'error', null, 'sticker_search_error', { startedAt: started });
+          finishToolCall(this.#store.orm, toolId, 'error', null, 'sticker_search_error', { startedAt: started });
           throw new Error(error instanceof Error ? error.message : 'Sticker search failed');
         }
       },
@@ -243,40 +272,57 @@ export class StickerService {
   }
 
   #applyStickerSet(alias: string, response: Static<typeof StickerSetResponseSchema>): void {
+    const orm = this.#store.orm;
     const now = new Date().toISOString();
-    const set = this.#store.db
-      .query<{ id: bigint }, [string]>('SELECT id FROM sticker_sets WHERE alias = ?')
-      .get(alias);
-    if (set === null) {
+    const set = orm.select({ id: stickerSets.id }).from(stickerSets).where(eq(stickerSets.alias, alias)).get();
+    if (set === undefined) {
       throw new Error('Configured sticker set row is missing');
     }
-    this.#store.db.query('UPDATE stickers SET active = 0 WHERE sticker_set_id = ?').run(set.id);
+    orm.update(stickers).set({ active: false }).where(eq(stickers.stickerSetId, set.id)).run();
     for (const sticker of response.stickers) {
       const format = sticker.is_video ? 'video' : sticker.is_animated ? 'animated' : 'static';
-      this.#store.db
-        .query(
-          "INSERT INTO stickers(sticker_set_id, file_unique_id, file_id, emoji, format, thumbnail_json, active, index_state, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, 'pending', ?) ON CONFLICT(file_unique_id) DO UPDATE SET sticker_set_id = excluded.sticker_set_id, file_id = excluded.file_id, emoji = excluded.emoji, format = excluded.format, thumbnail_json = excluded.thumbnail_json, active = 1, updated_at = excluded.updated_at",
-        )
-        .run(
-          set.id,
-          sticker.file_unique_id,
-          sticker.file_id,
-          sticker.emoji ?? null,
+      orm
+        .insert(stickers)
+        .values({
+          stickerSetId: set.id,
+          fileUniqueId: sticker.file_unique_id,
+          fileId: sticker.file_id,
+          emoji: sticker.emoji ?? null,
           format,
-          sticker.thumbnail === undefined ? null : JSON.stringify(sticker.thumbnail),
-          now,
-        );
+          thumbnailJson: sticker.thumbnail === undefined ? null : JSON.stringify(sticker.thumbnail),
+          active: true,
+          indexState: 'pending',
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: stickers.fileUniqueId,
+          set: {
+            stickerSetId: sql`excluded.sticker_set_id`,
+            fileId: sql`excluded.file_id`,
+            emoji: sql`excluded.emoji`,
+            format: sql`excluded.format`,
+            thumbnailJson: sql`excluded.thumbnail_json`,
+            active: true,
+            updatedAt: sql`excluded.updated_at`,
+          },
+        })
+        .run();
     }
-    this.#store.db
-      .query(
-        'DELETE FROM sticker_search WHERE sticker_id IN (SELECT CAST(id AS TEXT) FROM stickers WHERE sticker_set_id = ? AND active = 0)',
-      )
-      .run(set.id);
-    this.#store.db
-      .query(
-        "UPDATE sticker_sets SET title = ?, telegram_name = ?, sync_state = 'success', last_synced_at = ?, error_code = NULL, updated_at = ? WHERE id = ?",
-      )
-      .run(response.title, response.name, now, now, set.id);
+    orm.run(
+      sql`DELETE FROM sticker_search WHERE sticker_id IN (SELECT CAST(id AS TEXT) FROM stickers WHERE sticker_set_id = ${set.id} AND active = 0)`,
+    );
+    orm
+      .update(stickerSets)
+      .set({
+        title: response.title,
+        telegramName: response.name,
+        syncState: 'success',
+        lastSyncedAt: now,
+        errorCode: null,
+        updatedAt: now,
+      })
+      .where(eq(stickerSets.id, set.id))
+      .run();
   }
 
   #publishIndex(stickerId: bigint, emoji: string | null, analysis: StickerIndexAnalysis): void {
@@ -289,53 +335,71 @@ export class StickerService {
       ...analysis.metadata.tags_en,
     ].join(' ');
     this.#store.transaction(() => {
+      const orm = this.#store.orm;
       const now = new Date().toISOString();
-      this.#store.db.query('DELETE FROM sticker_search WHERE sticker_id = ?').run(stickerId.toString());
-      this.#store.db
-        .query('INSERT INTO sticker_search(sticker_id, description) VALUES (?, ?)')
-        .run(stickerId.toString(), content);
-      this.#store.db
-        .query(
-          "UPDATE stickers SET current_analysis_id = ?, index_state = 'success', failure_count = 0, next_retry_at = NULL, updated_at = ? WHERE id = ?",
-        )
-        .run(analysis.analysisId, now, stickerId);
+      orm.run(sql`DELETE FROM sticker_search WHERE sticker_id = ${stickerId.toString()}`);
+      orm.run(sql`INSERT INTO sticker_search(sticker_id, description) VALUES (${stickerId.toString()}, ${content})`);
+      orm
+        .update(stickers)
+        .set({
+          currentAnalysisId: analysis.analysisId,
+          indexState: 'success',
+          failureCount: 0n,
+          nextRetryAt: null,
+          updatedAt: now,
+        })
+        .where(eq(stickers.id, stickerId))
+        .run();
     });
   }
 
   #findByIds(ids: readonly string[]): SearchRow[] {
-    const query = this.#store.db.query<SearchRow, [bigint]>(
-      `SELECT s.id, s.file_id, s.emoji, ma.description
-       FROM stickers s
-       JOIN sticker_sets ss ON ss.id = s.sticker_set_id
-       JOIN media_analyses ma ON ma.id = s.current_analysis_id
-       WHERE s.id = ? AND s.active = 1 AND s.index_state = 'success' AND ss.configured = 1`,
-    );
     return ids.flatMap((id) => {
-      const row = query.get(BigInt(id));
-      return row === null ? [] : [row];
+      const row = this.#store.orm
+        .select({
+          id: stickers.id,
+          file_id: stickers.fileId,
+          emoji: stickers.emoji,
+          description: mediaAnalyses.description,
+        })
+        .from(stickers)
+        .innerJoin(stickerSets, eq(stickers.stickerSetId, stickerSets.id))
+        .innerJoin(mediaAnalyses, eq(mediaAnalyses.id, stickers.currentAnalysisId))
+        .where(
+          and(
+            eq(stickers.id, BigInt(id)),
+            eq(stickers.active, true),
+            eq(stickers.indexState, 'success'),
+            eq(stickerSets.configured, true),
+          ),
+        )
+        .get();
+      return row === undefined ? [] : [row];
     });
   }
 
   #search(query: string, setId: bigint | undefined, limit: number): SearchRow[] {
-    const from =
-      'FROM sticker_search ss JOIN stickers s ON CAST(s.id AS TEXT) = ss.sticker_id ' +
-      'JOIN sticker_sets st ON st.id = s.sticker_set_id JOIN media_analyses ma ON ma.id = s.current_analysis_id';
-    const filter = setId === undefined ? '' : 'AND s.sticker_set_id = ?';
-    const prefix = setId === undefined ? [] : [setId];
+    const from = sql`
+      FROM sticker_search ss
+      JOIN stickers s ON CAST(s.id AS TEXT) = ss.sticker_id
+      JOIN sticker_sets st ON st.id = s.sticker_set_id
+      JOIN media_analyses ma ON ma.id = s.current_analysis_id
+    `;
+    const setFilter = setId === undefined ? sql.empty() : sql`AND s.sticker_set_id = ${setId}`;
     if ([...query].length >= 3) {
       const match = `"${query.replaceAll('"', '""')}"`;
-      return this.#store.db
-        .query<SearchRow, SQLQueryBindings[]>(
-          `SELECT s.id, s.file_id, s.emoji, ma.description ${from} WHERE s.active = 1 AND st.configured = 1 ${filter} AND sticker_search MATCH ? ORDER BY bm25(sticker_search), s.id LIMIT ?`,
-        )
-        .all(...prefix, match, BigInt(limit));
+      return this.#store.orm.all<SearchRow>(sql`
+        SELECT s.id, s.file_id, s.emoji, ma.description ${from}
+        WHERE s.active = 1 AND st.configured = 1 ${setFilter} AND sticker_search MATCH ${match}
+        ORDER BY bm25(sticker_search), s.id LIMIT ${BigInt(limit)}
+      `);
     }
     const like = `%${query.replace(/[\\%_]/g, '\\$&')}%`;
-    return this.#store.db
-      .query<SearchRow, SQLQueryBindings[]>(
-        `SELECT s.id, s.file_id, s.emoji, ma.description ${from} WHERE s.active = 1 AND st.configured = 1 ${filter} AND ss.description LIKE ? ESCAPE '\\' ORDER BY s.id LIMIT ?`,
-      )
-      .all(...prefix, like, BigInt(limit));
+    return this.#store.orm.all<SearchRow>(sql`
+      SELECT s.id, s.file_id, s.emoji, ma.description ${from}
+      WHERE s.active = 1 AND st.configured = 1 ${setFilter} AND ss.description LIKE ${like} ESCAPE '\\'
+      ORDER BY s.id LIMIT ${BigInt(limit)}
+    `);
   }
 
   async #loop(signal: AbortSignal): Promise<void> {

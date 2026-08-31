@@ -1,7 +1,8 @@
-import type { Database } from 'bun:sqlite';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { and, eq, sql } from 'drizzle-orm';
 import Type from 'typebox';
-import { finishToolCall, startToolCall } from './database.ts';
+import { type Orm, asRunResult, finishToolCall, startToolCall } from './database.ts';
+import { appState } from './schema.ts';
 
 export const SLEEP_REMAINING_BUDGET_PERCENT = 5n;
 export const MINIMUM_SLEEP_MILLISECONDS = 8 * 60 * 60 * 1_000;
@@ -19,14 +20,13 @@ export interface SleepTransition {
   readonly entered: boolean;
 }
 
-export function readDailyTokenBudget(db: Database, maxTokens: number, now = new Date()): DailyTokenBudget {
-  const usedTokens =
-    db
-      .query<{ amount: bigint }, [string]>(
-        "SELECT COALESCE(SUM(amount), 0) AS amount FROM daily_usage WHERE utc_date = ? AND scope = 'chat' AND metric = 'model_tokens'",
-      )
-      .get(now.toISOString().slice(0, 10))?.amount ?? 0n;
-  return { usedTokens, maxTokens: BigInt(maxTokens) };
+export function readDailyTokenBudget(orm: Orm, maxTokens: number, now = new Date()): DailyTokenBudget {
+  const row = orm
+    .all<{ amount: bigint }>(
+      sql`SELECT COALESCE(SUM(amount), 0) AS amount FROM daily_usage WHERE utc_date = ${now.toISOString().slice(0, 10)} AND scope = 'chat' AND metric = 'model_tokens'`,
+    )
+    .at(0);
+  return { usedTokens: row?.amount ?? 0n, maxTokens: BigInt(maxTokens) };
 }
 
 export function isLowDailyTokenBudget(budget: DailyTokenBudget): boolean {
@@ -37,72 +37,91 @@ export function isDailyTokenBudgetReached(budget: DailyTokenBudget): boolean {
   return budget.usedTokens >= budget.maxTokens;
 }
 
-export function storedSleepUntil(db: Database): string | null {
+export function storedSleepUntil(orm: Orm): string | null {
   return (
-    db.query<{ value: string }, [string]>('SELECT value FROM app_state WHERE key = ?').get(SLEEP_STATE_KEY)?.value ??
-    null
+    orm.select({ value: appState.value }).from(appState).where(eq(appState.key, SLEEP_STATE_KEY)).get()?.value ?? null
   );
 }
 
-export function activeSleepUntil(db: Database, now = new Date()): string | null {
-  return db
-    .transaction(() => {
-      const sleepUntil = storedSleepUntil(db);
+export function activeSleepUntil(orm: Orm, now = new Date()): string | null {
+  return orm.transaction(
+    () => {
+      const sleepUntil = storedSleepUntil(orm);
       if (sleepUntil === null) {
         return null;
       }
       if (sleepUntil > now.toISOString()) {
         return sleepUntil;
       }
-      const deleted = db.query('DELETE FROM app_state WHERE key = ? AND value = ?').run(SLEEP_STATE_KEY, sleepUntil);
+      const deleted = asRunResult(
+        orm
+          .delete(appState)
+          .where(and(eq(appState.key, SLEEP_STATE_KEY), eq(appState.value, sleepUntil)))
+          .run(),
+      );
       if (deleted.changes === 1) {
         console.log(
           JSON.stringify({ event: 'bot_awake_after_budget_reset', sleep_until: sleepUntil, at: now.toISOString() }),
         );
       }
       return null;
-    })
-    .immediate();
+    },
+    { behavior: 'immediate' },
+  );
 }
 
-export function wakeFromSleep(db: Database, now = new Date()): boolean {
-  return db
-    .transaction(() => {
-      const sleepUntil = storedSleepUntil(db);
+export function wakeFromSleep(orm: Orm, now = new Date()): boolean {
+  return orm.transaction(
+    () => {
+      const sleepUntil = storedSleepUntil(orm);
       if (sleepUntil === null) {
         return false;
       }
-      const deleted = db.query('DELETE FROM app_state WHERE key = ? AND value = ?').run(SLEEP_STATE_KEY, sleepUntil);
+      const deleted = asRunResult(
+        orm
+          .delete(appState)
+          .where(and(eq(appState.key, SLEEP_STATE_KEY), eq(appState.value, sleepUntil)))
+          .run(),
+      );
       if (deleted.changes !== 1) {
         return false;
       }
       console.log(JSON.stringify({ event: 'bot_awake_manually', sleep_until: sleepUntil, at: now.toISOString() }));
       return true;
-    })
-    .immediate();
+    },
+    { behavior: 'immediate' },
+  );
 }
 
-export function enterSleep(db: Database, now = new Date()): SleepTransition {
-  return db
-    .transaction(() => {
-      const current = db
-        .query<{ value: string }, [string]>('SELECT value FROM app_state WHERE key = ?')
-        .get(SLEEP_STATE_KEY);
-      if (current !== null && current.value > now.toISOString()) {
+export function enterSleep(orm: Orm, now = new Date()): SleepTransition {
+  return orm.transaction(
+    () => {
+      const current = orm
+        .select({ value: appState.value })
+        .from(appState)
+        .where(eq(appState.key, SLEEP_STATE_KEY))
+        .get();
+      if (current !== undefined && current.value > now.toISOString()) {
         return { sleepUntil: current.value, entered: false };
       }
       const nextResetAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
       const sleepUntil = new Date(Math.max(now.getTime() + MINIMUM_SLEEP_MILLISECONDS, nextResetAt)).toISOString();
-      db.query(
-        'INSERT INTO app_state(key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
-      ).run(SLEEP_STATE_KEY, sleepUntil, now.toISOString());
+      orm
+        .insert(appState)
+        .values({ key: SLEEP_STATE_KEY, value: sleepUntil, updatedAt: now.toISOString() })
+        .onConflictDoUpdate({
+          target: appState.key,
+          set: { value: sleepUntil, updatedAt: now.toISOString() },
+        })
+        .run();
       return { sleepUntil, entered: true };
-    })
-    .immediate();
+    },
+    { behavior: 'immediate' },
+  );
 }
 
 export function createZzzTool(options: {
-  readonly db: Database;
+  readonly orm: Orm;
   readonly invocationId: bigint;
   readonly chatId: bigint;
   readonly onSleep: () => void;
@@ -117,7 +136,7 @@ export function createZzzTool(options: {
     execute: async (toolCallId, input) => {
       const now = new Date();
       const auditId = startToolCall(
-        options.db,
+        options.orm,
         options.invocationId,
         toolCallId,
         'zzz',
@@ -134,7 +153,7 @@ export function createZzzTool(options: {
         }),
       );
       try {
-        const transition = enterSleep(options.db, now);
+        const transition = enterSleep(options.orm, now);
         options.onSleep();
         if (transition.entered) {
           console.log(
@@ -148,7 +167,7 @@ export function createZzzTool(options: {
           );
         }
         finishToolCall(
-          options.db,
+          options.orm,
           auditId,
           'success',
           `sleep_until=${transition.sleepUntil} entered=${transition.entered}`,
@@ -167,7 +186,7 @@ export function createZzzTool(options: {
           details: { sleep_until: transition.sleepUntil, entered: transition.entered },
         };
       } catch (error) {
-        finishToolCall(options.db, auditId, 'error', null, 'sleep_error', { now });
+        finishToolCall(options.orm, auditId, 'error', null, 'sleep_error', { now });
         throw error;
       }
     },

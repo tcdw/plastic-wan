@@ -1,7 +1,28 @@
 import { Database } from 'bun:sqlite';
 import { chmod, type FileHandle, mkdir, open, readdir, readFile, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { and, eq, sql } from 'drizzle-orm';
+import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import type { RawConfig } from './config.ts';
+import * as schema from './schema.ts';
+import { chatMigrations, chatPause, toolCalls } from './schema.ts';
+
+/** Typed query layer over the raw Bun SQLite connection. */
+export type Orm = BunSQLiteDatabase<typeof schema>;
+
+/**
+ * The bun-sqlite drizzle driver types `.run()` as `void`, but at runtime it
+ * returns the native result with `changes`. Use this whenever a write needs
+ * its affected-row count.
+ */
+export interface SqliteRunResult {
+  readonly changes: number;
+  readonly lastInsertRowid: number | bigint;
+}
+
+export function asRunResult(result: unknown): SqliteRunResult {
+  return result as SqliteRunResult;
+}
 
 interface Migration {
   readonly version: number;
@@ -54,11 +75,14 @@ export class ServeLock {
 
 export class SqliteStore {
   readonly db: Database;
+  /** Drizzle query layer. Use sync methods (`.all()`, `.get()`, `.run()`, `.values()`) so statements execute inside `transaction()`. */
+  readonly orm: Orm;
   readonly path: string;
 
-  private constructor(path: string, database: Database) {
+  private constructor(path: string, database: Database, orm: Orm) {
     this.path = path;
     this.db = database;
+    this.orm = orm;
   }
 
   static async open(config: RawConfig, migrate = true): Promise<SqliteStore> {
@@ -70,7 +94,7 @@ export class SqliteStore {
     database.exec('PRAGMA synchronous = FULL;');
     database.exec('PRAGMA foreign_keys = ON;');
     database.exec('PRAGMA busy_timeout = 5000;');
-    const store = new SqliteStore(path, database);
+    const store = new SqliteStore(path, database, drizzle(database, { schema }));
     try {
       if (migrate) {
         await store.migrate(config, existed);
@@ -142,7 +166,8 @@ export async function backupDatabase(config: RawConfig): Promise<string> {
     source.exec('PRAGMA synchronous = FULL;');
     source.exec('PRAGMA foreign_keys = ON;');
     source.exec('PRAGMA busy_timeout = 5000;');
-    purgeExpiredData(source, config);
+    const sourceOrm = drizzle(source, { schema });
+    purgeExpiredData(sourceOrm, config);
     const path = await createBackupFile(
       source,
       config.paths.backups,
@@ -155,98 +180,81 @@ export async function backupDatabase(config: RawConfig): Promise<string> {
   }
 }
 
-export function purgeExpiredData(database: Database, config: RawConfig, now = new Date()): void {
+export function purgeExpiredData(orm: Orm, config: RawConfig, now = new Date()): void {
   const cutoff = new Date(now.getTime() - config.retention.online_days * 86_400_000).toISOString();
-  database
-    .transaction(() => {
-      database.query('DELETE FROM memories WHERE expires_at <= ?').run(now.toISOString());
-      database.query('DELETE FROM telegram_updates WHERE received_at < ?').run(cutoff);
-      database
-        .query(`
+  orm.transaction(
+    () => {
+      orm.run(sql`DELETE FROM memories WHERE expires_at <= ${now.toISOString()}`);
+      orm.run(sql`DELETE FROM telegram_updates WHERE received_at < ${cutoff}`);
+      orm.run(sql`
       DELETE FROM telegram_sends
       WHERE tool_call_id IN (
         SELECT tc.id
         FROM tool_calls tc
         JOIN invocations i ON i.id = tc.invocation_id
         WHERE i.state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'skipped_budget')
-          AND COALESCE(i.finished_at, i.created_at) < ?
+          AND COALESCE(i.finished_at, i.created_at) < ${cutoff}
       )
-    `)
-        .run(cutoff);
-      database
-        .query(`
+    `);
+      orm.run(sql`
       DELETE FROM internal_contexts
       WHERE invocation_id IN (
         SELECT id
         FROM invocations
         WHERE state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'skipped_budget')
-          AND COALESCE(finished_at, created_at) < ?
+          AND COALESCE(finished_at, created_at) < ${cutoff}
       )
          OR source_agent_message_id IN (
            SELECT am.id
            FROM agent_messages am
            JOIN invocations i ON i.id = am.invocation_id
            WHERE i.state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'skipped_budget')
-             AND COALESCE(i.finished_at, i.created_at) < ?
+             AND COALESCE(i.finished_at, i.created_at) < ${cutoff}
          )
-         OR created_at < ?
-    `)
-        .run(cutoff, cutoff, cutoff);
-      database
-        .query(`
+         OR created_at < ${cutoff}
+    `);
+      orm.run(sql`
       DELETE FROM invocations
       WHERE state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'skipped_budget')
-        AND COALESCE(finished_at, created_at) < ?
-    `)
-        .run(cutoff);
-      database
-        .query(`
+        AND COALESCE(finished_at, created_at) < ${cutoff}
+    `);
+      orm.run(sql`
       UPDATE buckets
       SET merged_into_bucket_id = NULL
       WHERE merged_into_bucket_id IN (
         SELECT id FROM buckets
         WHERE state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'merged', 'expired', 'skipped_budget')
-          AND COALESCE(finished_at, updated_at) < ?
+          AND COALESCE(finished_at, updated_at) < ${cutoff}
       )
-    `)
-        .run(cutoff);
-      database
-        .query(`
+    `);
+      orm.run(sql`
       DELETE FROM buckets
       WHERE state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'merged', 'expired', 'skipped_budget')
-        AND COALESCE(finished_at, updated_at) < ?
+        AND COALESCE(finished_at, updated_at) < ${cutoff}
         AND NOT EXISTS (SELECT 1 FROM invocations i WHERE i.bucket_id = buckets.id)
-    `)
-        .run(cutoff);
-      database
-        .query(`
+    `);
+      orm.run(sql`
       DELETE FROM media
       WHERE revision_id IN (
         SELECT r.id FROM message_revisions r
         JOIN messages m ON m.id = r.message_id
-        WHERE m.received_at < ?
+        WHERE m.received_at < ${cutoff}
       )
-    `)
-        .run(cutoff);
-      database
-        .query(`
+    `);
+      orm.run(sql`
       UPDATE messages
       SET current_revision_id = NULL
-      WHERE received_at < ?
+      WHERE received_at < ${cutoff}
         AND NOT EXISTS (SELECT 1 FROM invocation_messages im WHERE im.message_id = messages.id)
         AND NOT EXISTS (SELECT 1 FROM bucket_messages bm WHERE bm.message_id = messages.id)
-    `)
-        .run(cutoff);
-      database
-        .query(`
+    `);
+      orm.run(sql`
       DELETE FROM messages
-      WHERE received_at < ?
+      WHERE received_at < ${cutoff}
         AND NOT EXISTS (SELECT 1 FROM invocation_messages im WHERE im.message_id = messages.id)
         AND NOT EXISTS (SELECT 1 FROM bucket_messages bm WHERE bm.message_id = messages.id)
-    `)
-        .run(cutoff);
-      database
-        .query(`
+    `);
+      orm.run(sql`
       UPDATE message_revisions
       SET sender_id = NULL,
           text = NULL,
@@ -255,50 +263,47 @@ export function purgeExpiredData(database: Database, config: RawConfig, now = ne
           forward_origin_json = NULL,
           service_json = NULL,
           raw_fragment_json = '{}'
-      WHERE message_id IN (SELECT id FROM messages WHERE received_at < ?)
-    `)
-        .run(cutoff);
-      database
-        .query(
-          'DELETE FROM senders WHERE NOT EXISTS (SELECT 1 FROM message_revisions r WHERE r.sender_id = senders.id)',
-        )
-        .run();
-      database.query("DELETE FROM media_analyses WHERE kind = 'image' AND updated_at < ?").run(cutoff);
-      database
-        .query("DELETE FROM model_calls WHERE invocation_id IS NULL AND state <> 'pending' AND created_at < ?")
-        .run(cutoff);
-      database
-        .query(
-          "DELETE FROM alarms WHERE state IN ('fired', 'cancelled') AND COALESCE(fired_at, cancelled_at, updated_at) < ?",
-        )
-        .run(cutoff);
-      database.query('DELETE FROM daily_usage WHERE utc_date < ?').run(cutoff.slice(0, 10));
-    })
-    .immediate();
+      WHERE message_id IN (SELECT id FROM messages WHERE received_at < ${cutoff})
+    `);
+      orm.run(
+        sql`DELETE FROM senders WHERE NOT EXISTS (SELECT 1 FROM message_revisions r WHERE r.sender_id = senders.id)`,
+      );
+      orm.run(sql`DELETE FROM media_analyses WHERE kind = 'image' AND updated_at < ${cutoff}`);
+      orm.run(
+        sql`DELETE FROM model_calls WHERE invocation_id IS NULL AND state <> 'pending' AND created_at < ${cutoff}`,
+      );
+      orm.run(
+        sql`DELETE FROM alarms WHERE state IN ('fired', 'cancelled') AND COALESCE(fired_at, cancelled_at, updated_at) < ${cutoff}`,
+      );
+      orm.run(sql`DELETE FROM daily_usage WHERE utc_date < ${cutoff.slice(0, 10)}`);
+    },
+    { behavior: 'immediate' },
+  );
 }
 
 export function resolveChatConfig(
   config: RawConfig,
-  db: Database,
+  orm: Orm,
   chatId: bigint,
 ): RawConfig['telegram']['chats'][number] | undefined {
   const direct = config.telegram.chats.find((chat) => BigInt(chat.id) === chatId);
   if (direct !== undefined) {
     return direct;
   }
-  const migration = db
-    .query<{ old_chat_id: bigint }, [bigint]>('SELECT old_chat_id FROM chat_migrations WHERE new_chat_id = ?')
-    .get(chatId);
-  if (migration === null) {
+  const migration = orm
+    .select({ oldChatId: chatMigrations.oldChatId })
+    .from(chatMigrations)
+    .where(eq(chatMigrations.newChatId, chatId))
+    .get();
+  if (migration === undefined) {
     return undefined;
   }
-  return config.telegram.chats.find((chat) => BigInt(chat.id) === migration.old_chat_id);
+  return config.telegram.chats.find((chat) => BigInt(chat.id) === migration.oldChatId);
 }
 
-export function isChatPaused(db: Database, chatId: bigint): boolean {
+export function isChatPaused(orm: Orm, chatId: bigint): boolean {
   return (
-    db.query<{ present: bigint }, [bigint]>('SELECT 1 AS present FROM chat_pause WHERE chat_id = ?').get(chatId) !==
-    null
+    orm.select({ chatId: chatPause.chatId }).from(chatPause).where(eq(chatPause.chatId, chatId)).get() !== undefined
   );
 }
 
@@ -306,7 +311,7 @@ export type ToolCallFinishState = 'success' | 'error' | 'outcome_unknown';
 
 /** Inserts the pending audit row for a starting tool call and returns its rowid. */
 export function startToolCall(
-  db: Database,
+  orm: Orm,
   invocationId: bigint,
   toolCallId: string,
   toolName: string,
@@ -314,17 +319,28 @@ export function startToolCall(
   sideEffect: boolean,
   now = new Date(),
 ): bigint {
-  const created = db
-    .query(
-      "INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, state, side_effect, created_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
-    )
-    .run(invocationId, toolCallId, toolName, argumentsJson, sideEffect ? 1 : 0, now.toISOString());
-  return BigInt(created.lastInsertRowid);
+  const created = orm
+    .insert(toolCalls)
+    .values({
+      invocationId,
+      toolCallId,
+      toolName,
+      argumentsJson,
+      state: 'pending',
+      sideEffect,
+      createdAt: now.toISOString(),
+    })
+    .returning({ id: toolCalls.id })
+    .get();
+  if (created === undefined) {
+    throw new Error('tool_calls insert returned no row');
+  }
+  return created.id;
 }
 
 /** Inserts the already-failed audit row for a call rejected before execution started. */
 export function rejectToolCall(
-  db: Database,
+  orm: Orm,
   invocationId: bigint,
   toolCallId: string,
   toolName: string,
@@ -334,9 +350,20 @@ export function rejectToolCall(
   now = new Date(),
 ): void {
   const at = now.toISOString();
-  db.query(
-    "INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, state, side_effect, error_code, created_at, finished_at) VALUES (?, ?, ?, ?, 'error', ?, ?, ?, ?)",
-  ).run(invocationId, toolCallId, toolName, argumentsJson, sideEffect ? 1 : 0, errorCode, at, at);
+  orm
+    .insert(toolCalls)
+    .values({
+      invocationId,
+      toolCallId,
+      toolName,
+      argumentsJson,
+      state: 'error',
+      sideEffect,
+      errorCode,
+      createdAt: at,
+      finishedAt: at,
+    })
+    .run();
 }
 
 /**
@@ -344,27 +371,24 @@ export function rejectToolCall(
  * to also record duration_ms; pendingOnly keeps rows that were already closed untouched.
  */
 export function finishToolCall(
-  db: Database,
+  orm: Orm,
   auditId: bigint,
   state: ToolCallFinishState,
   resultText: string | null,
   errorCode: string | null,
   options: { startedAt?: number; pendingOnly?: boolean; now?: Date } = {},
 ): void {
-  let sql = 'UPDATE tool_calls SET state = ?, result_text = ?, error_code = ?';
-  if (options.startedAt !== undefined) {
-    sql += ', duration_ms = ?';
-  }
-  sql += ', finished_at = ? WHERE id = ?';
-  if (options.pendingOnly === true) {
-    sql += " AND state = 'pending'";
-  }
-  const values: (string | bigint | null)[] = [state, resultText, errorCode];
-  if (options.startedAt !== undefined) {
-    values.push(BigInt(Math.max(0, Math.round(performance.now() - options.startedAt))));
-  }
-  values.push((options.now ?? new Date()).toISOString(), auditId);
-  db.query(sql).run(...values);
+  const finishedAt = (options.now ?? new Date()).toISOString();
+  const durationMs =
+    options.startedAt !== undefined
+      ? BigInt(Math.max(0, Math.round(performance.now() - options.startedAt)))
+      : undefined;
+  const pending = options.pendingOnly === true;
+  orm
+    .update(toolCalls)
+    .set({ state, resultText, errorCode, durationMs, finishedAt })
+    .where(pending ? and(eq(toolCalls.id, auditId), eq(toolCalls.state, 'pending')) : eq(toolCalls.id, auditId))
+    .run();
 }
 
 async function createBackupFile(database: Database, backupDir: string, filename: string): Promise<string> {

@@ -3,14 +3,16 @@ import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import type { Api, AssistantMessage, ImageContent, Model, Models } from '@earendil-works/pi-ai';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import sharp from 'sharp';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import { AsyncSemaphore, type KeyedSemaphore } from './concurrency.ts';
 import type { RawConfig } from './config.ts';
 import type { DirectImage, InvocationContext } from './context-builder.ts';
-import { finishToolCall, rejectToolCall, startToolCall, type SqliteStore } from './database.ts';
+import { finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from './database.ts';
 import type { ModelRegistry } from './providers.ts';
+import { dailyUsage, mediaAnalyses, media as mediaTable, modelCalls, stickers } from './schema.ts';
 import type { SecretStore } from './secrets.ts';
 import { isDailyTokenBudgetReached, readDailyTokenBudget } from './sleep.ts';
 import { pickEnv, readBoundedOutput } from './subprocess.ts';
@@ -118,12 +120,12 @@ export class TelegramMediaClient implements MediaDownloader {
 
 interface MediaRow {
   readonly id: bigint;
-  readonly kind: 'photo' | 'document' | 'sticker';
-  readonly file_id: string;
-  readonly file_unique_id: string;
-  readonly mime_type: string | null;
-  readonly file_size: bigint | null;
-  readonly telegram_json: string;
+  readonly kind: string;
+  readonly fileId: string;
+  readonly fileUniqueId: string;
+  readonly mimeType: string | null;
+  readonly fileSize: bigint | null;
+  readonly telegramJson: string;
 }
 
 type AnalysisScope =
@@ -179,15 +181,23 @@ export class MediaService {
     try {
       const content: ImageContent[] = [];
       for (const [index, image] of images.entries()) {
-        const media = this.#store.db
-          .query<MediaRow, [bigint]>(
-            'SELECT id, kind, file_id, file_unique_id, mime_type, file_size, telegram_json FROM media WHERE id = ?',
-          )
-          .get(image.mediaId);
-        if (media === null || media.kind === 'sticker') {
+        const media = this.#store.orm
+          .select({
+            id: mediaTable.id,
+            kind: mediaTable.kind,
+            fileId: mediaTable.fileId,
+            fileUniqueId: mediaTable.fileUniqueId,
+            mimeType: mediaTable.mimeType,
+            fileSize: mediaTable.fileSize,
+            telegramJson: mediaTable.telegramJson,
+          })
+          .from(mediaTable)
+          .where(eq(mediaTable.id, image.mediaId))
+          .get();
+        if (media === undefined || media.kind === 'sticker') {
           throw new Error('Direct image is unavailable');
         }
-        if (media.file_size !== null && media.file_size > BigInt(MAX_DOWNLOAD_BYTES)) {
+        if (media.fileSize !== null && media.fileSize > BigInt(MAX_DOWNLOAD_BYTES)) {
           throw new Error('Telegram media exceeds 20 MB');
         }
         const imageDirectory = join(temporaryDirectory, String(index));
@@ -224,7 +234,7 @@ export class MediaService {
         const mediaId = context.imageCapabilities.get(input.image_ref);
         if (mediaId === undefined) {
           rejectToolCall(
-            this.#store.db,
+            this.#store.orm,
             context.invocationId,
             toolCallId,
             'read_image',
@@ -235,7 +245,7 @@ export class MediaService {
           throw new Error('image_ref is not visible in this invocation');
         }
         const toolId = startToolCall(
-          this.#store.db,
+          this.#store.orm,
           context.invocationId,
           toolCallId,
           'read_image',
@@ -246,23 +256,31 @@ export class MediaService {
         const combinedSignal =
           signal === undefined ? AbortSignal.timeout(timeout) : AbortSignal.any([signal, AbortSignal.timeout(timeout)]);
         try {
-          const media = this.#store.db
-            .query<MediaRow, [bigint]>(
-              'SELECT id, kind, file_id, file_unique_id, mime_type, file_size, telegram_json FROM media WHERE id = ?',
-            )
-            .get(mediaId);
-          if (media === null) {
+          const media = this.#store.orm
+            .select({
+              id: mediaTable.id,
+              kind: mediaTable.kind,
+              fileId: mediaTable.fileId,
+              fileUniqueId: mediaTable.fileUniqueId,
+              mimeType: mediaTable.mimeType,
+              fileSize: mediaTable.fileSize,
+              telegramJson: mediaTable.telegramJson,
+            })
+            .from(mediaTable)
+            .where(eq(mediaTable.id, mediaId))
+            .get();
+          if (media === undefined) {
             throw new Error('Referenced media no longer exists');
           }
           const version = `${this.#model.provider}/${this.#model.id}/prompt-${this.#config.vision.prompt_version}`;
-          const cached = this.#store.db
-            .query<{ description: string }, [string, string, string]>(
-              "SELECT description FROM media_analyses WHERE file_unique_id = ? AND analysis_version = ? AND state = 'success' AND (expires_at IS NULL OR expires_at >= ?)",
+          const cached = this.#store.orm
+            .all<{ description: string }>(
+              sql`SELECT description FROM media_analyses WHERE file_unique_id = ${media.fileUniqueId} AND analysis_version = ${version} AND state = 'success' AND (expires_at IS NULL OR expires_at >= ${new Date().toISOString()})`,
             )
-            .get(media.file_unique_id, version, new Date().toISOString());
+            .at(0);
           let description: string;
           let cacheHit: boolean;
-          if (cached !== null) {
+          if (cached !== undefined) {
             description = cached.description;
             cacheHit = true;
           } else {
@@ -274,14 +292,14 @@ export class MediaService {
             );
             cacheHit = false;
           }
-          finishToolCall(this.#store.db, toolId, 'success', description, null);
+          finishToolCall(this.#store.orm, toolId, 'success', description, null);
           return {
             content: [{ type: 'text', text: description }],
             details: { cached: cacheHit },
           };
         } catch (_error) {
           const code = combinedSignal.aborted ? 'vision_timeout' : 'vision_error';
-          finishToolCall(this.#store.db, toolId, 'error', null, code);
+          finishToolCall(this.#store.orm, toolId, 'error', null, code);
           throw new Error(code === 'vision_timeout' ? 'Image analysis timed out' : 'Image analysis failed');
         }
       },
@@ -289,25 +307,24 @@ export class MediaService {
   }
 
   async analyzeStickerForIndex(stickerId: bigint, signal: AbortSignal): Promise<StickerIndexAnalysis> {
-    const sticker = this.#store.db
-      .query<
-        {
-          id: bigint;
-          file_unique_id: string;
-          file_id: string;
-          format: 'static' | 'animated' | 'video';
-          thumbnail_json: string | null;
-        },
-        [bigint]
-      >('SELECT id, file_unique_id, file_id, format, thumbnail_json FROM stickers WHERE id = ? AND active = 1')
-      .get(stickerId);
-    if (sticker === null) {
+    const sticker = this.#store.orm
+      .select({
+        id: stickers.id,
+        fileUniqueId: stickers.fileUniqueId,
+        fileId: stickers.fileId,
+        format: stickers.format,
+        thumbnailJson: stickers.thumbnailJson,
+      })
+      .from(stickers)
+      .where(and(eq(stickers.id, stickerId), eq(stickers.active, true)))
+      .get();
+    if (sticker === undefined) {
       throw new Error('Sticker is no longer active');
     }
     let thumbnail: unknown;
-    if (sticker.thumbnail_json !== null) {
+    if (sticker.thumbnailJson !== null) {
       try {
-        thumbnail = JSON.parse(sticker.thumbnail_json);
+        thumbnail = JSON.parse(sticker.thumbnailJson);
       } catch {
         throw new Error('Stored sticker thumbnail metadata is invalid');
       }
@@ -323,35 +340,35 @@ export class MediaService {
     const media: MediaRow = {
       id: sticker.id,
       kind: 'sticker',
-      file_id: sticker.file_id,
-      file_unique_id: sticker.file_unique_id,
-      mime_type:
+      fileId: sticker.fileId,
+      fileUniqueId: sticker.fileUniqueId,
+      mimeType:
         sticker.format === 'video'
           ? 'video/webm'
           : sticker.format === 'animated'
             ? 'application/x-tgsticker'
             : 'image/webp',
-      file_size: null,
-      telegram_json: JSON.stringify(telegram),
+      fileSize: null,
+      telegramJson: JSON.stringify(telegram),
     };
     const version = `${this.#model.provider}/${this.#model.id}/prompt-${this.#config.vision.prompt_version}`;
-    let analysis = this.#store.db
-      .query<{ id: bigint; description: string; metadata_json: string }, [string, string]>(
-        "SELECT id, description, metadata_json FROM media_analyses WHERE file_unique_id = ? AND analysis_version = ? AND state = 'success'",
+    let analysis = this.#store.orm
+      .all<{ id: bigint; description: string; metadata_json: string }>(
+        sql`SELECT id, description, metadata_json FROM media_analyses WHERE file_unique_id = ${media.fileUniqueId} AND analysis_version = ${version} AND state = 'success'`,
       )
-      .get(media.file_unique_id, version);
-    if (analysis === null) {
+      .at(0);
+    if (analysis === undefined) {
       if (!this.#reserveStickerImage()) {
         throw new Error('Sticker vision daily budget reached');
       }
       await this.#analyzeDeduplicated(media, version, { kind: 'sticker_index' }, signal);
-      analysis = this.#store.db
-        .query<{ id: bigint; description: string; metadata_json: string }, [string, string]>(
-          "SELECT id, description, metadata_json FROM media_analyses WHERE file_unique_id = ? AND analysis_version = ? AND state = 'success'",
+      analysis = this.#store.orm
+        .all<{ id: bigint; description: string; metadata_json: string }>(
+          sql`SELECT id, description, metadata_json FROM media_analyses WHERE file_unique_id = ${media.fileUniqueId} AND analysis_version = ${version} AND state = 'success'`,
         )
-        .get(media.file_unique_id, version);
+        .at(0);
     }
-    if (analysis === null) {
+    if (analysis === undefined) {
       throw new Error('Sticker analysis was not persisted');
     }
     let metadata: unknown;
@@ -377,7 +394,7 @@ export class MediaService {
     scope: AnalysisScope,
     signal: AbortSignal,
   ): Promise<string> {
-    const key = `${media.file_unique_id}\u0000${version}`;
+    const key = `${media.fileUniqueId}\u0000${version}`;
     const existing = this.#inflight.get(key);
     if (existing !== undefined) {
       return existing;
@@ -388,12 +405,12 @@ export class MediaService {
   }
 
   async #analyze(media: MediaRow, version: string, scope: AnalysisScope, signal: AbortSignal): Promise<string> {
-    if (media.file_size !== null && media.file_size > BigInt(MAX_DOWNLOAD_BYTES)) {
+    if (media.fileSize !== null && media.fileSize > BigInt(MAX_DOWNLOAD_BYTES)) {
       throw new Error('Telegram media exceeds 20 MB');
     }
     if (
       scope.kind === 'chat' &&
-      isDailyTokenBudgetReached(readDailyTokenBudget(this.#store.db, this.#config.agent.daily_budget.max_tokens))
+      isDailyTokenBudgetReached(readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens))
     ) {
       throw new Error('Daily token budget reached');
     }
@@ -406,26 +423,30 @@ export class MediaService {
     let analysisId: bigint | undefined;
     try {
       const now = new Date().toISOString();
-      this.#store.db
-        .query(
-          "INSERT INTO media_analyses(file_unique_id, analysis_version, provider, model, prompt_version, kind, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?) ON CONFLICT(file_unique_id, analysis_version) DO UPDATE SET state = 'pending', updated_at = excluded.updated_at",
-        )
-        .run(
-          media.file_unique_id,
-          version,
-          this.#model.provider,
-          this.#model.id,
-          BigInt(this.#config.vision.prompt_version),
-          media.kind === 'sticker' ? 'sticker' : 'image',
-          now,
-          now,
-        );
-      const analysis = this.#store.db
-        .query<{ id: bigint }, [string, string]>(
-          'SELECT id FROM media_analyses WHERE file_unique_id = ? AND analysis_version = ?',
-        )
-        .get(media.file_unique_id, version);
-      if (analysis === null) {
+      this.#store.orm
+        .insert(mediaAnalyses)
+        .values({
+          fileUniqueId: media.fileUniqueId,
+          analysisVersion: version,
+          provider: this.#model.provider,
+          model: this.#model.id,
+          promptVersion: BigInt(this.#config.vision.prompt_version),
+          kind: media.kind === 'sticker' ? 'sticker' : 'image',
+          state: 'pending',
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [mediaAnalyses.fileUniqueId, mediaAnalyses.analysisVersion],
+          set: { state: 'pending', updatedAt: now },
+        })
+        .run();
+      const analysis = this.#store.orm
+        .select({ id: mediaAnalyses.id })
+        .from(mediaAnalyses)
+        .where(and(eq(mediaAnalyses.fileUniqueId, media.fileUniqueId), eq(mediaAnalyses.analysisVersion, version)))
+        .get();
+      if (analysis === undefined) {
         throw new Error('Media analysis upsert failed');
       }
       analysisId = analysis.id;
@@ -504,22 +525,22 @@ export class MediaService {
         }
         const expiresAt =
           media.kind === 'sticker' ? null : new Date(Date.now() + IMAGE_CACHE_DAYS * 24 * 60 * 60_000).toISOString();
-        this.#store.db
-          .query(
-            "UPDATE media_analyses SET state = 'success', description = ?, metadata_json = ?, expires_at = ?, updated_at = ? WHERE id = ?",
-          )
-          .run(
-            analyzed.description,
-            JSON.stringify({
+        this.#store.orm
+          .update(mediaAnalyses)
+          .set({
+            state: 'success',
+            description: analyzed.description,
+            metadataJson: JSON.stringify({
               width: normalized.width,
               height: normalized.height,
               mime_type: normalized.mimeType,
               sticker: analyzed.metadata,
             }),
             expiresAt,
-            new Date().toISOString(),
-            analysisId,
-          );
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(mediaAnalyses.id, analysisId))
+          .run();
         return analyzed.description;
       } finally {
         releaseChat?.();
@@ -527,11 +548,15 @@ export class MediaService {
       }
     } catch (error) {
       if (analysisId !== undefined) {
-        this.#store.db
-          .query(
-            "UPDATE media_analyses SET state = 'error', failure_count = failure_count + 1, updated_at = ? WHERE id = ?",
-          )
-          .run(new Date().toISOString(), analysisId);
+        this.#store.orm
+          .update(mediaAnalyses)
+          .set({
+            state: 'error',
+            failureCount: sql`${mediaAnalyses.failureCount} + 1`,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(mediaAnalyses.id, analysisId))
+          .run();
       }
       throw error;
     } finally {
@@ -540,77 +565,110 @@ export class MediaService {
   }
 
   #startVisionCall(scope: AnalysisScope, analysisId: bigint): bigint {
-    const created = this.#store.db
-      .query(
-        "INSERT INTO model_calls(invocation_id, media_analysis_id, role, provider, model, attempt, state, created_at) VALUES (?, ?, ?, ?, ?, 1, 'pending', ?)",
+    // Raw template: model_calls.invocation_id is nullable in the migrations, but the
+    // drizzle schema in schema.ts marks it notNull(), so the builder cannot bind the
+    // NULL written here for sticker-index calls.
+    const created = this.#store.orm
+      .all<{ id: bigint }>(
+        sql`INSERT INTO model_calls(invocation_id, media_analysis_id, role, provider, model, attempt, state, created_at) VALUES (${scope.kind === 'chat' ? scope.invocationId : null}, ${analysisId}, ${scope.kind === 'chat' ? 'vision_chat' : 'vision_sticker'}, ${this.#model.provider}, ${this.#model.id}, 1, 'pending', ${new Date().toISOString()}) RETURNING id`,
       )
-      .run(
-        scope.kind === 'chat' ? scope.invocationId : null,
-        analysisId,
-        scope.kind === 'chat' ? 'vision_chat' : 'vision_sticker',
-        this.#model.provider,
-        this.#model.id,
-        new Date().toISOString(),
-      );
-    return BigInt(created.lastInsertRowid);
+      .at(0);
+    if (created === undefined) {
+      throw new Error('model_calls insert returned no row');
+    }
+    return created.id;
   }
 
   #finishVisionCall(callId: bigint, scope: AnalysisScope, message: AssistantMessage): void {
     this.#store.transaction(() => {
       const now = new Date().toISOString();
       const usage = message.usage;
-      this.#store.db
-        .query(
-          'UPDATE model_calls SET state = ?, input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_write_tokens = ?, total_tokens = ?, cost = ?, error_code = ?, error_detail = ?, finished_at = ? WHERE id = ?',
-        )
-        .run(
-          message.stopReason === 'error' || message.stopReason === 'aborted' ? 'error' : 'success',
-          BigInt(usage.input),
-          BigInt(usage.output),
-          BigInt(usage.cacheRead),
-          BigInt(usage.cacheWrite),
-          BigInt(usage.totalTokens),
-          usage.cost.total,
-          message.stopReason === 'error'
-            ? 'vision_model_error'
-            : message.stopReason === 'aborted'
-              ? 'vision_timeout'
-              : null,
-          message.errorMessage === undefined ? null : this.#secrets.redact(message.errorMessage),
-          now,
-          callId,
-        );
+      this.#store.orm
+        .update(modelCalls)
+        .set({
+          state: message.stopReason === 'error' || message.stopReason === 'aborted' ? 'error' : 'success',
+          inputTokens: BigInt(usage.input),
+          outputTokens: BigInt(usage.output),
+          cacheReadTokens: BigInt(usage.cacheRead),
+          cacheWriteTokens: BigInt(usage.cacheWrite),
+          totalTokens: BigInt(usage.totalTokens),
+          cost: usage.cost.total,
+          errorCode:
+            message.stopReason === 'error'
+              ? 'vision_model_error'
+              : message.stopReason === 'aborted'
+                ? 'vision_timeout'
+                : null,
+          errorDetail: message.errorMessage === undefined ? null : this.#secrets.redact(message.errorMessage),
+          finishedAt: now,
+        })
+        .where(eq(modelCalls.id, callId))
+        .run();
       if (scope.kind === 'chat') {
-        this.#store.db
-          .query(
-            "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', ?, ?) ON CONFLICT(utc_date, scope, resource, metric) DO UPDATE SET amount = amount + excluded.amount, updated_at = excluded.updated_at",
-          )
-          .run(now.slice(0, 10), scope.chatId.toString(), BigInt(usage.totalTokens), now);
+        this.#store.orm
+          .insert(dailyUsage)
+          .values({
+            utcDate: now.slice(0, 10),
+            scope: 'chat',
+            resource: scope.chatId.toString(),
+            metric: 'model_tokens',
+            amount: BigInt(usage.totalTokens),
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: [dailyUsage.utcDate, dailyUsage.scope, dailyUsage.resource, dailyUsage.metric],
+            set: { amount: sql`${dailyUsage.amount} + excluded.amount`, updatedAt: now },
+          })
+          .run();
       } else {
-        this.#store.db
-          .query(
-            "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'system', 'sticker_index', 'vision_tokens', ?, ?) ON CONFLICT(utc_date, scope, resource, metric) DO UPDATE SET amount = amount + excluded.amount, updated_at = excluded.updated_at",
-          )
-          .run(now.slice(0, 10), BigInt(usage.totalTokens), now);
+        this.#store.orm
+          .insert(dailyUsage)
+          .values({
+            utcDate: now.slice(0, 10),
+            scope: 'system',
+            resource: 'sticker_index',
+            metric: 'vision_tokens',
+            amount: BigInt(usage.totalTokens),
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: [dailyUsage.utcDate, dailyUsage.scope, dailyUsage.resource, dailyUsage.metric],
+            set: { amount: sql`${dailyUsage.amount} + excluded.amount`, updatedAt: now },
+          })
+          .run();
       }
     });
   }
 
   #failVisionCall(callId: bigint, code: string, error: unknown): void {
-    this.#store.db
-      .query("UPDATE model_calls SET state = 'error', error_code = ?, error_detail = ?, finished_at = ? WHERE id = ?")
-      .run(code, this.#secrets.redactError(error), new Date().toISOString(), callId);
+    this.#store.orm
+      .update(modelCalls)
+      .set({
+        state: 'error',
+        errorCode: code,
+        errorDetail: this.#secrets.redactError(error),
+        finishedAt: new Date().toISOString(),
+      })
+      .where(eq(modelCalls.id, callId))
+      .run();
   }
 
   #reserveStickerImage(): boolean {
     return this.#store.transaction(() => {
       const now = new Date().toISOString();
       const date = now.slice(0, 10);
-      const rows = this.#store.db
-        .query<{ metric: string; amount: bigint }, [string]>(
-          "SELECT metric, amount FROM daily_usage WHERE utc_date = ? AND scope = 'system' AND resource = 'sticker_index' AND metric IN ('vision_images', 'vision_tokens')",
+      const rows = this.#store.orm
+        .select({ metric: dailyUsage.metric, amount: dailyUsage.amount })
+        .from(dailyUsage)
+        .where(
+          and(
+            eq(dailyUsage.utcDate, date),
+            eq(dailyUsage.scope, 'system'),
+            eq(dailyUsage.resource, 'sticker_index'),
+            inArray(dailyUsage.metric, ['vision_images', 'vision_tokens']),
+          ),
         )
-        .all(date);
+        .all();
       const usage: Record<string, bigint> = {};
       for (const row of rows) {
         usage[row.metric] = row.amount;
@@ -621,11 +679,21 @@ export class MediaService {
       ) {
         return false;
       }
-      this.#store.db
-        .query(
-          "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'system', 'sticker_index', 'vision_images', 1, ?) ON CONFLICT(utc_date, scope, resource, metric) DO UPDATE SET amount = amount + 1, updated_at = excluded.updated_at",
-        )
-        .run(date, now);
+      this.#store.orm
+        .insert(dailyUsage)
+        .values({
+          utcDate: date,
+          scope: 'system',
+          resource: 'sticker_index',
+          metric: 'vision_images',
+          amount: 1n,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [dailyUsage.utcDate, dailyUsage.scope, dailyUsage.resource, dailyUsage.metric],
+          set: { amount: sql`${dailyUsage.amount} + 1`, updatedAt: now },
+        })
+        .run();
       return true;
     });
   }
@@ -646,12 +714,12 @@ async function prepareMediaImage(
   signal: AbortSignal,
 ): Promise<NormalizedImage> {
   if (media.kind !== 'sticker') {
-    await downloader.download(media.file_id, inputPath, signal);
+    await downloader.download(media.fileId, inputPath, signal);
     return normalizeImage(inputPath, directory);
   }
   let telegram: unknown;
   try {
-    telegram = JSON.parse(media.telegram_json);
+    telegram = JSON.parse(media.telegramJson);
   } catch {
     throw new Error('Stored sticker metadata is invalid JSON');
   }
@@ -663,7 +731,7 @@ async function prepareMediaImage(
     await downloader.download(telegram.thumbnail.file_id, thumbnailPath, signal);
     return normalizeImage(thumbnailPath, directory);
   }
-  await downloader.download(media.file_id, inputPath, signal);
+  await downloader.download(media.fileId, inputPath, signal);
   if (!telegram.is_video && !telegram.is_animated) {
     return normalizeImage(inputPath, directory);
   }

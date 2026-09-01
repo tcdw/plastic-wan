@@ -400,6 +400,152 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
   expect(await readdir(loaded.config.paths.media_cache)).toEqual([]);
   store.close();
 });
+
+test('keeps history photos as img_ refs for the multimodal agent while attaching only new photos', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-history-image-'));
+  directories.push(directory);
+  const configPath = join(directory, 'config.jsonc');
+  await writeTestConfig(directory, configPath);
+  const loaded = await loadConfig(configPath);
+  const store = await SqliteStore.open(loaded.config);
+  const fixturePath = join(directory, 'fixture.png');
+  await sharp({ create: { width: 16, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } } })
+    .png()
+    .toFile(fixturePath);
+  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    state: 'completed',
+    reason: 'done',
+  }));
+
+  // First bucket: a photo message that becomes history for the next invocation.
+  const firstReceived = new Date('2026-08-15T00:00:00.000Z');
+  ingestion.ingest(
+    {
+      update_id: 10,
+      message: {
+        message_id: 40,
+        date: 1_700_000_000,
+        chat: { id: 123456789, type: 'private', first_name: 'Owner' },
+        from: { id: 42, is_bot: false, first_name: 'Alice' },
+        photo: [
+          { file_id: 'history-photo', file_unique_id: 'history-photo-unique', width: 16, height: 8, file_size: 100 },
+        ],
+      },
+    },
+    firstReceived,
+  );
+  const [firstInvocation] = scheduler.processDue(new Date(firstReceived.getTime() + 15_000));
+  if (firstInvocation === undefined) {
+    throw new Error('Expected the first invocation');
+  }
+  store.db
+    .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+    .run(firstInvocation);
+  store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(firstInvocation);
+
+  // Second bucket: text-only trigger; the earlier photo is history now.
+  const secondReceived = new Date(firstReceived.getTime() + 60_000);
+  ingestion.ingest(
+    {
+      update_id: 11,
+      message: {
+        message_id: 41,
+        date: 1_700_000_060,
+        chat: { id: 123456789, type: 'private', first_name: 'Owner' },
+        from: { id: 42, is_bot: false, first_name: 'Alice' },
+        text: 'what was in that picture?',
+      },
+    },
+    secondReceived,
+  );
+  const [secondInvocation] = scheduler.processDue(new Date(secondReceived.getTime() + 15_000));
+  if (secondInvocation === undefined) {
+    throw new Error('Expected the second invocation');
+  }
+
+  const agentFaux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  let historyRef: string | undefined;
+  agentFaux.setResponses([
+    (context) => {
+      const user = context.messages[0];
+      expect(user?.role).toBe('user');
+      if (user?.role !== 'user' || typeof user.content === 'string') {
+        throw new Error('Expected multimodal user content');
+      }
+      expect(user.content.filter((entry) => entry.type === 'image')).toHaveLength(0);
+      const text = user.content.find((entry) => entry.type === 'text')?.text ?? '';
+      expect(text).toContain('"message_id":"40"');
+      expect(text).not.toContain('"image_ref":"figure_');
+      const match = /"image_ref":"(img_[^"]+)"/.exec(text);
+      historyRef = match?.[1];
+      if (historyRef === undefined) {
+        throw new Error('Multimodal agent context omitted the history img_ ref');
+      }
+      return fauxAssistantMessage(fauxToolCall('read_image', { image_ref: historyRef }), { stopReason: 'toolUse' });
+    },
+    fauxAssistantMessage('understood'),
+  ]);
+  const visionFaux = fauxProvider({
+    provider: 'vision',
+    models: [{ id: 'vision-model', input: ['text', 'image'], contextWindow: 128_000, maxTokens: 8_192 }],
+  });
+  visionFaux.setResponses([fauxAssistantMessage('A dark rectangle.')]);
+  const models = createModels();
+  models.setProvider(agentFaux.provider);
+  models.setProvider(visionFaux.provider);
+  const registry: ModelRegistry = { models, agentModel: agentFaux.getModel(), visionModel: visionFaux.getModel() };
+  const media = new MediaService({
+    store,
+    config: loaded.config,
+    secrets: new SecretStore(),
+    registry,
+    mediaClient: {
+      download: async (fileId, destination, signal) => {
+        signal.throwIfAborted();
+        expect(fileId).toBe('history-photo');
+        await Bun.write(destination, Bun.file(fixturePath));
+      },
+    },
+    modelGate: new KeyedSemaphore(),
+  });
+  const runtime = new AgentRuntime({
+    store,
+    config: loaded.config,
+    secrets: new SecretStore(),
+    registry,
+    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    telegramApi: {
+      sendMessage: async () => ({ message_id: 601, date: 1_700_000_100, chat: { id: 123456789 } }),
+      sendSticker: async () => ({ message_id: 602, date: 1_700_000_100, chat: { id: 123456789 } }),
+    },
+    bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    additionalTools: (context, _state, deadline) => [media.createReadImageTool(context, deadline)],
+  });
+  const outcome = await runtime.run(secondInvocation, new AbortController().signal);
+  expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+  expect(agentFaux.state.callCount).toBe(2);
+  expect(visionFaux.state.callCount).toBe(1);
+  expect(
+    store.db
+      .query<{ count: bigint }, []>(
+        "SELECT COUNT(*) AS count FROM tool_calls WHERE tool_name = 'read_image' AND state = 'success'",
+      )
+      .get()?.count,
+  ).toBe(1n);
+  expect(
+    store.db
+      .query<{ count: bigint }, []>(
+        "SELECT COUNT(*) AS count FROM model_calls WHERE role = 'vision_chat' AND state = 'success'",
+      )
+      .get()?.count,
+  ).toBe(1n);
+  expect(await readdir(loaded.config.paths.media_cache)).toEqual([]);
+  store.close();
+});
 test('lets a text-only agent read a Telegram photo through read_image', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-fallback-'));
   directories.push(directory);

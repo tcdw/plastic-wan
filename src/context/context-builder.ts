@@ -161,7 +161,7 @@ export class ContextBuilder {
       hourCycle: 'h23',
     }).format(new Date());
     const imageHandling = supportsImages
-      ? 'Telegram Photo and supported image Documents are attached directly to the multimodal Agent input, in the same order as the figure_N image_ref entries inside the message JSON of <untrusted_telegram_history> and <untrusted_new_messages>. Treat each attached image as the media of the message whose JSON references the matching figure_N. The read_image Tool is restricted to Sticker references.'
+      ? 'Photos and supported image Documents from the new messages are attached directly to the multimodal Agent input, in the same order as the figure_N image_ref entries inside the message JSON of <untrusted_new_messages>. Treat each attached image as the media of the message whose JSON references the matching figure_N. History images are not attached; inspect them on demand with read_image using their img_ refs. read_image never accepts figure_N refs.'
       : 'Telegram images and Stickers are available through the read_image Tool. Call it when visual details are needed.';
     const templateValues: PromptTemplateValues = {
       agent: agentModel,
@@ -221,7 +221,7 @@ export class ContextBuilder {
     const prepared = rows.map((row) => ({
       section: row.section,
       messageId: row.message_id,
-      snapshot: this.#prepareSnapshot(row.snapshot_json, capabilities, mediaIds, supportsImages),
+      snapshot: this.#prepareSnapshot(row.snapshot_json, capabilities, mediaIds),
       target: { conversationId: row.conversation_id, threadId: row.message_thread_id },
     }));
     const maximumCharacters = Math.max(
@@ -253,15 +253,18 @@ export class ContextBuilder {
       usedCharacters += size;
     }
     const omittedNewMessages = current.length - selectedCurrent.length;
-    // Multimodal agents receive Photos and image Documents as direct attachments
-    // instead of inline image refs. Rewrite those media entries into ordered
-    // figure markers (figure_1, figure_2, ...) rendered in the message JSON so
-    // each attachment keeps an explicit reference back to the group message
-    // that shared it. Text-only agents keep unmodified image refs.
+    // Multimodal agents receive only the new bucket's Photos and image Documents
+    // as direct attachments. History media keep their img_ image_ref and remain
+    // authorized for read_image, so old images cannot distract the agent by
+    // default but stay inspectable on demand. New-section media are rewritten
+    // into ordered figure markers (figure_1, figure_2, ...) rendered in the
+    // message JSON so each attachment keeps an explicit reference back to the
+    // message that shared it. Text-only agents keep unmodified img_ refs
+    // everywhere.
     const orderedFigureMedia: { imageRef: string; originalRef: string }[] = [];
     let nextFigureNumber = 1;
     const renderSnapshot = (entry: (typeof prepared)[number]): string => {
-      if (!supportsImages || entry.snapshot.media.length === 0) {
+      if (!supportsImages || entry.section !== 'new' || entry.snapshot.media.length === 0) {
         return JSON.stringify(entry.snapshot);
       }
       const snapshot = {
@@ -297,8 +300,12 @@ export class ContextBuilder {
     );
     const selectedMedia = [...selectedHistory, ...selectedCurrent].flatMap((entry) => entry.snapshot.media);
     const selectedMediaIds = new Set(selectedMedia.map((media) => media.image_ref));
+    const convertedRefs = new Set(orderedFigureMedia.map((media) => media.originalRef));
     for (const [reference] of capabilities) {
-      if (!selectedMediaIds.has(reference)) {
+      // Drop refs that are no longer rendered and the img_ refs rewritten into
+      // direct figure attachments, so read_image only ever sees history images
+      // and stickers that are actually visible in this invocation.
+      if (!selectedMediaIds.has(reference) || convertedRefs.has(reference)) {
         capabilities.delete(reference);
       }
     }
@@ -372,12 +379,7 @@ export class ContextBuilder {
     return renderInternalContextsPrompt(records);
   }
 
-  #prepareSnapshot(
-    json: string,
-    capabilities: Map<string, bigint>,
-    mediaIds: Map<string, bigint>,
-    supportsImages: boolean,
-  ): PreparedSnapshot {
+  #prepareSnapshot(json: string, capabilities: Map<string, bigint>, mediaIds: Map<string, bigint>): PreparedSnapshot {
     let parsed: unknown;
     try {
       parsed = JSON.parse(json);
@@ -390,9 +392,7 @@ export class ContextBuilder {
     const media = parsed.media.map((entry) => {
       const reference = `img_${crypto.randomUUID().replaceAll('-', '')}`;
       mediaIds.set(reference, BigInt(entry.id));
-      if (!supportsImages || entry.kind === 'sticker') {
-        capabilities.set(reference, BigInt(entry.id));
-      }
+      capabilities.set(reference, BigInt(entry.id));
       return {
         image_ref: reference,
         kind: entry.kind,

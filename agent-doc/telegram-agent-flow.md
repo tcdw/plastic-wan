@@ -83,9 +83,9 @@ first session      = T + telegram.bucket_window_seconds
 
 - `systemPrompt`：代码固化的 Core Agent Protocol、图片/Sticker 能力说明、运维侧人格 Prompt、私聊/群聊模式、Chat instructions、记忆列表、隐藏 internal context 历史、当前时间。Core Protocol 规定消息分区、沉默判断、Tool 选择原则与副作用成功判定；人格 Prompt 只负责身份和表达风格。
 - `userPrompt`：仅列出已允许且索引成功 Sticker 的 `<untrusted_sticker_catalog>`（`sticker_id:emoji`），随后是最近 history 与本 Bucket new messages。
-- `directImages`：当 `agent` 模型支持 image 时，选中消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容。
+- `directImages`：当 `agent` 模型支持 image 时，`new` 区段消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容。
 - `visibleReplyMessageIds`：本次允许 Reply 的 Telegram Message ID。
-- `imageCapabilities`：Sticker 始终可用；当 `agent` 模型不支持 image 时也包含 Photo/图片 Document，供 `read_image` 使用。
+- `imageCapabilities`：Sticker 始终可用；Photo/图片 Document 在 `agent` 模型不支持 image 时全部可用，支持 image 时仅历史区段可用，供 `read_image` 使用。
 - `omittedNewMessages`：因 Context 上限省略的新消息数量。
 
 当前 Conversation 全部有效记忆按创建时间升序注入（`<memory_list>` 块）：固定 Prompt → 记忆列表 → 当前时间。新增记忆等价于列表末尾 append，不重排已有项，尽量保留 Provider prefix cache；TTL 到期与 `delete_memory` 只破坏删除位置之后的缓存前缀。
@@ -170,9 +170,9 @@ Tool 只返回文本、JSON、XML 或 JavaScript 响应，拒绝压缩和二进�
 
 ## 用户图片模型分流
 
-当 `agent` 模型支持 image 时，Photo 与受支持的图片 Document 随冻结 Context 直接送入主模型，不经过 `read_image` 或独立 `vision` 模型。Telegram Photo 只保留最高分辨率变体，避免同一照片重复占用模型输入。
+当 `agent` 模型支持 image 时，`new` 区段的 Photo 与受支持的图片 Document 随冻结 Context 直接送入主模型，不经过 `read_image` 或独立 `vision` 模型；历史区段的图片只保留 `image_ref`，模型可用 `read_image` 按需查看，避免旧图占用输入或分散注意力。Telegram Photo 只保留最高分辨率变体，避免同一照片重复占用模型输入。
 
-当 `agent` 模型只有 text 输入时，普通图片不附到主模型请求，而是在 Context 中保留 Invocation-scoped `image_ref`。Agent 可按需调用 `read_image`，由独立 `vision` 模型返回文字描述。普通图片继续按 `file_unique_id + analysis_version` 缓存 30 天。
+当 `agent` 模型只有 text 输入时，所有普通图片不附到主模型请求，而是在 Context 中保留 Invocation-scoped `image_ref`。Agent 可按需调用 `read_image`，由独立 `vision` 模型返回文字描述。普通图片继续按 `file_unique_id + analysis_version` 缓存 30 天。
 
 直传图片在首次 Agent 请求前下载到 `paths.media_cache` 临时目录，并执行下载大小、真实格式、像素数、EXIF 移除、最大边长与标准化输出大小限制；请求载荷完成构造后立即删除临时文件。下载或校验失败会使 Invocation 失败，不会把缺失图片伪装成成功。
 

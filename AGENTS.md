@@ -21,25 +21,18 @@ Plastic Wan 是一个运行在 Telegram 私聊、群组、Supergroup 与 Forum T
 
 ```text
 plastic-wan/
-├── src/                    # Bun/TypeScript 运行时代码
-│   ├── migrations/         # 按版本顺序执行的 SQLite 迁移
-│   ├── application.ts      # 进程装配、启动与优雅关闭
-│   ├── telegram-ingestion.ts
-│   ├── scheduler.ts        # Bucket、Invocation、恢复与合并
-│   ├── context-builder.ts  # 受限模型上下文与能力引用
-│   ├── agent-runtime.ts    # Pi Agent 循环、预算与 Tool 注册
-│   ├── send-tool.ts        # 唯一 Telegram 发送边界
-│   ├── memory.ts           # Conversation 级短期记忆存储与 add/delete 工具
-│   ├── media.ts            # 图片/Sticker 下载、转换与视觉理解
-│   ├── stickers.ts         # Sticker Set 同步、索引、搜索
-│   ├── mcp.ts              # MCP 生命周期、策略、预算与审计
-│   ├── database.ts         # SQLite、迁移、保留与备份
-│   ├── schema.ts           # Drizzle 查询层表定义（与 migrations 终态对齐）
-│   ├── config.ts           # 严格 JSONC Schema 与语义校验
-│   ├── providers.ts        # Pi AI Provider/Model 注册
+├── src/                    # Bun/TypeScript 运行时代码；依赖自上而下
+│   ├── application.ts      # 组合根：进程装配、启动与优雅关闭
+│   ├── cli.ts              # serve/check-config/doctor/backup 入口
 │   ├── doctor.ts           # 真实依赖与外部连接诊断
-│   ├── admin/              # Admin Panel 认证、审计查询与 HTTP 边界
-│   └── cli.ts              # serve/check-config/doctor/backup
+│   ├── startup-catch-up.ts # 启动补偿拉取与排队
+│   ├── tui/                # 交互式配置向导
+│   ├── ingress/            # telegram-ingestion 与 admin/（Panel 认证、审计查询、HTTP 边界）
+│   ├── orchestration/      # scheduler、invocation-queue、agent-runtime、bot-commands
+│   ├── capabilities/       # send-tool、alarm、mcp、web-fetch、stickers、media/
+│   ├── context/            # context-builder、memory
+│   ├── store/              # database、schema、migrations/、internal-context、sleep、admins
+│   └── platform/           # config、secrets、providers、invocation-context 等无业务依赖模块
 ├── test/                   # Bun 行为测试与 MCP fixture
 ├── apps/admin/             # Rsbuild + React + Ant Design Admin Panel 前端
 ├── deploy/                 # systemd service 与 backup timer
@@ -120,7 +113,7 @@ bun run admin:dev
 - `bun run lint` 需要保持通过，如果存在问题需要先使用 `bun run lint:fix` 进行自动修复，如果无法自动修复需要尝试进行手动修改。
 - 配置和外部响应在边界处使用 TypeBox 校验；不要把未经校验的 `unknown` 转成业务类型。
 - SQLite ID 使用 `bigint`；Telegram JSON 中需要字符串化的 ID 不得经过不安全 `number` 转换。
-- 业务查询走 `store.orm`（Drizzle 同步 API；表定义在 `src/schema.ts`，新增迁移必须同步更新）；`store.db` 仅限连接层、doctor 探针与测试验证断言。复杂 SQL 与 FTS5 用 `sql` 模板，值一律绑定参数。
+- 业务查询走 `store.orm`（Drizzle 同步 API；表定义在 `src/store/schema.ts`，新增迁移必须同步更新）；`store.db` 仅限连接层、doctor 探针与测试验证断言。复杂 SQL 与 FTS5 用 `sql` 模板，值一律绑定参数。
 - 不新增第二套 Provider、调度、审计或进程执行约定；复用现有模块。
 - 清理式切换：迁移所有调用方并删除旧路径，不保留兼容别名或隐藏 fallback。
 - Admin Panel 后端复用 `SqliteStore`，审计查询只读；记忆增删改查与 Bot 管理员列表管理是仅有的管理写入例外。

@@ -1,9 +1,9 @@
 import type { Update } from 'grammy/types';
 import { eq } from 'drizzle-orm';
-import type { SqliteStore } from './database.ts';
-import { type BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from './scheduler.ts';
-import { appState } from './schema.ts';
-import type { TelegramIngestion } from './telegram-ingestion.ts';
+import type { SqliteStore } from './store/database.ts';
+import { type BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from './orchestration/scheduler.ts';
+import { appState } from './store/schema.ts';
+import type { TelegramIngestion } from './ingress/telegram-ingestion.ts';
 
 interface GetUpdatesOptions {
   readonly offset?: number;

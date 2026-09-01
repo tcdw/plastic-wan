@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
-import { type Orm, asRunResult } from '../database.ts';
-import { botAdmins } from '../schema.ts';
-import { AdminQueryError } from './audit.ts';
+import { type Orm, asRunResult } from './database.ts';
+import { botAdmins } from './schema.ts';
+import { AdminQueryError } from '../ingress/admin/audit.ts';
 
 export interface BotAdminItem {
   readonly telegram_user_id: string;

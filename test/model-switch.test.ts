@@ -2,10 +2,10 @@ import { afterAll, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type FileConfig, loadConfig } from '../src/config.ts';
-import { AgentModelSwitcher } from '../src/model-switch.ts';
-import { createModelRegistry } from '../src/providers.ts';
-import { SecretStore } from '../src/secrets.ts';
+import { type FileConfig, loadConfig } from '../src/platform/config.ts';
+import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
+import { createModelRegistry } from '../src/platform/providers.ts';
+import { SecretStore } from '../src/platform/secrets.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];

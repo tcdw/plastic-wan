@@ -3,12 +3,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
-import { seedConfigAdmins } from '../src/admin/admins.ts';
-import { BotCommandService } from '../src/bot-commands.ts';
-import { type LoadedConfig, loadConfig } from '../src/config.ts';
-import { SqliteStore } from '../src/database.ts';
-import { BucketScheduler } from '../src/scheduler.ts';
-import { TelegramIngestion } from '../src/telegram-ingestion.ts';
+import { seedConfigAdmins } from '../src/store/admins.ts';
+import { BotCommandService } from '../src/orchestration/bot-commands.ts';
+import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { SqliteStore } from '../src/store/database.ts';
+import { BucketScheduler } from '../src/orchestration/scheduler.ts';
+import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];

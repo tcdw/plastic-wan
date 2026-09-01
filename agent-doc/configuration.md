@@ -1,6 +1,6 @@
 # 配置
 
-Plastic Wan 使用严格 JSONC 配置。Schema 位于 `src/config.ts`，未知字段会被拒绝；除类型校验外，还会验证时区、ID 唯一性、模型引用、URL 和预算关系。
+Plastic Wan 使用严格 JSONC 配置。Schema 位于 `src/platform/config.ts`，未知字段会被拒绝；除类型校验外，还会验证时区、ID 唯一性、模型引用、URL 和预算关系。
 
 ## 加载语义
 

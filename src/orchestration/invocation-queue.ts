@@ -1,10 +1,10 @@
 import { and, eq, inArray, lt, sql } from 'drizzle-orm';
-import { AGENT_PROMPT_VERSION } from './agent-protocol.ts';
-import type { RawConfig } from './config.ts';
-import { type SqliteStore, asRunResult, isChatPaused, resolveChatConfig } from './database.ts';
-import { snapshotInvocation } from './invocation-snapshot.ts';
-import { activeSleepUntil } from './sleep.ts';
-import { alarms, appState, bucketMessages, buckets, dailyUsage, invocations } from './schema.ts';
+import { AGENT_PROMPT_VERSION } from '../platform/agent-protocol.ts';
+import type { RawConfig } from '../platform/config.ts';
+import { type SqliteStore, asRunResult, isChatPaused, resolveChatConfig } from '../store/database.ts';
+import { snapshotInvocation } from '../store/invocation-snapshot.ts';
+import { activeSleepUntil } from '../store/sleep.ts';
+import { alarms, appState, bucketMessages, buckets, dailyUsage, invocations } from '../store/schema.ts';
 
 export const RECOVERY_MAX_AGE_MS = 5 * 60_000;
 export const STARTUP_CATCH_UP_STATE_KEY = 'telegram_startup_catch_up';

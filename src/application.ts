@@ -1,27 +1,37 @@
 import { eq } from 'drizzle-orm';
 import { Bot, type Context } from 'grammy';
-import { seedConfigAdmins } from './admin/admins.ts';
-import { AdminServer } from './admin/server.ts';
-import { AgentRuntime, type AdditionalToolFactory } from './agent-runtime.ts';
-import { createAlarmTool, createDeleteAlarmTool, createListAlarmTool, type AgentMessageRecorder } from './alarm.ts';
-import { BOT_COMMANDS, BotCommandService, type ParsedCommand, registerBotCommands } from './bot-commands.ts';
-import { KeyedSemaphore } from './concurrency.ts';
-import { assertConfigPermissions, loadConfig } from './config.ts';
-import { ServeLock, SqliteStore } from './database.ts';
-import { previewContext } from './invocation-context.ts';
-import { McpManager } from './mcp.ts';
-import { TelegramMediaClient } from './media-download.ts';
-import { MediaService } from './media.ts';
-import { createMemoryTools, MemoryStore } from './memory.ts';
-import { AgentModelSwitcher } from './model-switch.ts';
-import { createModelRegistry } from './providers.ts';
-import { BucketScheduler } from './scheduler.ts';
-import { SecretStore } from './secrets.ts';
+import { seedConfigAdmins } from './store/admins.ts';
+import { AdminServer } from './ingress/admin/server.ts';
+import { AgentRuntime, type AdditionalToolFactory } from './orchestration/agent-runtime.ts';
+import {
+  createAlarmTool,
+  createDeleteAlarmTool,
+  createListAlarmTool,
+  type AgentMessageRecorder,
+} from './capabilities/alarm.ts';
+import {
+  BOT_COMMANDS,
+  BotCommandService,
+  type ParsedCommand,
+  registerBotCommands,
+} from './orchestration/bot-commands.ts';
+import { KeyedSemaphore } from './platform/concurrency.ts';
+import { assertConfigPermissions, loadConfig } from './platform/config.ts';
+import { ServeLock, SqliteStore } from './store/database.ts';
+import { previewContext } from './platform/invocation-context.ts';
+import { McpManager } from './capabilities/mcp.ts';
+import { TelegramMediaClient } from './capabilities/media/media-download.ts';
+import { MediaService } from './capabilities/media/media.ts';
+import { createMemoryTools, MemoryStore } from './context/memory.ts';
+import { AgentModelSwitcher } from './platform/model-switch.ts';
+import { createModelRegistry } from './platform/providers.ts';
+import { BucketScheduler } from './orchestration/scheduler.ts';
+import { SecretStore } from './platform/secrets.ts';
 import { runStartupCatchUp } from './startup-catch-up.ts';
-import { appState } from './schema.ts';
-import { StickerService } from './stickers.ts';
-import { TelegramIngestion } from './telegram-ingestion.ts';
-import { createWebFetchTool } from './web-fetch.ts';
+import { appState } from './store/schema.ts';
+import { StickerService } from './capabilities/stickers.ts';
+import { TelegramIngestion } from './ingress/telegram-ingestion.ts';
+import { createWebFetchTool } from './capabilities/web-fetch.ts';
 
 const ALLOWED_UPDATES = ['message', 'edited_message', 'my_chat_member'] as const;
 

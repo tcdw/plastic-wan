@@ -3,7 +3,7 @@ import { chmod, type FileHandle, mkdir, open, readdir, readFile, rename, unlink 
 import { dirname, join } from 'node:path';
 import { and, eq, sql } from 'drizzle-orm';
 import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-import type { RawConfig } from './config.ts';
+import type { RawConfig } from '../platform/config.ts';
 import * as schema from './schema.ts';
 import { chatMigrations, chatPause, toolCalls } from './schema.ts';
 

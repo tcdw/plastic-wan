@@ -1,12 +1,12 @@
 import { join, resolve, sep } from 'node:path';
 import type { Server } from 'bun';
-import type { RawConfig } from '../config.ts';
-import type { SqliteStore } from '../database.ts';
-import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from '../memory.ts';
-import { type AgentModelOption, type AgentModelSwitcher, ModelSwitchError } from '../model-switch.ts';
-import type { BucketScheduler } from '../scheduler.ts';
-import { wakeFromSleep } from '../sleep.ts';
-import { addBotAdmin, listBotAdmins, parseAdminUserId, removeBotAdmin } from './admins.ts';
+import type { RawConfig } from '../../platform/config.ts';
+import type { SqliteStore } from '../../store/database.ts';
+import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from '../../context/memory.ts';
+import { type AgentModelOption, type AgentModelSwitcher, ModelSwitchError } from '../../platform/model-switch.ts';
+import type { BucketScheduler } from '../../orchestration/scheduler.ts';
+import { wakeFromSleep } from '../../store/sleep.ts';
+import { addBotAdmin, listBotAdmins, parseAdminUserId, removeBotAdmin } from '../../store/admins.ts';
 import { cancelAlarm, listAlarms, parseAlarmId } from './alarm-admin.ts';
 import {
   AdminQueryError,
@@ -91,7 +91,7 @@ export class AdminServer {
     this.#auth = new AdminAuth(options.store.orm, admin.session_ttl_hours);
     this.#scheduler = options.scheduler;
     this.#modelSwitcher = options.modelSwitcher;
-    this.#staticDir = resolve(admin.static_dir ?? join(import.meta.dir, '..', '..', 'apps', 'admin', 'dist'));
+    this.#staticDir = resolve(admin.static_dir ?? join(import.meta.dir, '..', '..', '..', 'apps', 'admin', 'dist'));
     this.#memoryWarningDays = options.config.agent.memory_ttl_warning_days ?? DEFAULT_MEMORY_TTL_WARNING_DAYS;
   }
 

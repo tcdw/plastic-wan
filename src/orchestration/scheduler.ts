@@ -1,9 +1,9 @@
 import { and, eq, sql } from 'drizzle-orm';
-import type { RawConfig } from './config.ts';
-import type { SqliteStore } from './database.ts';
+import type { RawConfig } from '../platform/config.ts';
+import type { SqliteStore } from '../store/database.ts';
 import { InvocationQueueService } from './invocation-queue.ts';
-import { activeSleepUntil } from './sleep.ts';
-import { alarms, buckets, conversations, invocations } from './schema.ts';
+import { activeSleepUntil } from '../store/sleep.ts';
+import { alarms, buckets, conversations, invocations } from '../store/schema.ts';
 
 export interface InvocationOutcome {
   readonly state: 'completed' | 'failed' | 'aborted' | 'outcome_unknown';

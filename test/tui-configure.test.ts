@@ -3,9 +3,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseCli } from '../src/cli-options.ts';
-import { loadConfig } from '../src/config.ts';
+import { loadConfig } from '../src/platform/config.ts';
 import { renderDoctorAgentPrompt } from '../src/doctor.ts';
-import { SecretStore } from '../src/secrets.ts';
+import { SecretStore } from '../src/platform/secrets.ts';
 import {
   extractInputCapabilities,
   extractReasoningEffortOptions,

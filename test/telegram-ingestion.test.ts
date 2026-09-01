@@ -3,9 +3,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
-import { type FileConfig, loadConfig } from '../src/config.ts';
-import { SqliteStore } from '../src/database.ts';
-import { TelegramIngestion } from '../src/telegram-ingestion.ts';
+import { type FileConfig, loadConfig } from '../src/platform/config.ts';
+import { SqliteStore } from '../src/store/database.ts';
+import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];

@@ -1,5 +1,5 @@
 import { and, eq, sql, type SQL } from 'drizzle-orm';
-import type { Orm } from '../database.ts';
+import type { Orm } from '../../store/database.ts';
 import {
   agentMessages,
   dailyUsage,
@@ -12,8 +12,8 @@ import {
   senders,
   telegramSends,
   toolCalls,
-} from '../schema.ts';
-import { storedSleepUntil } from '../sleep.ts';
+} from '../../store/schema.ts';
+import { storedSleepUntil } from '../../store/sleep.ts';
 
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 25;

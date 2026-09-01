@@ -1,8 +1,8 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { Message, Update } from 'grammy/types';
-import { type ParsedCommand, parseBotCommand } from './bot-commands.ts';
-import type { RawConfig } from './config.ts';
-import { asRunResult, isChatPaused, type SqliteStore } from './database.ts';
+import { type ParsedCommand, parseBotCommand } from '../orchestration/bot-commands.ts';
+import type { RawConfig } from '../platform/config.ts';
+import { asRunResult, isChatPaused, type SqliteStore } from '../store/database.ts';
 import {
   bucketMessages,
   buckets,
@@ -15,7 +15,7 @@ import {
   messages,
   senders,
   telegramUpdates,
-} from './schema.ts';
+} from '../store/schema.ts';
 
 const IMAGE_MIME_TYPES: Record<string, true> = {
   'image/jpeg': true,

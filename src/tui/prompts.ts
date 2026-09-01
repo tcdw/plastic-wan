@@ -1,5 +1,5 @@
 import { checkbox, input, select } from '@inquirer/prompts';
-import type { SecretRef } from '../config.ts';
+import type { SecretRef } from '../platform/config.ts';
 
 export type ApiAdapter = 'openai-responses' | 'openai-completions' | 'anthropic-messages';
 

@@ -1,7 +1,7 @@
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { confirm, input, search, select } from '@inquirer/prompts';
-import type { FileConfig, SecretRef } from '../config.ts';
-import { SecretStore } from '../secrets.ts';
+import type { FileConfig, SecretRef } from '../platform/config.ts';
+import { SecretStore } from '../platform/secrets.ts';
 import {
   fetchModelsDevCatalog,
   findModel,

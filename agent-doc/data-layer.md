@@ -13,7 +13,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 - foreign keys
 - 5 秒 busy timeout
 
-迁移文件位于 `src/migrations/`，文件名为 `NNN_name.sql`，按编号排序。每个迁移在 IMMEDIATE transaction 中执行并记录到 `schema_migrations`。已有数据库存在待执行迁移时，先在备份目录创建 `pre-migration-*.sqlite`。
+迁移文件位于 `src/store/migrations/`，文件名为 `NNN_name.sql`，按编号排序。每个迁移在 IMMEDIATE transaction 中执行并记录到 `schema_migrations`。已有数据库存在待执行迁移时，先在备份目录创建 `pre-migration-*.sqlite`。
 
 新增迁移时：
 

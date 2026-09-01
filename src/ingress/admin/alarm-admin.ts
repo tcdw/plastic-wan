@@ -1,6 +1,6 @@
 import { and, eq, sql, type SQL } from 'drizzle-orm';
-import type { Orm } from '../database.ts';
-import { alarms } from '../schema.ts';
+import type { Orm } from '../../store/database.ts';
+import { alarms } from '../../store/schema.ts';
 import { AdminQueryError, type ListQuery, type Page, parseId, parseLimit } from './audit.ts';
 
 const ALARM_STATES = new Set(['pending', 'firing', 'fired', 'cancelled']);

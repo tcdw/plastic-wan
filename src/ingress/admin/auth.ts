@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
-import { type Orm, asRunResult } from '../database.ts';
-import { adminSessions, adminUsers } from '../schema.ts';
+import { type Orm, asRunResult } from '../../store/database.ts';
+import { adminSessions, adminUsers } from '../../store/schema.ts';
 
 const SESSION_TOKEN_BYTES = 32;
 const MAX_FAILED_ATTEMPTS = 10;

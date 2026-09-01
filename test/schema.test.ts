@@ -3,8 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq, sql } from 'drizzle-orm';
-import { type LoadedConfig, loadConfig } from '../src/config.ts';
-import { SqliteStore } from '../src/database.ts';
+import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { SqliteStore } from '../src/store/database.ts';
 import {
   bucketMessages,
   buckets,
@@ -15,7 +15,7 @@ import {
   schemaMigrations,
   stickerSets,
   telegramUpdates,
-} from '../src/schema.ts';
+} from '../src/store/schema.ts';
 import { writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];

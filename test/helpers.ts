@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { FileConfig } from '../src/config.ts';
+import type { FileConfig } from '../src/platform/config.ts';
 
 export function testConfigJsonc(directory: string, transform?: (config: FileConfig) => void): string {
   const path = (name: string) => join(directory, name).replaceAll('\\', '/');

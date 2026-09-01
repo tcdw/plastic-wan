@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { type Orm, asRunResult } from '../database.ts';
+import { type Orm, asRunResult } from '../../store/database.ts';
 
 export interface CancelPendingResult {
   readonly canceled_buckets: number;

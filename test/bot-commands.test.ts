@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Message, Update } from 'grammy/types';
-import { seedConfigAdmins } from '../src/admin/admins.ts';
+import { seedConfigAdmins } from '../src/store/admins.ts';
 import {
   BOT_COMMANDS,
   type BotCommandRegistration,
@@ -11,14 +11,14 @@ import {
   type CommandSender,
   parseBotCommand,
   registerBotCommands,
-} from '../src/bot-commands.ts';
-import { type FileConfig, type LoadedConfig, loadConfig } from '../src/config.ts';
-import { SqliteStore } from '../src/database.ts';
-import { AgentModelSwitcher } from '../src/model-switch.ts';
-import { createModelRegistry } from '../src/providers.ts';
-import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from '../src/scheduler.ts';
-import { SecretStore } from '../src/secrets.ts';
-import { TelegramIngestion } from '../src/telegram-ingestion.ts';
+} from '../src/orchestration/bot-commands.ts';
+import { type FileConfig, type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { SqliteStore } from '../src/store/database.ts';
+import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
+import { createModelRegistry } from '../src/platform/providers.ts';
+import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from '../src/orchestration/scheduler.ts';
+import { SecretStore } from '../src/platform/secrets.ts';
+import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];

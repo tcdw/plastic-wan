@@ -1,5 +1,5 @@
 import { confirm, select } from '@inquirer/prompts';
-import { loadConfig, type FileConfig } from '../config.ts';
+import { loadConfig, type FileConfig } from '../platform/config.ts';
 import { runProviderWizard } from './provider-wizard.ts';
 
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;

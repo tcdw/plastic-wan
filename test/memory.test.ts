@@ -4,13 +4,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
 import Compile from 'typebox/compile';
-import { AdminServer } from '../src/admin/server.ts';
-import { type LoadedConfig, loadConfig } from '../src/config.ts';
-import { ContextBuilder } from '../src/context-builder.ts';
-import { purgeExpiredData, SqliteStore } from '../src/database.ts';
-import { AddMemoryInputSchema, createMemoryTools, DeleteMemoryInputSchema, MemoryStore } from '../src/memory.ts';
-import { BucketScheduler } from '../src/scheduler.ts';
-import { TelegramIngestion } from '../src/telegram-ingestion.ts';
+import { AdminServer } from '../src/ingress/admin/server.ts';
+import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { ContextBuilder } from '../src/context/context-builder.ts';
+import { purgeExpiredData, SqliteStore } from '../src/store/database.ts';
+import {
+  AddMemoryInputSchema,
+  createMemoryTools,
+  DeleteMemoryInputSchema,
+  MemoryStore,
+} from '../src/context/memory.ts';
+import { BucketScheduler } from '../src/orchestration/scheduler.ts';
+import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];

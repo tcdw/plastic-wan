@@ -5,16 +5,16 @@ import type { Api, AssistantMessage, ImageContent, Model, Models } from '@earend
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
-import { AsyncSemaphore, type KeyedSemaphore } from './concurrency.ts';
-import type { RawConfig } from './config.ts';
-import { finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from './database.ts';
-import type { DirectImage, InvocationContext } from './invocation-context.ts';
+import { AsyncSemaphore, type KeyedSemaphore } from '../../platform/concurrency.ts';
+import type { RawConfig } from '../../platform/config.ts';
+import { finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from '../../store/database.ts';
+import type { DirectImage, InvocationContext } from '../../platform/invocation-context.ts';
 import { MAX_DOWNLOAD_BYTES, type MediaRow, prepareMediaImage, stickerTelegramValidator } from './media-image.ts';
 import type { MediaDownloader } from './media-download.ts';
-import type { ModelRegistry } from './providers.ts';
-import { dailyUsage, mediaAnalyses, media as mediaTable, modelCalls, stickers } from './schema.ts';
-import type { SecretStore } from './secrets.ts';
-import { isDailyTokenBudgetReached, readDailyTokenBudget } from './sleep.ts';
+import type { ModelRegistry } from '../../platform/providers.ts';
+import { dailyUsage, mediaAnalyses, media as mediaTable, modelCalls, stickers } from '../../store/schema.ts';
+import type { SecretStore } from '../../platform/secrets.ts';
+import { isDailyTokenBudgetReached, readDailyTokenBudget } from '../../store/sleep.ts';
 
 const ReadImageSchema = Type.Object({ image_ref: Type.String({ minLength: 1 }) }, { additionalProperties: false });
 const StickerAnalysisSchema = Type.Object(

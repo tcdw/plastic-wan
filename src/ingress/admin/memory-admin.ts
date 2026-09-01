@@ -1,5 +1,5 @@
 import { and, desc, eq, gt, lt, lte, type SQL } from 'drizzle-orm';
-import { asRunResult, type Orm } from '../database.ts';
+import { asRunResult, type Orm } from '../../store/database.ts';
 import {
   DEFAULT_MEMORY_TTL_SECONDS,
   MEMORY_ID_PATTERN,
@@ -7,8 +7,8 @@ import {
   MEMORY_TTL_MAX_SECONDS,
   MEMORY_TTL_MIN_SECONDS,
   newMemoryId,
-} from '../memory.ts';
-import { chats, conversations, memories } from '../schema.ts';
+} from '../../context/memory.ts';
+import { chats, conversations, memories } from '../../store/schema.ts';
 import { AdminQueryError, type ListQuery, type Page, page, parseId, parseLimit } from './audit.ts';
 
 export interface MemoryAdminItem {

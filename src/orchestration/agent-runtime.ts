@@ -11,18 +11,18 @@ import {
   type Usage,
 } from '@earendil-works/pi-ai';
 import { and, eq, isNull, sql } from 'drizzle-orm';
-import { KeyedSemaphore } from './concurrency.ts';
-import type { RawConfig } from './config.ts';
-import { ContextBuilder } from './context-builder.ts';
-import { resolveChatConfig, type SqliteStore } from './database.ts';
-import type { InvocationContext } from './invocation-context.ts';
-import { serializeModelRequestForAudit } from './model-request-audit.ts';
-import type { AgentModelSwitcher } from './model-switch.ts';
-import type { ModelRegistry } from './providers.ts';
+import { KeyedSemaphore } from '../platform/concurrency.ts';
+import type { RawConfig } from '../platform/config.ts';
+import { ContextBuilder } from '../context/context-builder.ts';
+import { resolveChatConfig, type SqliteStore } from '../store/database.ts';
+import type { InvocationContext } from '../platform/invocation-context.ts';
+import { serializeModelRequestForAudit } from '../platform/model-request-audit.ts';
+import type { AgentModelSwitcher } from '../platform/model-switch.ts';
+import type { ModelRegistry } from '../platform/providers.ts';
 import type { InvocationOutcome } from './scheduler.ts';
-import { agentMessages, dailyUsage, invocations, modelCalls, toolCalls as toolCallsTable } from './schema.ts';
-import type { SecretStore } from './secrets.ts';
-import { createSendTool, type TelegramSendApi } from './send-tool.ts';
+import { agentMessages, dailyUsage, invocations, modelCalls, toolCalls as toolCallsTable } from '../store/schema.ts';
+import type { SecretStore } from '../platform/secrets.ts';
+import { createSendTool, type TelegramSendApi } from '../capabilities/send-tool.ts';
 import {
   activeSleepUntil,
   createZzzTool,
@@ -30,7 +30,7 @@ import {
   isDailyTokenBudgetReached,
   isLowDailyTokenBudget,
   readDailyTokenBudget,
-} from './sleep.ts';
+} from '../store/sleep.ts';
 
 export interface ToolRuntimeState {
   readonly stickerCapabilities: Map<string, string>;

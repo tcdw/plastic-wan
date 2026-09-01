@@ -1,12 +1,16 @@
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
-import { CORE_AGENT_PROTOCOL } from './agent-protocol.ts';
-import type { RawConfig } from './config.ts';
-import { resolveChatConfig, type SqliteStore } from './database.ts';
-import { listRecentInternalContexts, renderInternalContextsPrompt } from './internal-context.ts';
-import type { AlarmContext, InvocationContext, VisibleSender } from './invocation-context.ts';
+import { CORE_AGENT_PROTOCOL } from '../platform/agent-protocol.ts';
+import type { RawConfig } from '../platform/config.ts';
+import { resolveChatConfig, type SqliteStore } from '../store/database.ts';
+import { listRecentInternalContexts, renderInternalContextsPrompt } from '../store/internal-context.ts';
+import type { AlarmContext, InvocationContext, VisibleSender } from '../platform/invocation-context.ts';
 import { MemoryStore } from './memory.ts';
-import { type PromptTemplateModel, type PromptTemplateValues, renderPromptTemplate } from './prompt-template.ts';
+import {
+  type PromptTemplateModel,
+  type PromptTemplateValues,
+  renderPromptTemplate,
+} from '../platform/prompt-template.ts';
 
 const Strict = { additionalProperties: false } as const;
 const MediaSnapshotSchema = Type.Object(

@@ -10,16 +10,16 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai';
 import type { Update } from 'grammy/types';
-import { AgentRuntime } from '../src/agent-runtime.ts';
-import { type LoadedConfig, loadConfig } from '../src/config.ts';
-import { SqliteStore } from '../src/database.ts';
-import { AgentModelSwitcher } from '../src/model-switch.ts';
-import type { ModelRegistry } from '../src/providers.ts';
-import { BucketScheduler } from '../src/scheduler.ts';
-import { SecretStore } from '../src/secrets.ts';
-import type { TelegramSendApi } from '../src/send-tool.ts';
-import { activeSleepUntil, enterSleep, SLEEP_STATE_KEY } from '../src/sleep.ts';
-import { TelegramIngestion } from '../src/telegram-ingestion.ts';
+import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
+import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { SqliteStore } from '../src/store/database.ts';
+import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
+import type { ModelRegistry } from '../src/platform/providers.ts';
+import { BucketScheduler } from '../src/orchestration/scheduler.ts';
+import { SecretStore } from '../src/platform/secrets.ts';
+import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
+import { activeSleepUntil, enterSleep, SLEEP_STATE_KEY } from '../src/store/sleep.ts';
+import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];

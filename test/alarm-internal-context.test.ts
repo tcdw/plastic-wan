@@ -3,12 +3,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
-import { createAlarmTool, createDeleteAlarmTool, createListAlarmTool } from '../src/alarm.ts';
-import { loadConfig } from '../src/config.ts';
-import { ContextBuilder } from '../src/context-builder.ts';
-import { SqliteStore } from '../src/database.ts';
-import { BucketScheduler } from '../src/scheduler.ts';
-import { TelegramIngestion } from '../src/telegram-ingestion.ts';
+import { createAlarmTool, createDeleteAlarmTool, createListAlarmTool } from '../src/capabilities/alarm.ts';
+import { loadConfig } from '../src/platform/config.ts';
+import { ContextBuilder } from '../src/context/context-builder.ts';
+import { SqliteStore } from '../src/store/database.ts';
+import { BucketScheduler } from '../src/orchestration/scheduler.ts';
+import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
@@ -458,7 +458,7 @@ describe('alarm internal context and ownership', () => {
     reopened.close();
 
     const reopenedForPurge = await SqliteStore.open(loaded.config, false);
-    const { purgeExpiredData } = await import('../src/database.ts');
+    const { purgeExpiredData } = await import('../src/store/database.ts');
     purgeExpiredData(reopenedForPurge.orm, loaded.config, new Date('2026-10-01T00:00:00.000Z'));
     expect(
       reopenedForPurge.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM internal_contexts').get()?.count,

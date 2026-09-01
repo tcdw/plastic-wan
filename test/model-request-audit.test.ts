@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { scrubModelRequestAuditJson } from '../src/model-request-audit.ts';
+import { scrubModelRequestAuditJson } from '../src/platform/model-request-audit.ts';
 
 test('scrubs every inline base64 image while preserving other request data', () => {
   const first = Buffer.from('first image');

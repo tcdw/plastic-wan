@@ -65,30 +65,44 @@ send Tool → Telegram API → 审计
 
 ## 模块职责
 
+代码按层组织，依赖只允许自上而下：`ingress/` → `orchestration/` → `capabilities/` → `context/` → `store/` → `platform/`；组合根（`application.ts`、`cli.ts`、`doctor.ts`、`startup-catch-up.ts`、`tui/`）位于 `src` 根，可以引用所有层。
+
+```
+src/
+├── application.ts / cli.ts / cli-options.ts / doctor.ts / startup-catch-up.ts   # 组合根
+├── tui/                    # 交互式配置向导
+├── ingress/                # telegram-ingestion、admin/（Panel 认证、审计查询、HTTP 边界）
+├── orchestration/          # scheduler、invocation-queue、agent-runtime、bot-commands
+├── capabilities/           # send-tool、alarm、mcp、web-fetch、stickers、media/
+├── context/                # context-builder、memory
+├── store/                  # database、schema、migrations/、internal-context、sleep、invocation-snapshot、admins
+└── platform/               # config、secrets、concurrency、subprocess、providers、model-switch、prompt-template、invocation-context、model-request-audit、agent-protocol
+```
+
 | 模块 | 职责 |
 | --- | --- |
 | `application.ts` | 启动、组件装配、信号处理和关闭顺序 |
-| `config.ts` | 严格 JSONC Schema、语义校验、配置哈希和权限检查 |
-| `secrets.ts` | literal/env/command SecretRef、大小/超时限制和脱敏 |
-| `database.ts` | SQLite 打开、迁移、单实例锁、保留清理和备份 |
-| `telegram-ingestion.ts` | Update 判定、消息/修订/媒体入库、Chat 迁移 |
-| `scheduler.ts` | Bucket/Invocation 事件循环、节拍、并发启动与执行诊断 |
-| `invocation-queue.ts` | Bucket/Alarm → Invocation 的同步状态转换、恢复与 Startup Catch-up |
-| `invocation-snapshot.ts` | Invocation 消息快照（history + 当前 Bucket）的冻结持久化 |
-| `invocation-context.ts` | `InvocationContext` 等共享上下文类型（无依赖叶子模块） |
-| `context-builder.ts` | Prompt、消息窗口、Reply 与按模型能力选择的媒体载荷/capability |
-| `agent-runtime.ts` | Pi Agent 循环、多模态/文本回退输入、模型/Tool 预算、调用审计 |
-| `send-tool.ts` | 文本/Sticker 发送、Reply 授权、重试与副作用审计 |
-| `memory.ts` | Conversation 级短期记忆存储、`add_memory`/`delete_memory` Tool 与 TTL 过期清理 |
-| `alarm.ts` | Deferred Invocation：`alarm` Tool、授权/时间/配额校验与 pending Alarm 持久化 |
-| `media.ts` | 视觉理解服务：`read_image` Tool、直接图片载荷、Sticker 索引分析与视觉缓存 |
-| `media-download.ts` | Telegram 文件下载传输（`MediaDownloader`） |
-| `media-image.ts` | 图像管线：Sticker 代表帧（ffmpeg/lottie）、sharp 标准化与尺寸/格式限制 |
-| `stickers.ts` | Set 同步、后台单并发索引、FTS 搜索和发送能力 |
-| `mcp.ts` | Server 生命周期、Tool 注册、策略、大小限制和预算 |
-| `web-fetch.ts` | 受限公网 HTTP(S) GET、SSRF 防护、DNS 连接固定、跳转与文本结果大小限制 |
+| `platform/config.ts` | 严格 JSONC Schema、语义校验、配置哈希和权限检查 |
+| `platform/secrets.ts` | literal/env/command SecretRef、大小/超时限制和脱敏 |
+| `store/database.ts` | SQLite 打开、迁移、单实例锁、保留清理和备份 |
+| `ingress/telegram-ingestion.ts` | Update 判定、消息/修订/媒体入库、Chat 迁移 |
+| `orchestration/scheduler.ts` | Bucket/Invocation 事件循环、节拍、并发启动与执行诊断 |
+| `orchestration/invocation-queue.ts` | Bucket/Alarm → Invocation 的同步状态转换、恢复与 Startup Catch-up |
+| `store/invocation-snapshot.ts` | Invocation 消息快照（history + 当前 Bucket）的冻结持久化 |
+| `platform/invocation-context.ts` | `InvocationContext` 等共享上下文类型（无依赖叶子模块） |
+| `context/context-builder.ts` | Prompt、消息窗口、Reply 与按模型能力选择的媒体载荷/capability |
+| `orchestration/agent-runtime.ts` | Pi Agent 循环、多模态/文本回退输入、模型/Tool 预算、调用审计 |
+| `capabilities/send-tool.ts` | 文本/Sticker 发送、Reply 授权、重试与副作用审计 |
+| `context/memory.ts` | Conversation 级短期记忆存储、`add_memory`/`delete_memory` Tool 与 TTL 过期清理 |
+| `capabilities/alarm.ts` | Deferred Invocation：`alarm` Tool、授权/时间/配额校验与 pending Alarm 持久化 |
+| `capabilities/media/media.ts` | 视觉理解服务：`read_image` Tool、直接图片载荷、Sticker 索引分析与视觉缓存 |
+| `capabilities/media/media-download.ts` | Telegram 文件下载传输（`MediaDownloader`） |
+| `capabilities/media/media-image.ts` | 图像管线：Sticker 代表帧（ffmpeg/lottie）、sharp 标准化与尺寸/格式限制 |
+| `capabilities/stickers.ts` | Set 同步、后台单并发索引、FTS 搜索和发送能力 |
+| `capabilities/mcp.ts` | Server 生命周期、Tool 注册、策略、大小限制和预算 |
+| `capabilities/web-fetch.ts` | 受限公网 HTTP(S) GET、SSRF 防护、DNS 连接固定、跳转与文本结果大小限制 |
 | `doctor.ts` | 本地依赖、模型、Vision、Telegram、required MCP 的真实探针 |
-| `admin/` | Admin Panel 认证、只读审计查询与本地 HTTP/静态边界 |
+| `ingress/admin/` | Admin Panel 认证、只读审计查询与本地 HTTP/静态边界 |
 
 ## 并发模型
 

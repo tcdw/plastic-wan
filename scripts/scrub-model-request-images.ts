@@ -1,8 +1,8 @@
 import { Database } from 'bun:sqlite';
 import { copyFile, mkdir, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { ServeLock } from '../src/database.ts';
-import { scrubModelRequestAuditJson } from '../src/model-request-audit.ts';
+import { ServeLock } from '../src/store/database.ts';
+import { scrubModelRequestAuditJson } from '../src/platform/model-request-audit.ts';
 
 interface RequestRow {
   readonly id: bigint;

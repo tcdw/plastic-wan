@@ -4,10 +4,10 @@ import { mkdtemp, readdir, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
-import { loadConfig } from '../src/config.ts';
-import { backupDatabase, purgeExpiredData, SqliteStore } from '../src/database.ts';
-import { BucketScheduler } from '../src/scheduler.ts';
-import { TelegramIngestion } from '../src/telegram-ingestion.ts';
+import { loadConfig } from '../src/platform/config.ts';
+import { backupDatabase, purgeExpiredData, SqliteStore } from '../src/store/database.ts';
+import { BucketScheduler } from '../src/orchestration/scheduler.ts';
+import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];

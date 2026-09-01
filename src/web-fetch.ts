@@ -5,8 +5,8 @@ import { Readable } from 'node:stream';
 import { request as httpsRequest } from 'node:https';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import Type from 'typebox';
-import type { InvocationContext } from './context-builder.ts';
 import { finishToolCall, startToolCall, type SqliteStore } from './database.ts';
+import type { InvocationContext } from './invocation-context.ts';
 
 const Strict = { additionalProperties: false } as const;
 const WebFetchInputSchema = Type.Object({ url: Type.String({ minLength: 1, maxLength: 2_048 }) }, Strict);

@@ -18,8 +18,8 @@ import Type, { type TUnsafe } from 'typebox';
 import Compile from 'typebox/compile';
 import { AsyncSemaphore } from './concurrency.ts';
 import type { McpServerConfig, RawConfig, SecretRef } from './config.ts';
-import { type InvocationContext, previewContext } from './context-builder.ts';
 import { finishToolCall, rejectToolCall, type SqliteStore } from './database.ts';
+import { type InvocationContext, previewContext } from './invocation-context.ts';
 import { dailyUsage, mcpServerState, toolCalls } from './schema.ts';
 import type { SecretStore } from './secrets.ts';
 

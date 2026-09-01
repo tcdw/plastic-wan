@@ -3,8 +3,8 @@ import { and, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import type { RawConfig } from './config.ts';
-import type { InvocationContext } from './context-builder.ts';
 import { finishToolCall, startToolCall, type SqliteStore } from './database.ts';
+import type { InvocationContext } from './invocation-context.ts';
 import type { MediaService, StickerIndexAnalysis } from './media.ts';
 import { mediaAnalyses, stickerSets, stickers } from './schema.ts';
 

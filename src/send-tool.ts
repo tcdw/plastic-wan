@@ -4,7 +4,7 @@ import { and, eq, lt, sql } from 'drizzle-orm';
 import { GrammyError, HttpError } from 'grammy';
 import type { MessageEntity } from 'grammy/types';
 import Type, { type Static } from 'typebox';
-import type { InvocationContext } from './context-builder.ts';
+import type { InvocationContext } from './invocation-context.ts';
 import { asRunResult, rejectToolCall, type SqliteStore } from './database.ts';
 import {
   chats,

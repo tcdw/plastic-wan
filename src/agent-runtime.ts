@@ -13,8 +13,9 @@ import {
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { KeyedSemaphore } from './concurrency.ts';
 import type { RawConfig } from './config.ts';
-import { ContextBuilder, type InvocationContext } from './context-builder.ts';
+import { ContextBuilder } from './context-builder.ts';
 import { resolveChatConfig, type SqliteStore } from './database.ts';
+import type { InvocationContext } from './invocation-context.ts';
 import { serializeModelRequestForAudit } from './model-request-audit.ts';
 import type { AgentModelSwitcher } from './model-switch.ts';
 import type { ModelRegistry } from './providers.ts';

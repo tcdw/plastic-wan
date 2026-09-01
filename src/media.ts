@@ -1,32 +1,22 @@
-import { chmod, mkdir, mkdtemp, open, rm, unlink } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { gunzipSync } from 'node:zlib';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import type { Api, AssistantMessage, ImageContent, Model, Models } from '@earendil-works/pi-ai';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import sharp from 'sharp';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import { AsyncSemaphore, type KeyedSemaphore } from './concurrency.ts';
 import type { RawConfig } from './config.ts';
-import type { DirectImage, InvocationContext } from './context-builder.ts';
 import { finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from './database.ts';
+import type { DirectImage, InvocationContext } from './invocation-context.ts';
+import { MAX_DOWNLOAD_BYTES, type MediaRow, prepareMediaImage, stickerTelegramValidator } from './media-image.ts';
+import type { MediaDownloader } from './media-download.ts';
 import type { ModelRegistry } from './providers.ts';
 import { dailyUsage, mediaAnalyses, media as mediaTable, modelCalls, stickers } from './schema.ts';
 import type { SecretStore } from './secrets.ts';
 import { isDailyTokenBudgetReached, readDailyTokenBudget } from './sleep.ts';
-import { pickEnv, readBoundedOutput } from './subprocess.ts';
 
 const ReadImageSchema = Type.Object({ image_ref: Type.String({ minLength: 1 }) }, { additionalProperties: false });
-const StickerTelegramSchema = Type.Object(
-  {
-    is_video: Type.Boolean(),
-    is_animated: Type.Boolean(),
-    thumbnail: Type.Optional(Type.Object({ file_id: Type.String() }, { additionalProperties: true })),
-  },
-  { additionalProperties: true },
-);
-const TgsMetadataSchema = Type.Object({ ip: Type.Number(), op: Type.Number() }, { additionalProperties: true });
 const StickerAnalysisSchema = Type.Object(
   {
     description_zh: Type.String({ minLength: 1 }),
@@ -38,95 +28,9 @@ const StickerAnalysisSchema = Type.Object(
   { additionalProperties: false },
 );
 const STICKER_ANALYSIS_TOOL_NAME = 'report_sticker_analysis';
-const stickerTelegramValidator = Compile(StickerTelegramSchema);
-const tgsMetadataValidator = Compile(TgsMetadataSchema);
 const stickerAnalysisValidator = Compile(StickerAnalysisSchema);
 type StickerAnalysis = Static<typeof StickerAnalysisSchema>;
-const ALLOWED_IMAGE_FORMATS: Record<string, true> = {
-  jpeg: true,
-  png: true,
-  webp: true,
-  svg: true,
-};
-const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
-const MAX_DECODED_PIXELS = 40_000_000;
-const MAX_NORMALIZED_BYTES = 10 * 1024 * 1024;
 const IMAGE_CACHE_DAYS = 30;
-
-interface TelegramFileApi {
-  getFile(fileId: string): Promise<{ readonly file_path?: string }>;
-}
-
-export interface MediaDownloader {
-  download(fileId: string, destination: string, signal: AbortSignal): Promise<void>;
-}
-
-export class TelegramMediaClient implements MediaDownloader {
-  readonly #api: TelegramFileApi;
-  readonly #token: string;
-
-  constructor(api: TelegramFileApi, token: string) {
-    this.#api = api;
-    this.#token = token;
-  }
-
-  async download(fileId: string, destination: string, signal: AbortSignal): Promise<void> {
-    const file = await this.#api.getFile(fileId);
-    if (file.file_path === undefined) {
-      throw new Error('Telegram getFile response omitted file_path');
-    }
-    const encodedPath = file.file_path
-      .split('/')
-      .map((part) => encodeURIComponent(part))
-      .join('/');
-    const response = await fetch(`https://api.telegram.org/file/bot${this.#token}/${encodedPath}`, {
-      signal,
-      redirect: 'error',
-    });
-    if (!response.ok || response.body === null) {
-      throw new Error(`Telegram media download failed with status ${response.status}`);
-    }
-    const contentLength = Number(response.headers.get('content-length'));
-    if (Number.isFinite(contentLength) && contentLength > MAX_DOWNLOAD_BYTES) {
-      throw new Error('Telegram media exceeds 20 MB');
-    }
-    const handle = await open(destination, 'wx', 0o600);
-    const reader = response.body.getReader();
-    let size = 0;
-    let completed = false;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        size += value.byteLength;
-        if (size > MAX_DOWNLOAD_BYTES) {
-          throw new Error('Telegram media exceeds 20 MB');
-        }
-        await handle.write(value);
-      }
-      completed = true;
-    } finally {
-      await reader.cancel().catch(() => undefined);
-      reader.releaseLock();
-      await handle.close();
-      if (!completed) {
-        await unlink(destination).catch(() => undefined);
-      }
-    }
-  }
-}
-
-interface MediaRow {
-  readonly id: bigint;
-  readonly kind: string;
-  readonly fileId: string;
-  readonly fileUniqueId: string;
-  readonly mimeType: string | null;
-  readonly fileSize: bigint | null;
-  readonly telegramJson: string;
-}
 
 type AnalysisScope =
   | { readonly kind: 'chat'; readonly chatId: bigint; readonly invocationId: bigint }
@@ -699,175 +603,9 @@ export class MediaService {
   }
 }
 
-interface NormalizedImage {
-  readonly path: string;
-  readonly mimeType: 'image/jpeg' | 'image/png';
-  readonly width: number;
-  readonly height: number;
-}
-
-async function prepareMediaImage(
-  media: MediaRow,
-  inputPath: string,
-  directory: string,
-  downloader: MediaDownloader,
-  signal: AbortSignal,
-): Promise<NormalizedImage> {
-  if (media.kind !== 'sticker') {
-    await downloader.download(media.fileId, inputPath, signal);
-    return normalizeImage(inputPath, directory);
-  }
-  let telegram: unknown;
-  try {
-    telegram = JSON.parse(media.telegramJson);
-  } catch {
-    throw new Error('Stored sticker metadata is invalid JSON');
-  }
-  if (!stickerTelegramValidator.Check(telegram)) {
-    throw new Error('Stored sticker metadata does not match its schema');
-  }
-  if (telegram.thumbnail !== undefined) {
-    const thumbnailPath = join(directory, 'thumbnail');
-    await downloader.download(telegram.thumbnail.file_id, thumbnailPath, signal);
-    return normalizeImage(thumbnailPath, directory);
-  }
-  await downloader.download(media.fileId, inputPath, signal);
-  if (!telegram.is_video && !telegram.is_animated) {
-    return normalizeImage(inputPath, directory);
-  }
-  if (telegram.is_video) {
-    const outputPath = join(directory, 'representative.png');
-    const durationText = await runExternal(
-      [
-        'ffprobe',
-        '-v',
-        'error',
-        '-show_entries',
-        'format=duration',
-        '-of',
-        'default=noprint_wrappers=1:nokey=1',
-        inputPath,
-      ],
-      true,
-      signal,
-    );
-    const duration = Number.parseFloat(durationText.trim());
-    if (!Number.isFinite(duration) || duration <= 0) {
-      throw new Error('ffprobe returned an invalid sticker duration');
-    }
-    await runExternal(
-      ['ffmpeg', '-v', 'error', '-ss', String(duration / 2), '-i', inputPath, '-frames:v', '1', outputPath],
-      false,
-      signal,
-    );
-    return normalizeImage(outputPath, directory);
-  }
-  const outputPath = join(directory, 'representative.svg');
-  const compressed = new Uint8Array(await Bun.file(inputPath).arrayBuffer());
-  let metadata: unknown;
-  try {
-    metadata = JSON.parse(new TextDecoder().decode(gunzipSync(compressed)));
-  } catch {
-    throw new Error('Animated sticker TGS metadata is invalid');
-  }
-  if (!tgsMetadataValidator.Check(metadata) || metadata.op <= metadata.ip) {
-    throw new Error('Animated sticker frame range is invalid');
-  }
-  const frame = Math.floor((metadata.ip + metadata.op) / 2);
-  await runExternal(createLottieCommand([inputPath, outputPath, '--frame', String(frame)]), false, signal);
-  return normalizeImage(outputPath, directory);
-}
-
 function parseStickerAnalysis(value: unknown): { description: string; metadata: StickerAnalysis } {
   if (!stickerAnalysisValidator.Check(value)) {
     throw new Error('Vision model returned an invalid sticker analysis');
   }
   return { description: value.description_zh, metadata: value };
-}
-
-export function createLottieCommand(argumentsList: readonly string[]): string[] {
-  if (process.platform !== 'win32') {
-    return ['lottie_convert.py', ...argumentsList];
-  }
-  const runner =
-    "import os, runpy, sysconfig; runpy.run_path(os.path.join(sysconfig.get_path('scripts'), 'lottie_convert.py'), run_name='__main__')";
-  return ['python', '-c', runner, ...argumentsList];
-}
-
-async function runExternal(argv: readonly string[], captureOutput: boolean, signal: AbortSignal): Promise<string> {
-  const processHandle = Bun.spawn([...argv], {
-    stdin: 'ignore',
-    stdout: captureOutput ? 'pipe' : 'ignore',
-    stderr: 'ignore',
-    env: pickEnv(
-      process.platform === 'win32'
-        ? ['PATH', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP']
-        : ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR'],
-    ),
-  });
-  const abortProcess = (): void => processHandle.kill();
-  signal.addEventListener('abort', abortProcess, { once: true });
-  const timeout = setTimeout(() => processHandle.kill(), 30_000);
-  try {
-    const output =
-      captureOutput && processHandle.stdout instanceof ReadableStream
-        ? await readBoundedOutput(processHandle.stdout, 65_536, () => {
-            processHandle.kill();
-            return new Error('Media command output exceeds 64 KiB');
-          })
-        : '';
-    const exitCode = await processHandle.exited;
-    if (signal.aborted) {
-      throw new Error('Media command aborted');
-    }
-    if (exitCode !== 0) {
-      throw new Error(`${argv[0]} failed with exit code ${exitCode}`);
-    }
-    return output;
-  } finally {
-    clearTimeout(timeout);
-    signal.removeEventListener('abort', abortProcess);
-  }
-}
-
-async function normalizeImage(inputPath: string, directory: string): Promise<NormalizedImage> {
-  const input = Buffer.from(await Bun.file(inputPath).arrayBuffer());
-  if (input.byteLength > MAX_DOWNLOAD_BYTES) {
-    throw new Error('Image input exceeds 20 MB');
-  }
-  const source = sharp(input, { failOn: 'error', limitInputPixels: MAX_DECODED_PIXELS });
-  const metadata = await source.metadata();
-  if (metadata.format === undefined || !(metadata.format in ALLOWED_IMAGE_FORMATS)) {
-    throw new Error('Unsupported image format');
-  }
-  if (metadata.width === undefined || metadata.height === undefined) {
-    throw new Error('Image dimensions are unavailable');
-  }
-  if (metadata.width * metadata.height > MAX_DECODED_PIXELS) {
-    throw new Error('Decoded image exceeds pixel limit');
-  }
-  const transparent = metadata.hasAlpha === true;
-  const outputPath = join(directory, transparent ? 'normalized.png' : 'normalized.jpg');
-  const pipeline = source.rotate().resize({
-    width: 2048,
-    height: 2048,
-    fit: 'inside',
-    withoutEnlargement: true,
-  });
-  const output = transparent
-    ? await pipeline.png().toBuffer({ resolveWithObject: true })
-    : await pipeline.jpeg({ quality: 85, mozjpeg: true }).toBuffer({ resolveWithObject: true });
-  if (output.data.byteLength > MAX_NORMALIZED_BYTES) {
-    throw new Error('Normalized image exceeds output limit');
-  }
-  await Bun.write(outputPath, output.data);
-  if (process.platform !== 'win32') {
-    await chmod(outputPath, 0o600);
-  }
-  return {
-    path: outputPath,
-    mimeType: transparent ? 'image/png' : 'image/jpeg',
-    width: output.info.width,
-    height: output.info.height,
-  };
 }

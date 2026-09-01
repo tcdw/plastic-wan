@@ -7,10 +7,11 @@ import { createAlarmTool, createDeleteAlarmTool, createListAlarmTool, type Agent
 import { BOT_COMMANDS, BotCommandService, type ParsedCommand, registerBotCommands } from './bot-commands.ts';
 import { KeyedSemaphore } from './concurrency.ts';
 import { assertConfigPermissions, loadConfig } from './config.ts';
-import { previewContext } from './context-builder.ts';
 import { ServeLock, SqliteStore } from './database.ts';
+import { previewContext } from './invocation-context.ts';
 import { McpManager } from './mcp.ts';
-import { MediaService, TelegramMediaClient } from './media.ts';
+import { TelegramMediaClient } from './media-download.ts';
+import { MediaService } from './media.ts';
 import { createMemoryTools, MemoryStore } from './memory.ts';
 import { AgentModelSwitcher } from './model-switch.ts';
 import { createModelRegistry } from './providers.ts';

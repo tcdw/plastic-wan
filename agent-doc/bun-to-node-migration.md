@@ -8,7 +8,9 @@
 - 策略：先在 Bun 上把所有 Bun 专有面替换为运行时无关实现，让「切换运行时」收敛为一次微小变更；SQLite 采用两段式——先 `bun:sqlite + Drizzle`，切换时刻再换 `node:sqlite + Drizzle`。
 - 不变式：全程保持 `bun run check` / 测试绿色；不出现双轨兼容层或隐藏 fallback；Telegram ID 全程 `bigint`。
 
-## 当前 Bun 依赖面（2026-08 盘点）
+## 当前 Bun 依赖面（2026-08 盘点；2026-09-01 修订 `bun:sqlite` 行）
+
+> 2026-09-01 状态速览：Phase 0 部分完成（drizzle-orm 已锁定）、**Phase 2 已完成**、Phase 1/3–6 未开始。下一步是 Phase 1（pnpm monorepo）或直接进入 Phase 3（运行时无关化，每项独立提交）。
 
 | 类别 | 位置 |
 | --- | --- |
@@ -38,10 +40,12 @@
 
 ## 阶段拆解
 
-### Phase 0 — 基线与依赖锁定
+### Phase 0 — 基线与依赖锁定（部分完成）
 
 - [ ] 记录基线：全量 `bun test`、`bun run check`、`check-config`、`doctor` 输出。
+  - 2026-09-01：`bun test`（168/168）与 `bun run check` 已随 Phase 2 验收反复全绿，可作为基线；`check-config` 与 `doctor` 输出待正式记录（生产试运行的 doctor 输出可直接归档为基线）。
 - [ ] 安装并锁定版本：`drizzle-orm`、`vitest`、`@node-rs/argon2`、`hono`、`@hono/node-server`。
+  - 2026-09-01：`drizzle-orm@^0.45.2` 已安装锁定（随 Phase 2 提前完成）；其余四项待 Phase 3 启动时安装。
 - [ ] 确认目标 Node 版本下限（type stripping 默认开启的版本）写入 `engines`。
 
 ### Phase 1 — pnpm monorepo（运行时仍为 Bun）
@@ -82,7 +86,7 @@
 ### Phase 5 — 切换运行时：Node.js + node:sqlite（单次小步）
 
 - [ ] shebang → `#!/usr/bin/env node`；`engines` 生效。
-- [ ] Drizzle 驱动 `drizzle-orm/bun-sqlite` → `drizzle-orm/node-sqlite`（唯一 import 位）。
+- [ ] Drizzle 驱动 `drizzle-orm/bun-sqlite` → `drizzle-orm/node-sqlite`（唯一 import 位；2026-09-01 已确认收敛为 `src/database.ts` 单处）。
 - [ ] **最高风险项**：`node:sqlite` 默认把 INTEGER 读成 Number；确认 Drizzle node-sqlite 会话对 bigint 列的处理，否则 Telegram ID 精度丢失。若无法保证，降级决策点：改用 `better-sqlite3` 驱动（成熟但引入原生依赖）。
 - [ ] 接受 `node:sqlite` 稳定性现状：Node 24.15+ 为 Stability 1.2 Release Candidate，无需 flag；记录到 operations.md。
 - [ ] 移除 `@types/bun`，新增 `@types/node`。

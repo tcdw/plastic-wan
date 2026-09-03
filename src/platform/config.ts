@@ -73,6 +73,7 @@ const ChatSchema = Type.Object(
   {
     id: Type.Integer(),
     topic_ids: Type.Optional(Type.Array(PositiveInteger, { minItems: 1, uniqueItems: true })),
+    ignored_user_ids: Type.Optional(Type.Array(PositiveInteger, { uniqueItems: true })),
     timezone: Type.Optional(Type.String({ minLength: 1 })),
     instructions_file: Type.Optional(Type.String({ minLength: 1 })),
     budget: ChatBudgetSchema,
@@ -338,6 +339,11 @@ function validateSemantics(config: FileConfig): void {
     chatIds.add(chat.id);
     if (chat.timezone !== undefined) {
       validateTimezone(chat.timezone, `chat ${chat.id} timezone`);
+    }
+    for (const ignoredUserId of chat.ignored_user_ids ?? []) {
+      if (!Number.isSafeInteger(ignoredUserId) || ignoredUserId === 0) {
+        throw new Error(`Invalid ignored Telegram user ID in chat ${chat.id}: ${ignoredUserId}`);
+      }
     }
   }
   for (const adminId of config.telegram.admins ?? []) {

@@ -2,7 +2,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import type { Message, Update } from 'grammy/types';
 import { type ParsedCommand, parseBotCommand } from '../orchestration/bot-commands.ts';
 import type { RawConfig } from '../platform/config.ts';
-import { asRunResult, isChatPaused, type SqliteStore } from '../store/database.ts';
+import { asRunResult, isChatPaused, resolveChatConfig, type SqliteStore } from '../store/database.ts';
 import {
   bucketMessages,
   buckets,
@@ -136,10 +136,16 @@ export class TelegramIngestion {
     }
 
     this.#recordMigration(message, receivedAt);
-    const internalChatId = this.#upsertChat(chat, chatId, receivedAt);
     if (message === undefined) {
+      this.#upsertChat(chat, chatId, receivedAt);
       return {};
     }
+    const chatConfig = resolveChatConfig(this.#config, this.#store.orm, chatId);
+    const ignoredUserIds = chatConfig?.ignored_user_ids ?? [];
+    if (isIgnoredUser(message, ignoredUserIds)) {
+      return {};
+    }
+    const internalChatId = this.#upsertChat(chat, chatId, receivedAt);
     const edited = update.edited_message !== undefined;
     // Chat control commands are handled by the bot itself: they are audited
     // but never stored as messages, so they cannot trigger or taint buckets.
@@ -147,7 +153,7 @@ export class TelegramIngestion {
     if (command !== null) {
       return { command };
     }
-    const stored = this.#storeMessage(message, internalChatId, threadId, receivedAt, edited);
+    const stored = this.#storeMessage(message, internalChatId, threadId, receivedAt, edited, ignoredUserIds);
     if (stored === undefined) {
       return {};
     }
@@ -239,6 +245,7 @@ export class TelegramIngestion {
     threadId: bigint,
     receivedAt: Date,
     edited: boolean,
+    ignoredUserIds: readonly number[],
   ): StoredMessage | undefined {
     const sender = this.#upsertSender(message, receivedAt);
     const fromBot = message.from?.is_bot === true;
@@ -280,7 +287,7 @@ export class TelegramIngestion {
       }
       revisionNo = existing.revision_no + 1n;
     }
-    const normalized = normalizeMessage(message, service);
+    const normalized = normalizeMessage(message, service, ignoredUserIds);
     const stickerOnly =
       normalized.kind === 'sticker' &&
       normalized.text === null &&
@@ -514,7 +521,7 @@ interface NormalizedMessage {
   readonly media: readonly NormalizedMedia[];
 }
 
-function normalizeMessage(message: Message, service: boolean): NormalizedMessage {
+function normalizeMessage(message: Message, service: boolean, ignoredUserIds: readonly number[]): NormalizedMessage {
   const media: NormalizedMedia[] = [];
   let kind = service ? 'service' : 'unsupported';
   if (message.text !== undefined) {
@@ -571,15 +578,24 @@ function normalizeMessage(message: Message, service: boolean): NormalizedMessage
     });
   }
   const reply = message.reply_to_message;
+  const visibleReply = reply !== undefined && !isIgnoredUser(reply, ignoredUserIds) ? reply : undefined;
   return {
     kind,
     text: message.text ?? null,
     caption: message.caption ?? null,
-    replyToMessageId: reply === undefined ? null : BigInt(reply.message_id),
-    replySnapshot: reply === undefined ? null : JSON.stringify(compactReply(reply)),
+    replyToMessageId: visibleReply === undefined ? null : BigInt(visibleReply.message_id),
+    replySnapshot: visibleReply === undefined ? null : JSON.stringify(compactReply(visibleReply)),
     forwardOrigin: message.forward_origin === undefined ? null : JSON.stringify(message.forward_origin),
     media,
   };
+}
+
+function isIgnoredUser(message: Message, ignoredUserIds: readonly number[]): boolean {
+  if (message.sender_chat !== undefined || message.from === undefined) {
+    return false;
+  }
+  const senderId = BigInt(message.from.id);
+  return ignoredUserIds.some((ignoredUserId) => BigInt(ignoredUserId) === senderId);
 }
 
 function compactReply(message: Message): Record<string, unknown> {

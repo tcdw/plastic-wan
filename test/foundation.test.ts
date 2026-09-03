@@ -3,9 +3,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/platform/config.ts';
-import { backupDatabase, SqliteStore } from '../src/store/database.ts';
 import { createModelRegistry } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
+import { backupDatabase, SqliteStore } from '../src/store/database.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
@@ -118,6 +118,59 @@ describe('configuration', () => {
       testConfigJsonc(directory, (config) => Object.assign(config.agent, { max_output_tokens: 4096 })),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
+  });
+
+  test('accepts chat-scoped ignored Telegram user IDs', async () => {
+    const { directory, configPath } = await fixture();
+    await Bun.write(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        const chat = config.telegram.chats[0];
+        if (chat === undefined) {
+          throw new Error('Expected chat fixture');
+        }
+        chat.ignored_user_ids = [42, 99];
+      }),
+    );
+    const loaded = await loadConfig(configPath);
+    expect(loaded.config.telegram.chats[0]?.ignored_user_ids).toEqual([42, 99]);
+  });
+
+  test('rejects invalid chat-scoped ignored Telegram user IDs', async () => {
+    const { directory, configPath } = await fixture();
+    await Bun.write(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        const chat = config.telegram.chats[0];
+        if (chat === undefined) {
+          throw new Error('Expected chat fixture');
+        }
+        chat.ignored_user_ids = [0];
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
+    await Bun.write(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        const chat = config.telegram.chats[0];
+        if (chat === undefined) {
+          throw new Error('Expected chat fixture');
+        }
+        chat.ignored_user_ids = [42, 42];
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
+    await Bun.write(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        const chat = config.telegram.chats[0];
+        if (chat === undefined) {
+          throw new Error('Expected chat fixture');
+        }
+        chat.ignored_user_ids = [9_007_199_254_740_992];
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid ignored Telegram user ID in chat 123456789');
   });
 
   test('accepts configured telegram admin user IDs', async () => {

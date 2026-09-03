@@ -3,13 +3,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
-import { type FileConfig, loadConfig } from '../src/platform/config.ts';
-import { ContextBuilder } from '../src/context/context-builder.ts';
-import { SqliteStore } from '../src/store/database.ts';
-import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from '../src/orchestration/scheduler.ts';
 import { createSendTool, type TelegramSendApi } from '../src/capabilities/send-tool.ts';
-import { runStartupCatchUp, type StartupCatchUpApi } from '../src/startup-catch-up.ts';
+import { ContextBuilder } from '../src/context/context-builder.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
+import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from '../src/orchestration/scheduler.ts';
+import { type FileConfig, loadConfig } from '../src/platform/config.ts';
+import { runStartupCatchUp, type StartupCatchUpApi } from '../src/startup-catch-up.ts';
+import { SqliteStore } from '../src/store/database.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
@@ -35,6 +35,19 @@ function topicUpdate(updateId: number, messageId: number, chatId: number, thread
       chat: { id: chatId, type: 'supergroup', title: `Chat ${chatId}`, is_forum: true },
       from: { id: 42, is_bot: false, first_name: 'Alice' },
       text: `chat-${chatId}-message-${messageId}`,
+    },
+  };
+}
+
+function textUpdate(updateId: number, messageId: number, senderId: number): Update {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: messageId,
+      date: 1_700_000_000 + messageId,
+      chat: { id: FIRST_CHAT_ID, type: 'supergroup', title: 'Group' },
+      from: { id: senderId, is_bot: false, first_name: `User ${senderId}` },
+      text: `message from ${senderId}`,
     },
   };
 }
@@ -155,6 +168,52 @@ describe('startup catch-up', () => {
     ]);
     expect(store.db.query('SELECT value FROM app_state WHERE key = ?').get(STARTUP_CATCH_UP_STATE_KEY)).toBeNull();
     store.close();
+  });
+
+  test('excludes ignored users from startup catch-up storage and context', async () => {
+    const { store, ingestion, scheduler } = await setup(false, (config) => {
+      const chat = config.telegram.chats[0];
+      if (chat === undefined) {
+        throw new Error('Expected chat fixture');
+      }
+      chat.ignored_user_ids = [42];
+    });
+    const result = await runStartupCatchUp({
+      api: fakeApi([textUpdate(1, 10, 42), textUpdate(2, 11, 7)]),
+      store,
+      ingestion,
+      scheduler,
+      allowedUpdates: ['message', 'edited_message', 'my_chat_member'],
+      now: fixedClock(),
+    });
+
+    expect(result.storedMessages).toBe(1);
+    expect(result.invocationIds).toHaveLength(1);
+    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(1n);
+    const snapshot = store.db
+      .query<{ snapshot_json: string }, []>('SELECT snapshot_json FROM invocation_messages')
+      .get();
+    expect(snapshot === null ? null : JSON.parse(snapshot.snapshot_json).sender.id).toBe('7');
+    store.close();
+
+    const ignoredOnly = await setup(false, (config) => {
+      const chat = config.telegram.chats[0];
+      if (chat === undefined) {
+        throw new Error('Expected chat fixture');
+      }
+      chat.ignored_user_ids = [42];
+    });
+    const ignoredOnlyResult = await runStartupCatchUp({
+      api: fakeApi([textUpdate(3, 12, 42)]),
+      store: ignoredOnly.store,
+      ingestion: ignoredOnly.ingestion,
+      scheduler: ignoredOnly.scheduler,
+      allowedUpdates: ['message', 'edited_message', 'my_chat_member'],
+      now: fixedClock(),
+    });
+    expect(ignoredOnlyResult.storedMessages).toBe(0);
+    expect(ignoredOnlyResult.invocationIds).toHaveLength(0);
+    ignoredOnly.store.close();
   });
 
   test('applies sticker_trigger_enabled to startup catch-up invocations', async () => {

@@ -15,11 +15,12 @@
 1. Chat 类型是否支持。
 2. Chat ID 是否在 `telegram.chats`。
 3. Forum Topic 是否在可选 `topic_ids`。
-4. 消息是否来自 Bot/Service，以及 `process_bot_messages` 是否允许。
-5. 单独的人类 Sticker 是否允许按 `sticker_trigger_enabled` 创建 Bucket；该开关默认关闭。
-6. Message/Edited Message 结构是否可归一化。
+4. 消息的 `message.from.id` 是否命中当前 Chat 的 `ignored_user_ids`。
+5. 消息是否来自 Bot/Service，以及 `process_bot_messages` 是否允许。
+6. 单独的人类 Sticker 是否允许按 `sticker_trigger_enabled` 创建 Bucket；该开关默认关闭。
+7. Message/Edited Message 结构是否可归一化。
 
-拒绝的 Update 不进入 Bucket，但保留稳定 `rejection_reason`，例如 `chat_not_allowed`、`topic_not_allowed`。排查 allowlist 时同时比较配置哈希；配置不会热重载。
+拒绝的 Update 不进入 Bucket，但保留稳定 `rejection_reason`，例如 `chat_not_allowed`、`topic_not_allowed`。允许 Chat 内被 `ignored_user_ids` 命中的用户消息仍保留 Update 审计，但在 Message、命令和 Bucket 边界之前直接丢弃；其文本、媒体及后续编辑不会进入实时或启动追赶 Context，其他成员回复该用户时也不保存对应 Reply 快照。该过滤只匹配 Telegram user，不匹配 `sender_chat`，且不追溯删除配置生效前已入库的历史。排查 allowlist 时同时比较配置哈希；配置不会热重载。
 
 ## Chat、Conversation 与 Topic
 

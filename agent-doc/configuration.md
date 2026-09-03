@@ -74,6 +74,7 @@ command SecretRef：
         "instructions_file": "prompts/chat-1001234567890.md",
         "timezone": "Asia/Shanghai",
         "topic_ids": [100, 200],
+        "ignored_user_ids": [123456789, 987654321],
         "budget": { "max_invocations_per_day": 100 },
       },
     ],
@@ -90,6 +91,7 @@ command SecretRef：
 - 未配置 `topic_ids`：允许该 Chat 的普通消息与所有 Topic。
 - 配置 `topic_ids`：只允许列出的正整数 Topic ID；未列出的 Topic 被审计为拒绝。
 - Forum Topic 按 `(chat_id, message_thread_id)` 隔离 Conversation。
+- `ignored_user_ids`（可选）是此 Chat 内要忽略的 Telegram User ID 数组；必须是唯一的正安全整数。匹配 `message.from.id` 的新消息和编辑只保留 Update 审计，不写入 Message、Revision、Media 或 Bucket，不能作为命令触发，也不会进入实时或启动追赶 Invocation 的 Context。其他成员消息中若 Reply 快照指向被忽略用户，该引用同样不保存。该字段不匹配 `sender_chat` 身份，修改后必须重启；已入库的旧消息不会追溯删除。
 - `instructions_file`（可选）指向该 Chat 的附加系统提示 Markdown 文件，缺省时为空；提示内容不提供额外授权。
 - 修改 Chat 后重启，并比较 `check-config` 与 `serve_started` 的 `config_hash`。
 - `budget.max_invocations_per_day` 限制该 Chat 每日创建的 Invocation 数量；Chat 不设 Token 硬上限，Token 仅按 Chat 归属统计。

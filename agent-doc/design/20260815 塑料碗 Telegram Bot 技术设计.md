@@ -196,6 +196,7 @@ Phase 1 的 custom Provider 只接受已编译并测试的 API adapter：
       {
         "id": -1001234567890,
         "topic_ids": [3, 8],
+        "ignored_user_ids": [123456789, 987654321],
         "instructions_file": "prompts/group.md",
         "budget": { "max_invocations_per_day": 200 },
       },
@@ -450,7 +451,7 @@ pending → success | error | outcome_unknown | blocked_budget
 - static WEBP、animated TGS、video WEBM sticker；
 - caption、reply、forward、media group、edited message。
 
-其他真人消息保存为 `unsupported` 占位并可触发 Bucket。人类 Sticker 在 `sticker_trigger_enabled` 为 `true` 时可单独触发 Bucket；该开关默认关闭，关闭时 Sticker 只加入已有 collecting Bucket。Service Message 只加入已经由真人触发的 collecting Bucket。其他 Bot 消息由 `process_bot_messages` 控制：关闭时完全忽略，开启后只能加入真人已触发 Bucket。自己发送的 Update 始终忽略；自己的出站消息在 Telegram API 成功后由应用直接写入历史。
+其他真人消息保存为 `unsupported` 占位并可触发 Bucket。每个允许 Chat 可配置 `ignored_user_ids`；匹配 `message.from.id` 的新消息和编辑在命令解析、Message 与 Bucket 边界前直接丢弃，只保留 Update 审计，其他成员消息中指向该用户的 Reply 快照也不保存。过滤不匹配 `sender_chat`，且不追溯删除配置生效前已入库的消息。人类 Sticker 在 `sticker_trigger_enabled` 为 `true` 时可单独触发 Bucket；该开关默认关闭，关闭时 Sticker 只加入已有 collecting Bucket。Service Message 只加入已经由真人触发的 collecting Bucket。其他 Bot 消息由 `process_bot_messages` 控制：关闭时完全忽略，开启后只能加入真人已触发 Bucket。自己发送的 Update 始终忽略；自己的出站消息在 Telegram API 成功后由应用直接写入历史。
 
 Reply 目标不在最近历史时，规范化层保存一层紧凑引用快照：Message ID、发送者、截断正文或媒体占位。不递归展开 Reply。
 

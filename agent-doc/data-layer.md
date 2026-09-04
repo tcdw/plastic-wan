@@ -25,7 +25,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 ## 查询层（Drizzle）
 
-业务查询统一走 `SqliteStore.orm`（drizzle-orm 0.45.2 `bun-sqlite` 驱动的同步 API）；`store.db` 仅供连接层自身（迁移、备份、`VACUUM INTO`）、`doctor.ts` 探针与测试验证断言使用。表定义在 [src/schema.ts](../src/schema.ts)，是迁移终态的类型化映射——新增迁移必须同步更新它。
+业务查询统一走 `SqliteStore.orm`（drizzle-orm 0.45.2 `bun-sqlite` 驱动的同步 API）；`store.db` 仅供连接层自身（迁移、备份、`VACUUM INTO`）、`doctor.ts` 探针与测试验证断言使用。表定义在 [src/store/schema.ts](../src/store/schema.ts)，是迁移终态的类型化映射——新增迁移必须同步更新它。
 
 约定：
 

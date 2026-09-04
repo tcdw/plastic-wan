@@ -12,32 +12,46 @@ bun test
 按改动范围可先运行目标测试：
 
 ```bash
-bun test test/telegram-ingestion.test.ts
-bun test test/scheduler.test.ts
-bun test test/context-send.test.ts
-bun test test/agent-runtime.test.ts
+bun test test/telegram-ingestion.test.ts test/startup-catch-up.test.ts
+bun test test/scheduler.test.ts test/sleep.test.ts
+bun test test/context-send.test.ts test/cut-topic.test.ts
+bun test test/agent-runtime.test.ts test/model-request-audit.test.ts
 bun test test/media.test.ts test/stickers.test.ts
-bun test test/mcp.test.ts
-bun test test/operations.test.ts test/foundation.test.ts
-bun test test/admin.test.ts
+bun test test/mcp.test.ts test/web-fetch.test.ts
+bun test test/operations.test.ts test/foundation.test.ts test/schema.test.ts
+bun test test/admin.test.ts test/model-switch.test.ts
+bun test test/bot-commands.test.ts
 bun test test/memory.test.ts
 bun test test/alarm.test.ts test/alarm-internal-context.test.ts
+bun test test/prompt-template.test.ts test/tui-configure.test.ts
 ```
+
+这 23 个文件是当前测试集的全部；新增测试文件时同步补进下表，否则本页会失去“该跑哪些验证”的作用。
 
 | 测试 | 主要契约 |
 | --- | --- |
 | `foundation.test.ts` | 严格配置、Secret 脱敏、迁移与备份 |
+| `schema.test.ts` | Drizzle 层 bigint/boolean 往返、STRICT 与 CHECK 约束、bun IMMEDIATE 事务回滚、`sql` 模板绑定与 FTS5 查询 |
 | `telegram-ingestion.test.ts` | allowlist、Revision、Bot/Service、Topic 隔离 |
+| `startup-catch-up.test.ts` | 每 Chat 一个追赶 Invocation、`history_messages` 上限、`ignored_user_ids` 与 `sticker_trigger_enabled` 生效、排空后切换实时 Bucket、Reply 的 Topic 路由 |
 | `scheduler.test.ts` | 配置 deadline、冻结快照、恢复和并发串行 |
+| `sleep.test.ts` | 5% 阈值边界与 `zzz` 可见性、跨轮次工具注册表更新、睡眠跳过 due/queued 会话、跨进程持久化、UTC 预算重置唤醒、并发 `zzz` 幂等 |
 | `context-send.test.ts` | Context 可见性、Reply capability、发送次数与未知结果 |
+| `cut-topic.test.ts` | `/cut_topic` 切点排除命令消息及更早历史、切点前移、按 Chat 隔离、非管理员拒绝、重建服务后仍生效 |
 | `agent-runtime.test.ts` | Fresh Agent、Tool 循环、预算、transcript 隔离与工具可见性审计 |
+| `model-request-audit.test.ts` | `request_json` 中 inline base64 图片被结构化摘要替换、其余请求数据保留、重复清洗幂等 |
 | `media.test.ts` | 图片标准化、缓存和 Vision reasoning |
 | `stickers.test.ts` | Set 同步、结构化视觉 Tool Call、索引、搜索、发送 |
 | `mcp.test.ts` | stdio/HTTP transport、策略、预算、Header、重定向和审计 |
+| `web-fetch.test.ts` | 有界不可信文本结果与审计、私网/合成地址拒绝（含跳转目标） |
 | `operations.test.ts` | Retention、备份轮换、Scheduler 关闭 |
 | `admin.test.ts` | Admin 首次设置、登录、Session、只读审计 API 与静态托管 |
+| `model-switch.test.ts` | 可切换模型仅列 text 能力、默认取配置值、切换只对下次会话生效、未知 provider/model 与 image-only 拒绝 |
+| `bot-commands.test.ts` | 命令解析与 mention 匹配、`setMyCommands` 注册一致性、`/pause` 中止与阻断、`/resume` 恢复、`/status` 用量口径、`/model` 分页与切换、管理员鉴权与匿名拒绝、命令只审计不入库 |
 | `memory.test.ts` | 记忆持久化与 TTL、Conversation 隔离、Tool 审计、system prompt 注入、Admin 记忆 CRUD |
 | `alarm.test.ts` / `alarm-internal-context.test.ts` | Alarm 创建/触发/取消、creator-vs-target ownership、latest-new caller 解析、跨 invocation hidden mapping、状态变化安全失败、send 不泄漏、重启后 durable internal context |
+| `prompt-template.test.ts` | Prompt 模板白名单变量渲染、未知与格式错误表达式拒绝 |
+| `tui-configure.test.ts` | `configure` 向导输出可被 `loadConfig` 接受、models.dev 能力/费用映射、Provider `/models` 拉取与去重、CLI 参数与 `--output-agent-prompt` 解析 |
 
 跨模块改动完成后运行全部测试与 TypeScript 检查。
 
@@ -110,7 +124,7 @@ bun run src/cli.ts serve --config dev-data/config.jsonc
 1. 出现一次 `admin_started`，host 为回环地址。
 2. 首次打开 `http://127.0.0.1:<port>/` 渲染「创建管理员」表单，`GET /api/auth/session` 返回 `setup_required = true`。
 3. 创建账号后 Overview 分别显示 Invocation、消息、媒体分析缓存与已配置 Sticker 索引状态。
-4. Tool session 详情五个 Tab（Tool calls / Model calls / Telegram sends / Agent transcript / Frozen context）各自渲染对应表格。
+4. Tool session 详情六个 Tab（Overview / Tool calls / Model calls / Telegram sends / Agent transcript / Frozen context）各自渲染；默认落在 Overview 时间线。
 5. 消息搜索命中当前 Chat 的文本，详情展示全部 Revision。
 6. Bot sticker sets 页面明确说明只包含 `telegram.sticker_sets` 中配置的 Set，并按 Set 与 `index_state` 过滤后行数变化。
 7. Memories 页面按群聊与状态过滤，新建/编辑/删除记忆后列表刷新；剩余寿命超过 `memory_ttl_warning_days` 的记忆带 warning 标记。

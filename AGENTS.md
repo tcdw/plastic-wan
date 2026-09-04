@@ -20,10 +20,10 @@ Plastic Wan 是一个运行在 Telegram 私聊、群组、Supergroup 与 Forum T
 ## Project Structure & Module Organization
 
 ```text
-plastic-wan/
+plasticwan/
 ├── src/                    # Bun/TypeScript 运行时代码；依赖自上而下
 │   ├── application.ts      # 组合根：进程装配、启动与优雅关闭
-│   ├── cli.ts              # serve/check-config/doctor/backup 入口
+│   ├── cli.ts              # serve/check-config/doctor/backup/configure 入口
 │   ├── doctor.ts           # 真实依赖与外部连接诊断
 │   ├── startup-catch-up.ts # 启动补偿拉取与排队
 │   ├── tui/                # 交互式配置向导
@@ -34,8 +34,11 @@ plastic-wan/
 │   ├── store/              # database、schema、migrations/、internal-context、sleep、admins
 │   └── platform/           # config、secrets、providers、invocation-context 等无业务依赖模块
 ├── test/                   # Bun 行为测试与 MCP fixture
+├── scripts/                # 一次性维护脚本（直连 bun:sqlite，不属于业务层）
 ├── apps/admin/             # Rsbuild + React + Ant Design Admin Panel 前端
 ├── deploy/                 # systemd service 与 backup timer
+├── Dockerfile              # 两阶段镜像；媒体依赖打包在内
+├── docker-compose.yml      # Docker 部署模板（/config 与 /data 两个卷）
 ├── agent-doc/              # 面向 agent 的按主题文档
 │   └── design/             # 产品设计与技术设计原文
 └── dev-data/               # 本地配置、数据库和缓存；已 gitignore
@@ -68,11 +71,13 @@ Telegram Update
 | JSONC、SecretRef、Chat/Topic、Provider、MCP 配置 | [agent-doc/configuration.md](agent-doc/configuration.md) |
 | SQLite 表组、迁移、保留与备份 | [agent-doc/data-layer.md](agent-doc/data-layer.md) |
 | Telegram 入库、Bucket、Context、发送与媒体流程 | [agent-doc/telegram-agent-flow.md](agent-doc/telegram-agent-flow.md) |
-| 本地运行、依赖、systemd、诊断和故障处理 | [agent-doc/operations.md](agent-doc/operations.md) |
+| 本地运行、依赖、Docker/systemd 部署、诊断和故障处理 | [agent-doc/operations.md](agent-doc/operations.md) |
 | Admin Panel 认证、审计 API 与前端 | [agent-doc/admin-panel.md](agent-doc/admin-panel.md) |
 | 测试命令与真实验收矩阵 | [agent-doc/verification.md](agent-doc/verification.md) |
 | 产品范围与验收要求 | [agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20设计方案.md](agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20设计方案.md) |
 | 原始技术设计与安全约束 | [agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20技术设计.md](agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20技术设计.md) |
+
+尚未落地的计划（Bun → Node 迁移、Admin 配置保存、Skills 机制）集中在 [agent-doc/README.md](agent-doc/README.md) 的「计划文档」小节，**不描述当前行为**；判断现状只看源码与上表文档。
 
 ## Build, Test, and Development Commands
 
@@ -84,6 +89,7 @@ bun run src/cli.ts check-config --config dev-data/config.jsonc
 bun run src/cli.ts doctor --config dev-data/config.jsonc
 bun run src/cli.ts serve --config dev-data/config.jsonc
 bun run src/cli.ts backup --config dev-data/config.jsonc
+bun run src/cli.ts configure --config dev-data/config.jsonc
 bun run admin:build
 bun run admin:dev
 ```
@@ -94,6 +100,7 @@ bun run admin:dev
 - `doctor`：执行 SQLite/Sharp/FFmpeg/Lottie、Provider、Vision、Telegram 与 required MCP 的真实探针。
 - `serve`：启动 Telegram long polling；配置只在启动时加载，不支持热重载。
 - `backup`：执行保留清理、SQLite `VACUUM INTO` 备份与轮换；完整性检查属于独立恢复验证。
+- `configure`：`src/tui/` 的交互式配置向导，编辑既有配置的 Provider 与 thinking level，可从 Provider `/models` 拉取可路由模型 ID 后写回原文件。要求已存在可加载的配置且 stdin 是 TTY，非交互环境直接报错退出——agent 不要调用它。
 - `admin:build`：构建 `apps/admin` 生产 bundle，供 `serve` 静态托管。
 - `admin:dev`：启动 Rsbuild dev server，`/api` 代理到运行中的 Admin Panel。
 

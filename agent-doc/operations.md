@@ -11,24 +11,31 @@
 - Provider API key
 - Telegram Bot Token
 
-Windows + Scoop：
+macOS（Homebrew）：
 
-```powershell
-scoop install ffmpeg-essentials python
-python -m pip install lottie
+```bash
+brew install ffmpeg python
+python3 -m pip install --user lottie
 ```
 
-安装后新开 PowerShell，确认 `ffmpeg`、`ffprobe`、`python` 可解析。Windows 运行时通过 Python 执行 `lottie_convert.py`；Linux/macOS 要求 `lottie_convert.py` 本身在服务 PATH 中。
+Debian/Ubuntu：
 
-TGS 流程先导出 SVG 再交给 Sharp，因此不需要 CairoSVG、Pillow 或 Glaxnimate。
+```bash
+sudo apt-get install -y ffmpeg python3 python3-pip
+python3 -m pip install --user lottie
+```
+
+Linux/macOS 要求 `lottie_convert.py` 本身在服务 PATH 中（`pip --user` 装到 `~/.local/bin`，确认它在 PATH 里）。Windows 是次要开发环境：`scoop install ffmpeg-essentials python` 后 `python -m pip install lottie`，运行时通过 Python 执行 `lottie_convert.py`。
+
+安装后确认 `ffmpeg`、`ffprobe`、`lottie_convert.py` 都能解析。TGS 流程先导出 SVG 再交给 Sharp，因此不需要 CairoSVG、Pillow 或 Glaxnimate。
 
 ## 初始化开发环境
 
-```powershell
-cd C:\Users\tcdw\Projects\plastic-wan
+```bash
+cd ~/Projects/plasticwan
 bun install
 
-$env:GOOGLE_API_KEY = "<rotated-key>"
+export GOOGLE_API_KEY="<rotated-key>"
 bun run src/cli.ts check-config --config dev-data/config.jsonc
 bun run src/cli.ts doctor --config dev-data/config.jsonc
 ```
@@ -37,7 +44,7 @@ bun run src/cli.ts doctor --config dev-data/config.jsonc
 
 ## 启动与停止
 
-```powershell
+```bash
 bun run src/cli.ts serve --config dev-data/config.jsonc
 ```
 
@@ -63,7 +70,7 @@ bun run src/cli.ts serve --config dev-data/config.jsonc
 
 配置不热重载。变更后：
 
-```powershell
+```bash
 bun run src/cli.ts check-config --config dev-data/config.jsonc
 # 停止旧进程
 bun run src/cli.ts serve --config dev-data/config.jsonc
@@ -73,13 +80,13 @@ bun run src/cli.ts serve --config dev-data/config.jsonc
 
 ## Doctor
 
-```powershell
+```bash
 bun run src/cli.ts doctor --config dev-data/config.jsonc
 ```
 
 如需查看配置中 Agent 系统 Prompt 的模板渲染结果：
 
-```powershell
+```bash
 bun run src/cli.ts doctor --config dev-data/config.jsonc --output-agent-prompt
 ```
 
@@ -183,6 +190,77 @@ PRAGMA integrity_check;
 ```
 
 并做实际恢复演练；“命令成功”不等于恢复路径已验证。
+
+## 部署方式
+
+仓库提供两条部署路径，二选一：
+
+- **Docker**：`Dockerfile` + `docker-compose.yml`，镜像由 CI 推到 GHCR。媒体依赖已打进镜像。
+- **systemd**：`deploy/` 下的三个单元，直接在宿主机跑 Bun。需要自己保证 FFmpeg/python-lottie 在服务 PATH 中。
+
+## Docker 部署
+
+`.github/workflows/docker.yml` 在推送 `develop` 分支和 `v*` tag 时构建 `linux/amd64` 与 `linux/arm64` 镜像并推送到 `ghcr.io/tcdw/plasticwan`：`develop` 产出 `nightly` 与 `develop` tag，`v*` 产出 `latest` 与 semver tag。
+
+镜像结构（`Dockerfile`，基于 `oven/bun:1.4-debian` 两阶段）：
+
+- builder 阶段 `bun install --frozen-lockfile` → `bun run admin:build` → 再以 `--production` 剪掉 devDependencies。
+- runtime 阶段用 apt 装 `ffmpeg`（含 `ffprobe`）、`python3` 与 `gosu`，再 pip 装 `lottie`；因此**不需要**在宿主机准备任何媒体依赖。
+- 只复制 `src/`、`node_modules/`、`apps/admin/dist/` 和 `package.json`。`deploy/`、`test/`、`agent-doc/`、`dev-data/` 被 `.dockerignore` 排除，镜像里没有这些目录。
+- Admin 前端已经构建进 `/app/apps/admin/dist`，与 `static_dir` 默认值一致，无需额外配置。
+
+运行约定：
+
+| 容器路径 | 用途 |
+| --- | --- |
+| `/config/config.jsonc` | 配置文件（bind mount） |
+| `/config/*.md` | Prompt 文件；`system_prompt_file`、`instructions_file` 相对配置文件解析，必须和 `config.jsonc` 放在一起 |
+| `/data` | `data_dir`、SQLite、媒体缓存与备份 |
+
+配置里必须使用容器内路径，而不是宿主机路径：
+
+```jsonc
+{
+  "data_dir": "/data",
+  "paths": {
+    "database": "/data/plasticwan.sqlite",
+    "media_cache": "/data/media-cache",
+    "backups": "/data/backups",
+  },
+}
+```
+
+启动：
+
+```bash
+mkdir -p config data
+# 把 config.jsonc 和 prompt 文件放进 ./config/
+docker compose up -d
+docker compose logs -f          # 确认 serve_started 与 config_hash
+```
+
+`docker-entrypoint.sh` 以 root 启动，做三件事后才降权：
+
+1. 按 `PUID`/`PGID`（默认 `1000`）重映射容器内 `plasticwan` 用户，避免 bind mount 的属主冲突。
+2. `chown -R` 挂载卷，并把 `/config`、`/data` 设为 `0700`、`/config/config.jsonc` 设为 `0600` —— 这是为了满足 `assertConfigPermissions` 的权限检查，宿主机上不必手动 chmod。
+3. `exec gosu plasticwan bun run /app/src/cli.ts "$@"`。
+
+因为最后一步把参数原样传给 CLI，其它子命令都能用同一镜像跑：
+
+```bash
+docker compose run --rm plasticwan check-config --config /config/config.jsonc
+docker compose run --rm plasticwan doctor --config /config/config.jsonc
+docker compose run --rm plasticwan backup --config /config/config.jsonc
+```
+
+注意：`serve` 是长期进程且受 `ServeLock` 约束，同一 `data_dir` 只能有一个实例。上面的一次性命令都不启动 `serve`，可以与运行中的容器共存；但**不要**用 `docker compose run` 再起一个 `serve`。
+
+Admin Panel 的 `admin.host` 只接受回环地址，因此它绑定的是**容器内**的 `127.0.0.1`。Docker 的端口发布转发到容器在 bridge 网络上的地址，够不到 loopback，所以 `docker-compose.yml` 里的 `ports:` 默认是注释掉的，取消注释也不会让面板可达。可行的访问方式：
+
+- `docker compose exec plasticwan <客户端> http://127.0.0.1:8787/...`（镜像未显式安装 curl，先确认基础镜像里有没有）；
+- 让反向代理与容器共享网络命名空间（`network_mode: "service:plasticwan"`），由它承担 TLS 与对外暴露。
+
+配置变更同样不热重载，改完 `./config/config.jsonc` 后 `docker compose restart`，并比对新日志里的 `config_hash`。
 
 ## systemd 部署
 

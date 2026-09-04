@@ -8,21 +8,21 @@
 - 策略：先在 Bun 上把所有 Bun 专有面替换为运行时无关实现，让「切换运行时」收敛为一次微小变更；SQLite 采用两段式——先 `bun:sqlite + Drizzle`，切换时刻再换 `node:sqlite + Drizzle`。
 - 不变式：全程保持 `bun run check` / 测试绿色；不出现双轨兼容层或隐藏 fallback；Telegram ID 全程 `bigint`。
 
-## 当前 Bun 依赖面（2026-08 盘点；2026-09-01 修订 `bun:sqlite` 行）
+## 当前 Bun 依赖面（2026-08 盘点；2026-09-04 重新核对全表）
 
-> 2026-09-01 状态速览：Phase 0 部分完成（drizzle-orm 已锁定）、**Phase 2 已完成**、Phase 1/3–6 未开始。下一步是 Phase 1（pnpm monorepo）或直接进入 Phase 3（运行时无关化，每项独立提交）。
+> 2026-09-04 状态速览：Phase 0 部分完成（drizzle-orm 已锁定）、**Phase 2 已完成**、Phase 1/3–6 未开始。下一步是 Phase 1（pnpm monorepo）或直接进入 Phase 3（运行时无关化，每项独立提交）。
 
 | 类别 | 位置 |
 | --- | --- |
 | `bun:sqlite` | `database.ts`（连接/迁移/备份层）、`doctor.ts`（探针）、`operations.test.ts`（备份只读验证）；业务查询层已迁移至 Drizzle（见 Phase 2） |
-| `Bun.file` / `Bun.write` / `Bun.BunFile` | `config.ts`、`database.ts`、`media.ts`、`admin/server.ts`、`tui/configure.ts`、`doctor.ts` |
-| `Bun.JSONC.parse` | `config.ts` |
-| `Bun.spawn` / `Bun.Subprocess` | `doctor.ts`、`media.ts`（FFmpeg/Lottie 外部链路）、`secrets.ts`（command SecretRef） |
-| `Bun.password.hash/verify` | `admin/auth.ts`（Argon2id） |
-| `Bun.serve` | `admin/server.ts`（fetch 风格 Request/Response 处理器 + 静态资源） |
-| `Bun.gc(true)` / `Bun.version` | `scheduler.ts`（强制 GC 与指标字段 `bun_version`） |
+| `Bun.file` / `Bun.write` / `Bun.BunFile` | `platform/config.ts`、`store/database.ts`、`capabilities/media/media.ts`、`capabilities/media/media-image.ts`、`ingress/admin/server.ts`（含 `BunFile`）、`tui/configure.ts`、`doctor.ts`、`scripts/scrub-model-request-images.ts`；另有 10 个测试文件 |
+| `Bun.JSONC.parse` | `platform/config.ts` |
+| `Bun.spawn` | `doctor.ts`、`capabilities/media/media-image.ts`（FFmpeg/Lottie 外部链路）、`platform/secrets.ts`（command SecretRef）。`Bun.Subprocess` 类型已无引用 |
+| `Bun.password.hash/verify` | `ingress/admin/auth.ts`（Argon2id） |
+| `Bun.serve` | `ingress/admin/server.ts`（fetch 风格 Request/Response 处理器 + 静态资源）；`mcp.test.ts`、`tui-configure.test.ts` 用它起 fixture server |
+| `Bun.gc(true)` / `Bun.version` | `orchestration/scheduler.ts`（强制 GC 与指标字段 `bun_version`）、`doctor.ts`（`Bun.version`）；`Bun.gc` 另在 19 个测试文件中用于回收断言 |
 | `Bun.argv` | `cli.ts` |
-| `bun:test` | `test/` 全部 18 个 `.test.ts` 文件（`afterAll`/`describe`/`expect`） |
+| `bun:test` | `test/` 全部 23 个 `.test.ts` 文件（`afterAll`/`describe`/`expect`）；`Bun.sleep` 另见 `bot-commands.test.ts` |
 | 其它 | 根 `package.json` 的 `workspaces` + `bun run --filter` 脚本、`@types/bun`、`src/cli.ts` shebang `#!/usr/bin/env bun` |
 
 ## 决策记录
@@ -43,7 +43,7 @@
 ### Phase 0 — 基线与依赖锁定（部分完成）
 
 - [ ] 记录基线：全量 `bun test`、`bun run check`、`check-config`、`doctor` 输出。
-  - 2026-09-01：`bun test`（168/168）与 `bun run check` 已随 Phase 2 验收反复全绿，可作为基线；`check-config` 与 `doctor` 输出待正式记录（生产试运行的 doctor 输出可直接归档为基线）。
+  - 2026-09-04：`bun test`（176/176，23 个文件）与 `bun run check` 全绿，可作为基线；`check-config` 与 `doctor` 输出待正式记录（生产试运行的 doctor 输出可直接归档为基线）。
 - [ ] 安装并锁定版本：`drizzle-orm`、`vitest`、`@node-rs/argon2`、`hono`、`@hono/node-server`。
   - 2026-09-01：`drizzle-orm@^0.45.2` 已安装锁定（随 Phase 2 提前完成）；其余四项待 Phase 3 启动时安装。
 - [ ] 确认目标 Node 版本下限（type stripping 默认开启的版本）写入 `engines`。
@@ -62,17 +62,17 @@
 - [x] 改造调用方：全部业务模块（ingestion、media、scheduler、bot-commands、startup-catch-up、send-tool、agent-runtime、mcp、memory、sleep、alarm、internal-context、stickers、admin 全部）。事务映射：`store.transaction(fn)` 保持 bun 原生 IMMEDIATE，drizzle 语句在其内执行；仅持有 `Orm` 的函数用 `orm.transaction(fn, { behavior: 'immediate' })`。
 - [x] **bigint 核验**：drizzle SQLite dialect 无 `integer({ mode: 'bigint' })`（备选被否决），改用 `customType` 自制 `sqliteBigInt`/`sqliteBigIntId`（读写均 `bigint`，主键变体允许省略自增 id）；精度/行为测试固化在 [test/schema.test.ts](../test/schema.test.ts)。
 - 实施要点：只用 drizzle 同步 API（`.all()/.get()/.run()/.values()`，与同步事务回调兼容）；该 driver 把 `.run()` 类型标为 `void`，取 `changes` 用 `asRunResult`；裸 `sql` 单行查询须 `.all<Row>(sql\`…\`).at(0)`（`orm.get(sql)` 返回列值数组）；sql 模板内的 `${}` 一律是绑定参数，常量 SQL 片段须 `sql.raw`。测试的裸 SQL 审计断言保留（验证层惯例）。
-- 验收：✅ 全量 `bun test` 168/168 绿；`bun run check`、`bun run lint` 零错误；备份/保留清理、Admin 审计分页、FTS5 搜索测试全部通过。`bun:sqlite` import 面收敛为 `database.ts`（连接/迁移/备份）、`doctor.ts`（探针）、`scripts/scrub-model-request-images.ts`（维护脚本）、`operations.test.ts`（备份验证）。
+- 验收：✅ 全量 `bun test` 绿（Phase 2 验收时 168/168；2026-09-04 复测 176/176）；`bun run check`、`bun run lint` 零错误；备份/保留清理、Admin 审计分页、FTS5 搜索测试全部通过。`bun:sqlite` import 面收敛为 `database.ts`（连接/迁移/备份）、`doctor.ts`（探针）、`scripts/scrub-model-request-images.ts`（维护脚本）、`operations.test.ts`（备份验证）。
 
 ### Phase 3 — 运行时无关化（每项独立提交，均在 Bun 上回归）
 
-1. `Bun.file`/`Bun.write`/`exists`/`lastModified` → `node:fs/promises`（`readFile`/`writeFile`/`stat`/`access`）；`media.ts` 中 `arrayBuffer()` 读法改为 `readFile` 直取 Buffer。
+1. `Bun.file`/`Bun.write`/`exists`/`lastModified` → `node:fs/promises`（`readFile`/`writeFile`/`stat`/`access`）；`capabilities/media/` 中 `arrayBuffer()` 读法改为 `readFile` 直取 Buffer。
 2. `Bun.JSONC.parse` → `jsonc-parser`（`config.ts`）。
 3. `Bun.spawn` → `node:child_process.spawn`；`readCommandOutput` 平移到 `Readable` 流聚合；覆盖 `doctor`、`media`、`secrets` 三处。
 4. `Bun.password` → `@node-rs/argon2`；**必须用存量管理员账号做登录回归**，证明旧 PHC hash 可验证；`HASH_OPTIONS` 参数逐项映射。
 5. `Bun.serve` → Hono + `@hono/node-server`：回环绑定、`idleTimeout: 30` 对应参数、静态资源 fallback（`index.html`）、错误 JSON 形状不变。
 6. `Bun.gc(true)` 移除（或 gate 在 `--expose-gc`）；指标字段 `bun_version` 更名 `runtime_version`（确认无持久化消费者）。
-7. `bun:test` → Vitest：18 个测试文件机械改 import；`bun:test` 特有行为（如隐式超时差异）逐一确认。
+7. `bun:test` → Vitest：23 个测试文件机械改 import；`bun:test` 特有行为（如隐式超时差异）逐一确认。
 - 出口条件：除 `drizzle-orm/bun-sqlite` 单一 import、shebang、`@types/bun` 外，仓库零 Bun 引用（`grep -r "Bun\.\|bun:"` 为空）。
 
 ### Phase 4 — tsconfig 与 Node type stripping 审计

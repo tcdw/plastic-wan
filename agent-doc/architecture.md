@@ -16,10 +16,12 @@ Config + SecretStore
         ├─ McpManager
         ├─ AgentRuntime
         ├─ BucketScheduler
+        ├─ BotCommandService / AgentModelSwitcher
+        ├─ AdminServer（仅 admin.enabled = true）
         └─ Alarm persistence (alarms table / alarm tool)
 ```
 
-启动顺序有语义：先加载并校验配置与权限，再取得单实例锁、迁移数据库、连接 Telegram、同步 Sticker Set；随后排空 Telegram pending updates，按 Chat 创建 startup catch-up Invocation；最后启动 MCP、Scheduler 和常规 long polling。关闭时停止 Bot，等待 Scheduler，停止 Sticker/MCP 服务，关闭数据库并释放锁。
+启动顺序有语义：先加载并校验配置与权限，再取得单实例锁、迁移数据库、连接 Telegram、同步 Sticker Set；随后排空 Telegram pending updates，按 Chat 创建 startup catch-up Invocation；最后启动 MCP、Scheduler、Admin Panel 和常规 long polling。关闭时停止 Bot，先停 Admin Panel 再等待 Scheduler（最多 30 秒），停止 Sticker/MCP 服务，关闭数据库并释放锁。
 
 ## 主数据流
 
@@ -54,6 +56,8 @@ Fresh Pi Agent
   ├─ add_memory / delete_memory
   ├─ read_image（Sticker；text-only Agent 也用于普通图片）
   ├─ search_stickers
+  ├─ alarm / list_alarm / delete_alarm
+  ├─ zzz（仅全局当日 Token 余量低于 5% 时出现）
   ├─ allowlisted MCP tools
   └─ web_fetch
         │
@@ -92,6 +96,11 @@ src/
 | `platform/invocation-context.ts` | `InvocationContext` 等共享上下文类型（无依赖叶子模块） |
 | `context/context-builder.ts` | Prompt、消息窗口、Reply 与按模型能力选择的媒体载荷/capability |
 | `orchestration/agent-runtime.ts` | Pi Agent 循环、多模态/文本回退输入、模型/Tool 预算、调用审计 |
+| `orchestration/bot-commands.ts` | `BOT_COMMANDS` 唯一事实源、命令解析与 mention 匹配、管理员鉴权、`/pause`/`/resume`/`/status`/`/model`/`/cut_topic` 的确定性回复 |
+| `platform/agent-protocol.ts` | 代码固化的 Core Agent Protocol：消息分区、沉默判断、Tool 选择原则与副作用成功判定 |
+| `platform/model-switch.ts` | `AgentModelSwitcher`：Admin Panel 与 `/model` 共享的内存态模型热切换 |
+| `store/sleep.ts` | `zzz` Tool、5% 预算阈值判定与 `bot_sleep_until` 的原子写入/清除 |
+| `store/internal-context.ts` | Conversation 级 durable hidden working context 的写入与读取 |
 | `capabilities/send-tool.ts` | 文本/Sticker 发送、Reply 授权、重试与副作用审计 |
 | `context/memory.ts` | Conversation 级短期记忆存储、`add_memory`/`delete_memory` Tool 与 TTL 过期清理 |
 | `capabilities/alarm.ts` | Deferred Invocation：`alarm` Tool、授权/时间/配额校验与 pending Alarm 持久化 |

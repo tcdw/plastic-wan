@@ -57,10 +57,10 @@
 
 ### Phase 2 — 数据访问层：bun:sqlite + Drizzle ✅（2026-09-01 完成）
 
-- [x] 新增 Drizzle schema（[src/store/schema.ts](../src/store/schema.ts)：31 张表逐列对齐迁移终态；FTS5 `sticker_search` 虚拟表不进 schema，查询走 `sql` 模板）。
+- [x] 新增 Drizzle schema（[src/store/schema.ts](../../src/store/schema.ts)：31 张表逐列对齐迁移终态；FTS5 `sticker_search` 虚拟表不进 schema，查询走 `sql` 模板）。
 - [x] 保留现有 `.sql` 迁移 runner；Drizzle 仅作查询层，不接管迁移（未引入 drizzle-kit）。
 - [x] 改造调用方：全部业务模块（ingestion、media、scheduler、bot-commands、startup-catch-up、send-tool、agent-runtime、mcp、memory、sleep、alarm、internal-context、stickers、admin 全部）。事务映射：`store.transaction(fn)` 保持 bun 原生 IMMEDIATE，drizzle 语句在其内执行；仅持有 `Orm` 的函数用 `orm.transaction(fn, { behavior: 'immediate' })`。
-- [x] **bigint 核验**：drizzle SQLite dialect 无 `integer({ mode: 'bigint' })`（备选被否决），改用 `customType` 自制 `sqliteBigInt`/`sqliteBigIntId`（读写均 `bigint`，主键变体允许省略自增 id）；精度/行为测试固化在 [test/schema.test.ts](../test/schema.test.ts)。
+- [x] **bigint 核验**：drizzle SQLite dialect 无 `integer({ mode: 'bigint' })`（备选被否决），改用 `customType` 自制 `sqliteBigInt`/`sqliteBigIntId`（读写均 `bigint`，主键变体允许省略自增 id）；精度/行为测试固化在 [test/schema.test.ts](../../test/schema.test.ts)。
 - 实施要点：只用 drizzle 同步 API（`.all()/.get()/.run()/.values()`，与同步事务回调兼容）；该 driver 把 `.run()` 类型标为 `void`，取 `changes` 用 `asRunResult`；裸 `sql` 单行查询须 `.all<Row>(sql\`…\`).at(0)`（`orm.get(sql)` 返回列值数组）；sql 模板内的 `${}` 一律是绑定参数，常量 SQL 片段须 `sql.raw`。测试的裸 SQL 审计断言保留（验证层惯例）。
 - 验收：✅ 全量 `bun test` 绿（Phase 2 验收时 168/168；2026-09-04 复测 176/176）；`bun run check`、`bun run lint` 零错误；备份/保留清理、Admin 审计分页、FTS5 搜索测试全部通过。`bun:sqlite` import 面收敛为 `database.ts`（连接/迁移/备份）、`doctor.ts`（探针）、`scripts/scrub-model-request-images.ts`（维护脚本）、`operations.test.ts`（备份验证）。
 

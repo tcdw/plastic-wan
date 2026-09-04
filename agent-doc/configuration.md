@@ -2,6 +2,8 @@
 
 Plastic Wan 使用严格 JSONC 配置。Schema 位于 `src/platform/config.ts`，未知字段会被拒绝；除类型校验外，还会验证时区、ID 唯一性、模型引用、URL 和预算关系。
 
+本页只记录 Schema 表达不出来的语义。每个字段的类型、取值范围和必填性以 `src/platform/config.ts` 的 TypeBox Schema 为准——越界值由 `check-config` 直接报出，不要靠文档抄写的数字判断。
+
 ## 加载语义
 
 - CLI 必须显式传入 `--config <path>`。
@@ -84,7 +86,7 @@ command SecretRef：
 
 规则：
 
-- `bucket_window_seconds` 是全局 Agent 会话节拍，单位秒；接受 0–300 的整数，示例值为 15。`0` 表示有新消息时不额外延迟，但不会创建空会话。节拍按 Chat（群）计算：同一时刻每个群最多一个 Agent 会话，下一会话在前一会话开始满一个节拍、且前一会话结束后启动。
+- `bucket_window_seconds` 是全局 Agent 会话节拍，单位秒，示例值为 15。`0` 表示有新消息时不额外延迟，但不会创建空会话。节拍按 Chat（群）计算：同一时刻每个群最多一个 Agent 会话，下一会话在前一会话开始满一个节拍、且前一会话结束后启动。
 - `sticker_trigger_enabled` 可选，默认 `false`。关闭时，单独收到的人类 Sticker 仍会持久化，但不会创建 Bucket 或触发 Invocation；已有 collecting Bucket 时仍会加入。设为 `true` 后，单独的 Sticker 可以创建 Bucket。
 - 消息收集仍按 Conversation 隔离：Forum Topic 各自收集、Context 互不混入，只是 Agent 会话在群内串行。
 - Chat ID 必须是非零安全整数且不可重复。
@@ -169,18 +171,13 @@ command SecretRef：
 - `daily_budget.max_tokens`: 主 Agent 与聊天触发的 `read_image` 共享的全局每日 Token 上限；各 Chat 用量仍分别写入 `daily_usage`。
 - `system_prompt_file`: 指向运维侧人格提示的 Markdown 文件，路径相对配置文件目录，内容必须非空。消息分区、安全边界、Tool 选择原则和副作用成功判定由代码内 Core Agent Protocol 固化；具体 Tool 的触发条件、禁用情形、调用顺序与收尾规则由 Tool description 固化，不应重复塞入人格文件。人格提示和 Chat 的 `instructions_file` 支持 `{{ agent.provider }}`、`{{ agent.model }}`、`{{ vision.provider }}`、`{{ vision.model }}`、`{{ timezone }}` 模板变量；模板只执行严格白名单替换，未知或格式错误的表达式会拒绝配置。
 - 模板中的 `agent.provider` 与 `agent.model` 是当前 Invocation 实际使用的模型，因此 Admin Panel 或 `/model` 的运行时切换会反映到下一次会话；`vision.*` 始终来自配置。模板值只注入 Prompt，不会注入记忆；记忆内容按原文保留。
-- `max_turns`: 1–8。
-- `max_tool_calls`: 1–12。
-- `max_sends`: 1–6。
-- `send_max_text_length`（可选，默认不限制）：`send` 工具文本消息的最大字符数（1–4096）。超出时 Tool Call 记为 `send_text_too_long` 错误，不消耗发送配额、不调用 Telegram；Sticker 不受影响。
+- `max_concurrency`: 全局并行 running Invocation 上限；`max_turns`/`max_tool_calls`/`max_sends`/`timeout_seconds` 是单次 Invocation 的硬上限，`history_messages` 是注入 Context 的历史条数。
+- `context_stop_ratio`: 占满模型窗口的比例阈值，超过后停止继续 Tool 循环，避免下一轮超窗。
+- `send_max_text_length`（可选，默认不限制）：`send` 工具文本消息的最大字符数。超出时 Tool Call 记为 `send_text_too_long` 错误，不消耗发送配额、不调用 Telegram；Sticker 不受影响。
 - `send_disallow_blank_lines`（可选，默认 `false`）：开启后，文本包含任何空行（两个换行符之间只有空格/Tab 也算空行）时 Tool Call 记为 `send_blank_lines` 错误，不消耗发送配额、不调用 Telegram；段落只能用单个换行分隔。Sticker 不受影响。
-- `timeout_seconds`: 大于 0 且不超过 90 秒。
-- `max_concurrency`: 全局并行 running Invocation 上限。
-- `context_stop_ratio`: 大于 0 且不超过 0.8。
-- `history_messages`: 不小于 1 的整数。
 - `memory_ttl_warning_days`（可选，默认 30）：Agent 记忆剩余寿命超过该天数时，Admin Panel 显示 warning，提示管理员判断保留、删除或提升进 `agents.md`。系统不禁止长 TTL。
 - `send_nudge_enabled`（可选，默认 `false`）：开启后，当 agent 即将自然停止、本轮未调用任何工具且产生了足够长的普通 Assistant 文本，又从未调用过 `send` 时，注入一条 harness 级 user 消息提醒其用 `send` 发送面向群聊的文本。每次 Invocation 至多触发一次；触发与提醒文本记录在 `agent_messages` 中，role 为 `harness_nudge`。用于稳定性不足、偶尔把回复写成私文本却忘记调用 `send` 的模型。
-- `thinking_level`: `off|minimal|low|medium|high|xhigh`；Provider 仍可能限制具体模型支持级别。
+- `thinking_level`: Provider 仍可能限制具体模型支持的级别，Schema 通过不代表模型接受。
 
 Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用目标模型在 provider 中声明的 `max_tokens`。Provider 注册的模型必须满足 `max_tokens ≤ context_window`，且 agent 模型必须支持 text。
 
@@ -240,7 +237,7 @@ Streamable HTTP 使用 `url` 与可选 SecretRef `headers`，且 `follow_redirec
 
 - `enabled = false` 或省略整个 section 时 `serve` 不监听任何 HTTP 端口。
 - `host` 只接受 `127.0.0.1`、`::1`、`localhost`；远程访问必须由反向代理承担 TLS 与网络暴露。
-- `session_ttl_hours` 为 1–720，同时决定 Session 过期与 Cookie `Max-Age`。
+- `session_ttl_hours` 同时决定 Session 过期与 Cookie `Max-Age`。
 - `static_dir` 可选，默认 `apps/admin/dist`；目录缺失时审计 API 仍可用，静态路由返回 503 `admin_bundle_missing`。
 
 详细认证、API 与前端约定见 [admin-panel.md](admin-panel.md)。

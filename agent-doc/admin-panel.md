@@ -4,30 +4,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 审计数据只读；记忆管理、Bot 管理员列表管理、模型热切换、解除睡眠、取消挂起会话与取消 pending Alarm 是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume`、`/cut_topic` 等 Bot 管理员命令的 Telegram 用户，热切换 agent 模型，唤醒/取消挂起会话，或取消尚未触发的 Alarm。面板不能改写配置文件、不能重跑 Invocation 或删除审计记录。
 
-## 配置
-
-```jsonc
-{
-  "admin": {
-    "enabled": true,
-    "host": "127.0.0.1",
-    "port": 8787,
-    "session_ttl_hours": 168,
-    // 可选：默认 apps/admin/dist
-    "static_dir": "/opt/plasticwan/apps/admin/dist",
-  },
-}
-```
-
-| 字段 | 语义 |
-| --- | --- |
-| `enabled` | `false` 时 `serve` 完全不监听端口 |
-| `host` | 只接受 `127.0.0.1`、`::1`、`localhost`；远程访问放反向代理 |
-| `port` | 1–65535 |
-| `session_ttl_hours` | 1–720，Session 与 Cookie `Max-Age` 共用 |
-| `static_dir` | 前端 bundle 目录；缺失时 API 仍可用，静态路由返回 503 `admin_bundle_missing` |
-
-`admin.host` 的回环限制在 `validateSemantics` 中强制。配置整体参与 `config_hash`，改动后必须重启 `serve`。
+`admin` section 的字段语义见 [configuration.md](configuration.md#admin-panel)；`admin.host` 的回环限制在 `validateSemantics` 中强制，配置整体参与 `config_hash`，改动后必须重启 `serve`。
 
 ## 生命周期
 
@@ -61,34 +38,23 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 前缀 `/api`，全部返回 JSON，`cache-control: no-store`。
 
-| 路由 | 说明 |
-| --- | --- |
-| `POST /auth/logout` | 撤销当前 Session |
-| `POST /auth/credentials` | 修改当前管理员用户名和密码，并撤销该用户其它 Session |
-| `GET /overview` | Bot 睡眠状态、管理员暂停的 Chat、Invocation/已配置 Sticker 索引状态、Top Tool、当日预算用量、消息与媒体分析缓存计数 |
-| `POST /wake` | 删除持久化睡眠状态并立即唤醒 Scheduler；重复调用保持 `awake` |
-| `GET /invocations` | Tool Session 列表 |
-| `GET /invocations/:id` | Overview 时间线所需的冻结消息、Tool Call、Model Call、Agent transcript、Telegram 发送与冻结上下文 |
-| `GET /messages` | 消息列表 |
-| `GET /messages/:id` | 全部 Revision 与媒体（含视觉描述） |
-| `GET /sticker-sets` | Set 同步状态与索引进度 |
-| `GET /stickers` | 已配置 Sticker Set 的可搜索索引条目与分析元数据 |
-| `GET /alarms` | Alarm 审计列表，可按 `state`（`pending`/`firing`/`fired`/`cancelled`）、`chat`（Telegram Chat ID）与 `target`（目标 Telegram User ID）过滤；`pending` 按 `scheduled_at, id` 升序置顶，非 pending 历史按最近状态时间/id 倒序 |
-| `DELETE /alarms/:id` | 原子取消 `pending` Alarm（`pending → cancelled`），记录当前面板管理员账号与 `admin_cancelled` 原因，并唤醒 Scheduler；不存在返回 404，非 pending 返回 409 |
-| `GET /memories` | 记忆列表，可按 `chat`（Telegram Chat ID）与 `state`（`active`/`expired`/`long_ttl`）过滤 |
-| `GET /memories/chats` | 已知 Chat 列表（记忆创建表单的选项来源） |
-| `POST /memories` | 创建记忆：`chat_id`、可选 `message_thread_id`（默认 0）、`content`（1–150 字符）、可选 `ttl_seconds`（默认 1 天） |
-| `PUT /memories/:id` | 修改 `content` 和/或按 `ttl_seconds` 续期（至少提供一项）；不存在返回 404 |
-| `DELETE /memories/:id` | 删除记忆；不存在返回 404 |
-| `GET /admins` | Bot 管理员列表（Telegram 用户 ID、显示名、来源、添加时间） |
-| `POST /admins` | 指派 Bot 管理员：`{ "telegram_user_id": 42 }`；重复添加幂等 |
-| `DELETE /admins/:id` | 移除 Bot 管理员（`:id` 为 Telegram 用户 ID）；配置种子项会在重启后重新出现 |
-| `GET /model` | 当前生效 agent 模型、config.jsonc 默认值与全部可切换选项（text 能力模型） |
-| `PUT /model` | 热切换 agent 模型：`{ "provider", "model" }`；未知 provider/model、无 text 能力返回 400（`unknown_provider`/`unknown_model`/`not_text_capable`） |
-| `DELETE /model` | 恢复 config.jsonc 默认 agent 模型 |
-| `POST /cancel-pending-sessions` | 取消所有 `collecting`/`queued` Bucket 及其 queued Invocation，并退回当日调用预算 |
+完整路由表以 `src/ingress/admin/server.ts` 的分发为准。这里只记录路由签名看不出来的约束。
 
-记忆列表项包含 `expired` 与 `long_ttl` 布尔标记：`long_ttl` 表示剩余寿命超过 `agent.memory_ttl_warning_days`（默认 30 天）。创建时若 `(chat_id, message_thread_id)` 对应的 Conversation 尚不存在会自动创建。
+**审计读端点**（`GET /auth/session`、`/overview`、`/usage`、`/invocations[/:id]`、`/messages[/:id]`、`/sticker-sets`、`/stickers`、`/alarms`、`/memories`、`/memories/chats`、`/admins`、`/model`）一律只读；落到审计分支的非 `GET` 请求返回 405 `method_not_allowed`。`/usage` 额外接受 `days`（1–90，默认 7），越界返回 400 `invalid_days`。
+
+**写端点是白名单例外**，只有这些：
+
+| 路由 | 非显然的语义 |
+| --- | --- |
+| `POST /auth/logout` / `POST /auth/credentials` | 改凭据会撤销该用户**全部** Session（含当前）并签发新 Cookie |
+| `POST /wake` | 删除持久化睡眠状态并唤醒 Scheduler；幂等，重复调用保持 `awake` |
+| `POST /cancel-pending-sessions` | 取消所有 `collecting`/`queued` Bucket 及其 queued Invocation，并**退回**当日调用预算 |
+| `POST` / `PUT` / `DELETE /memories[/:id]` | 创建时若 `(chat_id, message_thread_id)` 的 Conversation 不存在会自动建；`PUT` 至少要提供 `content` 或 `ttl_seconds` 之一 |
+| `POST` / `DELETE /admins[/:id]` | `:id` 是 Telegram 用户 ID 不是行 ID；添加幂等；删掉配置种子项后重启会重新出现 |
+| `PUT` / `DELETE /model` | 内存态热切换，只影响后续 Invocation；未知 provider/model 或模型无 text 能力返回 400（`unknown_provider`/`unknown_model`/`not_text_capable`） |
+| `DELETE /alarms/:id` | **只能**取消 `pending`：`firing` 与其它终态返回 409 `alarm_not_pending`，不存在返回 404 `not_found`。取消记录当前面板管理员与 `admin_cancelled` 原因并唤醒 Scheduler |
+
+列表过滤同样只在少数端点上有效：`/alarms` 按 `state`(`pending`/`firing`/`fired`/`cancelled`)/`chat`/`target`，`/memories` 按 `chat`/`state`(`active`/`expired`/`long_ttl`)，`/stickers` 按 `set`/`state`。记忆列表项带 `expired` 与 `long_ttl` 布尔标记，`long_ttl` 表示剩余寿命超过 `agent.memory_ttl_warning_days`。Alarm 列表把 `pending` 按 `scheduled_at, id` 升序置顶，非 pending 历史按最近状态时间/id 倒序。
 
 `GET /stickers` 不列出群聊中收到的任意 Sticker。只有 `telegram.sticker_sets` 中配置的 Set 才会同步到该索引并获准供 Bot 搜索和发送；聊天媒体的按需视觉分析属于 `media_analyses`，在消息详情中展示。
 
@@ -153,18 +119,4 @@ Bot 管理员列表（迁移 `src/store/migrations/008_bot_admins.sql`）：
 
 ## 验证
 
-```bash
-bun test test/admin.test.ts
-bun test test/alarm.test.ts
-bun test test/memory.test.ts
-bun run check
-bun run admin:build
-```
-
-`test/admin.test.ts` 覆盖：首次初始化与登录态转换、弱密码拒绝且不写入用户、`setup` 重复调用冲突、错误凭据与未知用户的统一 401、跨站 `POST` 拒绝、Overview 睡眠/手动唤醒与管理员暂停状态、审计三大视图的字段与过滤、非法 `limit`/`state` 的 400、审计路由写操作 405、静态资源回退与目录穿越拒绝、`admin.host` 非回环时配置加载失败。
-
-`test/alarm.test.ts` 覆盖：Alarm Tool schema/时间边界/目标授权/配额/审计、UTC 归一化与原 Topic 归属、到期 claim/排序/优先级/同 Chat 串行/动态唤醒、pause/chat/topic 移除取消且不预留预算、token gate + zzz bypass 而普通 Invocation 仍阻塞、恢复与所有终态不重试、临时 prompt 不落消息历史、首次文本 mention 与 Sticker 拒绝/后续发送/长度/空行/MarkdownV2 行为、retention，以及 Admin Alarm 列表分页/过滤/排序/bigint 序列化/Invocation 链接、认证/Origin/方法/404/409/wake 行为。
-
-`test/memory.test.ts` 覆盖：记忆持久化与 TTL 过期、跨 Conversation 隔离与删除幂等、Tool 审计与 150 字符硬限制、system prompt 注入顺序与过滤、管理 API 的 CRUD/聊天过滤/`long_ttl` 与 `expired` 标记/参数校验/404 与 405、`purgeExpiredData` 清理过期记忆。
-
-浏览器冒烟应确认：初始化表单 → Overview 统计、Bot 睡眠/手动唤醒与管理员暂停状态 → Tool session 详情六个 Tab，默认 Overview 按时间显示收到的消息与 `send` 内容 → Alarms 页面按状态/Chat/Target 过滤、pending 优先列表、展开完整诊断、关联 Tool session 链接、pending-only 二次确认取消与 409 冲突提示 → 消息搜索与详情 Revision、媒体分析 → 已配置 Sticker Set 与 `index_state` 过滤 → Memories 页面按群聊与状态过滤、新建/编辑/删除记忆、长 TTL 记忆显示 warning → Bot admins 页面添加/移除管理员与 `telegram.admins` 种子展示 → Model 页面查看当前/默认模型、切换后 `/status` 立即反映新模型、恢复默认 → 登出后深链接回落登录页 → 重新登录恢复。
+测试命令、覆盖契约与浏览器冒烟清单见 [verification.md](verification.md) 的「静态与单元验证」与「Admin Panel 冒烟」两节。

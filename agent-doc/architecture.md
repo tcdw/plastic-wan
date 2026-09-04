@@ -83,35 +83,12 @@ src/
 └── platform/               # config、secrets、concurrency、subprocess、providers、model-switch、prompt-template、invocation-context、model-request-audit、agent-protocol
 ```
 
-| 模块 | 职责 |
-| --- | --- |
-| `application.ts` | 启动、组件装配、信号处理和关闭顺序 |
-| `platform/config.ts` | 严格 JSONC Schema、语义校验、配置哈希和权限检查 |
-| `platform/secrets.ts` | literal/env/command SecretRef、大小/超时限制和脱敏 |
-| `store/database.ts` | SQLite 打开、迁移、单实例锁、保留清理和备份 |
-| `ingress/telegram-ingestion.ts` | Update 判定、消息/修订/媒体入库、Chat 迁移 |
-| `orchestration/scheduler.ts` | Bucket/Invocation 事件循环、节拍、并发启动与执行诊断 |
-| `orchestration/invocation-queue.ts` | Bucket/Alarm → Invocation 的同步状态转换、恢复与 Startup Catch-up |
-| `store/invocation-snapshot.ts` | Invocation 消息快照（history + 当前 Bucket）的冻结持久化 |
-| `platform/invocation-context.ts` | `InvocationContext` 等共享上下文类型（无依赖叶子模块） |
-| `context/context-builder.ts` | Prompt、消息窗口、Reply 与按模型能力选择的媒体载荷/capability |
-| `orchestration/agent-runtime.ts` | Pi Agent 循环、多模态/文本回退输入、模型/Tool 预算、调用审计 |
-| `orchestration/bot-commands.ts` | `BOT_COMMANDS` 唯一事实源、命令解析与 mention 匹配、管理员鉴权、`/pause`/`/resume`/`/status`/`/model`/`/cut_topic` 的确定性回复 |
-| `platform/agent-protocol.ts` | 代码固化的 Core Agent Protocol：消息分区、沉默判断、Tool 选择原则与副作用成功判定 |
-| `platform/model-switch.ts` | `AgentModelSwitcher`：Admin Panel 与 `/model` 共享的内存态模型热切换 |
-| `store/sleep.ts` | `zzz` Tool、5% 预算阈值判定与 `bot_sleep_until` 的原子写入/清除 |
-| `store/internal-context.ts` | Conversation 级 durable hidden working context 的写入与读取 |
-| `capabilities/send-tool.ts` | 文本/Sticker 发送、Reply 授权、重试与副作用审计 |
-| `context/memory.ts` | Conversation 级短期记忆存储、`add_memory`/`delete_memory` Tool 与 TTL 过期清理 |
-| `capabilities/alarm.ts` | Deferred Invocation：`alarm` Tool、授权/时间/配额校验与 pending Alarm 持久化 |
-| `capabilities/media/media.ts` | 视觉理解服务：`read_image` Tool、直接图片载荷、Sticker 索引分析与视觉缓存 |
-| `capabilities/media/media-download.ts` | Telegram 文件下载传输（`MediaDownloader`） |
-| `capabilities/media/media-image.ts` | 图像管线：Sticker 代表帧（ffmpeg/lottie）、sharp 标准化与尺寸/格式限制 |
-| `capabilities/stickers.ts` | Set 同步、后台单并发索引、FTS 搜索和发送能力 |
-| `capabilities/mcp.ts` | Server 生命周期、Tool 注册、策略、大小限制和预算 |
-| `capabilities/web-fetch.ts` | 受限公网 HTTP(S) GET、SSRF 防护、DNS 连接固定、跳转与文本结果大小限制 |
-| `doctor.ts` | 本地依赖、模型、Vision、Telegram、required MCP 的真实探针 |
-| `ingress/admin/` | Admin Panel 认证、只读审计查询与本地 HTTP/静态边界 |
+模块职责基本能从层级和文件名推出，源码是唯一事实源。只有几处放置位置和名字不直观，需要单独记住：
+
+- `platform/agent-protocol.ts` 是代码固化的 **Core Agent Protocol**——消息分区、沉默判断、Tool 选择原则与副作用成功判定都在这里，不在人格 Prompt 文件里。
+- 不是所有 Agent Tool 都在 `capabilities/`：`zzz` 定义在 `store/sleep.ts`，`add_memory`/`delete_memory` 定义在 `context/memory.ts`，各自与所属状态放在一起。找某个 Tool 的实现时按名字 grep，别只翻 `capabilities/`。
+- `store/invocation-snapshot.ts` 是 Invocation 消息快照的冻结边界；`orchestration/invocation-queue.ts` 负责 Bucket/Alarm → Invocation 的同步状态转换、恢复与 Startup Catch-up。这两个名字容易和 `scheduler.ts` 混淆——Scheduler 只管事件循环与并发。
+- `platform/invocation-context.ts` 是无依赖的叶子类型模块，存在的唯一目的是打断 import 环，不要往里加逻辑。
 
 ## 并发模型
 

@@ -128,8 +128,12 @@ bun run src/cli.ts serve --config dev-data/config.jsonc
 5. 消息搜索命中当前 Chat 的文本，详情展示全部 Revision。
 6. Bot sticker sets 页面明确说明只包含 `telegram.sticker_sets` 中配置的 Set，并按 Set 与 `index_state` 过滤后行数变化。
 7. Memories 页面按群聊与状态过滤，新建/编辑/删除记忆后列表刷新；剩余寿命超过 `memory_ttl_warning_days` 的记忆带 warning 标记。
-8. 登出后访问深链接回落登录页；重新登录恢复访问。
-9. `admin_users.password_hash` 以 `$argon2id$` 开头，`admin_sessions` 只有 64 位十六进制摘要。
+8. Overview 的 Bot status 卡片显示 `sleeping`/`awake` 与 `sleep_until`，睡眠时 `Wake now` 带二次确认；同时列出所有 `chat_pause` Chat 与暂停时间。
+9. Alarms 页面按 state/Chat/Target 过滤，pending 优先置顶，展开显示完整诊断并链接到对应 Tool session；取消只对 pending 开放且需二次确认，对非 pending 给出 409 冲突提示。
+10. Bot admins 页面能添加/移除管理员，`telegram.admins` 的种子项来源显示为 `config`。
+11. Model 页面显示当前/默认模型；切换后 Telegram `/status` 立即反映新模型，恢复默认后回到 `config.jsonc` 的值。
+12. 登出后访问深链接回落登录页；重新登录恢复访问。
+13. `admin_users.password_hash` 以 `$argon2id$` 开头，`admin_sessions` 只有 64 位十六进制摘要。
 
 未构建 bundle 时静态路由返回 503 `admin_bundle_missing`，API 仍可用；这不是启动失败。
 

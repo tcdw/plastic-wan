@@ -40,7 +40,7 @@ plasticwan/
 ├── Dockerfile              # 两阶段镜像；媒体依赖打包在内
 ├── docker-compose.yml      # Docker 部署模板（/config 与 /data 两个卷）
 ├── agent-doc/              # 面向 agent 的按主题文档
-│   └── design/             # 产品设计与技术设计原文
+│   └── design/             # 设计原文与未落地计划；不描述当前行为
 └── dev-data/               # 本地配置、数据库和缓存；已 gitignore
 ```
 
@@ -77,7 +77,7 @@ Telegram Update
 | 产品范围与验收要求 | [agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20设计方案.md](agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20设计方案.md) |
 | 原始技术设计与安全约束 | [agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20技术设计.md](agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20技术设计.md) |
 
-尚未落地的计划（Bun → Node 迁移、Admin 配置保存、Skills 机制）集中在 [agent-doc/README.md](agent-doc/README.md) 的「计划文档」小节，**不描述当前行为**；判断现状只看源码与上表文档。
+设计原文与尚未落地的计划（Bun → Node 迁移、Skills 机制）都在 `agent-doc/design/`，索引见 [agent-doc/README.md](agent-doc/README.md)。它们**不描述当前行为**；判断现状只看源码与上表文档。
 
 ## Build, Test, and Development Commands
 

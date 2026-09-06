@@ -190,35 +190,6 @@ describe('bucket scheduler', () => {
     store.close();
   });
 
-  test('skips a bucket once the daily invocation reservation is exhausted', async () => {
-    const { store, ingestion, scheduler } = await setup((config) => {
-      const chat = config.telegram.chats[0];
-      if (chat === undefined) {
-        throw new Error('Expected chat fixture');
-      }
-      chat.budget.max_invocations_per_day = 1;
-    });
-    const start = new Date('2026-08-15T00:00:00.000Z');
-    ingestion.ingest(textUpdate(1, 10, 'first'), start);
-    const [firstInvocation] = scheduler.processDue(new Date(start.getTime() + 15_000));
-    if (firstInvocation === undefined) {
-      throw new Error('Expected first invocation');
-    }
-    store.db
-      .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
-      .run(firstInvocation);
-    store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(firstInvocation);
-    const secondStart = new Date(start.getTime() + 20_000);
-    ingestion.ingest(textUpdate(2, 11, 'second'), secondStart);
-    scheduler.processDue(new Date(secondStart.getTime() + 15_000));
-    const states = store.db
-      .query<{ state: string }, []>('SELECT state FROM buckets ORDER BY id')
-      .all()
-      .map((row) => row.state);
-    expect(states).toEqual(['completed', 'skipped_budget']);
-    store.close();
-  });
-
   test('starts the next busy-period bucket on the prior session pace', async () => {
     const { store, ingestion, scheduler } = await setup((config) => {
       config.telegram.bucket_window_seconds = 6;
@@ -447,7 +418,7 @@ describe('bucket scheduler', () => {
 
   test('runs agent sessions of different chats concurrently', async () => {
     const { store, ingestion, scheduler } = await setup((config) => {
-      config.telegram.chats.push({ id: 987654321, budget: { max_invocations_per_day: 100 } });
+      config.telegram.chats.push({ id: 987654321 });
     });
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'chat-a', 123456789), start);

@@ -4,7 +4,7 @@ import type { RawConfig } from '../platform/config.ts';
 import { type SqliteStore, asRunResult, isChatPaused, resolveChatConfig } from '../store/database.ts';
 import { snapshotInvocation } from '../store/invocation-snapshot.ts';
 import { activeSleepUntil } from '../store/sleep.ts';
-import { alarms, appState, bucketMessages, buckets, dailyUsage, invocations } from '../store/schema.ts';
+import { alarms, appState, bucketMessages, buckets, invocations } from '../store/schema.ts';
 
 export const RECOVERY_MAX_AGE_MS = 5 * 60_000;
 export const STARTUP_CATCH_UP_STATE_KEY = 'telegram_startup_catch_up';
@@ -24,7 +24,6 @@ interface InvocationRow {
 
 interface SleepingInvocationRow extends InvocationRow {
   readonly telegram_chat_id: bigint;
-  readonly created_at: string;
 }
 
 interface StartupMessageRow {
@@ -173,17 +172,14 @@ export class InvocationQueueService {
         if (latest === undefined) {
           continue;
         }
-        const budget = resolveChatConfig(this.#config, this.#store.orm, latest.telegram_chat_id)?.budget;
         const skipReason =
-          budget === undefined
+          resolveChatConfig(this.#config, this.#store.orm, latest.telegram_chat_id) === undefined
             ? 'chat_removed'
             : isChatPaused(this.#store.orm, latest.chat_id)
               ? 'chat_paused'
               : sleepUntil !== null
                 ? 'sleeping'
-                : this.#reserveInvocation(latest.telegram_chat_id, budget.max_invocations_per_day, now)
-                  ? undefined
-                  : 'invocation_budget';
+                : undefined;
         const created =
           skipReason === undefined
             ? this.#store.orm
@@ -312,7 +308,7 @@ export class InvocationQueueService {
   skipQueuedInvocations(sleepUntil: string, now: Date): void {
     const queued = this.#store.transaction(() => {
       const rows = this.#store.orm.all<SleepingInvocationRow>(
-        sql`SELECT i.id, i.bucket_id, i.conversation_id, i.created_at, c.telegram_chat_id
+        sql`SELECT i.id, i.bucket_id, i.conversation_id, c.telegram_chat_id
          FROM invocations i
          JOIN conversations v ON v.id = i.conversation_id
          JOIN chats c ON c.id = v.chat_id
@@ -332,11 +328,6 @@ export class InvocationQueueService {
           .set({ state: 'skipped_budget', errorCode: 'sleeping', finishedAt: nowIso, updatedAt: nowIso })
           .where(eq(buckets.id, invocation.bucket_id))
           .run();
-        this.#store.orm.run(
-          sql`UPDATE daily_usage
-             SET amount = MAX(0, amount - 1), updated_at = ${nowIso}
-             WHERE utc_date = ${invocation.created_at.slice(0, 10)} AND scope = 'chat' AND resource = ${invocation.telegram_chat_id.toString()} AND metric = 'agent_invocations'`,
-        );
       }
       return rows;
     });
@@ -436,18 +427,13 @@ export class InvocationQueueService {
       this.#markBucketSkipped(bucket.id, now, 'chat_paused');
       return undefined;
     }
-    const budget = resolveChatConfig(this.#config, this.#store.orm, chat.telegram_chat_id)?.budget;
-    if (budget === undefined) {
+    if (resolveChatConfig(this.#config, this.#store.orm, chat.telegram_chat_id) === undefined) {
       this.#markBucketSkipped(bucket.id, now, 'chat_removed');
       return undefined;
     }
     if (sleepUntil !== null) {
       this.#markBucketSkipped(bucket.id, now, 'sleeping');
       this.#logSleepingSkip(chat.telegram_chat_id, bucket.id, null, sleepUntil);
-      return undefined;
-    }
-    if (!this.#reserveInvocation(chat.telegram_chat_id, budget.max_invocations_per_day, now)) {
-      this.#markBucketSkipped(bucket.id, now, 'invocation_budget');
       return undefined;
     }
     this.#store.orm
@@ -484,43 +470,6 @@ export class InvocationQueueService {
       includeHistory,
     );
     return invocationId;
-  }
-
-  #reserveInvocation(chatId: bigint, limit: number, now: Date): boolean {
-    const date = now.toISOString().slice(0, 10);
-    const resource = chatId.toString();
-    const current =
-      this.#store.orm
-        .select({ amount: dailyUsage.amount })
-        .from(dailyUsage)
-        .where(
-          and(
-            eq(dailyUsage.utcDate, date),
-            eq(dailyUsage.scope, 'chat'),
-            eq(dailyUsage.resource, resource),
-            eq(dailyUsage.metric, 'agent_invocations'),
-          ),
-        )
-        .get()?.amount ?? 0n;
-    if (current >= BigInt(limit)) {
-      return false;
-    }
-    this.#store.orm
-      .insert(dailyUsage)
-      .values({
-        utcDate: date,
-        scope: 'chat',
-        resource,
-        metric: 'agent_invocations',
-        amount: 1n,
-        updatedAt: now.toISOString(),
-      })
-      .onConflictDoUpdate({
-        target: [dailyUsage.utcDate, dailyUsage.scope, dailyUsage.resource, dailyUsage.metric],
-        set: { amount: sql`${dailyUsage.amount} + 1`, updatedAt: sql`excluded.updated_at` },
-      })
-      .run();
-    return true;
   }
 
   #markBucketSkipped(bucketId: bigint, now: Date, reason: string): void {

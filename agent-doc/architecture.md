@@ -39,7 +39,7 @@ TelegramIngestion
 BucketScheduler
   ├─ 冻结 history/new 消息快照
   ├─ 创建 Invocation
-  ├─ 恢复、节拍、预算判定
+  ├─ 恢复、节拍判定
   └─ 调用 AgentRuntime
         │
         ▼
@@ -117,7 +117,7 @@ Memory 内容是模型自己写入的持久化数据，按 Conversation 隔离�
 - Chat/Topic allowlist 在入库边界校验。
 - Reply Message ID、媒体引用、Sticker Set 和 Sticker ID 必须来自当前 Context capability。
 - 普通 Assistant 文本不会发往 Telegram；`send` 是唯一发送边界。
-- MCP Tool 必须通过配置 allowlist、策略、预算、超时和大小限制。
+- MCP Tool 必须通过配置 allowlist、策略、超时和大小限制。
 - `web_fetch` 只允许默认端口的公网 HTTP(S) GET；每次 DNS 与跳转目标都重新校验，连接固定到已校验地址，且不发送 Cookie 或认证信息。
 - 模型不能取得 Bash、任意进程、任意文件或原始 Telegram file ID 能力。
 

@@ -824,24 +824,52 @@ export function usage(orm: Orm, days: number, now = new Date()): UsageSeries {
   }
   const firstDate = new Date(today);
   firstDate.setUTCDate(today.getUTCDate() - (days - 1));
-  const rows = orm.all<{
-    utc_date: string;
-    metric: string;
-    total: bigint;
-  }>(sql`SELECT utc_date, metric, SUM(amount) AS total
-       FROM daily_usage
-       WHERE utc_date >= ${firstDate.toISOString().slice(0, 10)} AND utc_date <= ${today.toISOString().slice(0, 10)} AND metric IN ('model_tokens', 'vision_tokens', 'tool_calls', 'agent_invocations')
-       GROUP BY utc_date, metric`);
+  const from = firstDate.toISOString().slice(0, 10);
+  const to = today.toISOString().slice(0, 10);
+  // Exclusive upper bound for the ISO-8601 `created_at` strings, so the count
+  // queries stay range comparisons instead of per-row substr().
+  const before = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + 1))
+    .toISOString()
+    .slice(0, 10);
   const byDate = new Map<string, UsagePoint>();
   for (const point of result) {
     byDate.set(point.date, point);
   }
-  for (const row of rows) {
-    const point = byDate.get(row.utc_date);
+  const apply = (date: string, metric: keyof UsagePoint, total: bigint): void => {
+    const point = byDate.get(date);
     if (point === undefined) {
-      continue;
+      return;
     }
-    byDate.set(row.utc_date, { ...point, [row.metric]: Number(row.total) });
+    byDate.set(date, { ...point, [metric]: Number(total) });
+  };
+  const tokenRows = orm.all<{ utc_date: string; metric: string; total: bigint }>(
+    sql`SELECT utc_date, metric, SUM(amount) AS total
+       FROM daily_usage
+       WHERE utc_date >= ${from} AND utc_date <= ${to} AND metric IN ('model_tokens', 'vision_tokens')
+       GROUP BY utc_date, metric`,
+  );
+  for (const row of tokenRows) {
+    apply(row.utc_date, row.metric === 'vision_tokens' ? 'vision_tokens' : 'model_tokens', row.total);
+  }
+  // Invocation and tool-call counts come straight from the audit tables: there
+  // is no daily reservation counter to read them off any more.
+  const invocationRows = orm.all<{ utc_date: string; total: bigint }>(
+    sql`SELECT substr(created_at, 1, 10) AS utc_date, COUNT(*) AS total
+       FROM invocations
+       WHERE created_at >= ${from} AND created_at < ${before}
+       GROUP BY utc_date`,
+  );
+  for (const row of invocationRows) {
+    apply(row.utc_date, 'agent_invocations', row.total);
+  }
+  const toolCallRows = orm.all<{ utc_date: string; total: bigint }>(
+    sql`SELECT substr(created_at, 1, 10) AS utc_date, COUNT(*) AS total
+       FROM tool_calls
+       WHERE created_at >= ${from} AND created_at < ${before}
+       GROUP BY utc_date`,
+  );
+  for (const row of toolCallRows) {
+    apply(row.utc_date, 'tool_calls', row.total);
   }
   return { days, series: Array.from(byDate.values()) };
 }

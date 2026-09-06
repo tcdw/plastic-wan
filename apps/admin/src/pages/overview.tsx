@@ -237,7 +237,7 @@ export function OverviewPage(): React.ReactNode {
           <Typography.Text type="secondary">No usage data</Typography.Text>
         )}
       </Card>
-      <Card title="Today's budget usage (UTC)" size="small">
+      <Card title="Today's usage (UTC)" size="small">
         <Table<UsageEntry>
           rowKey={(row) => `${row.resource}|${row.metric}|${row.scope}`}
           size="small"

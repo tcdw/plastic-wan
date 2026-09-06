@@ -40,7 +40,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 完整路由表以 `src/ingress/admin/server.ts` 的分发为准。这里只记录路由签名看不出来的约束。
 
-**审计读端点**（`GET /auth/session`、`/overview`、`/usage`、`/invocations[/:id]`、`/messages[/:id]`、`/sticker-sets`、`/stickers`、`/alarms`、`/memories`、`/memories/chats`、`/admins`、`/model`）一律只读；落到审计分支的非 `GET` 请求返回 405 `method_not_allowed`。`/usage` 额外接受 `days`（1–90，默认 7），越界返回 400 `invalid_days`。
+**审计读端点**（`GET /auth/session`、`/overview`、`/usage`、`/invocations[/:id]`、`/messages[/:id]`、`/sticker-sets`、`/stickers`、`/alarms`、`/memories`、`/memories/chats`、`/admins`、`/model`）一律只读；落到审计分支的非 `GET` 请求返回 405 `method_not_allowed`。`/usage` 额外接受 `days`（1–90，默认 7），越界返回 400 `invalid_days`；Token 序列来自 `daily_usage`，Invocation 与 Tool call 序列直接按 UTC 日期 `COUNT` `invocations` 与 `tool_calls`。
 
 **写端点是白名单例外**，只有这些：
 
@@ -48,7 +48,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 | --- | --- |
 | `POST /auth/logout` / `POST /auth/credentials` | 改凭据会撤销该用户**全部** Session（含当前）并签发新 Cookie |
 | `POST /wake` | 删除持久化睡眠状态并唤醒 Scheduler；幂等，重复调用保持 `awake` |
-| `POST /cancel-pending-sessions` | 取消所有 `collecting`/`queued` Bucket 及其 queued Invocation，并**退回**当日调用预算 |
+| `POST /cancel-pending-sessions` | 取消所有 `collecting`/`queued` Bucket 及其 queued Invocation |
 | `POST` / `PUT` / `DELETE /memories[/:id]` | 创建时若 `(chat_id, message_thread_id)` 的 Conversation 不存在会自动建；`PUT` 至少要提供 `content` 或 `ttl_seconds` 之一 |
 | `POST` / `DELETE /admins[/:id]` | `:id` 是 Telegram 用户 ID 不是行 ID；添加幂等；删掉配置种子项后重启会重新出现 |
 | `PUT` / `DELETE /model` | 内存态热切换，只影响后续 Invocation；未知 provider/model 或模型无 text 能力返回 400（`unknown_provider`/`unknown_model`/`not_text_capable`） |

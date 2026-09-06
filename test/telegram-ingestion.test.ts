@@ -252,7 +252,6 @@ describe('Telegram ingestion', () => {
       chat.ignored_user_ids = [42];
       config.telegram.chats.push({
         id: secondChatId,
-        budget: { max_invocations_per_day: 100 },
       });
     });
     expect(ingestion.ingest(groupTextUpdate(1, 10, 42))).toEqual({});

@@ -13,14 +13,14 @@ import {
   McpError,
   type MessageExtraInfo,
 } from '@modelcontextprotocol/sdk/types.js';
-import { and, eq, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import Type, { type TUnsafe } from 'typebox';
 import Compile from 'typebox/compile';
 import { AsyncSemaphore } from '../platform/concurrency.ts';
 import type { McpServerConfig, RawConfig, SecretRef } from '../platform/config.ts';
-import { finishToolCall, rejectToolCall, type SqliteStore } from '../store/database.ts';
+import { finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from '../store/database.ts';
 import { type InvocationContext, previewContext } from '../platform/invocation-context.ts';
-import { dailyUsage, mcpServerState, toolCalls } from '../store/schema.ts';
+import { mcpServerState } from '../store/schema.ts';
 import type { SecretStore } from '../platform/secrets.ts';
 
 const ARGUMENT_MAX_BYTES = 32_768;
@@ -31,8 +31,6 @@ const TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 interface ToolPolicy {
   readonly readOnly: boolean;
   readonly timeoutMs: number;
-  readonly perChatDailyCalls: number;
-  readonly globalDailyCalls: number;
 }
 
 interface McpToolDefinition {
@@ -56,11 +54,6 @@ interface ManagedServer {
   reconnectTimer: NodeJS.Timeout | undefined;
   stderrBytes: number;
   state: 'starting' | 'ready' | 'degraded' | 'stopped';
-}
-
-interface StartedToolCall {
-  readonly auditId: bigint;
-  readonly blocked: boolean;
 }
 
 type RegistryValidator = (tools: readonly AgentTool[]) => void;
@@ -334,8 +327,6 @@ export class McpManager {
         policy: {
           readOnly: configuredPolicy.read_only,
           timeoutMs: Math.round(configuredPolicy.timeout_seconds * 1_000),
-          perChatDailyCalls: configuredPolicy.per_chat_daily_calls,
-          globalDailyCalls: configuredPolicy.global_daily_calls,
         },
         resultMaxBytes: server.result_max_bytes,
       };
@@ -381,13 +372,17 @@ export class McpManager {
       this.#recordRejectedCall(context.invocationId, toolCallId, definition, input, 'arguments_too_large');
       throw new Error('MCP tool arguments exceed 32 KiB');
     }
-    const started = this.#reserveAndStart(context, toolCallId, definition, argumentsJson);
-    if (started.blocked) {
-      throw new Error('MCP tool daily call budget reached');
-    }
+    const auditId = startToolCall(
+      this.#store.orm,
+      context.invocationId,
+      toolCallId,
+      definition.exposedName,
+      argumentsJson,
+      !definition.policy.readOnly,
+    );
     const server = this.#servers.get(definition.serverAlias);
     if (server === undefined) {
-      finishToolCall(this.#store.orm, started.auditId, 'error', null, 'server_unconfigured', {
+      finishToolCall(this.#store.orm, auditId, 'error', null, 'server_unconfigured', {
         startedAt: performance.now(),
         pendingOnly: true,
       });
@@ -398,7 +393,7 @@ export class McpManager {
     try {
       release = await server.semaphore.acquire(outerSignal ?? new AbortController().signal);
     } catch {
-      finishToolCall(this.#store.orm, started.auditId, 'error', null, 'aborted_before_request', {
+      finishToolCall(this.#store.orm, auditId, 'error', null, 'aborted_before_request', {
         startedAt,
         pendingOnly: true,
       });
@@ -423,13 +418,13 @@ export class McpManager {
       }
       const text = truncateUtf8(JSON.stringify(result), definition.resultMaxBytes);
       if ('isError' in result && result.isError === true) {
-        finishToolCall(this.#store.orm, started.auditId, 'error', text, 'mcp_tool_error', {
+        finishToolCall(this.#store.orm, auditId, 'error', text, 'mcp_tool_error', {
           startedAt,
           pendingOnly: true,
         });
         throw new KnownToolError(text);
       }
-      finishToolCall(this.#store.orm, started.auditId, 'success', text, null, { startedAt, pendingOnly: true });
+      finishToolCall(this.#store.orm, auditId, 'success', text, null, { startedAt, pendingOnly: true });
       return {
         content: [{ type: 'text', text }],
         details: { server: definition.serverAlias, tool: definition.originalName },
@@ -443,7 +438,7 @@ export class McpManager {
         error.code !== ErrorCode.ConnectionClosed &&
         error.code !== ErrorCode.RequestTimeout;
       const state = known ? 'error' : 'outcome_unknown';
-      finishToolCall(this.#store.orm, started.auditId, state, null, classifyMcpError(error), {
+      finishToolCall(this.#store.orm, auditId, state, null, classifyMcpError(error), {
         startedAt,
         pendingOnly: true,
       });
@@ -475,50 +470,6 @@ export class McpManager {
     });
   }
 
-  #reserveAndStart(
-    context: InvocationContext,
-    toolCallId: string,
-    definition: McpToolDefinition,
-    argumentsJson: string,
-  ): StartedToolCall {
-    return this.#store.transaction(() => {
-      const now = new Date().toISOString();
-      const date = now.slice(0, 10);
-      const chatResource = `${context.chatId}:${definition.exposedName}`;
-      const globalResource = definition.exposedName;
-      const chatUsed = this.#usage(date, 'mcp_chat', chatResource);
-      const globalUsed = this.#usage(date, 'mcp_global', globalResource);
-      const blocked =
-        chatUsed >= BigInt(definition.policy.perChatDailyCalls) ||
-        globalUsed >= BigInt(definition.policy.globalDailyCalls);
-      const created = this.#store.orm
-        .insert(toolCalls)
-        .values({
-          invocationId: context.invocationId,
-          toolCallId,
-          toolName: definition.exposedName,
-          argumentsJson,
-          state: blocked ? 'blocked_budget' : 'pending',
-          sideEffect: !definition.policy.readOnly,
-          errorCode: blocked ? 'blocked_budget' : null,
-          createdAt: now,
-          finishedAt: blocked ? now : null,
-        })
-        .returning({ id: toolCalls.id })
-        .get();
-      if (created === undefined) {
-        throw new Error('tool_calls insert returned no row');
-      }
-      const auditId = created.id;
-      if (blocked) {
-        return { auditId, blocked: true };
-      }
-      this.#incrementUsage(date, 'mcp_chat', chatResource, now);
-      this.#incrementUsage(date, 'mcp_global', globalResource, now);
-      return { auditId, blocked: false };
-    });
-  }
-
   #recordRejectedCall(
     invocationId: bigint,
     toolCallId: string,
@@ -535,37 +486,6 @@ export class McpManager {
       !definition.policy.readOnly,
       errorCode,
     );
-  }
-
-  #usage(date: string, scope: string, resource: string): bigint {
-    return (
-      this.#store.orm
-        .select({ amount: dailyUsage.amount })
-        .from(dailyUsage)
-        .where(
-          and(
-            eq(dailyUsage.utcDate, date),
-            eq(dailyUsage.scope, scope),
-            eq(dailyUsage.resource, resource),
-            eq(dailyUsage.metric, 'tool_calls'),
-          ),
-        )
-        .get()?.amount ?? 0n
-    );
-  }
-
-  #incrementUsage(date: string, scope: string, resource: string, now: string): void {
-    this.#store.orm
-      .insert(dailyUsage)
-      .values({ utcDate: date, scope, resource, metric: 'tool_calls', amount: 1n, updatedAt: now })
-      .onConflictDoUpdate({
-        target: [dailyUsage.utcDate, dailyUsage.scope, dailyUsage.resource, dailyUsage.metric],
-        set: {
-          amount: sql`${dailyUsage.amount} + 1`,
-          updatedAt: sql`excluded.updated_at`,
-        },
-      })
-      .run();
   }
 
   #scheduleReconnect(server: ManagedServer): void {

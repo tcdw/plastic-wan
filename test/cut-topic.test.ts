@@ -74,7 +74,6 @@ async function setup(): Promise<{
       config.telegram.chats.push({
         id: Number(SECOND_CHAT),
         instructions_file: 'chat-instructions.md',
-        budget: { max_invocations_per_day: 100 },
       });
     }),
   );

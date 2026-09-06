@@ -15,7 +15,6 @@ export function testConfigJsonc(directory: string, transform?: (config: FileConf
         {
           id: 123456789,
           instructions_file: 'chat-instructions.md',
-          budget: { max_invocations_per_day: 100 },
         },
       ],
     },

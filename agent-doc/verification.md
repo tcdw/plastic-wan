@@ -42,7 +42,7 @@ bun test test/prompt-template.test.ts test/tui-configure.test.ts
 | `model-request-audit.test.ts` | `request_json` 中 inline base64 图片被结构化摘要替换、其余请求数据保留、重复清洗幂等 |
 | `media.test.ts` | 图片标准化、缓存和 Vision reasoning |
 | `stickers.test.ts` | Set 同步、结构化视觉 Tool Call、索引、搜索、发送 |
-| `mcp.test.ts` | stdio/HTTP transport、策略、预算、Header、重定向和审计 |
+| `mcp.test.ts` | stdio/HTTP transport、策略、Header、重定向和审计 |
 | `web-fetch.test.ts` | 有界不可信文本结果与审计、私网/合成地址拒绝（含跳转目标） |
 | `operations.test.ts` | Retention、备份轮换、Scheduler 关闭 |
 | `admin.test.ts` | Admin 首次设置、登录、Session、只读审计 API 与静态托管 |
@@ -189,7 +189,7 @@ bun run src/cli.ts serve --config dev-data/config.jsonc
 - required Server 失败会阻止启动。
 - optional Server 失败进入 degraded，不伪装 ready。
 - allowlisted Tool 可调用并审计。
-- 未配置策略/超预算/超时/超大小结果被拒绝。
+- 未配置策略/超时/超大小结果被拒绝。
 - Streamable HTTP 重定向被拒绝；静态 Header 生效且不进入日志。
 
 ## 审计验收

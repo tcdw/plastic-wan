@@ -74,7 +74,7 @@ first session      = T + telegram.bucket_window_seconds
 3. 下一次允许启动的时间为 `max(前一会话 started_at + bucket_window_seconds, 前一会话 finished_at)`，按 Chat 计算。
 4. 前一会话短于一个节拍时，等待满节拍；长于一个节拍时，结束后立即处理下一 Bucket。
 5. 没有新的可触发消息时不创建 Bucket，也不启动空会话。`sticker_trigger_enabled` 默认为 `false`：单独的人类 Sticker 不开 Bucket，但可以加入已有 collecting Bucket；设为 `true` 后可以单独触发。
-6. 到达启动时间后，Scheduler 冻结 `history` 与 `new` 快照、预留预算并创建 Invocation。
+6. 到达启动时间后，Scheduler 冻结 `history` 与 `new` 快照并创建 Invocation。
 
 因此，如果 Agent 会话耗时为 0 且群友持续发送消息，会话开始时间固定相隔 `bucket_window_seconds`，与该群有多少活跃 Topic 无关。Bot 自己通过 `send` 产生的消息写入可见历史，但不会触发下一 Bucket。
 
@@ -112,7 +112,7 @@ Context
   → completed / failed / aborted / outcome_unknown
 ```
 
-限制来自配置：全局每日 Token 预算、最大轮次、Tool Call 数、发送数、输出 Token、Invocation 超时和全局并发。模型调用与 Tool Call 分别写入审计。`add_memory`/`delete_memory` 是持久化副作用，按 Conversation 隔离并计入 `tool_calls` 审计；`send` 仍是唯一 Telegram 输出边界。
+限制来自配置：全局每日 Token 预算、最大轮次、Tool Call 数、发送数、输出 Token、Invocation 超时和全局并发。除该全局 Token 预算外没有其它每日配额：Chat 不限每日 Invocation 数，MCP Tool 不限每日调用数。模型调用与 Tool Call 分别写入审计。`add_memory`/`delete_memory` 是持久化副作用，按 Conversation 隔离并计入 `tool_calls` 审计；`send` 仍是唯一 Telegram 输出边界。
 
 每次模型请求都会附带完整的工具注册表（名称、label、描述与参数 Schema）。请求发出前把该请求实际附带的工具名写入 `model_calls.tools_json`，Invocation 的可用注册表快照（`name`/`label`/`description`）写入 `invocations.tool_registry_json`——因此可以审计“模型在某一轮到底看到了哪些工具”。context 接近上限时，Agent 循环只保留 `send` 和已经可用的 `zzz` 继续收尾。
 
@@ -137,7 +137,7 @@ Agent 通过 `alarm` Tool 创建一个绑定当前 conversation 的未来 Invoca
 3. 成功创建是副作用，写入 `alarms`（含原 conversation/Forum Topic、目标 ID 与显示名快照、UTC deadline、`created_by_user_id`、`created_by_invocation_id`），并返回 Alarm ID/scheduled UTC。历史旧行若 `created_by_user_id IS NULL`，不会被用户列出或删除；不会把 target 冒充 creator 回填。
 4. Scheduler 的动态等待同时考虑最近 Bucket deadline 与最近 pending Alarm `scheduled_at`；到期 Alarm 在 Chat 空闲时原子 `pending → firing`，再创建不携带任何 Telegram Update/Message/Revision 的真实 `alarm` Invocation。
 5. Alarm Invocation 仍走普通 Context/Agent/send pipeline；系统提示临时加入任务说明（summary 是任务描述，不是待发送文本），首次成功文本 `send` 自动在开头加入目标用户的 Telegram text mention。
-6. Alarm Invocation 绕过 Chat 每日调用预留、全局每日 Token gate 与预算触发的 `zzz`/sleep，且不暴露 `zzz`；仍受 pause、Chat/Topic 配置、同 Chat 串行、并发、timeout、最大轮次/Tool/send、capability 与 Telegram 错误约束。
+6. Alarm Invocation 绕过全局每日 Token gate 与预算触发的 `zzz`/sleep，且不暴露 `zzz`；仍受 pause、Chat/Topic 配置、同 Chat 串行、并发、timeout、最大轮次/Tool/send、capability 与 Telegram 错误约束。
 7. Invocation 无论何种终态都关闭 Alarm 且不重试；进程恢复遗留 `firing` 关闭为 `fired`/`outcome_unknown`。到期时 Chat/Topic 停用、移出配置或 pause 则置 `cancelled` 并记录稳定原因。
 
 ## send Tool

@@ -72,9 +72,13 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 `media_analyses` 按 `file_unique_id + analysis_version` 缓存视觉结果。Sticker 分析在 Set 仍受配置允许时可长期保留；普通图片分析按在线保留窗口清理。`vision.prompt_version`、Provider 和 Model 都参与分析版本，避免不同规则错误复用缓存。FTS5 虚拟表 `sticker_search` 不进 Drizzle schema，只能走 `sql` 模板。
 
+### 每日用量
+
+`daily_usage` 只保留 Token 计量：`scope = 'chat'` / `metric = 'model_tokens'` 按 Chat 归属记录 Agent 与聊天触发 `read_image` 的 Token（全局求和后与 `agent.daily_budget.max_tokens` 比较），`scope = 'system'` / `resource = 'sticker_index'` 的 `vision_images`、`vision_tokens` 服务于后台 Sticker 索引的 `vision.daily_budget`。Chat 每日 Invocation 数与 MCP 每日调用数已经取消，不再有对应的 metric；Admin Panel 的 Invocation 与 Tool call 曲线直接 `COUNT` `invocations` 与 `tool_calls`，因此覆盖全部 Tool 而不只是 MCP。
+
 ### MCP 与 Admin
 
-MCP 只有 `mcp_server_state` 一张自己的表（Server 状态、Tool registry hash、重连次数、错误码）；Tool 调用复用 `tool_calls`，预算复用 `daily_usage`。
+MCP 只有 `mcp_server_state` 一张自己的表（Server 状态、Tool registry hash、重连次数、错误码）；Tool 调用复用 `tool_calls`，没有自己的调用配额。
 
 Admin 侧的 `admin_users`/`admin_sessions`/`bot_admins` 语义见 [admin-panel.md](admin-panel.md#数据表)。密码明文和 Session Token 原文都不入库；`admin_users` 与 `admin_sessions` 不参与在线保留清理（管理员账号不是会话数据），过期 Session 由 `AdminAuth` 在认证、新建 Session 和服务启动时删除。`chat_pause` 记录 `/pause` 暂停的 Chat，`chat_context_cutoffs` 记录 `/cut_topic` 的每 Chat 上下文切点（Telegram message ID），仅影响新 Invocation 的 history。
 
@@ -93,7 +97,7 @@ Admin 侧的 `admin_users`/`admin_sessions`/`bot_admins` 语义见 [admin-panel.
 - 过期 Telegram Update 与终态 Invocation/Send/Bucket。
 - 不再被 Invocation/Bucket 引用的旧 Message。
 - 仍被快照引用的旧 Message 保留身份，但匿名化 Revision 文本、Sender、Reply/Forward 和 Service 内容。
-- 删除无引用 Sender、过期普通图片分析、独立 Doctor 模型调用与旧预算日期。
+- 删除无引用 Sender、过期普通图片分析、独立 Doctor 模型调用与旧 `daily_usage` 日期。
 - Sticker 长期视觉索引不按普通图片策略删除。
 - `alarms` 的 `pending`/`firing` 行保留（未来仍需执行）；`fired`/`cancelled` 终态行随在线审计窗口清理。
 - `internal_contexts` 不是长期 memory，也不单独配置 TTL；它随在线会话窗口清理，默认保留到 `created_at < now - retention.online_days` 时删除。

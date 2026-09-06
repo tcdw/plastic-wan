@@ -24,7 +24,7 @@ afterAll(async () => {
   );
 });
 
-test('stdio MCP discovery, result bounds, audit, and dual budget reservation', async () => {
+test('stdio MCP discovery, result bounds, audit, and unmetered repeat calls', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-mcp-'));
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
@@ -45,8 +45,6 @@ test('stdio MCP discovery, result bounds, audit, and dual budget reservation', a
               name: 'echo',
               read_only: true,
               timeout_seconds: 5,
-              per_chat_daily_calls: 1,
-              global_daily_calls: 2,
             },
           ],
         },
@@ -103,25 +101,22 @@ test('stdio MCP discovery, result bounds, audit, and dual budget reservation', a
     expect(text.text.endsWith('[tool result truncated]')).toBe(true);
     expect(Buffer.byteLength(text.text)).toBeLessThanOrEqual(128);
 
-    await expect(tool.execute('mcp-2', { text: 'blocked' })).rejects.toThrow('budget');
+    const repeat = await tool.execute('mcp-2', { text: 'second' });
+    expect(repeat.content.some((entry) => entry.type === 'text')).toBe(true);
     await expect(tool.execute('mcp-3', {})).rejects.toThrow('arguments');
     const calls = store.db
       .query<{ state: string; error_code: string | null }, []>('SELECT state, error_code FROM tool_calls ORDER BY id')
       .all();
     expect(calls).toEqual([
       { state: 'success', error_code: null },
-      { state: 'blocked_budget', error_code: 'blocked_budget' },
+      { state: 'success', error_code: null },
       { state: 'error', error_code: 'invalid_arguments' },
     ]);
-    const usage = store.db
-      .query<{ scope: string; amount: bigint }, []>(
-        "SELECT scope, amount FROM daily_usage WHERE metric = 'tool_calls' ORDER BY scope",
-      )
-      .all();
-    expect(usage).toEqual([
-      { scope: 'mcp_chat', amount: 1n },
-      { scope: 'mcp_global', amount: 1n },
-    ]);
+    expect(
+      store.db
+        .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM daily_usage WHERE metric = 'tool_calls'")
+        .get()?.count,
+    ).toBe(0n);
   } finally {
     await manager.stop();
     store.close();
@@ -178,8 +173,6 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
               name: 'lookup',
               read_only: true,
               timeout_seconds: 5,
-              per_chat_daily_calls: 2,
-              global_daily_calls: 2,
             },
           ],
         },
@@ -258,8 +251,6 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
                 name: 'lookup',
                 read_only: true,
                 timeout_seconds: 5,
-                per_chat_daily_calls: 2,
-                global_daily_calls: 2,
               },
             ],
           },

@@ -68,7 +68,6 @@ const CustomProviderSchema = Type.Object(
   },
   Strict,
 );
-const ChatBudgetSchema = Type.Object({ max_invocations_per_day: PositiveInteger }, Strict);
 const ChatSchema = Type.Object(
   {
     id: Type.Integer(),
@@ -76,7 +75,6 @@ const ChatSchema = Type.Object(
     ignored_user_ids: Type.Optional(Type.Array(PositiveInteger, { uniqueItems: true })),
     timezone: Type.Optional(Type.String({ minLength: 1 })),
     instructions_file: Type.Optional(Type.String({ minLength: 1 })),
-    budget: ChatBudgetSchema,
   },
   Strict,
 );
@@ -90,8 +88,6 @@ const StickerSetSchema = Type.Object(
 const ToolPolicyFields = {
   read_only: Type.Boolean(),
   timeout_seconds: Type.Number({ exclusiveMinimum: 0 }),
-  per_chat_daily_calls: PositiveInteger,
-  global_daily_calls: PositiveInteger,
 };
 const ToolPolicySchema = Type.Object({ name: Type.String({ minLength: 1 }), ...ToolPolicyFields }, Strict);
 const DefaultToolPolicySchema = Type.Object(ToolPolicyFields, Strict);

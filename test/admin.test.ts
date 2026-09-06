@@ -396,12 +396,17 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
       )
       .run(now.slice(0, 10), now);
 
+    // Invocation and tool-call counts are read straight from the audit tables,
+    // so date them into the requested window instead of writing daily_usage.
+    store.db.query('UPDATE invocations SET created_at = ?').run(now);
+    store.db.query('UPDATE tool_calls SET created_at = ?').run(now);
+
     const usage = await readJson(await server.handle(request('/api/usage?days=7', { headers })));
     expect(usage.days).toBe(7);
     expect(usage.series.length).toBe(7);
     const today = now.slice(0, 10);
     const todayEntry = usage.series.find((entry: { date: string }) => entry.date === today);
-    expect(todayEntry).toMatchObject({ date: today, model_tokens: 500 });
+    expect(todayEntry).toMatchObject({ date: today, model_tokens: 500, agent_invocations: 1, tool_calls: 1 });
 
     const invalidDays = await server.handle(request('/api/usage?days=0', { headers }));
     expect(invalidDays.status).toBe(400);
@@ -483,15 +488,10 @@ test('admin can cancel all pending sessions', async () => {
     );
     const headers = { cookie };
 
-    const beforeUsage = store.db
-      .query<{ amount: bigint }, []>("SELECT amount FROM daily_usage WHERE metric = 'agent_invocations'")
-      .get();
-    expect(beforeUsage?.amount).toBe(1n);
-
     const canceled = await server.handle(post('/api/cancel-pending-sessions', {}, cookie));
     expect(canceled.status).toBe(200);
     const body = await readJson(canceled);
-    expect(body).toMatchObject({ canceled_buckets: 1, canceled_invocations: 1, refunded_invocations: 1 });
+    expect(body).toMatchObject({ canceled_buckets: 1, canceled_invocations: 1 });
 
     const bucketState = store.db.query<{ state: string }, []>('SELECT state FROM buckets').get()?.state;
     expect(bucketState).toBe('expired');
@@ -499,11 +499,6 @@ test('admin can cancel all pending sessions', async () => {
       .query<{ state: string }, [bigint]>('SELECT state FROM invocations WHERE id = ?')
       .get(invocationId)?.state;
     expect(invocationState).toBe('aborted');
-
-    const afterUsage = store.db
-      .query<{ amount: bigint }, []>("SELECT amount FROM daily_usage WHERE metric = 'agent_invocations'")
-      .get();
-    expect(afterUsage?.amount).toBe(0n);
 
     const overview = await readJson(await server.handle(request('/api/overview', { headers })));
     expect(overview.invocation_states).toContainEqual({ label: 'aborted', count: 1 });

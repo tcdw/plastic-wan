@@ -468,7 +468,7 @@ describe('alarm scheduler', () => {
     store.close();
   });
 
-  test('cancels due alarms for pause, chat removal, and topic removal without reserving budget', async () => {
+  test('cancels due alarms for pause, chat removal, and topic removal', async () => {
     const { store, scheduler } = await setup();
     const conversation = ensureConversation(store);
     const chat = store.db
@@ -506,11 +506,6 @@ describe('alarm scheduler', () => {
         )
         .get(removedAlarm),
     ).toEqual({ state: 'cancelled', cancel_reason: 'chat_removed' });
-    expect(
-      store.db
-        .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM daily_usage WHERE metric = 'agent_invocations'")
-        .get()?.count,
-    ).toBe(0n);
     store.close();
   });
 

@@ -58,7 +58,7 @@ Telegram Update
   → Telegram API
 ```
 
-媒体与 MCP 都在 Tool 边界内：模型只能读取当前 Invocation 授权的媒体引用；MCP Tool 经过 allowlist、只读策略、请求/响应大小限制、超时、每日预算和审计。记忆按 Conversation 隔离，由模型通过 `add_memory`/`delete_memory` 维护，TTL 到期自动清理；`agents.md` 才是经过人工审核的长期知识。
+媒体与 MCP 都在 Tool 边界内：模型只能读取当前 Invocation 授权的媒体引用；MCP Tool 经过 allowlist、只读策略、请求/响应大小限制、超时和审计。记忆按 Conversation 隔离，由模型通过 `add_memory`/`delete_memory` 维护，TTL 到期自动清理；`agents.md` 才是经过人工审核的长期知识。
 
 架构细节见 [agent-doc/architecture.md](agent-doc/architecture.md)。
 

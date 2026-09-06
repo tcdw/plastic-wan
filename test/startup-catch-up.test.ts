@@ -100,7 +100,6 @@ async function setup(
       config.telegram.chats.push({
         id: SECOND_CHAT_ID,
         instructions_file: 'chat-instructions.md',
-        budget: { max_invocations_per_day: 100 },
       });
     }
     transform?.(config);

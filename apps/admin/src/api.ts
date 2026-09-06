@@ -349,7 +349,6 @@ export interface UsageEntry {
 export interface CancelPendingResult {
   readonly canceled_buckets: number;
   readonly canceled_invocations: number;
-  readonly refunded_invocations: number;
 }
 
 export interface WakeResult {

@@ -62,7 +62,6 @@ export function testConfigJsonc(directory: string, transform?: (config: FileConf
       thinking_level: 'low',
       system_prompt_file: 'agent-system-prompt.md',
       max_turns: 8,
-      max_tool_calls: 12,
       max_sends: 6,
       timeout_seconds: 90,
       max_concurrency: 4,

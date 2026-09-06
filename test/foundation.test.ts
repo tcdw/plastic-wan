@@ -243,7 +243,7 @@ describe('database', () => {
     const store = await SqliteStore.open(config);
     try {
       const prepared = store.orm.select().from(schemaMigrations).prepare();
-      expect(prepared.all()).toHaveLength(14);
+      expect(prepared.all()).toHaveLength(15);
       store.close();
       expect(() => prepared.all()).toThrow();
       await unlink(config.paths.database);

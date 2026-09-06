@@ -166,7 +166,6 @@ export const ConfigSchema = Type.Object(
         ]),
         system_prompt_file: Type.String({ minLength: 1 }),
         max_turns: Type.Integer({ minimum: 1, maximum: 8 }),
-        max_tool_calls: Type.Integer({ minimum: 1, maximum: 12 }),
         max_sends: Type.Integer({ minimum: 1, maximum: 6 }),
         send_max_text_length: Type.Optional(Type.Integer({ minimum: 1, maximum: 4096 })),
         send_disallow_blank_lines: Type.Optional(Type.Boolean()),

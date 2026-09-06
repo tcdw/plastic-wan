@@ -138,6 +138,82 @@ test('a fresh Agent publishes only through send and audits model usage', async (
   store.close();
 });
 
+test('an invocation keeps running past the removed per-invocation tool-call cap and still audits the count', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-no-tool-cap-'));
+  directories.push(directory);
+  const configPath = join(directory, 'config.jsonc');
+  await writeTestConfig(directory, configPath);
+  const loaded = await loadConfig(configPath);
+  const store = await SqliteStore.open(loaded.config);
+  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const update: Update = {
+    update_id: 3,
+    message: {
+      message_id: 12,
+      date: 1_700_000_000,
+      chat: { id: 123456789, type: 'private', first_name: 'Owner' },
+      from: { id: 42, is_bot: false, first_name: 'Alice' },
+      text: 'hello',
+    },
+  };
+  const received = new Date('2026-08-15T00:00:00.000Z');
+  ingestion.ingest(update, received);
+  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    state: 'completed',
+    reason: 'done',
+  }));
+  const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
+  if (invocationId === undefined) {
+    throw new Error('Expected a due invocation');
+  }
+
+  const noop: AgentTool = {
+    name: 'noop',
+    label: 'Noop',
+    description: 'Test-only tool that returns without side effects.',
+    parameters: Type.Object({}, { additionalProperties: false }),
+    execute: async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} }),
+  };
+  // 6 tool turns x 3 calls = 18 tool calls, past the former max_tool_calls cap
+  // of 12 (removed; audit counting stays). The 7th turn ends naturally.
+  const faux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  faux.setResponses([
+    ...Array.from({ length: 6 }, () =>
+      fauxAssistantMessage([fauxToolCall('noop', {}), fauxToolCall('noop', {}), fauxToolCall('noop', {})], {
+        stopReason: 'toolUse',
+      }),
+    ),
+    fauxAssistantMessage('done'),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const model = faux.getModel();
+  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const runtime = new AgentRuntime({
+    store,
+    config: loaded.config,
+    secrets: new SecretStore(),
+    registry,
+    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    telegramApi: {
+      sendMessage: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
+      sendSticker: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
+    },
+    bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    additionalTools: () => [noop],
+  });
+  const outcome = await runtime.run(invocationId, new AbortController().signal);
+  expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+  const audited = store.db
+    .query<{ tool_calls_used: bigint }, [bigint]>('SELECT tool_calls_used FROM invocations WHERE id = ?')
+    .get(invocationId);
+  expect(audited?.tool_calls_used).toBe(18n);
+  store.close();
+});
+
 test('counts tool descriptions in registry limits', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-tool-budget-'));
   directories.push(directory);

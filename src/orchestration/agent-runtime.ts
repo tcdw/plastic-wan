@@ -262,10 +262,9 @@ export class AgentRuntime {
         ) {
           return { block: true, reason: 'You are no longer sleepy' };
         }
+        // Audit-only counter: the per-invocation tool-call cap was removed;
+        // runaway loops stay bounded by max_turns, timeout, and token budget.
         toolCalls += 1;
-        if (toolCalls > this.#config.agent.max_tool_calls) {
-          return { block: true, reason: 'Invocation tool-call limit reached', terminate: true };
-        }
         this.#store.orm
           .update(invocations)
           .set({ toolCallsUsed: BigInt(toolCalls) })

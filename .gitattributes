@@ -1,0 +1,19 @@
+# All text files are normalized to LF in the repository and checked out as LF.
+# `text=auto` lets git skip auto-detected binaries; `eol=lf` keeps the working
+# tree LF on every platform so `biome format` (which expects LF) stays green.
+* text=auto eol=lf
+
+# Defense in depth: never run line-ending normalization on these asset types.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.tgs binary
+*.sqlite binary
+*.db binary

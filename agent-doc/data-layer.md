@@ -35,6 +35,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 - 该驱动把 `.run()` 的类型标为 `void`（运行时返回 `{ changes, lastInsertRowid }`）；需要 `changes` 时用 `asRunResult`（`database.ts`）。
 - 复杂 SQL（多表 JOIN、子查询、`NOT EXISTS`、`COALESCE`、FTS5 `MATCH`/`bm25()`、动态拼列）保留 `sql` 模板：`orm.all<Row>(sql\`...\`)`；`${}` 一律是绑定参数（禁止拼 SQL 字符串；受控常量片段用 `sql.raw`）。FTS5 虚拟表 `sticker_search` 不进 schema，只能走 `sql` 模板。
 - 驱动陷阱：`orm.get(sql\`...\`)` 对裸 SQL 返回列值数组而非对象——单行裸 SQL 用 `.all<Row>(sql\`...\`).at(0)` 判 `undefined`。
+- 关闭连接时使用 `Database.close(true)`，立即释放 Drizzle 通过 `.prepare()` 创建的未缓存语句及文件句柄；默认 `close()` 可能延迟到语句被 GC 回收后才释放文件，导致 Windows 上备份后的临时数据库无法删除。`SqliteStore.close()`、初始化失败清理及备份连接清理都采用严格关闭，关闭后不得继续使用已创建的 ORM 查询。
 - 测试中的裸 SQL 审计断言保留原样：验证层独立于被验证的实现是本仓库的测试惯例。
 
 ## 表组

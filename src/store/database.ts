@@ -104,14 +104,15 @@ export class SqliteStore {
       }
       return store;
     } catch (error) {
-      database.close();
+      database.close(true);
       throw error;
     }
   }
 
   close(): void {
+    // Drizzle statements must not retain file handles until GC.
     this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
-    this.db.close();
+    this.db.close(true);
   }
 
   transaction<T>(work: () => T): T {
@@ -176,7 +177,7 @@ export async function backupDatabase(config: RawConfig): Promise<string> {
     await rotateBackups(config.paths.backups, config.retention.backup_copies);
     return path;
   } finally {
-    source.close();
+    source.close(true);
   }
 }
 

@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/platform/config.ts';
 import { createModelRegistry } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { backupDatabase, SqliteStore } from '../src/store/database.ts';
+import { schemaMigrations } from '../src/store/schema.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
@@ -236,7 +237,23 @@ describe('secrets', () => {
 });
 
 describe('database', () => {
-  test('applies migrations and creates a consistent backup', async () => {
+  test('closing the store invalidates prepared ORM queries and releases the file', async () => {
+    const { configPath } = await fixture();
+    const { config } = await loadConfig(configPath);
+    const store = await SqliteStore.open(config);
+    try {
+      const prepared = store.orm.select().from(schemaMigrations).prepare();
+      expect(prepared.all()).toHaveLength(14);
+      store.close();
+      expect(() => prepared.all()).toThrow();
+      await unlink(config.paths.database);
+      expect(await Bun.file(config.paths.database).exists()).toBe(false);
+    } finally {
+      store.db.close(true);
+    }
+  });
+
+  test('applies migrations, creates a consistent backup, and releases the source file', async () => {
     const { configPath } = await fixture();
     const { config } = await loadConfig(configPath);
     const store = await SqliteStore.open(config);
@@ -248,5 +265,22 @@ describe('database', () => {
 
     const backupPath = await backupDatabase(config);
     expect(await Bun.file(backupPath).exists()).toBe(true);
+    await unlink(config.paths.database);
+    expect(await Bun.file(config.paths.database).exists()).toBe(false);
+  });
+
+  test('a failed backup releases the source file after running ORM queries', async () => {
+    const { configPath } = await fixture();
+    const { config } = await loadConfig(configPath);
+    const store = await SqliteStore.open(config);
+    try {
+      store.db.exec('DROP TABLE telegram_updates');
+    } finally {
+      store.close();
+    }
+
+    await expect(backupDatabase(config)).rejects.toThrow('telegram_updates');
+    await unlink(config.paths.database);
+    expect(await Bun.file(config.paths.database).exists()).toBe(false);
   });
 });

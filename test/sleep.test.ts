@@ -20,6 +20,7 @@ import { SecretStore } from '../src/platform/secrets.ts';
 import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
 import { activeSleepUntil, enterSleep, SLEEP_STATE_KEY } from '../src/store/sleep.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
+import { SystemResources } from '../src/platform/system-resources.ts';
 import { writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
@@ -100,6 +101,7 @@ async function runtimeSetup(
     modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    systemResources: SystemResources.empty(),
   });
   return { store, runtime, invocationId, faux };
 }
@@ -115,7 +117,7 @@ test('does not expose zzz while more than five percent remains', async () => {
   const { store, runtime, invocationId, faux } = await runtimeSetup(284_999n);
   faux.setResponses([fauxAssistantMessage('done')]);
   await runtime.run(invocationId, new AbortController().signal);
-  expect(modelToolLists(store)).toEqual([['send']]);
+  expect(modelToolLists(store)).toEqual([['read', 'send', 'execute']]);
   store.close();
 });
 
@@ -123,7 +125,7 @@ test('exposes zzz after global remaining budget falls below five percent', async
   const { store, runtime, invocationId, faux } = await runtimeSetup(285_001n, '987654321');
   faux.setResponses([fauxAssistantMessage('done')]);
   await runtime.run(invocationId, new AbortController().signal);
-  expect(modelToolLists(store)).toEqual([['send', 'zzz']]);
+  expect(modelToolLists(store)).toEqual([['read', 'send', 'execute', 'zzz']]);
   store.close();
 });
 
@@ -141,7 +143,7 @@ test('keeps zzz hidden at exactly five percent remaining', async () => {
   const { store, runtime, invocationId, faux } = await runtimeSetup(285_000n);
   faux.setResponses([fauxAssistantMessage('done')]);
   await runtime.run(invocationId, new AbortController().signal);
-  expect(modelToolLists(store)).toEqual([['send']]);
+  expect(modelToolLists(store)).toEqual([['read', 'send', 'execute']]);
   store.close();
 });
 
@@ -165,7 +167,10 @@ test('adds zzz at the next turn boundary when a running session crosses the thre
     fauxAssistantMessage(fauxToolCall('zzz', {}), { stopReason: 'toolUse' }),
   ]);
   await runtime.run(invocationId, new AbortController().signal);
-  expect(modelToolLists(store)).toEqual([['send'], ['send', 'zzz']]);
+  expect(modelToolLists(store)).toEqual([
+    ['read', 'send', 'execute'],
+    ['read', 'send', 'execute', 'zzz'],
+  ]);
   expect(activeSleepUntil(store.orm)).not.toBeNull();
   store.close();
 });

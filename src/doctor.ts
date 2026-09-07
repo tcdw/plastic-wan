@@ -21,8 +21,7 @@ import { AgentModelSwitcher } from './platform/model-switch.ts';
 import { type PromptTemplateValues, renderPromptTemplate } from './platform/prompt-template.ts';
 import { createModelRegistry, type ModelRegistry } from './platform/providers.ts';
 import { SecretStore } from './platform/secrets.ts';
-import { StickerService } from './capabilities/stickers.ts';
-import { createWebFetchTool } from './capabilities/web-fetch.ts';
+import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from './platform/system-resources.ts';
 
 export async function runDoctor(configPath: string, outputAgentPrompt = false): Promise<void> {
   const loaded = await loadConfig(configPath);
@@ -158,7 +157,6 @@ async function runDoctorChecks(
       mediaClient: new TelegramMediaClient(bot.api, telegramToken),
       modelGate,
     });
-    const stickers = new StickerService({ store, config, api: bot.api, media });
     const manager = new McpManager(store, requiredConfig, secrets);
     mcp = manager;
     const runtime = new AgentRuntime({
@@ -174,23 +172,12 @@ async function runDoctorChecks(
         username: me.username ?? null,
       },
       modelGate,
+      systemResources: await SystemResources.load(BUNDLED_SYSTEM_RESOURCES_DIR),
       directImageLoader: (context, signal) => media.loadDirectImages(context.directImages, signal),
-      additionalTools: (context, state, deadline) => [
-        media.createReadImageTool(context, deadline),
-        stickers.createSearchTool(context, state.stickerCapabilities),
-        createWebFetchTool({ store, context, invocationDeadline: deadline }),
-        ...manager.createTools(context, deadline),
-      ],
+      additionalTools: (context, _state, deadline) => [...manager.createTools(context, deadline)],
     });
     const preview = previewContext();
-    manager.setRegistryValidator((mcpTools) =>
-      runtime.validateAdditionalTools(preview, [
-        media.createReadImageTool(preview, Number.MAX_SAFE_INTEGER),
-        stickers.createSearchTool(preview, new Map()),
-        createWebFetchTool({ store, context: preview, invocationDeadline: Number.MAX_SAFE_INTEGER }),
-        ...mcpTools,
-      ]),
-    );
+    manager.setRegistryValidator((mcpTools) => runtime.validateAdditionalTools(preview, mcpTools));
     await manager.start();
     console.log(
       JSON.stringify({

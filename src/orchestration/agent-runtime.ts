@@ -22,6 +22,9 @@ import type { ModelRegistry } from '../platform/providers.ts';
 import type { InvocationOutcome } from './scheduler.ts';
 import { agentMessages, dailyUsage, invocations, modelCalls, toolCalls as toolCallsTable } from '../store/schema.ts';
 import type { SecretStore } from '../platform/secrets.ts';
+import { createExecuteTool, type ExecutableCapability } from '../capabilities/execute-tool.ts';
+import { createReadTool } from '../capabilities/read-tool.ts';
+import type { SystemResources } from '../platform/system-resources.ts';
 import { createSendTool, type TelegramSendApi } from '../capabilities/send-tool.ts';
 import {
   activeSleepUntil,
@@ -36,11 +39,21 @@ export interface ToolRuntimeState {
   readonly stickerCapabilities: Map<string, string>;
 }
 
-export type AdditionalToolFactory = (
+/**
+ * Builds per-invocation tools. Used for the execute registry (runtime-internal
+ * capabilities) and for directly exposed extras (allowlisted MCP tools).
+ */
+export type ToolFactory = (
   context: InvocationContext,
   state: ToolRuntimeState,
   deadline: number,
 ) => readonly AgentTool[];
+export type AdditionalToolFactory = ToolFactory;
+export type CapabilityToolFactory = (
+  context: InvocationContext,
+  state: ToolRuntimeState,
+  deadline: number,
+) => readonly ExecutableCapability[];
 export type DirectImageLoader = (context: InvocationContext, signal: AbortSignal) => Promise<readonly ImageContent[]>;
 
 export interface AgentRuntimeOptions {
@@ -51,7 +64,12 @@ export interface AgentRuntimeOptions {
   readonly modelSwitcher: AgentModelSwitcher;
   readonly telegramApi: TelegramSendApi;
   readonly bot: { readonly id: bigint; readonly displayName: string; readonly username: string | null };
-  readonly additionalTools?: AdditionalToolFactory;
+  /** The bundled system:/// resource tree: read primitive backend plus skill index. */
+  readonly systemResources: SystemResources;
+  /** Runtime-internal capabilities dispatched through the execute primitive. */
+  readonly capabilityTools?: CapabilityToolFactory;
+  /** Directly exposed non-primitive tools (allowlisted MCP tools). */
+  readonly additionalTools?: ToolFactory;
   readonly directImageLoader?: DirectImageLoader;
   readonly modelGate?: KeyedSemaphore;
 }
@@ -77,7 +95,9 @@ export class AgentRuntime {
   readonly #modelSwitcher: AgentModelSwitcher;
   readonly #telegramApi: TelegramSendApi;
   readonly #bot: AgentRuntimeOptions['bot'];
-  readonly #additionalTools: AdditionalToolFactory | undefined;
+  readonly #systemResources: SystemResources;
+  readonly #capabilityTools: CapabilityToolFactory | undefined;
+  readonly #additionalTools: ToolFactory | undefined;
   readonly #directImageLoader: DirectImageLoader | undefined;
   readonly #contextBuilder: ContextBuilder;
   readonly #modelGate: KeyedSemaphore;
@@ -91,10 +111,12 @@ export class AgentRuntime {
     this.#modelSwitcher = options.modelSwitcher;
     this.#telegramApi = options.telegramApi;
     this.#bot = options.bot;
+    this.#systemResources = options.systemResources;
+    this.#capabilityTools = options.capabilityTools;
     this.#additionalTools = options.additionalTools;
     this.#directImageLoader = options.directImageLoader;
     this.#modelGate = options.modelGate ?? new KeyedSemaphore();
-    this.#contextBuilder = new ContextBuilder(options.store, options.config);
+    this.#contextBuilder = new ContextBuilder(options.store, options.config, options.systemResources.skills);
   }
   validateAdditionalTools(context: InvocationContext, additionalTools: readonly AgentTool[]): void {
     const send = createSendTool({
@@ -108,7 +130,15 @@ export class AgentRuntime {
       deadline: Number.MAX_SAFE_INTEGER,
       bot: this.#bot,
     });
-    validateToolRegistry([send, ...additionalTools], this.#model.contextWindow);
+    validateToolRegistry(
+      [
+        createReadTool({ store: this.#store, context, resources: this.#systemResources }),
+        send,
+        createExecuteTool({ store: this.#store, context, capabilities: [] }),
+        ...additionalTools,
+      ],
+      this.#model.contextWindow,
+    );
   }
 
   async run(invocationId: bigint, schedulerSignal: AbortSignal): Promise<InvocationOutcome> {
@@ -144,19 +174,28 @@ export class AgentRuntime {
     if (zzzExposed) {
       this.#logZzzExposure(invocationId, provisionalContext.chatId, initialBudget);
     }
-    const preliminarySend = createSendTool({
-      store: this.#store,
-      api: this.#telegramApi,
-      context: provisionalContext,
-      stickerCapabilities: state.stickerCapabilities,
-      maxSends: this.#config.agent.max_sends,
-      maxTextLength: this.#config.agent.send_max_text_length,
-      disallowBlankLines: this.#config.agent.send_disallow_blank_lines === true,
-      deadline,
-      bot: this.#bot,
-    });
+    const buildSend = (target: InvocationContext): AgentTool =>
+      createSendTool({
+        store: this.#store,
+        api: this.#telegramApi,
+        context: target,
+        stickerCapabilities: state.stickerCapabilities,
+        maxSends: this.#config.agent.max_sends,
+        maxTextLength: this.#config.agent.send_max_text_length,
+        disallowBlankLines: this.#config.agent.send_disallow_blank_lines === true,
+        deadline,
+        bot: this.#bot,
+      });
+    const buildPrimitives = (
+      target: InvocationContext,
+      capabilities: readonly ExecutableCapability[],
+    ): readonly AgentTool[] => [
+      createReadTool({ store: this.#store, context: target, resources: this.#systemResources }),
+      buildSend(target),
+      createExecuteTool({ store: this.#store, context: target, capabilities }),
+    ];
     const preliminaryTools = [
-      preliminarySend,
+      ...buildPrimitives(provisionalContext, this.#capabilityTools?.(provisionalContext, state, deadline) ?? []),
       ...(this.#additionalTools?.(provisionalContext, state, deadline) ?? []),
       ...(zzzExposed ? [zzz] : []),
     ];
@@ -169,18 +208,11 @@ export class AgentRuntime {
       model.input.includes('image'),
       { provider: model.provider, model: model.id },
     );
-    const send = createSendTool({
-      store: this.#store,
-      api: this.#telegramApi,
-      context,
-      stickerCapabilities: state.stickerCapabilities,
-      maxSends: this.#config.agent.max_sends,
-      maxTextLength: this.#config.agent.send_max_text_length,
-      disallowBlankLines: this.#config.agent.send_disallow_blank_lines === true,
-      deadline,
-      bot: this.#bot,
-    });
-    const tools = [send, ...(this.#additionalTools?.(context, state, deadline) ?? []), ...(zzzExposed ? [zzz] : [])];
+    const tools = [
+      ...buildPrimitives(context, this.#capabilityTools?.(context, state, deadline) ?? []),
+      ...(this.#additionalTools?.(context, state, deadline) ?? []),
+      ...(zzzExposed ? [zzz] : []),
+    ];
     validateToolRegistry(tools, model.contextWindow);
     const toolDefinitionCharacters = estimateToolRegistryCharacters(tools);
     this.#recordToolRegistry(invocationId, tools);

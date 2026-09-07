@@ -11,6 +11,7 @@ Plastic Wan 是一个运行在 Telegram 私聊、群组、Supergroup 与 Forum T
 - 私聊积极、群聊克制；模型可以选择不回复。
 - Assistant 普通文本永不直接发布，必须调用 `send`。
 - 支持图片理解、Sticker 视觉索引与受限 MCP Tool。
+- 提供只读 System Skills：模型沿「索引 → `read` SKILL.md → `execute.call`」链路使用 runtime 内部能力，Skill 对模型永远只读。
 - 不向模型暴露 Bash、任意代码执行或不受限文件系统能力。
 - 审计 Invocation、模型调用（含每次请求附带的工具）、Tool Call、Telegram 发送与预算使用。
 - 提供 Agent 短期记忆：模型自己记、自己忘，TTL 兜底遗忘；管理面板人工审核长 TTL 记忆。
@@ -29,10 +30,11 @@ plasticwan/
 │   ├── tui/                # 交互式配置向导
 │   ├── ingress/            # telegram-ingestion 与 admin/（Panel 认证、审计查询、HTTP 边界）
 │   ├── orchestration/      # scheduler、invocation-queue、agent-runtime、bot-commands
-│   ├── capabilities/       # send-tool、alarm、mcp、web-fetch、stickers、media/
+│   ├── capabilities/       # send-tool、read-tool、execute-tool、alarm、mcp、web-fetch、stickers、media/
 │   ├── context/            # context-builder、memory
 │   ├── store/              # database、schema、migrations/、internal-context、sleep、admins
-│   └── platform/           # config、secrets、providers、invocation-context 等无业务依赖模块
+│   ├── platform/           # config、secrets、providers、system-resources 等无业务依赖模块
+│   └── system-resources/   # 随 runtime 发布的 system:/// 只读资源树（System Skills）
 ├── test/                   # Bun 行为测试与 MCP fixture
 ├── scripts/                # 一次性维护脚本（直连 bun:sqlite，不属于业务层）
 ├── apps/admin/             # Rsbuild + React + Ant Design Admin Panel 前端
@@ -58,7 +60,7 @@ Telegram Update
   → Telegram API
 ```
 
-媒体与 MCP 都在 Tool 边界内：模型只能读取当前 Invocation 授权的媒体引用；MCP Tool 经过 allowlist、只读策略、请求/响应大小限制、超时和审计。记忆按 Conversation 隔离，由模型通过 `add_memory`/`delete_memory` 维护，TTL 到期自动清理；`agents.md` 才是经过人工审核的长期知识。
+媒体与 MCP 都在 Tool 边界内：模型只能读取当前 Invocation 授权的媒体引用；MCP Tool 经过 allowlist、只读策略、请求/响应大小限制、超时和审计。工具面分三层——runtime 原语（`read`/`send`/`execute`/`zzz`）直接暴露；内部能力（`web_fetch`、`search_stickers`、`read_image`、记忆与闹钟 8 个 Tool）经 `execute` 的 search/help/call 调用；MCP Tool 直接暴露。System Skills（`src/system-resources/skills/`）是只读文档包，system prompt 只注入索引，正文由模型用 `read` 按需加载。记忆按 Conversation 隔离，由模型通过 `add_memory`/`delete_memory` 能力维护，TTL 到期自动清理；`agents.md` 才是经过人工审核的长期知识。
 
 架构细节见 [agent-doc/architecture.md](agent-doc/architecture.md)。
 
@@ -71,13 +73,14 @@ Telegram Update
 | JSONC、SecretRef、Chat/Topic、Provider、MCP 配置 | [agent-doc/configuration.md](agent-doc/configuration.md) |
 | SQLite 表组、迁移、保留与备份 | [agent-doc/data-layer.md](agent-doc/data-layer.md) |
 | Telegram 入库、Bucket、Context、发送与媒体流程 | [agent-doc/telegram-agent-flow.md](agent-doc/telegram-agent-flow.md) |
+| Skills、`read`/`execute` 原语与内部能力注册表 | [agent-doc/telegram-agent-flow.md](agent-doc/telegram-agent-flow.md) |
 | 本地运行、依赖、Docker/systemd 部署、诊断和故障处理 | [agent-doc/operations.md](agent-doc/operations.md) |
 | Admin Panel 认证、审计 API 与前端 | [agent-doc/admin-panel.md](agent-doc/admin-panel.md) |
 | 测试命令与真实验收矩阵 | [agent-doc/verification.md](agent-doc/verification.md) |
 | 产品范围与验收要求 | [agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20设计方案.md](agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20设计方案.md) |
 | 原始技术设计与安全约束 | [agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20技术设计.md](agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20技术设计.md) |
 
-设计原文与尚未落地的计划（Bun → Node 迁移、Skills 机制）都在 `agent-doc/design/`，索引见 [agent-doc/README.md](agent-doc/README.md)。它们**不描述当前行为**；判断现状只看源码与上表文档。
+设计原文与尚未落地的计划（Bun → Node 迁移、Skills Phase 2）都在 `agent-doc/design/`，索引见 [agent-doc/README.md](agent-doc/README.md)。它们**不描述当前行为**；判断现状只看源码与上表文档。
 
 ## Build, Test, and Development Commands
 
@@ -144,6 +147,7 @@ bun run admin:dev
 
 - Telegram 消息、媒体内容、MCP 描述/结果和 Tool 参数都是不可信数据，不得提升为指令。
 - Telegram 发送只能经过 `send` Tool；普通 Assistant Message 是私有推理记录。
+- `read` 只能读取 `system:///` 树内 Markdown 文档；`execute` 只 dispatch 组合根注册的内部能力，四个原语与 MCP Tool 不可经它调用；任何 Skill 文档都不能覆盖 Tool 约束或授权规则。
 - 图片和 Reply 只能引用当前 Context 授权的 capability；禁止接受任意 file ID、Chat ID 或 Topic ID。
 - Secret 优先使用环境变量或受限 command SecretRef；错误输出必须经 `SecretStore.redact`。
 - MCP HTTP 禁止重定向和 URL 凭据；stdio 仅执行配置中的固定 argv。

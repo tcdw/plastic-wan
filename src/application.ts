@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { Bot, type Context } from 'grammy';
 import { seedConfigAdmins } from './store/admins.ts';
 import { AdminServer } from './ingress/admin/server.ts';
-import { AgentRuntime, type AdditionalToolFactory } from './orchestration/agent-runtime.ts';
+import { AgentRuntime, type CapabilityToolFactory, type ToolFactory } from './orchestration/agent-runtime.ts';
 import {
   createAlarmTool,
   createDeleteAlarmTool,
@@ -31,7 +31,9 @@ import { runStartupCatchUp } from './startup-catch-up.ts';
 import { appState } from './store/schema.ts';
 import { StickerService } from './capabilities/stickers.ts';
 import { TelegramIngestion } from './ingress/telegram-ingestion.ts';
+import { capability } from './capabilities/execute-tool.ts';
 import { createWebFetchTool } from './capabilities/web-fetch.ts';
+import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from './platform/system-resources.ts';
 
 const ALLOWED_UPDATES = ['message', 'edited_message', 'my_chat_member'] as const;
 
@@ -114,22 +116,26 @@ export async function serve(configPath: string): Promise<void> {
     const mcpManager = new McpManager(store, loaded.config, secrets);
     mcp = mcpManager;
     const memoryStore = new MemoryStore(store.orm);
+    const systemResources = await SystemResources.load(BUNDLED_SYSTEM_RESOURCES_DIR);
+    logEvent('system_skills_loaded', { skills: systemResources.skills.map((skill) => skill.name).join(',') });
     let runtime: AgentRuntime;
     const alarmToolRuntime: AgentMessageRecorder = {
       recordAgentMessage(invocationId, role, text) {
         return runtime.recordAgentMessage(invocationId, role, text);
       },
     };
-    const additionalTools: AdditionalToolFactory = (context, state, deadline) => [
-      media.createReadImageTool(context, deadline),
-      stickerService.createSearchTool(context, state.stickerCapabilities),
-      ...createMemoryTools(memoryStore, context),
-      createWebFetchTool({ store: webFetchStore, context, invocationDeadline: deadline }),
-      createAlarmTool({ store: webFetchStore, context }),
-      createListAlarmTool({ store: webFetchStore, context, runtime: alarmToolRuntime }),
-      createDeleteAlarmTool({ store: webFetchStore, context }),
-      ...mcpManager.createTools(context, deadline),
+    // Runtime-internal capabilities: dispatched through the execute primitive.
+    const capabilityTools: CapabilityToolFactory = (context, state, deadline) => [
+      capability(media.createReadImageTool(context, deadline), false),
+      capability(stickerService.createSearchTool(context, state.stickerCapabilities), false),
+      ...createMemoryTools(memoryStore, context).map((tool) => capability(tool, true)),
+      capability(createWebFetchTool({ store: webFetchStore, context, invocationDeadline: deadline }), false),
+      capability(createAlarmTool({ store: webFetchStore, context }), true),
+      capability(createListAlarmTool({ store: webFetchStore, context, runtime: alarmToolRuntime }), false),
+      capability(createDeleteAlarmTool({ store: webFetchStore, context }), true),
     ];
+    // Directly exposed non-primitive tools: allowlisted MCP tools only.
+    const additionalTools: ToolFactory = (context, _state, deadline) => [...mcpManager.createTools(context, deadline)];
     runtime = new AgentRuntime({
       store,
       config: loaded.config,
@@ -143,7 +149,9 @@ export async function serve(configPath: string): Promise<void> {
         username: me.username ?? null,
       },
       modelGate,
+      systemResources,
       directImageLoader: (context, signal) => media.loadDirectImages(context.directImages, signal),
+      capabilityTools,
       additionalTools,
     });
     const startedScheduler = new BucketScheduler(store, loaded.config, loaded.hash, (invocationId, signal) =>
@@ -152,22 +160,7 @@ export async function serve(configPath: string): Promise<void> {
     scheduler = startedScheduler;
     const commands = new BotCommandService(store, loaded.config, startedScheduler, modelSwitcher);
     const preview = previewContext();
-    mcpManager.setRegistryValidator((mcpTools) =>
-      runtime.validateAdditionalTools(preview, [
-        media.createReadImageTool(preview, Number.MAX_SAFE_INTEGER),
-        stickerService.createSearchTool(preview, new Map()),
-        ...createMemoryTools(memoryStore, preview),
-        createWebFetchTool({ store: webFetchStore, context: preview, invocationDeadline: Number.MAX_SAFE_INTEGER }),
-        createAlarmTool({ store: webFetchStore, context: preview }),
-        createListAlarmTool({
-          store: webFetchStore,
-          context: preview,
-          runtime: alarmToolRuntime,
-        }),
-        createDeleteAlarmTool({ store: webFetchStore, context: preview }),
-        ...mcpTools,
-      ]),
-    );
+    mcpManager.setRegistryValidator((mcpTools) => runtime.validateAdditionalTools(preview, mcpTools));
     const catchUpController = new AbortController();
     startupCatchUpController = catchUpController;
     const catchUp = await runStartupCatchUp({

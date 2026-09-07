@@ -20,6 +20,7 @@ import { AsyncSemaphore } from '../platform/concurrency.ts';
 import type { McpServerConfig, RawConfig, SecretRef } from '../platform/config.ts';
 import { finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from '../store/database.ts';
 import { type InvocationContext, previewContext } from '../platform/invocation-context.ts';
+import { safeJson, truncateUtf8 } from '../platform/truncate.ts';
 import { mcpServerState } from '../store/schema.ts';
 import type { SecretStore } from '../platform/secrets.ts';
 
@@ -416,7 +417,7 @@ export class McpManager {
         await delay(100, undefined, { signal });
         result = await this.#call(server, definition, input, signal, timeoutMs);
       }
-      const text = truncateUtf8(JSON.stringify(result), definition.resultMaxBytes);
+      const text = truncateUtf8(JSON.stringify(result), definition.resultMaxBytes, TRUNCATION_MARKER);
       if ('isError' in result && result.isError === true) {
         finishToolCall(this.#store.orm, auditId, 'error', text, 'mcp_tool_error', {
           startedAt,
@@ -655,32 +656,6 @@ function limitResponseBody(response: Response, maxBytes: number, onLimit: () => 
     statusText: response.statusText,
     headers: response.headers,
   });
-}
-
-function truncateUtf8(value: string, maxBytes: number): string {
-  const encoded = new TextEncoder().encode(value);
-  if (encoded.byteLength <= maxBytes) {
-    return value;
-  }
-  const marker = new TextEncoder().encode(TRUNCATION_MARKER);
-  if (marker.byteLength >= maxBytes) {
-    return new TextDecoder().decode(marker.subarray(0, maxBytes));
-  }
-  const available = Math.max(0, maxBytes - marker.byteLength);
-  let end = available;
-  while (end > 0 && (encoded[end] ?? 0) >= 0x80 && (encoded[end] ?? 0) < 0xc0) {
-    end -= 1;
-  }
-  const prefix = new TextDecoder().decode(encoded.subarray(0, end));
-  return `${prefix}${TRUNCATION_MARKER}`;
-}
-
-function safeJson(value: unknown, maxBytes: number): string {
-  try {
-    return truncateUtf8(JSON.stringify(value), maxBytes);
-  } catch {
-    return 'null';
-  }
 }
 
 function isTransient(error: unknown): boolean {

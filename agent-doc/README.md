@@ -17,6 +17,7 @@
 | 修改 JSONC、Provider、Chat/Topic、Sticker Set 或 MCP | [configuration.md](configuration.md) |
 | 修改 SQLite、迁移、保留、备份或审计（含 durable internal context） | [data-layer.md](data-layer.md) |
 | 修改 Telegram 入库、调度、Context、Tool 或媒体 | [telegram-agent-flow.md](telegram-agent-flow.md) |
+| 实现/排查 Skills、`read`/`execute` 原语与内部能力注册表 | [telegram-agent-flow.md](telegram-agent-flow.md)、[design/20260903 Skills 机制设计计划](design/20260903%20塑料碗%20Skills%20机制设计计划.md) |
 | 实现/排查 Alarm 与 Deferred Invocation | [telegram-agent-flow.md](telegram-agent-flow.md)、[design/20260828 闹钟系统.md](design/20260828%20闹钟系统.md) |
 | 本地启动、安装媒体依赖、部署或排障 | [operations.md](operations.md) |
 | 修改 Admin Panel 认证、审计 API 或前端 | [admin-panel.md](admin-panel.md) |
@@ -36,7 +37,7 @@
 | [20260823 睡眠系统](design/20260823%20睡眠系统.md) | 预算耗尽后的 `zzz` 与全局睡眠 | 已实现，见 [telegram-agent-flow.md](telegram-agent-flow.md) |
 | [20260828 闹钟系统](design/20260828%20闹钟系统.md) | Alarm / Deferred Invocation | 已实现，见 [telegram-agent-flow.md](telegram-agent-flow.md) |
 | [20260901 Bun 到 Node 迁移 Epic](design/20260901%20Bun%20到%20Node%20迁移%20Epic.md) | 运行时迁移分阶段计划与决策记录 | **进行中**：Phase 2（Drizzle 查询层）已完成，Phase 1/3–6 未开始 |
-| [20260903 Skills 机制设计计划](design/20260903%20塑料碗%20Skills%20机制设计计划.md) | Skills 机制 | **未实现**：源码中没有任何 Skill 相关模块 |
+| [20260903 Skills 机制设计计划](design/20260903%20塑料碗%20Skills%20机制设计计划.md) | Skills 机制 | **Phase 1 已实现**（System Skills、`read`/`execute` 原语、8 个内部能力迁入 execute），见 [telegram-agent-flow.md](telegram-agent-flow.md)；Phase 2（Admin Skills、容器脚本）未开始 |
 
 ## 文档边界
 

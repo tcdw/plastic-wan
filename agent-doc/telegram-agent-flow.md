@@ -82,7 +82,7 @@ first session      = T + telegram.bucket_window_seconds
 
 `ContextBuilder` 生成：
 
-- `systemPrompt`：代码固化的 Core Agent Protocol、图片/Sticker 能力说明、运维侧人格 Prompt、私聊/群聊模式、Chat instructions、记忆列表、隐藏 internal context 历史、当前时间。Core Protocol 规定消息分区、沉默判断、Tool 选择原则与副作用成功判定；人格 Prompt 只负责身份和表达风格。
+- `systemPrompt`：代码固化的 Core Agent Protocol、System Skill 索引、图片/Sticker 能力说明、运维侧人格 Prompt、私聊/群聊模式、Chat instructions、记忆列表、隐藏 internal context 历史、当前时间。Core Protocol 规定消息分区、沉默判断、Tool 选择原则与副作用成功判定；人格 Prompt 只负责身份和表达风格。
 - `userPrompt`：仅列出已允许且索引成功 Sticker 的 `<untrusted_sticker_catalog>`（`sticker_id:emoji`），随后是最近 history 与本 Bucket new messages。
 - `directImages`：当 `agent` 模型支持 image 时，`new` 区段消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容。
 - `visibleReplyMessageIds`：本次允许 Reply 的 Telegram Message ID。
@@ -112,7 +112,19 @@ Context
   → completed / failed / aborted / outcome_unknown
 ```
 
-限制来自配置：全局每日 Token 预算、最大轮次、Tool Call 数、发送数、输出 Token、Invocation 超时和全局并发。除该全局 Token 预算外没有其它每日配额：Chat 不限每日 Invocation 数，MCP Tool 不限每日调用数。模型调用与 Tool Call 分别写入审计。`add_memory`/`delete_memory` 是持久化副作用，按 Conversation 隔离并计入 `tool_calls` 审计；`send` 仍是唯一 Telegram 输出边界。
+限制来自配置：全局每日 Token 预算、最大轮次、发送数、输出 Token、Invocation 超时和全局并发（`tool_calls_used` 仅作审计统计，不再按次数终止）。除该全局 Token 预算外没有其它每日配额：Chat 不限每日 Invocation 数，MCP Tool 不限每日调用数。模型调用与 Tool Call 分别写入审计；`execute` 每次调用有自己的 `tool_calls` 行，dispatch 到的内部能力还会各自再写一行，因此一次 `execute.call` 在审计里是两条可关联记录（外层 `tool_call_id` 与内层 `<id>:<tool>`）。`add_memory`/`delete_memory` 是持久化副作用，按 Conversation 隔离；`send` 仍是唯一 Telegram 输出边界。
+
+## Skills 与受控能力调用
+
+工具面分三层：runtime 原语直接暴露、内部能力经 `execute`、MCP Tool 直接暴露。
+
+- **原语**：`read`、`send`、`execute`、`zzz`（条件暴露）。它们的定义、Schema 与约束完全由 runtime 提供，不依赖任何 Skill；未读取任何 Skill 也能直接调用。
+- **内部能力注册表**（经 `execute` 的 search/help/call）：`web_fetch`、`search_stickers`、`read_image`、`add_memory`、`delete_memory`、`alarm`、`list_alarm`、`delete_alarm`。注册表只包含这 8 个，沿用既有 Tool 名；调用前按各能力的参数 Schema 校验，input 超 32 KiB 拒绝。
+- **MCP Tool**：按配置 allowlist 直接暴露，不进入 `execute` 注册表。
+
+`execute.call` 的结果是 `{text, refs}` 封套：`text` 截断到 32 KiB 并带 `[content truncated]` 标记；`refs` 是本次调用产生的 Invocation 级引用 token（目前只有 `search_stickers` 的 `sticker_ref`），只能交给对应消费 Tool 在边界校验后使用。`execute` 拒绝四个原语（`execute_primitive_rejected`）与未知能力（`unknown_capability`），也不会递归调用自己。
+
+System Skills 是随 runtime 发布的只读文档包，位于 `src/system-resources/skills/<name>/SKILL.md`（Docker 镜像随 `src/` 打包）。`SKILL.md` 头部 frontmatter 声明 `name`（必须等于目录名）与 `description`，加载失败即启动失败。system prompt 只注入索引（名称、描述、`system:///skills/<name>/SKILL.md` URI）；正文由模型用 `read` 按需读取，即 progressive disclosure。`read` 只接受 `system:///` 绝对 URI 或「相对引用 + base」，路径段校验拒绝 `..`、反斜杠、百分号转义，只允许 `.md`，结果 32 KiB 截断。Skill 是文档不是授权：不能覆盖 Tool 约束、协议或预算。
 
 每次模型请求都会附带完整的工具注册表（名称、label、描述与参数 Schema）。请求发出前把该请求实际附带的工具名写入 `model_calls.tools_json`，Invocation 的可用注册表快照（`name`/`label`/`description`）写入 `invocations.tool_registry_json`——因此可以审计“模型在某一轮到底看到了哪些工具”。context 接近上限时，Agent 循环只保留 `send` 和已经可用的 `zzz` 继续收尾。
 
@@ -130,7 +142,7 @@ Context
 
 ## Alarm / Deferred Invocation
 
-Agent 通过 `alarm` Tool 创建一个绑定当前 conversation 的未来 Invocation，而不是延迟发送预生成文本。另有 `list_alarm`/`delete_alarm`：前者只从可信 invocation 身份列出当前调用者自己仍可操作的 pending alarms，并把结果以 durable hidden internal context 保存；后者只允许把该调用者自己的 pending alarm 原子置为现有终态 `cancelled`，对不存在 / 他人所有 / 状态变化统一返回 `alarm_not_found`：
+Agent 通过 `alarm` 能力（经 `execute.call` 调用）创建一个绑定当前 conversation 的未来 Invocation，而不是延迟发送预生成文本。另有 `list_alarm`/`delete_alarm`：前者只从可信 invocation 身份列出当前调用者自己仍可操作的 pending alarms，并把结果以 durable hidden internal context 保存；后者只允许把该调用者自己的 pending alarm 原子置为现有终态 `cancelled`，对不存在 / 他人所有 / 状态变化统一返回 `alarm_not_found`：
 
 1. Tool 校验 `target_user_id` 必须是当前 Invocation 实际可见消息中的 Telegram **user** sender（sender_chat 与任意 ID 拒绝）、`summary` 为 1–500 字符任务说明、`datetime` 为带显式 offset/`Z` 的绝对时间且严格未来、不超 365 天；同一 Invocation 最多成功创建 3 个。
 2. Alarm 的 owner 是“创建者”而不是 target。创建者来自冻结 invocation 的 `new` 区段中**最新一条** Telegram user sender；不会扫描 `visibleSenders` 做唯一值猜测。若 `new` 区段里没有可靠 user sender（例如 alarm invocation、sender_chat、仅 bot/service），`alarm`/`list_alarm`/`delete_alarm` 全部 fail closed，返回 `alarm_caller_not_available`。
@@ -163,7 +175,7 @@ Agent 通过 `alarm` Tool 创建一个绑定当前 conversation 的未来 Invoca
 
 ## `web_fetch`
 
-`web_fetch` 接受模型生成的单个 URL，只执行无 Cookie、无认证 Header 的 HTTP(S) GET。它只允许协议默认端口，最多跟随 3 次跳转；每一跳都重新解析并校验目标，连接固定到已经校验的 IP，防止 DNS rebinding。
+`web_fetch` 是经 `execute.call` 调用的内部能力，接受模型生成的单个 URL，只执行无 Cookie、无认证 Header 的 HTTP(S) GET。它只允许协议默认端口，最多跟随 3 次跳转；每一跳都重新解析并校验目标，连接固定到已经校验的 IP，防止 DNS rebinding。
 
 直接提交的环回、私网、链路本地、文档与保留地址会被拒绝。代理环境把公网域名解析到 `198.18.0.0/15` synthetic IP 时，仅允许“域名解析结果”使用该网段；模型直接提交该网段 IP 仍会被拒绝。
 
@@ -179,7 +191,7 @@ Tool 只返回文本、JSON、XML 或 JavaScript 响应，拒绝压缩和二进�
 
 ## `read_image`
 
-模型只能使用 Context 中展示的不透明 `image_ref`。多模态 Agent 只获得 Sticker 引用；text-only Agent 还会获得 Photo 与图片 Document 引用。Tool 不接受原始 Telegram file ID、任意 URL 或任意 Media ID。
+`read_image` 是经 `execute.call` 调用的内部能力。模型只能使用 Context 中展示的不透明 `image_ref`。多模态 Agent 只获得 Sticker 引用；text-only Agent 还会获得 Photo 与图片 Document 引用。Tool 不接受原始 Telegram file ID、任意 URL 或任意 Media ID。
 
 处理流程：
 
@@ -210,7 +222,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 - 分析成功后更新 `sticker_search` FTS5 trigram 索引。
 - 失败记录次数与 `next_retry_at`，避免热循环。
 
-`search_stickers` 支持语义查询，也支持一次解析最多 5 个目录 `sticker_id`；两种方式都只返回已允许、已成功索引的 Sticker，并生成仅限当前 Invocation 的 `sticker_ref`。目录 ID 与 Telegram file ID 都不能直接发送，`send` 只接受本次 `search_stickers` 返回的 capability。
+`search_stickers`（经 `execute.call` 调用）支持语义查询，也支持一次解析最多 5 个目录 `sticker_id`；两种方式都只返回已允许、已成功索引的 Sticker，并生成仅限当前 Invocation 的 `sticker_ref`。目录 ID 与 Telegram file ID 都不能直接发送，`send` 只接受本次 `search_stickers` 返回的 capability；`execute.call` 的结果封套会在 `refs.sticker_ref` 中同时列出这些授权 token。
 
 ## Bot Commands
 

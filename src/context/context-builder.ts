@@ -5,6 +5,7 @@ import type { RawConfig } from '../platform/config.ts';
 import { resolveChatConfig, type SqliteStore } from '../store/database.ts';
 import { listRecentInternalContexts, renderInternalContextsPrompt } from '../store/internal-context.ts';
 import type { AlarmContext, InvocationContext, VisibleSender } from '../platform/invocation-context.ts';
+import { type SystemSkill, renderSkillIndexPrompt } from '../platform/system-resources.ts';
 import { MemoryStore } from './memory.ts';
 import {
   type PromptTemplateModel,
@@ -95,11 +96,13 @@ export class ContextBuilder {
   readonly #store: SqliteStore;
   readonly #config: RawConfig;
   readonly #memory: MemoryStore;
+  readonly #skills: readonly SystemSkill[];
 
-  constructor(store: SqliteStore, config: RawConfig) {
+  constructor(store: SqliteStore, config: RawConfig, skills: readonly SystemSkill[] = []) {
     this.#store = store;
     this.#config = config;
     this.#memory = new MemoryStore(store.orm);
+    this.#skills = skills;
   }
 
   build(
@@ -161,8 +164,8 @@ export class ContextBuilder {
       hourCycle: 'h23',
     }).format(new Date());
     const imageHandling = supportsImages
-      ? 'Photos and supported image Documents from the new messages are attached directly to the multimodal Agent input, in the same order as the figure_N image_ref entries inside the message JSON of <untrusted_new_messages>. Treat each attached image as the media of the message whose JSON references the matching figure_N. History images are not attached; inspect them on demand with read_image using their img_ refs. read_image never accepts figure_N refs.'
-      : 'Telegram images and Stickers are available through the read_image Tool. Call it when visual details are needed.';
+      ? 'Photos and supported image Documents from the new messages are attached directly to the multimodal Agent input, in the same order as the figure_N image_ref entries inside the message JSON of <untrusted_new_messages>. Treat each attached image as the media of the message whose JSON references the matching figure_N. History images are not attached; inspect them on demand with the read_image capability (called via execute) using their img_ refs. read_image never accepts figure_N refs.'
+      : 'Telegram images and Stickers are available through the read_image capability (called via execute). Call it when visual details are needed.';
     const templateValues: PromptTemplateValues = {
       agent: agentModel,
       vision: { provider: this.#config.vision.provider, model: this.#config.vision.model },
@@ -172,9 +175,10 @@ export class ContextBuilder {
     const stickerCatalogHandling =
       stickerCatalog.length === 0
         ? ''
-        : 'An untrusted sticker catalog is included as sticker_id:emoji entries. Emoji is only a coarse hint. To inspect one or more candidates and authorize sending, call search_stickers with ids; use only the returned sticker_ref with send. search_stickers also supports semantic queries.';
+        : 'An untrusted sticker catalog is included as sticker_id:emoji entries. Emoji is only a coarse hint. To inspect one or more candidates and authorize sending, call the search_stickers capability via execute with ids; use only the returned sticker_ref with send. search_stickers also supports semantic queries.';
     const systemPrompt = [
       CORE_AGENT_PROTOCOL,
+      renderSkillIndexPrompt(this.#skills),
       imageHandling,
       stickerCatalogHandling,
       renderPromptTemplate(this.#config.agent.system_prompt, templateValues),
@@ -367,7 +371,7 @@ export class ContextBuilder {
   #memoryPrompt(conversationId: bigint): string {
     const memories = this.#memory.listActive(conversationId, new Date());
     return [
-      'Memory: short-term notes you deliberately saved for this conversation with add_memory. Keep each note under 100 characters; the hard limit is 150. Notes expire after their TTL (1 day by default). Delete wrong or obsolete notes with delete_memory. Setting a long TTL nominates stable knowledge for human review; durable rules live in agents.md and are curated by humans.',
+      'Memory: short-term notes you deliberately saved for this conversation with the add_memory capability (called via execute). Keep each note under 100 characters; the hard limit is 150. Notes expire after their TTL (1 day by default). Delete wrong or obsolete notes with the delete_memory capability. Setting a long TTL nominates stable knowledge for human review; durable rules live in agents.md and are curated by humans.',
       '<memory_list>',
       ...memories.map((entry) => `- ${entry.id}: ${entry.content}`),
       '</memory_list>',

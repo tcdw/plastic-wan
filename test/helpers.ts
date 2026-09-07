@@ -1,5 +1,11 @@
 import { join } from 'node:path';
 import type { FileConfig } from '../src/platform/config.ts';
+import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from '../src/platform/system-resources.ts';
+
+/** Loads the real bundled system:/// resource tree for integration-style tests. */
+export function bundledSystemResources(): Promise<SystemResources> {
+  return SystemResources.load(BUNDLED_SYSTEM_RESOURCES_DIR);
+}
 
 export function testConfigJsonc(directory: string, transform?: (config: FileConfig) => void): string {
   const path = (name: string) => join(directory, name).replaceAll('\\', '/');

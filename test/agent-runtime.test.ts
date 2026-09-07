@@ -21,7 +21,9 @@ import { SecretStore } from '../src/platform/secrets.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
+import { capability } from '../src/capabilities/execute-tool.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { SystemResources } from '../src/platform/system-resources.ts';
 
 const directories: string[] = [];
 
@@ -92,6 +94,7 @@ test('a fresh Agent publishes only through send and audits model usage', async (
     modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    systemResources: SystemResources.empty(),
   });
   const outcome = await runtime.run(invocationId, new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
@@ -116,7 +119,7 @@ test('a fresh Agent publishes only through send and audits model usage', async (
       "SELECT tools_json FROM model_calls WHERE role = 'agent' ORDER BY id LIMIT 1",
     )
     .get();
-  expect(presented?.tools_json).toBe(JSON.stringify(['send']));
+  expect(presented?.tools_json).toBe(JSON.stringify(['read', 'send', 'execute']));
   const snapshot = store.db
     .query<{ request_json: string | null; response_json: string | null }, []>(
       "SELECT request_json, response_json FROM model_calls WHERE role = 'agent' AND request_json IS NOT NULL ORDER BY id LIMIT 1",
@@ -203,6 +206,7 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
       sendSticker: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
     },
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    systemResources: SystemResources.empty(),
     additionalTools: () => [noop],
   });
   const outcome = await runtime.run(invocationId, new AbortController().signal);
@@ -240,6 +244,7 @@ test('counts tool descriptions in registry limits', async () => {
       sendSticker: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
     },
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    systemResources: SystemResources.empty(),
   });
   const oversizedDescriptionTool: AgentTool = {
     name: 'large_description',
@@ -309,6 +314,7 @@ test('audits complete redacted model error details', async () => {
       sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
     },
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    systemResources: SystemResources.empty(),
   });
 
   expect(await runtime.run(invocationId, new AbortController().signal)).toEqual({
@@ -434,6 +440,7 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
     modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    systemResources: SystemResources.empty(),
     directImageLoader: (context, signal) => media.loadDirectImages(context.directImages, signal),
   });
   const outcome = await runtime.run(invocationId, new AbortController().signal);
@@ -561,7 +568,10 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
       if (historyRef === undefined) {
         throw new Error('Multimodal agent context omitted the history img_ ref');
       }
-      return fauxAssistantMessage(fauxToolCall('read_image', { image_ref: historyRef }), { stopReason: 'toolUse' });
+      return fauxAssistantMessage(
+        fauxToolCall('execute', { action: 'call', tool: 'read_image', input: { image_ref: historyRef } }),
+        { stopReason: 'toolUse' },
+      );
     },
     fauxAssistantMessage('understood'),
   ]);
@@ -599,7 +609,8 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
       sendSticker: async () => ({ message_id: 602, date: 1_700_000_100, chat: { id: 123456789 } }),
     },
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
-    additionalTools: (context, _state, deadline) => [media.createReadImageTool(context, deadline)],
+    systemResources: SystemResources.empty(),
+    capabilityTools: (context, _state, deadline) => [capability(media.createReadImageTool(context, deadline), false)],
   });
   const outcome = await runtime.run(secondInvocation, new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
@@ -680,7 +691,10 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
       if (photoRef === undefined) {
         throw new Error('Text-only agent context omitted image_ref');
       }
-      return fauxAssistantMessage(fauxToolCall('read_image', { image_ref: photoRef }), { stopReason: 'toolUse' });
+      return fauxAssistantMessage(
+        fauxToolCall('execute', { action: 'call', tool: 'read_image', input: { image_ref: photoRef } }),
+        { stopReason: 'toolUse' },
+      );
     },
     fauxAssistantMessage('understood'),
   ]);
@@ -720,7 +734,8 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
       sendSticker: async () => ({ message_id: 602, date: 1_700_000_100, chat: { id: 123456789 } }),
     },
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
-    additionalTools: (context, _state, deadline) => [media.createReadImageTool(context, deadline)],
+    systemResources: SystemResources.empty(),
+    capabilityTools: (context, _state, deadline) => [capability(media.createReadImageTool(context, deadline), false)],
   });
   const outcome = await runtime.run(invocationId, new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
@@ -746,7 +761,7 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
     )
     .get();
   const toolsJson = presented?.tools_json ?? null;
-  expect(toolsJson === null ? null : JSON.parse(toolsJson)).toEqual(['send', 'read_image']);
+  expect(toolsJson === null ? null : JSON.parse(toolsJson)).toEqual(['read', 'send', 'execute']);
   store.close();
 });
 
@@ -814,6 +829,7 @@ test('nudges the model once to use send when it drafts a private reply and never
     modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    systemResources: SystemResources.empty(),
   });
   const outcome = await runtime.run(invocationId, new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });

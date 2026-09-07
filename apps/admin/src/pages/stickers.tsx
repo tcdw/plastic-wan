@@ -63,9 +63,10 @@ export function StickersPage(): React.ReactElement {
       <Card title="Bot search index" size="small">
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-            Only successfully analyzed stickers from configured sets appear here and are available to{" "}
-            <Typography.Text code>search_stickers</Typography.Text>. On-demand analyses of chat media are stored
-            separately and appear in message details.
+            Only successfully analyzed stickers from configured sets appear here and are available to the{" "}
+            <Typography.Text code>search_stickers</Typography.Text> capability (called through{" "}
+            <Typography.Text code>execute</Typography.Text>). On-demand analyses of chat media are stored separately
+            and appear in message details.
           </Typography.Paragraph>
           <Space wrap>
             <Select

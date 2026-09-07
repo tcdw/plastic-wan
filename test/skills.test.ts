@@ -1,0 +1,412 @@
+import { afterAll, expect, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  createModels,
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+  type Message,
+  type ToolResultMessage,
+} from '@earendil-works/pi-ai';
+import type { Update } from 'grammy/types';
+import sharp from 'sharp';
+import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
+import { KeyedSemaphore } from '../src/platform/concurrency.ts';
+import { loadConfig } from '../src/platform/config.ts';
+import { SqliteStore } from '../src/store/database.ts';
+import { capability } from '../src/capabilities/execute-tool.ts';
+import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
+import { MediaService } from '../src/capabilities/media/media.ts';
+import { createMemoryTools, MemoryStore } from '../src/context/memory.ts';
+import { createWebFetchTool } from '../src/capabilities/web-fetch.ts';
+import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
+import type { ModelRegistry } from '../src/platform/providers.ts';
+import { SecretStore } from '../src/platform/secrets.ts';
+import { BucketScheduler } from '../src/orchestration/scheduler.ts';
+import { StickerService } from '../src/capabilities/stickers.ts';
+import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
+import { testConfigJsonc, writeTestConfig, bundledSystemResources } from './helpers.ts';
+
+const directories: string[] = [];
+
+afterAll(async () => {
+  Bun.gc(true);
+  await Promise.all(
+    directories.map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })),
+  );
+});
+
+interface InvocationSetup {
+  readonly store: SqliteStore;
+  readonly loaded: Awaited<ReturnType<typeof loadConfig>>;
+  readonly invocationId: bigint;
+}
+
+async function setupInvocation(
+  prefix: string,
+  withStickers: boolean,
+): Promise<InvocationSetup & { stickerId?: bigint }> {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  directories.push(directory);
+  const configPath = join(directory, 'config.jsonc');
+  const jsonc = testConfigJsonc(directory, (config) => {
+    if (withStickers) {
+      config.telegram.sticker_sets = [{ alias: 'cats', name: 'CatSet' }];
+    }
+  });
+  await writeTestConfig(directory, configPath, jsonc);
+  const loaded = await loadConfig(configPath);
+  const store = await SqliteStore.open(loaded.config);
+  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const update: Update = {
+    update_id: 1,
+    message: {
+      message_id: 10,
+      date: 1_700_000_000,
+      chat: { id: 123456789, type: 'private', first_name: 'Owner' },
+      from: { id: 42, is_bot: false, first_name: 'Alice' },
+      text: 'hello',
+    },
+  };
+  const received = new Date('2026-08-15T00:00:00.000Z');
+  ingestion.ingest(update, received);
+  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    state: 'completed',
+    reason: 'done',
+  }));
+  const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
+  if (invocationId === undefined) {
+    throw new Error('Expected a due invocation');
+  }
+  return { store, loaded, invocationId };
+}
+
+async function indexOneSticker(setup: InvocationSetup): Promise<{ stickers: StickerService; stickerId: bigint }> {
+  const { store, loaded } = setup;
+  const fixturePath = join(tmpdir(), `plasticwan-skills-sticker-${crypto.randomUUID()}.webp`);
+  await sharp({ create: { width: 64, height: 64, channels: 4, background: { r: 0, g: 0, b: 255, alpha: 1 } } })
+    .webp()
+    .toFile(fixturePath);
+  directories.push(fixturePath);
+  const visionFaux = fauxProvider({
+    provider: 'vision',
+    models: [{ id: 'vision-model', input: ['text', 'image'], contextWindow: 128_000, maxTokens: 8_192 }],
+  });
+  visionFaux.setResponses([
+    () =>
+      fauxAssistantMessage(
+        fauxToolCall('report_sticker_analysis', {
+          description_zh: '一只委屈猫正在哭泣',
+          emotion_zh: ['委屈'],
+          action_zh: ['哭泣'],
+          tags_zh: ['猫'],
+          tags_en: ['cat'],
+        }),
+      ),
+  ]);
+  const models = createModels();
+  models.setProvider(visionFaux.provider);
+  const downloader: MediaDownloader = {
+    download: async (_fileId, destination, signal) => {
+      signal.throwIfAborted();
+      await Bun.write(destination, Bun.file(fixturePath));
+    },
+  };
+  const media = new MediaService({
+    store,
+    config: loaded.config,
+    secrets: new SecretStore(),
+    registry: { models, agentModel: visionFaux.getModel(), visionModel: visionFaux.getModel() },
+    mediaClient: downloader,
+    modelGate: new KeyedSemaphore(),
+  });
+  const stickers = new StickerService({
+    store,
+    config: loaded.config,
+    media,
+    api: {
+      getStickerSet: async () => ({
+        name: 'CatSet',
+        title: 'Cats',
+        stickers: [
+          {
+            file_id: 'sticker-file',
+            file_unique_id: 'sticker-unique',
+            width: 64,
+            height: 64,
+            is_animated: false,
+            is_video: false,
+            emoji: '😭',
+            thumbnail: { file_id: 'thumb-file' },
+          },
+        ],
+      }),
+    },
+  });
+  await stickers.sync();
+  expect(await stickers.runOne()).toBe(true);
+  const stickerId = store.db.query<{ id: bigint }, []>('SELECT id FROM stickers').get()?.id;
+  if (stickerId === undefined) {
+    throw new Error('Sticker indexing did not create a row');
+  }
+  return { stickers, stickerId };
+}
+
+function lastToolResult(messages: readonly Message[]): ToolResultMessage {
+  const last = messages.filter((message): message is ToolResultMessage => message.role === 'toolResult').at(-1);
+  if (last === undefined) {
+    throw new Error('Expected a tool result message');
+  }
+  return last;
+}
+
+function toolResultText(message: ToolResultMessage): string {
+  return message.content
+    .filter((entry) => entry.type === 'text')
+    .map((entry) => entry.text)
+    .join('');
+}
+
+test('the skill index reaches the system prompt and primitives stay directly callable', async () => {
+  const setup = await setupInvocation('plasticwan-skills-index-', false);
+  const { store } = setup;
+  const agentFaux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  agentFaux.setResponses([
+    (context) => {
+      expect(context.systemPrompt).toContain('System skills:');
+      expect(context.systemPrompt).toContain('system:///skills/sticker-search/SKILL.md');
+      expect(context.systemPrompt).toContain('This index is the complete list');
+      expect(context.systemPrompt).toContain('read_image capability (called via execute)');
+      expect(context.systemPrompt).toContain('add_memory capability (called via execute)');
+      expect(context.systemPrompt).not.toContain('# Web fetch');
+      expect(context.tools?.map((tool) => tool.name)).toEqual(['read', 'send', 'execute']);
+      return fauxAssistantMessage(fauxToolCall('execute', { action: 'help', tool: 'web_fetch' }), {
+        stopReason: 'toolUse',
+      });
+    },
+    (context) => {
+      const help = lastToolResult(context.messages);
+      expect(help.isError).toBe(false);
+      const parsed = JSON.parse(toolResultText(help)) as { name: string; parameters: unknown };
+      expect(parsed.name).toBe('web_fetch');
+      expect(parsed.parameters).toMatchObject({ type: 'object' });
+      return fauxAssistantMessage(fauxToolCall('execute', { action: 'search', query: 'fetch a web page' }), {
+        stopReason: 'toolUse',
+      });
+    },
+    (context) => {
+      const search = lastToolResult(context.messages);
+      const results = JSON.parse(toolResultText(search)) as { name: string; summary: string }[];
+      expect(results.some((result) => result.name === 'web_fetch' && result.summary === 'Fetch a web page')).toBe(true);
+      return fauxAssistantMessage('done');
+    },
+  ]);
+  const models = createModels();
+  models.setProvider(agentFaux.provider);
+  const model = agentFaux.getModel();
+  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const memoryStore = new MemoryStore(store.orm);
+  const runtime = new AgentRuntime({
+    store,
+    config: setup.loaded.config,
+    secrets: new SecretStore(),
+    registry,
+    modelSwitcher: new AgentModelSwitcher(setup.loaded.config, models),
+    telegramApi: {
+      sendMessage: async () => ({ message_id: 500, date: 1, chat: { id: 123456789 } }),
+      sendSticker: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),
+    },
+    bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    systemResources: await bundledSystemResources(),
+    capabilityTools: (context, _state, deadline) => [
+      ...createMemoryTools(memoryStore, context).map((tool) => capability(tool, true)),
+      capability(createWebFetchTool({ store, context, invocationDeadline: deadline }), false),
+    ],
+  });
+  expect(await runtime.run(setup.invocationId, new AbortController().signal)).toEqual({
+    state: 'completed',
+    reason: 'completed',
+  });
+  const executeRows = store.db
+    .query<{ state: string; error_code: string | null }, []>(
+      "SELECT state, error_code FROM tool_calls WHERE tool_name = 'execute' ORDER BY id",
+    )
+    .all();
+  expect(executeRows).toEqual([
+    { state: 'success', error_code: null },
+    { state: 'success', error_code: null },
+  ]);
+  store.close();
+});
+
+test('search_stickers runs through execute and its refs authorize a sticker send', async () => {
+  const setup = await setupInvocation('plasticwan-skills-sticker-', true);
+  const { store } = setup;
+  const { stickers, stickerId } = await indexOneSticker(setup);
+  const agentFaux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  agentFaux.setResponses([
+    (context) => {
+      expect(context.systemPrompt ?? '').toContain('search_stickers capability via execute');
+      expect(context.messages.some((message) => message.role === 'user')).toBe(true);
+      return fauxAssistantMessage(
+        fauxToolCall('execute', {
+          action: 'call',
+          tool: 'search_stickers',
+          input: { ids: [stickerId.toString()] },
+        }),
+        { stopReason: 'toolUse' },
+      );
+    },
+    (context) => {
+      const call = lastToolResult(context.messages);
+      expect(call.isError).toBe(false);
+      const envelope = JSON.parse(toolResultText(call)) as {
+        text: string;
+        refs: { sticker_ref: string[] };
+      };
+      expect(envelope.text).toContain(stickerId.toString());
+      expect(envelope.refs.sticker_ref).toHaveLength(1);
+      const stickerRef = envelope.refs.sticker_ref[0];
+      if (stickerRef === undefined || !stickerRef.startsWith('stk_')) {
+        throw new Error('Expected an authorized stk_ sticker_ref');
+      }
+      return fauxAssistantMessage(fauxToolCall('send', { kind: 'sticker', sticker_ref: stickerRef }), {
+        stopReason: 'toolUse',
+      });
+    },
+    fauxAssistantMessage('sent'),
+  ]);
+  const models = createModels();
+  models.setProvider(agentFaux.provider);
+  const model = agentFaux.getModel();
+  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  let sentSticker: string | undefined;
+  const runtime = new AgentRuntime({
+    store,
+    config: setup.loaded.config,
+    secrets: new SecretStore(),
+    registry,
+    modelSwitcher: new AgentModelSwitcher(setup.loaded.config, models),
+    telegramApi: {
+      sendMessage: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),
+      sendSticker: async (_chatId, sticker) => {
+        sentSticker = sticker;
+        return { message_id: 502, date: 1, chat: { id: 123456789 } };
+      },
+    },
+    bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    systemResources: await bundledSystemResources(),
+    capabilityTools: (context, state, _deadline) => [
+      capability(stickers.createSearchTool(context, state.stickerCapabilities), false),
+    ],
+  });
+  expect(await runtime.run(setup.invocationId, new AbortController().signal)).toEqual({
+    state: 'completed',
+    reason: 'completed',
+  });
+  expect(sentSticker).toBe('sticker-file');
+  const rows = store.db
+    .query<{ tool_name: string; state: string; error_code: string | null }, []>(
+      'SELECT tool_name, state, error_code FROM tool_calls ORDER BY id',
+    )
+    .all();
+  expect(rows).toEqual([
+    { tool_name: 'execute', state: 'success', error_code: null },
+    { tool_name: 'search_stickers', state: 'success', error_code: null },
+    { tool_name: 'send', state: 'success', error_code: null },
+  ]);
+  expect(
+    store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM telegram_sends WHERE state = 'success'").get()
+      ?.count,
+  ).toBe(1n);
+  store.close();
+});
+
+test('execute refuses primitives and unknown capabilities while memory calls still work', async () => {
+  const setup = await setupInvocation('plasticwan-skills-memory-', false);
+  const { store } = setup;
+  const agentFaux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  agentFaux.setResponses([
+    fauxAssistantMessage(
+      fauxToolCall('execute', { action: 'call', tool: 'send', input: { kind: 'text', text: 'nope' } }),
+      { stopReason: 'toolUse' },
+    ),
+    (context) => {
+      const rejected = lastToolResult(context.messages);
+      expect(rejected.isError).toBe(true);
+      expect(toolResultText(rejected)).toContain('runtime primitive send');
+      return fauxAssistantMessage(
+        fauxToolCall('execute', { action: 'call', tool: 'add_memory', input: { content: 'owner likes cats' } }),
+        { stopReason: 'toolUse' },
+      );
+    },
+    (context) => {
+      const saved = lastToolResult(context.messages);
+      expect(saved.isError).toBe(false);
+      expect(toolResultText(saved)).toContain('Saved memory');
+      return fauxAssistantMessage(
+        fauxToolCall('execute', { action: 'call', tool: 'generate_image', input: { prompt: 'x' } }),
+        { stopReason: 'toolUse' },
+      );
+    },
+    (context) => {
+      const unknown = lastToolResult(context.messages);
+      expect(unknown.isError).toBe(true);
+      expect(toolResultText(unknown)).toContain('no capability named generate_image');
+      return fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'saved' }), { stopReason: 'toolUse' });
+    },
+    fauxAssistantMessage('done'),
+  ]);
+  const models = createModels();
+  models.setProvider(agentFaux.provider);
+  const model = agentFaux.getModel();
+  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const memoryStore = new MemoryStore(store.orm);
+  const runtime = new AgentRuntime({
+    store,
+    config: setup.loaded.config,
+    secrets: new SecretStore(),
+    registry,
+    modelSwitcher: new AgentModelSwitcher(setup.loaded.config, models),
+    telegramApi: {
+      sendMessage: async () => ({ message_id: 500, date: 1, chat: { id: 123456789 } }),
+      sendSticker: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),
+    },
+    bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    systemResources: await bundledSystemResources(),
+    capabilityTools: (context) => [...createMemoryTools(memoryStore, context).map((tool) => capability(tool, true))],
+  });
+  expect(await runtime.run(setup.invocationId, new AbortController().signal)).toEqual({
+    state: 'completed',
+    reason: 'completed',
+  });
+  const rows = store.db
+    .query<{ tool_name: string; state: string; error_code: string | null }, []>(
+      'SELECT tool_name, state, error_code FROM tool_calls ORDER BY id',
+    )
+    .all();
+  expect(rows).toEqual([
+    { tool_name: 'execute', state: 'error', error_code: 'execute_primitive_rejected' },
+    { tool_name: 'execute', state: 'success', error_code: null },
+    { tool_name: 'add_memory', state: 'success', error_code: null },
+    { tool_name: 'execute', state: 'error', error_code: 'unknown_capability' },
+    { tool_name: 'send', state: 'success', error_code: null },
+  ]);
+  const memories = store.db
+    .query<{ content: string }, []>('SELECT content FROM memories')
+    .all()
+    .map((row) => row.content);
+  expect(memories).toEqual(['owner likes cats']);
+  store.close();
+});

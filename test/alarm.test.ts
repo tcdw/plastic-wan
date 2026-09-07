@@ -22,6 +22,8 @@ import { SecretStore } from '../src/platform/secrets.ts';
 import { createSendTool, type TelegramSendApi } from '../src/capabilities/send-tool.ts';
 import { enterSleep } from '../src/store/sleep.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
+import { capability } from '../src/capabilities/execute-tool.ts';
+import { SystemResources } from '../src/platform/system-resources.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
@@ -361,7 +363,31 @@ describe('alarm tool', () => {
           faux.getModel(),
         );
         void options?.onResponse?.({ status: 200, headers: {} }, faux.getModel());
-        return fauxAssistantMessage(fauxToolCall('list_alarm', {}), { stopReason: 'toolUse' });
+        // list_alarm is no longer directly exposed; its schema reaches the
+        // model through the execute help action instead.
+        return fauxAssistantMessage(fauxToolCall('execute', { action: 'help', tool: 'list_alarm' }), {
+          stopReason: 'toolUse',
+        });
+      },
+      (context) => {
+        const last = context.messages.filter((message) => message.role === 'toolResult').at(-1);
+        const helpText =
+          last === undefined
+            ? ''
+            : last.content
+                .filter((entry) => entry.type === 'text')
+                .map((entry) => entry.text)
+                .join('');
+        const helped = JSON.parse(helpText) as { name: string; parameters: unknown };
+        expect(helped.name).toBe('list_alarm');
+        expect(helped.parameters).toEqual({
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        });
+        return fauxAssistantMessage(fauxToolCall('execute', { action: 'call', tool: 'list_alarm', input: {} }), {
+          stopReason: 'toolUse',
+        });
       },
       fauxAssistantMessage('listed'),
     ]);
@@ -381,27 +407,31 @@ describe('alarm tool', () => {
       },
       bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
       modelGate: new KeyedSemaphore(),
-      additionalTools: (context) => [
-        createListAlarmTool({
-          store,
-          context,
-          runtime: {
-            recordAgentMessage: (currentInvocationId, role, text) => {
-              const sequence =
-                store.db
-                  .query<{ value: bigint }, [bigint]>(
-                    'SELECT COALESCE(MAX(sequence_no), 0) + 1 AS value FROM agent_messages WHERE invocation_id = ?',
+      systemResources: SystemResources.empty(),
+      capabilityTools: (context) => [
+        capability(
+          createListAlarmTool({
+            store,
+            context,
+            runtime: {
+              recordAgentMessage: (currentInvocationId, role, text) => {
+                const sequence =
+                  store.db
+                    .query<{ value: bigint }, [bigint]>(
+                      'SELECT COALESCE(MAX(sequence_no), 0) + 1 AS value FROM agent_messages WHERE invocation_id = ?',
+                    )
+                    .get(currentInvocationId)?.value ?? 1n;
+                const created = store.db
+                  .query(
+                    "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, ?, ?, ?, '', ?)",
                   )
-                  .get(currentInvocationId)?.value ?? 1n;
-              const created = store.db
-                .query(
-                  "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, ?, ?, ?, '', ?)",
-                )
-                .run(currentInvocationId, sequence, role, text, '2026-08-15T00:00:15.000Z');
-              return BigInt(created.lastInsertRowid);
+                  .run(currentInvocationId, sequence, role, text, '2026-08-15T00:00:15.000Z');
+                return BigInt(created.lastInsertRowid);
+              },
             },
-          },
-        }),
+          }),
+          false,
+        ),
       ],
     });
     expect(await runtime.run(invocationId, new AbortController().signal)).toEqual({
@@ -412,19 +442,16 @@ describe('alarm tool', () => {
     const presented = store.db
       .query<{ tools_json: string }, []>("SELECT tools_json FROM model_calls WHERE role = 'agent' ORDER BY id LIMIT 1")
       .get();
-    expect(presented?.tools_json).toBe(JSON.stringify(['send', 'list_alarm']));
+    expect(presented?.tools_json).toBe(JSON.stringify(['read', 'send', 'execute']));
     const auditPayload = store.db
       .query<{ request_json: string | null }, []>(
         "SELECT request_json FROM model_calls WHERE role = 'agent' AND request_json IS NOT NULL ORDER BY id LIMIT 1",
       )
       .get();
     const payload = JSON.parse(auditPayload?.request_json ?? 'null') as { tools?: Array<Record<string, unknown>> };
-    const listAlarmTool = payload.tools?.find((entry) => entry.name === 'list_alarm');
-    expect(listAlarmTool?.parameters).toEqual({
-      type: 'object',
-      properties: {},
-      additionalProperties: false,
-    });
+    // The model-facing registry carries only the runtime primitives; the
+    // list_alarm schema was served by the execute help action above.
+    expect(payload.tools?.map((entry) => entry.name)).toEqual(['read', 'send', 'execute']);
     // The faux tool call id is generated; match by tool name instead.
     const listAudit = store.db
       .query<{ arguments_json: string; state: string }, []>(
@@ -578,6 +605,7 @@ describe('alarm runtime budget bypass', () => {
       },
       bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
       modelGate: new KeyedSemaphore(),
+      systemResources: SystemResources.empty(),
     });
     expect(await runtime.run(alarmInvocation, new AbortController().signal)).toEqual({
       state: 'completed',

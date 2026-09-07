@@ -214,7 +214,7 @@ export class StickerService {
   createSearchTool(
     context: InvocationContext,
     stickerCapabilities: Map<string, string>,
-  ): AgentTool<typeof SearchStickersSchema, { count: number }> {
+  ): AgentTool<typeof SearchStickersSchema, { count: number; refs: Record<string, readonly string[]> }> {
     return {
       name: 'search_stickers',
       label: 'Find approved stickers',
@@ -262,7 +262,15 @@ export class StickerService {
           });
           const resultText = JSON.stringify(results);
           finishToolCall(this.#store.orm, toolId, 'success', resultText, null, { startedAt: started });
-          return { content: [{ type: 'text', text: resultText }], details: { count: results.length } };
+          return {
+            content: [{ type: 'text', text: resultText }],
+            details: {
+              count: results.length,
+              // Reference payload for the execute envelope: the authorized
+              // sticker_ref tokens produced by this call, keyed by ref kind.
+              refs: { sticker_ref: results.map((result) => result.sticker_ref) },
+            },
+          };
         } catch (error) {
           finishToolCall(this.#store.orm, toolId, 'error', null, 'sticker_search_error', { startedAt: started });
           throw new Error(error instanceof Error ? error.message : 'Sticker search failed');

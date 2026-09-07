@@ -16,6 +16,7 @@ bun test test/telegram-ingestion.test.ts test/startup-catch-up.test.ts
 bun test test/scheduler.test.ts test/sleep.test.ts
 bun test test/context-send.test.ts test/cut-topic.test.ts
 bun test test/agent-runtime.test.ts test/model-request-audit.test.ts
+bun test test/skills.test.ts test/system-resources.test.ts
 bun test test/media.test.ts test/stickers.test.ts
 bun test test/mcp.test.ts test/web-fetch.test.ts
 bun test test/operations.test.ts test/foundation.test.ts test/schema.test.ts
@@ -26,7 +27,7 @@ bun test test/alarm.test.ts test/alarm-internal-context.test.ts
 bun test test/prompt-template.test.ts test/tui-configure.test.ts
 ```
 
-这 23 个文件是当前测试集的全部；新增测试文件时同步补进下表，否则本页会失去“该跑哪些验证”的作用。
+这 25 个文件是当前测试集的全部；新增测试文件时同步补进下表，否则本页会失去“该跑哪些验证”的作用。
 
 | 测试 | 主要契约 |
 | --- | --- |
@@ -39,6 +40,8 @@ bun test test/prompt-template.test.ts test/tui-configure.test.ts
 | `context-send.test.ts` | Context 可见性、Reply capability、发送次数与未知结果 |
 | `cut-topic.test.ts` | `/cut_topic` 切点排除命令消息及更早历史、切点前移、按 Chat 隔离、非管理员拒绝、重建服务后仍生效 |
 | `agent-runtime.test.ts` | Fresh Agent、Tool 循环、预算、transcript 隔离与工具可见性审计 |
+| `skills.test.ts` | Skill 索引注入 system prompt、原语不经 execute、`execute` search/help/call、`{text, refs}` 封套驱动 `search_stickers → send` 贴纸链路、记忆经 execute 写入、原语/未知能力拒绝的审计 |
+| `system-resources.test.ts` | Skill manifest 校验与启动失败、`system:///` 绝对/相对 URI 解析、越界与非 Markdown 拒绝、32 KiB 截断、progressive disclosure fixture |
 | `model-request-audit.test.ts` | `request_json` 中 inline base64 图片被结构化摘要替换、其余请求数据保留、重复清洗幂等 |
 | `media.test.ts` | 图片标准化、缓存和 Vision reasoning |
 | `stickers.test.ts` | Set 同步、结构化视觉 Tool Call、索引、搜索、发送 |
@@ -181,6 +184,14 @@ bun run src/cli.ts serve --config dev-data/config.jsonc
 - 允许 Topic：正常入库。
 - 未允许 Topic：`topic_not_allowed`。
 - 两个 Topic 的 Conversation、history、Bucket、Reply 和媒体 capability 不混合。
+
+### Skills 与 execute
+
+- system prompt 包含完整 Skill 索引；模型未读取任何 Skill 也能直接调用 `send`。
+- 让模型处理匹配某个 Skill 的任务：审计出现 `read` 的 `system:///skills/...` 成功行，随后是 `execute` 调用行。
+- 贴纸请求走「`execute.call search_stickers` → 封套 `refs.sticker_ref` → `send kind=sticker`」链路；`tool_calls` 中 `execute` 与 `search_stickers` 各自成功。
+- 模型尝试 `execute.call send/zzz/read/execute`：审计记录 `execute_primitive_rejected`，消息未发出。
+- 上下文收尾轮次仍可直接 `send`；`zzz` 暴露与休眠终止不受 Skill 加载影响。
 
 ### MCP
 

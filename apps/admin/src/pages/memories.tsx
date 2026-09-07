@@ -95,10 +95,11 @@ export function MemoriesPage(): React.ReactElement {
         message="Agent-managed short-term memory"
         description={
           <Typography.Text>
-            The agent saves and deletes notes itself via <Typography.Text code>add_memory</Typography.Text> /{" "}
-            <Typography.Text code>delete_memory</Typography.Text>; notes expire by TTL. Entries whose remaining
-            lifetime exceeds the configured warning threshold are flagged — review them: keep, delete, or promote
-            durable knowledge into <Typography.Text code>agents.md</Typography.Text>.
+            The agent saves and deletes notes itself via the <Typography.Text code>add_memory</Typography.Text> /{" "}
+            <Typography.Text code>delete_memory</Typography.Text> capabilities (called through{" "}
+            <Typography.Text code>execute</Typography.Text>); notes expire by TTL. Entries whose remaining lifetime
+            exceeds the configured warning threshold are flagged — review them: keep, delete, or promote durable
+            knowledge into <Typography.Text code>agents.md</Typography.Text>.
           </Typography.Text>
         }
       />

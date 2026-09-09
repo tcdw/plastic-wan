@@ -390,6 +390,8 @@ describe('alarm tool', () => {
         });
       },
       fauxAssistantMessage('listed'),
+      // Non-empty draft triggers the send nudge; the model then stays silent.
+      fauxAssistantMessage(''),
     ]);
     const models = createModels();
     models.setProvider(faux.provider);
@@ -588,7 +590,11 @@ describe('alarm runtime budget bypass', () => {
       provider: 'agent',
       models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
     });
-    faux.setResponses([fauxAssistantMessage('followed up')]);
+    faux.setResponses([
+      fauxAssistantMessage('followed up'),
+      // Non-empty draft triggers the send nudge; the model then stays silent.
+      fauxAssistantMessage(''),
+    ]);
     const models = createModels();
     models.setProvider(faux.provider);
     const model = faux.getModel();

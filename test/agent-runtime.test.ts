@@ -190,6 +190,9 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
       }),
     ),
     fauxAssistantMessage('done'),
+    // The send nudge fires once for the non-empty draft above; the model then
+    // confirms silence with an empty draft and the invocation ends.
+    fauxAssistantMessage(''),
   ]);
   const models = createModels();
   models.setProvider(faux.provider);
@@ -408,6 +411,8 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
       expect(user.content).toContainEqual({ type: 'text', text: expect.stringContaining('"image_ref":"figure_1"') });
       return fauxAssistantMessage('saw the photo');
     },
+    // Non-empty draft triggers the send nudge; the model then stays silent.
+    fauxAssistantMessage(''),
   ]);
   const models = createModels();
   models.setProvider(faux.provider);
@@ -574,6 +579,8 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
       );
     },
     fauxAssistantMessage('understood'),
+    // Non-empty draft triggers the send nudge; the model then stays silent.
+    fauxAssistantMessage(''),
   ]);
   const visionFaux = fauxProvider({
     provider: 'vision',
@@ -614,7 +621,7 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
   });
   const outcome = await runtime.run(secondInvocation, new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
-  expect(agentFaux.state.callCount).toBe(2);
+  expect(agentFaux.state.callCount).toBe(3);
   expect(visionFaux.state.callCount).toBe(1);
   expect(
     store.db
@@ -697,6 +704,8 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
       );
     },
     fauxAssistantMessage('understood'),
+    // Non-empty draft triggers the send nudge; the model then stays silent.
+    fauxAssistantMessage(''),
   ]);
   const visionFaux = fauxProvider({
     provider: 'vision',
@@ -739,7 +748,7 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
   });
   const outcome = await runtime.run(invocationId, new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
-  expect(agentFaux.state.callCount).toBe(2);
+  expect(agentFaux.state.callCount).toBe(3);
   expect(visionFaux.state.callCount).toBe(1);
   expect(
     store.db
@@ -794,15 +803,17 @@ test('nudges the model once to use send when it drafts a private reply and never
     throw new Error('Expected a due invocation');
   }
 
-  // Turn 1: a would-be reply drafted as private assistant text, no send call.
-  // Turn 2: after the nudge, the model still forgets send — proving no re-nudge.
+  // Turn 1: a short would-be reply drafted as private assistant text, no send
+  // call — shorter drafts must nudge too (regression: a 40-char threshold used
+  // to swallow them). Turn 2: after the nudge, the model still forgets send —
+  // proving no re-nudge.
   let sawNudge = false;
   const faux = fauxProvider({
     provider: 'agent',
     models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
   });
   faux.setResponses([
-    fauxAssistantMessage('this is a long private reply that the model forgot to send via the send tool'),
+    fauxAssistantMessage('short private reply'),
     (context) => {
       const lastUser = [...context.messages].reverse().find((message) => message.role === 'user');
       const content = lastUser?.content;
@@ -810,7 +821,7 @@ test('nudges the model once to use send when it drafts a private reply and never
       if (nudgeText.includes('call the send tool')) {
         sawNudge = true;
       }
-      return fauxAssistantMessage('another long private reply that still forgets to call send');
+      return fauxAssistantMessage('still no send');
     },
   ]);
   const models = createModels();
@@ -841,5 +852,68 @@ test('nudges the model once to use send when it drafts a private reply and never
   ).toBe(1n);
   expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM telegram_sends').get()?.count).toBe(0n);
   expect(faux.state.callCount).toBe(2);
+  store.close();
+});
+
+test('does not nudge when the model ends without any draft text', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-nudge-empty-'));
+  directories.push(directory);
+  const configPath = join(directory, 'config.jsonc');
+  await writeTestConfig(directory, configPath);
+  const loaded = await loadConfig(configPath);
+  const store = await SqliteStore.open(loaded.config);
+  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const update: Update = {
+    update_id: 5,
+    message: {
+      message_id: 11,
+      date: 1_700_000_000,
+      chat: { id: 123456789, type: 'private', first_name: 'Owner' },
+      from: { id: 42, is_bot: false, first_name: 'Alice' },
+      text: 'hello',
+    },
+  };
+  const received = new Date('2026-08-15T00:00:00.000Z');
+  ingestion.ingest(update, received);
+  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    state: 'completed',
+    reason: 'done',
+  }));
+  const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
+  if (invocationId === undefined) {
+    throw new Error('Expected a due invocation');
+  }
+
+  // The model deliberately stays silent: no tool call and only blank drafts.
+  const faux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  faux.setResponses([fauxAssistantMessage('   ')]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const model = faux.getModel();
+  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const runtime = new AgentRuntime({
+    store,
+    config: loaded.config,
+    secrets: new SecretStore(),
+    registry,
+    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    telegramApi: {
+      sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
+      sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
+    },
+    bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    systemResources: SystemResources.empty(),
+  });
+  const outcome = await runtime.run(invocationId, new AbortController().signal);
+  expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+  expect(
+    store.db
+      .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM agent_messages WHERE role = 'harness_nudge'")
+      .get()?.count,
+  ).toBe(0n);
+  expect(faux.state.callCount).toBe(1);
   store.close();
 });

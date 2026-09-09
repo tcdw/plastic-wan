@@ -205,6 +205,8 @@ test('the skill index reaches the system prompt and primitives stay directly cal
       expect(results.some((result) => result.name === 'web_fetch' && result.summary === 'Fetch a web page')).toBe(true);
       return fauxAssistantMessage('done');
     },
+    // Non-empty draft triggers the send nudge; the model then stays silent.
+    fauxAssistantMessage(''),
   ]);
   const models = createModels();
   models.setProvider(agentFaux.provider);

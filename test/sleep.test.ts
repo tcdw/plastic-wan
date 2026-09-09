@@ -115,7 +115,9 @@ function modelToolLists(store: SqliteStore): string[][] {
 
 test('does not expose zzz while more than five percent remains', async () => {
   const { store, runtime, invocationId, faux } = await runtimeSetup(284_999n);
-  faux.setResponses([fauxAssistantMessage('done')]);
+  // The model deliberately stays silent with a blank draft so the send nudge
+  // cannot add a second turn whose usage would push the budget over the line.
+  faux.setResponses([fauxAssistantMessage('   ')]);
   await runtime.run(invocationId, new AbortController().signal);
   expect(modelToolLists(store)).toEqual([['read', 'send', 'execute']]);
   store.close();
@@ -123,7 +125,7 @@ test('does not expose zzz while more than five percent remains', async () => {
 
 test('exposes zzz after global remaining budget falls below five percent', async () => {
   const { store, runtime, invocationId, faux } = await runtimeSetup(285_001n, '987654321');
-  faux.setResponses([fauxAssistantMessage('done')]);
+  faux.setResponses([fauxAssistantMessage('   ')]);
   await runtime.run(invocationId, new AbortController().signal);
   expect(modelToolLists(store)).toEqual([['read', 'send', 'execute', 'zzz']]);
   store.close();
@@ -141,7 +143,7 @@ test('blocks model calls after another chat exhausts the global daily budget', a
 
 test('keeps zzz hidden at exactly five percent remaining', async () => {
   const { store, runtime, invocationId, faux } = await runtimeSetup(285_000n);
-  faux.setResponses([fauxAssistantMessage('done')]);
+  faux.setResponses([fauxAssistantMessage('   ')]);
   await runtime.run(invocationId, new AbortController().signal);
   expect(modelToolLists(store)).toEqual([['read', 'send', 'execute']]);
   store.close();

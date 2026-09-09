@@ -78,11 +78,11 @@ export interface AgentRuntimeOptions {
  * Safety net for models that draft a group-facing reply as ordinary assistant
  * text and then stop without calling send. Ordinary assistant text is private
  * and never published, so such a reply is silently lost. When the agent is
- * about to stop after producing substantial private text without ever calling
- * send, inject one harness-level reminder to use send. Fires at most once per
- * invocation; if the model still does not send, we stop and let it stay silent.
+ * about to stop after producing any non-empty private text without ever
+ * calling send, inject one harness-level reminder to use send. Fires at most
+ * once per invocation; if the model still does not send, we stop and let it
+ * stay silent.
  */
-const SEND_NUDGE_MIN_TEXT_CHARS = 40;
 const SEND_NUDGE_TEXT =
   'You produced a reply as ordinary assistant text. Ordinary assistant text is private and is never published to Telegram. If that text is meant for the chat, call the send tool to publish it now. You will not be reminded again.';
 
@@ -325,7 +325,7 @@ export class AgentRuntime {
             .filter((entry) => entry.type === 'text')
             .map((entry) => entry.text)
             .join('');
-          if (!hasToolCalls && text.length >= SEND_NUDGE_MIN_TEXT_CHARS) {
+          if (!hasToolCalls && text.trim().length > 0) {
             nudged = true;
             agent.steer({ role: 'user', content: [{ type: 'text', text: SEND_NUDGE_TEXT }], timestamp: Date.now() });
             this.recordAgentMessage(invocationId, 'harness_nudge', SEND_NUDGE_TEXT);

@@ -1,6 +1,6 @@
 # 数据层
 
-Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索引、预算与审计。数据库不是长期记忆；在线保留窗口由必填的 `retention.online_days` 指定（dev 示例为 30 天）。
+Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索引、预算与审计。数据库不是长期记忆；在线保留窗口由必填的 `retention.online_days` 指定。
 
 ## 打开与迁移
 
@@ -25,7 +25,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 ## 查询层（Drizzle）
 
-业务查询统一走 `SqliteStore.orm`（drizzle-orm 0.45.2 `bun-sqlite` 驱动的同步 API）；`store.db` 仅供连接层自身（迁移、备份、`VACUUM INTO`）、`doctor.ts` 探针与测试验证断言使用。表定义在 [src/store/schema.ts](../src/store/schema.ts)，是迁移终态的类型化映射——新增迁移必须同步更新它。
+业务查询统一走 `SqliteStore.orm`（Drizzle `bun-sqlite` 驱动的同步 API；依赖版本见 [package.json](../package.json) 与 [bun.lock](../bun.lock)）；`store.db` 仅供连接层自身（迁移、备份、`VACUUM INTO`）、`doctor.ts` 探针与测试验证断言使用。表定义在 [src/store/schema.ts](../src/store/schema.ts)，是迁移终态的类型化映射——新增迁移必须同步更新它。
 
 约定：
 
@@ -40,7 +40,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 ## 表组
 
-32 张表的列定义见 [src/store/schema.ts](../src/store/schema.ts) 与 `src/store/migrations/`，表名本身基本自解释。下面只记录 schema 读不出来的语义。
+表与列定义见 [src/store/schema.ts](../src/store/schema.ts) 和 [迁移目录](../src/store/migrations/)，不在文档维护表数量或字段副本。下面只记录 schema 读不出来的语义。
 
 ### 冻结与重放边界
 
@@ -69,7 +69,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 ### 工具可见性审计
 
-`invocations.tool_registry_hash` 之外还有 `tool_registry_json`：本次 Invocation 实际展示给模型的完整工具快照（`name`/`label`/`description`）；hash 覆盖名称、描述和参数 Schema，Tool 使用策略变化也会产生新 hash。`model_calls.tools_json` 记录该次请求真正附带的工具名数组——Agent 循环在 context 接近上限时会把工具裁剪到只剩 `send`，因此同一 Invocation 内不同请求的工具列表可能不同；这两列共同回答“模型当时能看到哪些工具”。
+`invocations.tool_registry_hash` 之外还有 `tool_registry_json`：本次 Invocation 实际展示给模型的完整工具快照（`name`/`label`/`description`）；hash 覆盖名称、描述和参数 Schema，Tool 使用策略变化也会产生新 hash。`model_calls.tools_json` 记录该次请求真正附带的工具名数组——Agent 循环在 context 接近上限时会把工具裁剪到 `send` 和当时可用的 `zzz`，因此同一 Invocation 内不同请求的工具列表可能不同；这两列共同回答“模型当时能看到哪些工具”。
 
 `model_calls.request_json` 保存 Provider 请求审计快照，但不会复制 `data:image/*;base64,...` 图片正文；对应字符串会替换为包含 MIME、Base64 字符数、解码字节数与 SHA-256 的结构化摘要，真实 Provider 请求不受影响。`side_effect_started` 和 `outcome_unknown` 用于阻止不可逆 Tool 的盲目重试。审计记录应保留稳定错误码；不要依赖解析自由文本错误。
 
@@ -98,8 +98,8 @@ Admin 侧的 `admin_users`/`admin_sessions`/`bot_admins` 语义见 [admin-panel.
 
 `backup` 在备份前调用 `purgeExpiredData`。清理仅删除已完成终态和不再被活跃引用的数据：
 
-- 已过期的 `memories`（按自身 TTL，不参与 30 天在线窗口）。
-- 已过期的 `conversation_attention` 注意力窗口行（窗口过期即无意义，不参与 30 天在线窗口）。
+- 已过期的 `memories`（按自身 TTL，不参与在线保留窗口）。
+- 已过期的 `conversation_attention` 注意力窗口行（窗口过期即无意义，不参与在线保留窗口）。
 - 过期 Telegram Update 与终态 Invocation/Send/Bucket。
 - 不再被 Invocation/Bucket 引用的旧 Message。
 - 仍被快照引用的旧 Message 保留身份，但匿名化 Revision 文本、Sender、Reply/Forward 和 Service 内容。

@@ -52,16 +52,9 @@ ContextBuilder / MediaService
         │
         ▼
 Fresh Pi Agent
-  ├─ read（system:/// 只读资源原语）
-  ├─ send
-  ├─ execute（search / help / call → runtime 内部能力注册表）
-  │    ├─ web_fetch
-  │    ├─ read_image（Sticker；text-only Agent 也用于普通图片）
-  │    ├─ search_stickers
-  │    ├─ add_memory / delete_memory
-  │    └─ alarm / list_alarm / delete_alarm
-  ├─ zzz（仅全局当日 Token 余量低于 5% 时出现）
-  └─ allowlisted MCP tools（直接暴露，不经 execute）
+  ├─ runtime 原语（直接暴露）
+  ├─ execute → runtime 内部能力（按需发现与调用）
+  └─ allowlisted MCP tools（直接暴露）
         │
         ▼
 send Tool → Telegram API → 审计
@@ -89,7 +82,7 @@ src/
 模块职责基本能从层级和文件名推出，源码是唯一事实源。只有几处放置位置和名字不直观，需要单独记住：
 
 - `platform/agent-protocol.ts` 是代码固化的 **Core Agent Protocol**——消息分区、沉默判断、Tool 选择原则与副作用成功判定都在这里，不在人格 Prompt 文件里。
-- `platform/system-resources.ts` 加载 `src/system-resources/` 下的 **System Skills**（`system:///` 只读资源树）：skill 索引注入 system prompt，`read` 原语按需读取正文。`capabilities/read-tool.ts` 与 `capabilities/execute-tool.ts` 分别实现 `read` 与 `execute` 两个 runtime 原语；8 个内部能力 Tool（web_fetch、search_stickers、read_image、add_memory、delete_memory、alarm、list_alarm、delete_alarm）由组合根包成 `ExecutableCapability` 注册进 `execute`。
+- [platform/system-resources.ts](../src/platform/system-resources.ts) 加载只读 **System Skills**；索引注入、按需读取和调用契约统一见 [Skills 与受控能力调用](telegram-agent-flow.md#skills-与受控能力调用)。Skill 提供操作知识而不授予权限，能力是否注册仍由组合根决定。
 - 不是所有 Agent Tool 都在 `capabilities/`：`zzz` 定义在 `store/sleep.ts`，`add_memory`/`delete_memory` 定义在 `context/memory.ts`，各自与所属状态放在一起。找某个 Tool 的实现时按名字 grep，别只翻 `capabilities/`。
 - `store/invocation-snapshot.ts` 是 Invocation 消息快照的冻结边界；`orchestration/invocation-queue.ts` 负责 Bucket/Alarm → Invocation 的同步状态转换、恢复与 Startup Catch-up。这两个名字容易和 `scheduler.ts` 混淆——Scheduler 只管事件循环与并发。
 - `platform/invocation-context.ts` 是无依赖的叶子类型模块，存在的唯一目的是打断 import 环，不要往里加逻辑。
@@ -120,7 +113,7 @@ Memory 内容是模型自己写入的持久化数据，按 Conversation 隔离�
 
 - Chat/Topic allowlist 在入库边界校验。
 - Reply Message ID、媒体引用、Sticker Set 和 Sticker ID 必须来自当前 Context capability。
-- 普通 Assistant 文本不会发往 Telegram；`send` 是唯一发送边界。
+- 普通 Assistant 文本不会发往 Telegram；模型驱动的 Telegram 输出只能经过 `send`。确定性的 Bot 命令回复直接调用 Bot API，不经过模型，见 [Bot Commands](telegram-agent-flow.md#bot-commands)。
 - `read` 只能读取 `system:///` 树内的 Markdown 文档：URI 段校验拒绝 `..`、反斜杠、百分号转义与非 Markdown 资源；Skill 内容是 runtime 文档，不是授权来源。
 - `execute` 只 dispatch 组合根注册的内部能力；`read`/`send`/`execute`/`zzz` 四个原语与 MCP Tool 不在注册表内，无法被间接调用。`execute.call` 返回 `{text, refs}` 封套：文本截断到 32 KiB，引用只能是以 Invocation 级 token 形式返回的 capability 引用（如 `sticker_ref`），由 `send` 在边界处校验后消费。
 - MCP Tool 必须通过配置 allowlist、策略、超时和大小限制。

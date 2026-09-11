@@ -84,6 +84,8 @@ bun run src/cli.ts serve --config dev-data/config.jsonc
 bun run src/cli.ts doctor --config dev-data/config.jsonc
 ```
 
+Doctor 是对已配置运行环境执行的真实依赖检查，不是静态 lint；完整检查范围与何时可判定通过见[验证：Doctor](verification.md#doctor)。它会产生 `role = 'doctor'` 的模型调用审计并消耗少量 Provider Token。
+
 如需查看配置中 Agent 系统 Prompt 的模板渲染结果：
 
 ```bash
@@ -91,35 +93,6 @@ bun run src/cli.ts doctor --config dev-data/config.jsonc --output-agent-prompt
 ```
 
 该选项仍会执行完整 Doctor 检查；成功 JSON 中增加 `agent_prompt` 字段。输出包含 Prompt 正文，但不会包含 Secret、Chat 记忆或 Chat-specific instructions。不要在共享日志中使用该选项。
-
-Doctor 执行真实检查，不是静态 lint：
-
-- 配置与 Secret 解析。
-- 数据目录、剩余空间和权限。
-- SQLite FTS5 trigram。
-- Sharp PNG。
-- FFmpeg、FFprobe。
-- TGS → SVG → Sharp PNG。
-- 自定义 Provider 连通性。
-- Agent 模型严格 Tool Call。
-- Vision 图片输入。
-- Telegram `getMe`。
-- required MCP 启动与 Tool registry。
-
-成功输出示例字段：
-
-```json
-{
-  "status": "ok",
-  "fts5_trigram": true,
-  "sharp": true,
-  "ffmpeg": true,
-  "ffprobe": true,
-  "lottie": true
-}
-```
-
-Doctor 会产生 `role = 'doctor'` 的模型调用审计并消耗少量 Provider Token。
 
 ## 日志
 
@@ -183,13 +156,7 @@ Doctor 会产生 `role = 'doctor'` 的模型调用审计并消耗少量 Provider
 bun run src/cli.ts backup --config dev-data/config.jsonc
 ```
 
-输出备份文件路径。备份前执行保留清理，完成后按 `backup_copies` 轮换。定期从复制出的数据库运行：
-
-```sql
-PRAGMA integrity_check;
-```
-
-并做实际恢复演练；“命令成功”不等于恢复路径已验证。
+备份前会执行保留清理，完成后按 `backup_copies` 轮换。备份文件的完整性和可恢复性验收见[验证：备份与恢复验证](verification.md#备份与恢复验证)；“命令成功”不等于恢复路径已验证。
 
 ## 部署方式
 

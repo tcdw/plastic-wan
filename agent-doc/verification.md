@@ -12,7 +12,7 @@ bun test
 按改动范围可先运行目标测试：
 
 ```bash
-bun test test/telegram-ingestion.test.ts test/startup-catch-up.test.ts
+bun test test/telegram-ingestion.test.ts test/startup-catch-up.test.ts test/participation.test.ts
 bun test test/scheduler.test.ts test/sleep.test.ts
 bun test test/context-send.test.ts test/cut-topic.test.ts
 bun test test/agent-runtime.test.ts test/model-request-audit.test.ts
@@ -24,16 +24,17 @@ bun test test/admin.test.ts test/model-switch.test.ts
 bun test test/bot-commands.test.ts
 bun test test/memory.test.ts
 bun test test/alarm.test.ts test/alarm-internal-context.test.ts
-bun test test/prompt-template.test.ts test/tui-configure.test.ts
+bun test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-configure.test.ts
 ```
 
-这 25 个文件是当前测试集的全部；新增测试文件时同步补进下表，否则本页会失去“该跑哪些验证”的作用。
+上面的命令按改动范围组织；新增测试文件时同步补充对应命令与下表契约。完整测试集以 `test/*.test.ts` 为准，`bun test` 运行全部测试。
 
 | 测试 | 主要契约 |
 | --- | --- |
 | `foundation.test.ts` | 严格配置、Secret 脱敏、迁移与备份 |
 | `schema.test.ts` | Drizzle 层 bigint/boolean 往返、STRICT 与 CHECK 约束、bun IMMEDIATE 事务回滚、`sql` 模板绑定与 FTS5 查询 |
 | `telegram-ingestion.test.ts` | allowlist、Revision、Bot/Service、Topic 隔离 |
+| `participation.test.ts` | 全局/每 Chat 规则合并、私聊配置拒绝、跨午夜时段、触发与注意力窗口、暂停/编辑边界、启动追赶与清理 |
 | `startup-catch-up.test.ts` | 每 Chat 一个追赶 Invocation、`history_messages` 上限、`ignored_user_ids` 与 `sticker_trigger_enabled` 生效、排空后切换实时 Bucket、Reply 的 Topic 路由 |
 | `scheduler.test.ts` | 配置 deadline、冻结快照、恢复和并发串行 |
 | `sleep.test.ts` | 5% 阈值边界与 `zzz` 可见性、跨轮次工具注册表与 system prompt 睡眠状态行同步、睡眠跳过 due/queued 会话、跨进程持久化、UTC 预算重置唤醒、并发 `zzz` 幂等 |
@@ -54,6 +55,7 @@ bun test test/prompt-template.test.ts test/tui-configure.test.ts
 | `memory.test.ts` | 记忆持久化与 TTL、Conversation 隔离、Tool 审计、system prompt 注入、Admin 记忆 CRUD |
 | `alarm.test.ts` / `alarm-internal-context.test.ts` | Alarm 创建/触发/取消、creator-vs-target ownership、latest-new caller 解析、跨 invocation hidden mapping、状态变化安全失败、send 不泄漏、重启后 durable internal context |
 | `prompt-template.test.ts` | Prompt 模板白名单变量渲染、未知与格式错误表达式拒绝 |
+| `prompt-markdown.test.ts` | HTML 注释剔除、纯注释行移除、跨行注释与未闭合注释保留 |
 | `tui-configure.test.ts` | `configure` 向导输出可被 `loadConfig` 接受、models.dev 能力/费用映射、Provider `/models` 拉取与去重、CLI 参数与 `--output-agent-prompt` 解析 |
 
 跨模块改动完成后运行全部测试与 TypeScript 检查。
@@ -73,19 +75,11 @@ bun run src/cli.ts check-config --config dev-data/config.jsonc
 
 ## Doctor
 
-```bash
-bun run src/cli.ts doctor --config dev-data/config.jsonc
-```
+按 [运行与运维：Doctor](operations.md#doctor) 执行检查；需要核对 Prompt 模板时使用该节的 `--output-agent-prompt` 命令，避免把 Prompt 正文转发到共享日志。
 
-如需同时验证 Prompt 模板的渲染结果：
+通过标准：命令成功退出、JSON 中 `status = ok`，以下依赖探针均成功；启用 Prompt 输出时还应核对 `agent_prompt` 的渲染结果。
 
-```bash
-bun run src/cli.ts doctor --config dev-data/config.jsonc --output-agent-prompt
-```
-
-该模式仍执行完整外部依赖冒烟，并在成功 JSON 中输出 `agent_prompt`。Prompt 正文可能包含内部配置，不要转发到共享日志。
-
-这是外部依赖冒烟，覆盖：
+检查覆盖：
 
 - SQLite/FTS/磁盘。
 - Sharp、FFmpeg、FFprobe、python-lottie。
@@ -98,20 +92,13 @@ Doctor 成功只证明连接与最小能力，不证明真实群聊调度、Repl
 
 ## 本地服务冒烟
 
-启动：
+按[运行与运维：启动与停止](operations.md#启动与停止)启动服务。以下是通过标准；运行方式、停止步骤与 lock 排障以该页为准：
 
-```bash
-bun run src/cli.ts serve --config dev-data/config.jsonc
-```
-
-验证：
-
-1. 出现一次 `serve_started`。
-2. `bot_id` 与预期 Bot 一致。
-3. `config_hash` 与 `check-config` 一致。
-4. 运行 30 秒以上没有退出/重启。
-5. `serve.lock` 阻止第二实例。
-6. `Ctrl+C` 后 Scheduler、数据库和 lock 正常收尾。
+1. 出现一次 `startup_catch_up_completed`，随后出现一次 `serve_started`。
+2. `bot_id` 与预期 Bot 一致，`config_hash` 与 `check-config` 一致。
+3. 运行 30 秒以上没有退出/重启。
+4. `serve.lock` 阻止第二实例。
+5. `Ctrl+C` 后 Scheduler、数据库和 lock 正常收尾。
 
 长期进程必须用进程监督器或人工前台运行；不要让测试命令无限阻塞。
 
@@ -228,11 +215,7 @@ telegram_updates
 
 ## 备份与恢复验证
 
-```bash
-bun run src/cli.ts backup --config dev-data/config.jsonc
-```
-
-检查：
+按[运行与运维：备份](operations.md#备份)执行备份命令。检查：
 
 1. 生成新 `.sqlite`。
 2. 数量不超过 `backup_copies`。

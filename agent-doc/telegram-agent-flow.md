@@ -57,8 +57,6 @@
 5. Snapshot 携带 `message_thread_id`。回复可见消息时，`send` 路由到该消息所属 Topic；不带 Reply 时路由到最新消息所属 Topic。
 6. 排空完成并原子清除启动状态后，才切换到常规按 Conversation 收集。
 
-当前 `dev-data/config.jsonc` 的 `agent.history_messages = 20`，因此每个群的启动追赶任务最多包含 20 条消息。
-
 ## 会话节拍与 Bucket
 
 Chat（群）空闲时，第一条可触发消息创建该 Conversation 的 `collecting` Bucket，并先等待一个完整节拍：
@@ -83,15 +81,15 @@ first session      = T + telegram.bucket_window_seconds
 
 ## 定时活跃与注意力窗口
 
-配置了 `telegram.participation` 或 `chats[].participation` 的群聊不再无条件开 Bucket。判定收敛成一个条件：
+配置了 `telegram.participation` 或 `chats[].participation` 的群聊不再无条件开 Bucket。先在活跃时段外处理有触发资格的新消息、更新注意力窗口，再判断 participation 闸门；allowlist、暂停状态和消息触发资格仍独立生效：
 
 ```text
-开 Bucket = 未配置 participation || 处于活跃时段 || 该 Conversation 的注意力窗口未过期
+participation 放行 = 未配置 participation || 处于活跃时段 || 更新后的注意力窗口未过期
 ```
 
 - **活跃时段**（`active_windows`）按 Chat 时区解释，是半开区间 `[start, end)`；`end < start` 表示跨午夜并归属开始日，`end = "24:00"` 表示到当日结束。时段内行为与未配置时完全一致。
 - **触发**只有三类：直接 @ Bot、Reply Bot 自己发过的消息（判定原始 Update 的 `reply_to_message.from.id`）、命中 `trigger_keywords`（`text` 与 `caption`，大小写不敏感）。优先级是 mention → reply → keyword，只影响记录下来的 `trigger_kind`，不影响是否放行。
-- 命中的消息先写入或刷新 `conversation_attention`（`expires_at = receivedAt + attention_window_seconds`）再判定，因此命中消息自身一定被放行，实时入库与启动追赶不可能得出相反的结论。
+- 仅在活跃时段外，有触发资格且命中的新消息才先写入或刷新 `conversation_attention`（`expires_at = receivedAt + attention_window_seconds`）再判定，因此命中消息自身会通过 participation 闸门。活跃时段内直接放行，不创建或刷新注意力窗口；实时入库与启动追赶复用这一判断。
 - 窗口按 Conversation（Chat + Forum Topic）隔离；时段按 Chat 生效，时段内该群所有 Topic 都活跃。
 - 只有能开 Bucket 的消息才能开窗口：`sticker_trigger_enabled = false` 时的单独 Sticker 既不开 Bucket 也不刷新窗口。
 - 编辑消息不触发、不刷新窗口、不开 Bucket，但仍写入 Revision，并在后续 Invocation 中作为 history 出现。
@@ -119,7 +117,7 @@ first session      = T + telegram.bucket_window_seconds
 
 私聊策略提示模型积极参与；群聊提示只在有明确价值时发言。它是行为偏好，不绕过 Tool 或预算授权。
 
-Context 受模型窗口限制：为系统提示、完整 Tool 定义（名称、描述与参数 Schema）、历史、新消息和输出保留空间。Tool description 不只是能力清单，还应说明何时使用、何时不用、必要调用顺序和成功判定。超过 `context_stop_ratio` 后停止继续 Tool 循环，避免下一轮超窗。
+Context 受模型窗口限制：为系统提示、完整 Tool 定义（名称、描述与参数 Schema）、历史、新消息和输出保留空间。Tool description 不只是能力清单，还应说明何时使用、何时不用、必要调用顺序和成功判定。估算输入达到 `context_stop_ratio` 后进入收尾模式，只保留 `send` 和当时可用的 `zzz`；估算输入加预留输出达到模型窗口时才按上下文限制终止，不是在比例阈值处立即停止 Tool 循环。
 
 ## Agent 循环
 
@@ -134,14 +132,14 @@ Context
   → completed / failed / aborted / outcome_unknown
 ```
 
-限制来自配置：全局每日 Token 预算、最大轮次、发送数、输出 Token、Invocation 超时和全局并发（`tool_calls_used` 仅作审计统计，不再按次数终止）。除该全局 Token 预算外没有其它每日配额：Chat 不限每日 Invocation 数，MCP Tool 不限每日调用数。模型调用与 Tool Call 分别写入审计；`execute` 每次调用有自己的 `tool_calls` 行，dispatch 到的内部能力还会各自再写一行，因此一次 `execute.call` 在审计里是两条可关联记录（外层 `tool_call_id` 与内层 `<id>:<tool>`）。`add_memory`/`delete_memory` 是持久化副作用，按 Conversation 隔离；`send` 仍是唯一 Telegram 输出边界。
+限制来自配置：全局每日 Token 预算、最大轮次、发送数、输出 Token、Invocation 超时和全局并发（`tool_calls_used` 仅作审计统计，不再按次数终止）。除该全局 Token 预算外没有其它每日配额：Chat 不限每日 Invocation 数，MCP Tool 不限每日调用数。模型调用与 Tool Call 分别写入审计；`execute` 每次调用有自己的 `tool_calls` 行，dispatch 到的内部能力还会各自再写一行，因此一次 `execute.call` 在审计里是两条可关联记录（外层 `tool_call_id` 与内层 `<id>:<tool>`）。`add_memory`/`delete_memory` 是持久化副作用，按 Conversation 隔离；`send` 仍是模型驱动的 Telegram 输出的唯一边界。
 
 ## Skills 与受控能力调用
 
-工具面分三层：runtime 原语直接暴露、内部能力经 `execute`、MCP Tool 直接暴露。
+工具面分三层：runtime 原语直接暴露、内部能力经 `execute`、MCP Tool 直接暴露。内部能力按需发现，避免每轮请求携带全部定义；这不是放宽授权，Schema、引用和预算仍由 Tool 边界校验。修改能力时先查 [组合根的 `capabilityTools`](../src/application.ts#L128) 与 [原语装配](../src/orchestration/agent-runtime.ts)，行为验证见 [验证索引](verification.md#静态与单元验证)。
 
 - **原语**：`read`、`send`、`execute`、`zzz`（条件暴露）。它们的定义、Schema 与约束完全由 runtime 提供，不依赖任何 Skill；未读取任何 Skill 也能直接调用。
-- **内部能力注册表**（经 `execute` 的 search/help/call）：`web_fetch`、`search_stickers`、`read_image`、`add_memory`、`delete_memory`、`alarm`、`list_alarm`、`delete_alarm`。注册表只包含这 8 个，沿用既有 Tool 名；调用前按各能力的参数 Schema 校验，input 超 32 KiB 拒绝。
+- **内部能力注册表**：由 [application.ts](../src/application.ts) 的 `capabilityTools` 装配，完整清单以此为准，不在文档维护副本。模型经 `execute` 的 search/help/call 按需发现与调用；调用前按目标能力的参数 Schema 校验，input 超 32 KiB 拒绝。
 - **MCP Tool**：按配置 allowlist 直接暴露，不进入 `execute` 注册表。
 
 `execute.call` 的结果是 `{text, refs}` 封套：`text` 截断到 32 KiB 并带 `[content truncated]` 标记；`refs` 是本次调用产生的 Invocation 级引用 token（目前只有 `search_stickers` 的 `sticker_ref`），只能交给对应消费 Tool 在边界校验后使用。`execute` 拒绝四个原语（`execute_primitive_rejected`）与未知能力（`unknown_capability`），也不会递归调用自己。
@@ -150,7 +148,7 @@ System Skills 是随 runtime 发布的只读文档包，位于 `src/system-resou
 
 每次模型请求都会附带完整的工具注册表（名称、label、描述与参数 Schema）。请求发出前把该请求实际附带的工具名写入 `model_calls.tools_json`，Invocation 的可用注册表快照（`name`/`label`/`description`）写入 `invocations.tool_registry_json`——因此可以审计“模型在某一轮到底看到了哪些工具”。context 接近上限时，Agent 循环只保留 `send` 和已经可用的 `zzz` 继续收尾。
 
-普通 Assistant Message 永不自动发布。模型不调用 `send` 即表示保持沉默，这在群聊中是正常成功结果。`agent.send_nudge_enabled` 开启时，若模型已草拟足够长的私有文本却未调用 `send`，harness 会在会话自然结束前注入一次 `steer` 提醒；提醒后仍不调用则静默放行，文本不出 Telegram。
+普通 Assistant Message 永不自动发布。模型不调用 `send` 即表示保持沉默，这在群聊中是正常成功结果。`agent.send_nudge_enabled` 开启时，若本轮没有 Tool Call、私有文本去除首尾空白后非空，且本次 Invocation 从未调用 `send`，harness 会在会话自然结束前至多注入一次 `steer` 提醒；提醒后仍不调用则静默放行，文本不出 Telegram。
 
 ## 睡眠
 
@@ -178,7 +176,7 @@ Agent 通过 `alarm` 能力（经 `execute.call` 调用）创建一个绑定当�
 
 ## send Tool
 
-`send` 是唯一 Telegram 输出边界，支持：
+`send` 是模型驱动的 Telegram 输出的唯一边界，支持以下形式；确定性的 Bot 命令回复不经过模型，见 [Bot Commands](#bot-commands)：
 
 - 文本默认按纯文本发送；显式设置 `parse_mode: "MarkdownV2"` 时由 Telegram 按 MarkdownV2 解析。只提供 `text`（以及可选的 `reply_to_message_id`）时，`kind` 默认为 `text`。
 - 配置允许且当前 capability 授权的 Sticker。
@@ -215,7 +213,7 @@ Tool 只返回文本、JSON、XML 或 JavaScript 响应，拒绝压缩和二进�
 
 ## `read_image`
 
-`read_image` 是经 `execute.call` 调用的内部能力。模型只能使用 Context 中展示的不透明 `image_ref`。多模态 Agent 只获得 Sticker 引用；text-only Agent 还会获得 Photo 与图片 Document 引用。Tool 不接受原始 Telegram file ID、任意 URL 或任意 Media ID。
+`read_image` 是经 `execute.call` 调用的内部能力。模型只能使用 Context 中展示的不透明 `image_ref`。多模态 Agent 获得 Sticker 与历史区段 Photo/图片 Document 的引用；新消息中的普通图片直传主模型，不再保留对应 `read_image` 引用。text-only Agent 获得所有可见区段中 Sticker、Photo 与图片 Document 的引用。Tool 不接受原始 Telegram file ID、任意 URL 或任意 Media ID。
 
 处理流程：
 

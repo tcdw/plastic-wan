@@ -128,10 +128,10 @@ command SecretRef：
 }
 ```
 
-判定收敛为一个条件：
+判定分两步：仅在活跃时段外，为有触发资格且命中 @、Reply 或关键词的新消息创建或刷新注意力窗口；再用更新后的窗口判断 participation 闸门是否放行。该闸门不替代 allowlist、暂停状态和消息触发资格检查。
 
 ```text
-开 Bucket = 未配置 participation || 处于活跃时段 || 该 Conversation 的注意力窗口未过期
+participation 放行 = 未配置 participation || 处于活跃时段 || 更新后的注意力窗口未过期
 ```
 
 - `participation` 可挂在 `telegram`（全局默认）与 `chats[]`（每 Chat）两处；两处都不配置时该 Chat 保持默认行为。
@@ -146,7 +146,7 @@ command SecretRef：
 - 被闸门拦下的消息照常入库并保留 Revision，只是不开 Bucket；它们会在下一次触发时作为 history 进入 Context，因此静默期不会丢上下文。
 - 私聊不受 `participation` 影响（即使配置了全局时段）；在正数 Chat ID（私聊）上显式写 `participation` 会被 `check-config` 拒绝。
 - `/pause` 优先于 `participation`：暂停期间既不建 Bucket 也不记录窗口。
-- `active_windows` 与 `trigger_keywords` **不设条数上限**：长度不改变语义，逐消息判定在启动期预计算（关键词小写化、时段转分钟数、按时区缓存 Formatter），成本与列表长度几乎无关。只有 `attention_window_seconds` 有上界，表达「永久活跃」应写 `00:00-24:00`。
+- `active_windows` 与 `trigger_keywords` **不设条数上限**。启动期会预编译时段、将关键词小写化，并复用时区 Formatter，减少重复解析；逐消息匹配仍遍历时段与关键词，成本随列表长度和消息文本长度增长。`attention_window_seconds` 有上界，表达「永久活跃」应写 `00:00-24:00`。
 - 修改后必须重启；窗口状态存在数据库里，跨重启保持。
 
 ## Sticker Set
@@ -223,11 +223,11 @@ command SecretRef：
 - Prompt 注释：`system_prompt_file` 与 `instructions_file` 中的 `<!-- ... -->` HTML 注释在加载时被剔除，可以写给人看的说明而不占模型上下文；注释可跨行，整行只有注释时该行一并消失。未闭合的 `<!--` 不构成注释，按原文保留；模板校验在剔除之后进行，因此注释里可以出现任意 `{{ ... }}` 文本。提示文件含 NUL 字符时拒绝加载。
 - 模板中的 `agent.provider` 与 `agent.model` 是当前 Invocation 实际使用的模型，因此 Admin Panel 或 `/model` 的运行时切换会反映到下一次会话；`vision.*` 始终来自配置。模板值只注入 Prompt，不会注入记忆；记忆内容按原文保留。
 - `max_concurrency`: 全局并行 running Invocation 上限；`max_turns`/`max_sends`/`timeout_seconds` 是单次 Invocation 的硬上限（历史上的 `max_tool_calls` 已移除，调用次数只做审计统计），`history_messages` 是注入 Context 的历史条数。
-- `context_stop_ratio`: 占满模型窗口的比例阈值，超过后停止继续 Tool 循环，避免下一轮超窗。
+- `context_stop_ratio`: 估算输入 Token 占模型窗口的比例达到该阈值后，进入收尾模式，只保留 `send` 和当时可用的 `zzz`，而不是立即停止 Tool 循环；估算输入加预留输出达到模型窗口时才按上下文限制终止。
 - `send_max_text_length`（可选，默认不限制）：`send` 工具文本消息的最大字符数。超出时 Tool Call 记为 `send_text_too_long` 错误，不消耗发送配额、不调用 Telegram；Sticker 不受影响。
 - `send_disallow_blank_lines`（可选，默认 `false`）：开启后，文本包含任何空行（两个换行符之间只有空格/Tab 也算空行）时 Tool Call 记为 `send_blank_lines` 错误，不消耗发送配额、不调用 Telegram；段落只能用单个换行分隔。Sticker 不受影响。
 - `memory_ttl_warning_days`（可选，默认 30）：Agent 记忆剩余寿命超过该天数时，Admin Panel 显示 warning，提示管理员判断保留、删除或提升进 `agents.md`。系统不禁止长 TTL。
-- `send_nudge_enabled`（可选，默认 `false`）：开启后，当 agent 即将自然停止、本轮未调用任何工具且产生了足够长的普通 Assistant 文本，又从未调用过 `send` 时，注入一条 harness 级 user 消息提醒其用 `send` 发送面向群聊的文本。每次 Invocation 至多触发一次；触发与提醒文本记录在 `agent_messages` 中，role 为 `harness_nudge`。用于稳定性不足、偶尔把回复写成私文本却忘记调用 `send` 的模型。
+- `send_nudge_enabled`（可选，默认 `false`）：开启后，当 agent 即将自然停止、本轮未调用任何工具且产生了去除首尾空白后非空的普通 Assistant 文本，又从未调用过 `send` 时，注入一条 harness 级 user 消息提醒其用 `send` 发送面向群聊的文本。每次 Invocation 至多触发一次；触发与提醒文本记录在 `agent_messages` 中，role 为 `harness_nudge`。用于稳定性不足、偶尔把回复写成私文本却忘记调用 `send` 的模型。
 - `thinking_level`: Provider 仍可能限制具体模型支持的级别，Schema 通过不代表模型接受。
 
 Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用目标模型在 provider 中声明的 `max_tokens`。Provider 注册的模型必须满足 `max_tokens ≤ context_window`，且 agent 模型必须支持 text。

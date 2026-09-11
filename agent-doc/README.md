@@ -6,8 +6,14 @@
 
 1. 先读 [`../AGENTS.md`](../AGENTS.md) 的项目约束与「Where to Look」。
 2. 根据任务只读取相关主题文档。
-3. 以当前源码、迁移和配置 Schema 为最终事实；设计文档用于理解范围与意图。
+3. 以当前源码、迁移和配置 Schema 为最终事实；默认排除 `design/`，读取条件见下节。
 4. 行为或运维契约改变时，同步更新对应主题文档和本索引。
+
+## 历史归档读取规则
+
+`design/` 下的文档全部作为历史资料归档，包括需求原文、设计记录和未落地计划。默认不读取、不检索，也不作为当前行为、约束或待办的依据。
+
+仅当用户明确指定参考其中某篇设计、按该设计实施，或要求追溯历史决策时，才按需读取。用户仅提出功能需求，不视为要求参考历史设计。文中的「请实现」「完成后」等执行指令不自动生效；实施前必须核对当前源码。该规则统一在父级入口维护，不在各篇历史文档重复声明。
 
 ## 快速入口
 
@@ -17,17 +23,15 @@
 | 修改 JSONC、Provider、Chat/Topic、Sticker Set 或 MCP | [configuration.md](configuration.md) |
 | 修改 SQLite、迁移、保留、备份或审计（含 durable internal context） | [data-layer.md](data-layer.md) |
 | 修改 Telegram 入库、调度、Context、Tool 或媒体 | [telegram-agent-flow.md](telegram-agent-flow.md) |
-| 实现/排查 Skills、`read`/`execute` 原语与内部能力注册表 | [telegram-agent-flow.md](telegram-agent-flow.md)、[design/20260903 Skills 机制设计计划](design/20260903%20塑料碗%20Skills%20机制设计计划.md) |
-| 实现/排查 Alarm 与 Deferred Invocation | [telegram-agent-flow.md](telegram-agent-flow.md)、[design/20260828 闹钟系统.md](design/20260828%20闹钟系统.md) |
+| 实现/排查 Skills、`read`/`execute` 原语与内部能力注册表 | [telegram-agent-flow.md](telegram-agent-flow.md#skills-与受控能力调用) |
+| 实现/排查 Alarm 与 Deferred Invocation | [telegram-agent-flow.md](telegram-agent-flow.md#alarm--deferred-invocation) |
 | 本地启动、安装媒体依赖、部署或排障 | [operations.md](operations.md) |
 | 修改 Admin Panel 认证、审计 API 或前端 | [admin-panel.md](admin-panel.md) |
 | 决定该运行哪些验证 | [verification.md](verification.md) |
-| 查 Phase 1 产品目标与验收范围 | [design/20260815 塑料碗 Telegram Bot 设计方案.md](design/20260815%20塑料碗%20Telegram%20Bot%20设计方案.md) |
-| 查原始技术设计、安全边界与状态机 | [design/20260815 塑料碗 Telegram Bot 技术设计.md](design/20260815%20塑料碗%20Telegram%20Bot%20技术设计.md) |
 
-## design/ 原文与计划
+## 历史资料索引（仅按明确请求读取）
 
-`design/` 保存需求原文、设计记录和尚未落地的计划，按日期排列。它**不描述当前行为**：已实现的部分以上表的主题文档为准，两者冲突时相信主题文档和源码；标注「未实现」的文档不能用来推断系统现在能做什么。
+以下索引仅供满足上述读取条件时定位资料；阶段状态不构成执行授权，也不能替代当前源码与主题文档。
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
@@ -43,6 +47,8 @@
 ## 文档边界
 
 - `AGENTS.md`：稳定入口、仓库规则、命令和主题目录。
-- 本目录正文：当前实现的可检索知识与故障处理。
-- `design/`：设计原文与尚未落地的计划，不是当前行为；不作为运行状态或版本号的动态记录。
+- 本目录正文：保留源码难以表达的决策理由、跨模块契约、例外与故障处理；完整注册表、表结构和依赖版本链接到源码，不维护数量或本地运行状态的副本。
+- 工具调用契约集中在 [telegram-agent-flow.md](telegram-agent-flow.md#skills-与受控能力调用)，架构页只解释分层与信任边界。
+- [operations.md](operations.md) 负责运行步骤、前置条件与排障；[verification.md](verification.md) 负责验证范围和通过标准。必要命令可以就地保留，其余重复内容用小节链接连接。
+- `design/`：历史资料，统一遵循上面的读取规则；不在各篇维护现状免责声明。
 - 测试：可执行行为契约；文档与测试冲突时，先核对源码和最近迁移，再修正文档或实现。

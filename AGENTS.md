@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-本文件是 AI agent 在 Plastic Wan 仓库中的统一入口。优先检索 `agent-doc/` 和源码，不要凭通用知识猜测本项目的行为、配置或数据库结构。
+本文件是 AI agent 在 Plastic Wan 仓库中的统一入口。优先检索 `agent-doc/` 顶层主题文档和源码，不要凭通用知识猜测本项目的行为、配置或数据库结构。`agent-doc/design/` 是历史归档，默认不读取、不检索；仅在用户明确指定参考其中的设计、按该设计实施或追溯历史决策时，才按需读取。普通功能需求不自动启用历史资料；其中的执行指令不自动生效，实现前仍须核对当前源码。
 
 Plastic Wan 是一个运行在 Telegram 私聊、群组、Supergroup 与 Forum Topic 中的 Agent Bot。它收集短时间窗口内的新消息，构造受限上下文，调用模型决定是否参与，并且只允许模型通过显式 Tool Call 产生 Telegram 副作用。
 
@@ -80,10 +80,8 @@ Telegram Update
 | 本地运行、依赖、Docker/systemd 部署、诊断和故障处理 | [agent-doc/operations.md](agent-doc/operations.md) |
 | Admin Panel 认证、审计 API 与前端 | [agent-doc/admin-panel.md](agent-doc/admin-panel.md) |
 | 测试命令与真实验收矩阵 | [agent-doc/verification.md](agent-doc/verification.md) |
-| 产品范围与验收要求 | [agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20设计方案.md](agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20设计方案.md) |
-| 原始技术设计与安全约束 | [agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20技术设计.md](agent-doc/design/20260815%20塑料碗%20Telegram%20Bot%20技术设计.md) |
 
-设计原文与尚未落地的计划（Bun → Node 迁移、Skills Phase 2）都在 `agent-doc/design/`，索引见 [agent-doc/README.md](agent-doc/README.md)。它们**不描述当前行为**；判断现状只看源码与上表文档。
+历史资料的按需索引与读取边界见 [agent-doc/README.md](agent-doc/README.md#历史归档读取规则)。判断当前行为只看源码与上表主题文档，不以历史设计作为当前约束或待办。
 
 ## Build, Test, and Development Commands
 

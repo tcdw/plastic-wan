@@ -186,6 +186,7 @@ export function purgeExpiredData(orm: Orm, config: RawConfig, now = new Date()):
   orm.transaction(
     () => {
       orm.run(sql`DELETE FROM memories WHERE expires_at <= ${now.toISOString()}`);
+      orm.run(sql`DELETE FROM conversation_attention WHERE expires_at <= ${now.toISOString()}`);
       orm.run(sql`DELETE FROM telegram_updates WHERE received_at < ${cutoff}`);
       orm.run(sql`
       DELETE FROM telegram_sends

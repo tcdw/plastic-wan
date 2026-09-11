@@ -52,6 +52,7 @@ plasticwan/
 Telegram Update
   → allowlist/topic 校验
   → SQLite 消息与 Revision 入库
+  → 参与闸门（活跃时段 / 注意力窗口）
   → 配置长度 Bucket
   → Invocation 快照
   → ContextBuilder
@@ -59,6 +60,8 @@ Telegram Update
   → send Tool
   → Telegram API
 ```
+
+群聊参与可由 `telegram.participation` 与 `chats[].participation` 收窄：配置了时段后，时段外只有直接 @、Reply Bot 自己发过的消息或命中触发关键词的消息才会开 Bucket，命中后该 Conversation 进入可配置长度的注意力窗口；私聊与未配置的群保持「任何可触发消息都开会话」的默认行为。
 
 媒体与 MCP 都在 Tool 边界内：模型只能读取当前 Invocation 授权的媒体引用；MCP Tool 经过 allowlist、只读策略、请求/响应大小限制、超时和审计。工具面分三层——runtime 原语（`read`/`send`/`execute`/`zzz`）直接暴露；内部能力（`web_fetch`、`search_stickers`、`read_image`、记忆与闹钟 8 个 Tool）经 `execute` 的 search/help/call 调用；MCP Tool 直接暴露。System Skills（`src/system-resources/skills/`）是只读文档包，system prompt 只注入索引，正文由模型用 `read` 按需加载。记忆按 Conversation 隔离，由模型通过 `add_memory`/`delete_memory` 能力维护，TTL 到期自动清理；`agents.md` 才是经过人工审核的长期知识。
 

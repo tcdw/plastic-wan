@@ -2,7 +2,9 @@ import type { Message } from 'grammy/types';
 import { and, eq, sql } from 'drizzle-orm';
 import { isBotAdmin } from '../store/admins.ts';
 import type { RawConfig } from '../platform/config.ts';
+import { isWithinActiveWindows } from '../platform/participation.ts';
 import { type SqliteStore, isChatPaused, resolveChatConfig } from '../store/database.ts';
+import { ParticipationRegistry, chatAttentionUntil } from '../store/participation.ts';
 import type { AgentModelOption, AgentModelSwitcher } from '../platform/model-switch.ts';
 import type { BucketScheduler } from './scheduler.ts';
 import { readDailyTokenBudget } from '../store/sleep.ts';
@@ -90,12 +92,14 @@ export class BotCommandService {
   readonly #config: RawConfig;
   readonly #scheduler: BucketScheduler;
   readonly #modelSwitcher: AgentModelSwitcher | undefined;
+  readonly #participation: ParticipationRegistry;
 
   constructor(store: SqliteStore, config: RawConfig, scheduler: BucketScheduler, modelSwitcher?: AgentModelSwitcher) {
     this.#store = store;
     this.#config = config;
     this.#scheduler = scheduler;
     this.#modelSwitcher = modelSwitcher;
+    this.#participation = new ParticipationRegistry(config);
   }
 
   run(command: ParsedCommand, telegramChatId: bigint, sender: CommandSender | null, now = new Date()): string {
@@ -316,8 +320,35 @@ export class BotCommandService {
     ];
     if (paused) {
       lines.push('互动: 已暂停');
+      return lines.join('\n');
+    }
+    const participation = this.#participationLine(telegramChatId, chatId, now);
+    if (participation !== null) {
+      lines.push(participation);
     }
     return lines.join('\n');
+  }
+
+  // Only chats with a configured schedule report a participation line, so chats
+  // that always participate keep the previous `/status` layout.
+  #participationLine(telegramChatId: bigint, chatId: bigint | null, now: Date): string | null {
+    const chat = this.#store.orm
+      .select({ type: chats.type })
+      .from(chats)
+      .where(eq(chats.telegramChatId, telegramChatId))
+      .get();
+    if (chat === undefined) {
+      return null;
+    }
+    const rule = this.#participation.ruleFor(this.#store.orm, telegramChatId, chat.type);
+    if (rule === undefined) {
+      return null;
+    }
+    if (isWithinActiveWindows(rule, now)) {
+      return '互动: 活跃时段内';
+    }
+    const until = chatId === null ? null : chatAttentionUntil(this.#store.orm, chatId, now);
+    return until === null ? '互动: 静默（仅 @、Reply 或关键词触发）' : `互动: 注意力窗口至 ${until}`;
   }
 
   #internalChatId(telegramChatId: bigint): bigint | null {

@@ -92,11 +92,61 @@ command SecretRef：
 - 未配置 `topic_ids`：允许该 Chat 的普通消息与所有 Topic。
 - 配置 `topic_ids`：只允许列出的正整数 Topic ID；未列出的 Topic 被审计为拒绝。
 - Forum Topic 按 `(chat_id, message_thread_id)` 隔离 Conversation。
+- `participation`（可选）配置此 Chat 的定时活跃时段、触发关键词与注意力窗口，见「定时活跃（participation）」。
 - `ignored_user_ids`（可选）是此 Chat 内要忽略的 Telegram User ID 数组；必须是唯一的正安全整数。匹配 `message.from.id` 的新消息和编辑只保留 Update 审计，不写入 Message、Revision、Media 或 Bucket，不能作为命令触发，也不会进入实时或启动追赶 Invocation 的 Context。其他成员消息中若 Reply 快照指向被忽略用户，该引用同样不保存。该字段不匹配 `sender_chat` 身份，修改后必须重启；已入库的旧消息不会追溯删除。
 - `instructions_file`（可选）指向该 Chat 的附加系统提示 Markdown 文件，缺省时为空；提示内容不提供额外授权。
 - 修改 Chat 后重启，并比较 `check-config` 与 `serve_started` 的 `config_hash`。
 - Chat 没有每日 Invocation 次数上限，也不设 Token 硬上限；Token 只按 Chat 归属统计，唯一硬上限是全局 `agent.daily_budget.max_tokens`。
 - `admins`（可选）是 Telegram User ID 数组，作为 Bot 管理员 seed 到 `bot_admins`；只有管理员能执行 `/pause`、`/resume`、`/model`、`/cut_topic`。
+
+## 定时活跃（participation）
+
+默认情况下，任何可触发消息都会开 Bucket 并启动 Agent 会话。`participation` 让管理员把群聊改成「按时间表活跃」：时段内行为与默认完全一致，时段外只有命中触发的消息才能唤醒会话。
+
+```jsonc
+{
+  "telegram": {
+    "participation": {
+      "active_windows": [
+        { "start": "09:00", "end": "12:00" },
+        { "start": "20:00", "end": "01:00", "days": [5, 6, 7] },
+      ],
+      "trigger_keywords": ["塑料碗", "wan"],
+      "attention_window_seconds": 300,
+    },
+    "chats": [
+      {
+        "id": -1001234567890,
+        "participation": {
+          "active_windows": [{ "start": "00:00", "end": "24:00" }],
+          "trigger_keywords": ["运维"],
+        },
+      },
+    ],
+  },
+}
+```
+
+判定收敛为一个条件：
+
+```text
+开 Bucket = 未配置 participation || 处于活跃时段 || 该 Conversation 的注意力窗口未过期
+```
+
+- `participation` 可挂在 `telegram`（全局默认）与 `chats[]`（每 Chat）两处；两处都不配置时该 Chat 保持默认行为。
+- `active_windows`（可选）：每天重复的活跃时段。`start` 与 `end` 是 `HH:MM` 本地时间，`end` 额外允许 `24:00`；`end` 小于 `start` 表示跨午夜并归属开始日（`23:00-01:00` 配 `days: [5]` 覆盖周五 23:00 到周六 01:00）；`days`（可选）为 ISO 星期 `1`–`7`，1 是周一，省略表示每天。判定是半开区间 `[start, end)`。
+- 时段按 Chat 时区解释：`chats[].timezone`，缺省用顶层 `timezone`。
+- **每群覆盖全局**：`chats[].participation.active_windows` 存在即整体替换全局值；`[]` 表示该 Chat 没有时段，只能靠触发唤醒。
+- `trigger_keywords`（可选）：**每群追加**到全局列表；匹配消息的 `text` 与 `caption`，大小写不敏感。`[]` 表示没有关键词触发。
+- `attention_window_seconds`（可选，默认 300）：命中后窗口的长度；同样每群覆盖全局。
+- 时段外只有三类消息能开 Bucket：直接 @ Bot、Reply Bot 自己发过的消息、命中 `trigger_keywords`。任意一类命中都会把该 Conversation 推进注意力窗口，窗口内再次命中则重置计时，窗口内该 Conversation 与时段内一样始终触发。
+- 窗口只在时段外维护：时段结束时立即回到静默，时段末尾的一次 @ 不会延续到时段之后。
+- 粒度是 Conversation（Chat + Forum Topic）：时段是 Chat 级，窗口只覆盖命中发生的那个 Topic。
+- 被闸门拦下的消息照常入库并保留 Revision，只是不开 Bucket；它们会在下一次触发时作为 history 进入 Context，因此静默期不会丢上下文。
+- 私聊不受 `participation` 影响（即使配置了全局时段）；在正数 Chat ID（私聊）上显式写 `participation` 会被 `check-config` 拒绝。
+- `/pause` 优先于 `participation`：暂停期间既不建 Bucket 也不记录窗口。
+- `active_windows` 与 `trigger_keywords` **不设条数上限**：长度不改变语义，逐消息判定在启动期预计算（关键词小写化、时段转分钟数、按时区缓存 Formatter），成本与列表长度几乎无关。只有 `attention_window_seconds` 有上界，表达「永久活跃」应写 `00:00-24:00`。
+- 修改后必须重启；窗口状态存在数据库里，跨重启保持。
 
 ## Sticker Set
 

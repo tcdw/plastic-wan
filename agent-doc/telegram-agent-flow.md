@@ -19,6 +19,7 @@
 5. 消息是否来自 Bot/Service，以及 `process_bot_messages` 是否允许。
 6. 单独的人类 Sticker 是否允许按 `sticker_trigger_enabled` 创建 Bucket；该开关默认关闭。
 7. Message/Edited Message 结构是否可归一化。
+8. 配置了 `participation` 的 Chat 在活跃时段外是否被这类消息命中触发，见「定时活跃与注意力窗口」。
 
 拒绝的 Update 不进入 Bucket，但保留稳定 `rejection_reason`，例如 `chat_not_allowed`、`topic_not_allowed`。允许 Chat 内被 `ignored_user_ids` 命中的用户消息仍保留 Update 审计，但在 Message、命令和 Bucket 边界之前直接丢弃；其文本、媒体及后续编辑不会进入实时或启动追赶 Context，其他成员回复该用户时也不保存对应 Reply 快照。该过滤只匹配 Telegram user，不匹配 `sender_chat`，且不追溯删除配置生效前已入库的历史。排查 allowlist 时同时比较配置哈希；配置不会热重载。
 
@@ -77,6 +78,27 @@ first session      = T + telegram.bucket_window_seconds
 6. 到达启动时间后，Scheduler 冻结 `history` 与 `new` 快照并创建 Invocation。
 
 因此，如果 Agent 会话耗时为 0 且群友持续发送消息，会话开始时间固定相隔 `bucket_window_seconds`，与该群有多少活跃 Topic 无关。Bot 自己通过 `send` 产生的消息写入可见历史，但不会触发下一 Bucket。
+
+配置了 `participation` 时，「可触发消息」还要先通过下一节的闸门。
+
+## 定时活跃与注意力窗口
+
+配置了 `telegram.participation` 或 `chats[].participation` 的群聊不再无条件开 Bucket。判定收敛成一个条件：
+
+```text
+开 Bucket = 未配置 participation || 处于活跃时段 || 该 Conversation 的注意力窗口未过期
+```
+
+- **活跃时段**（`active_windows`）按 Chat 时区解释，是半开区间 `[start, end)`；`end < start` 表示跨午夜并归属开始日，`end = "24:00"` 表示到当日结束。时段内行为与未配置时完全一致。
+- **触发**只有三类：直接 @ Bot、Reply Bot 自己发过的消息（判定原始 Update 的 `reply_to_message.from.id`）、命中 `trigger_keywords`（`text` 与 `caption`，大小写不敏感）。优先级是 mention → reply → keyword，只影响记录下来的 `trigger_kind`，不影响是否放行。
+- 命中的消息先写入或刷新 `conversation_attention`（`expires_at = receivedAt + attention_window_seconds`）再判定，因此命中消息自身一定被放行，实时入库与启动追赶不可能得出相反的结论。
+- 窗口按 Conversation（Chat + Forum Topic）隔离；时段按 Chat 生效，时段内该群所有 Topic 都活跃。
+- 只有能开 Bucket 的消息才能开窗口：`sticker_trigger_enabled = false` 时的单独 Sticker 既不开 Bucket 也不刷新窗口。
+- 编辑消息不触发、不刷新窗口、不开 Bucket，但仍写入 Revision，并在后续 Invocation 中作为 history 出现。
+- 闸门只阻止**创建** Bucket：已有 `collecting` Bucket 时，被抑制的消息仍按原逻辑追加进去。被拦下的消息照常写入 `messages`、`message_revisions` 与 `media`。
+- 命中时打印 `agent_attention_triggered`（`chat_id`、`conversation_id`、`trigger_kind`、`telegram_message_id`、`expires_at`）；被抑制的消息不打印，避免静默期每条消息一行。
+- 私聊永不受闸门影响；`/pause` 优先（暂停期间既不建 Bucket 也不记窗口）；Alarm 的排期 Invocation 不受影响。
+- 启动追赶同样过闸门：追赶 Bucket 只在处于时段内或窗口未过期时创建，否则记为 `skipped_budget`/`participation_gated`。追赶期间收到的命中消息同样会刷新窗口，因此停机期间被 @ 不会丢。
 
 ## Context
 
@@ -247,7 +269,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 暂停期间消息仍入库并保留 Revision，但不创建 Bucket、不启动会话；`processDue` 与启动追赶也会跳过暂停 Chat（追赶 Bucket 记 `skipped_budget`/`chat_paused`）。`/resume` 删除 `chat_pause` 行，恢复正常节拍。
 
-`/status` 返回当前生效的 `agent.provider` / `agent.model`（含 Admin Panel 热切换后的运行时模型）、`agent.thinking_level`、本 Chat 的当日 `model_tokens` 用量，以及全局当日用量、`agent.daily_budget.max_tokens` 上限与四舍五入到两位小数的用量百分比；所有 token 数量使用千位分隔符。并按该 Chat 的 Model Call 审计拆分显示 `read`、`write`、`cache read`、`cache write` token。日期口径均为 UTC；暂停中额外显示一行。
+`/status` 返回当前生效的 `agent.provider` / `agent.model`（含 Admin Panel 热切换后的运行时模型）、`agent.thinking_level`、本 Chat 的当日 `model_tokens` 用量，以及全局当日用量、`agent.daily_budget.max_tokens` 上限与四舍五入到两位小数的用量百分比；所有 token 数量使用千位分隔符。并按该 Chat 的 Model Call 审计拆分显示 `read`、`write`、`cache read`、`cache write` token。日期口径均为 UTC；暂停中额外显示一行。配置了 `participation` 的 Chat 再多一行互动状态：`互动: 活跃时段内`、`互动: 注意力窗口至 <UTC ISO>` 或 `互动: 静默（仅 @、Reply 或关键词触发）`；暂停时只显示 `互动: 已暂停`。
 
 `/cut_topic` 仅对 Bot 管理员开放，用于在群聊上下文被旧话题污染时手动切断历史：
 

@@ -40,7 +40,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 ## 表组
 
-31 张表的列定义见 [src/store/schema.ts](../src/store/schema.ts) 与 `src/store/migrations/`，表名本身基本自解释。下面只记录 schema 读不出来的语义。
+32 张表的列定义见 [src/store/schema.ts](../src/store/schema.ts) 与 `src/store/migrations/`，表名本身基本自解释。下面只记录 schema 读不出来的语义。
 
 ### 冻结与重放边界
 
@@ -62,6 +62,10 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 - `content` 硬限制 150 字符（SQLite `CHECK` 兜底；Tool Schema 与 Admin API 先校验）。
 - `expires_at` 由 `created_at + ttl_seconds` 决定，默认 TTL 1 天；过期行在每次写操作机会性清除，`purgeExpiredData` 也会清除。
 - 系统不禁止长 TTL；剩余寿命超过 `agent.memory_ttl_warning_days`（默认 30 天）的记忆在 Admin Panel 显示 warning，由管理员决定保留、删除或提升进 `agents.md`。
+
+### 注意力窗口
+
+`conversation_attention` 每个 Conversation 至多一行，记录 `expires_at`、命中的 `trigger_kind`（`mention`/`reply_to_bot`/`keyword`）与触发消息的 Telegram message ID。它只回答「这个会话现在算不算活跃」：行过期即无意义，读路径只比较 `expires_at > now` 且从不惰性删除，清理交给 `purgeExpiredData`。窗口要跨进程重启保持，因此放在 SQLite 而不是内存。
 
 ### 工具可见性审计
 
@@ -95,6 +99,7 @@ Admin 侧的 `admin_users`/`admin_sessions`/`bot_admins` 语义见 [admin-panel.
 `backup` 在备份前调用 `purgeExpiredData`。清理仅删除已完成终态和不再被活跃引用的数据：
 
 - 已过期的 `memories`（按自身 TTL，不参与 30 天在线窗口）。
+- 已过期的 `conversation_attention` 注意力窗口行（窗口过期即无意义，不参与 30 天在线窗口）。
 - 过期 Telegram Update 与终态 Invocation/Send/Bucket。
 - 不再被 Invocation/Bucket 引用的旧 Message。
 - 仍被快照引用的旧 Message 保留身份，但匿名化 Revision 文本、Sender、Reply/Forward 和 Service 内容。

@@ -3,6 +3,7 @@ import type { Message, Update } from 'grammy/types';
 import { type ParsedCommand, parseBotCommand } from '../orchestration/bot-commands.ts';
 import type { RawConfig } from '../platform/config.ts';
 import { asRunResult, isChatPaused, resolveChatConfig, type SqliteStore } from '../store/database.ts';
+import { ParticipationRegistry, evaluateParticipation } from '../store/participation.ts';
 import {
   bucketMessages,
   buckets,
@@ -51,6 +52,7 @@ const MAX_IMAGE_DOCUMENT_BYTES = 20 * 1024 * 1024;
 interface StoredMessage {
   readonly id: bigint;
   readonly revisionId: bigint;
+  readonly conversationId: bigint;
   readonly eligibleHuman: boolean;
   readonly companionOnly: boolean;
 }
@@ -64,6 +66,7 @@ export interface IngestResult {
 export class TelegramIngestion {
   readonly #store: SqliteStore;
   readonly #config: RawConfig;
+  readonly #participation: ParticipationRegistry;
   readonly #allowedChats = new Map<string, ReadonlySet<bigint> | undefined>();
   readonly #botId: bigint;
   readonly #botUsername: string | null;
@@ -73,6 +76,7 @@ export class TelegramIngestion {
     this.#config = config;
     this.#botId = BigInt(bot.id);
     this.#botUsername = bot.username ?? null;
+    this.#participation = new ParticipationRegistry(config);
     for (const chat of config.telegram.chats) {
       this.#allowedChats.set(
         String(chat.id),
@@ -158,8 +162,23 @@ export class TelegramIngestion {
       return {};
     }
     let bucketId: bigint | undefined;
-    if (!edited && schedule) {
-      bucketId = this.#appendToBucket(internalChatId, threadId, stored, receivedAt);
+    if (!edited) {
+      // The window is refreshed even during startup catch-up, so a mention that
+      // arrived while the process was down still leaves the chat awake.
+      const decision = evaluateParticipation({
+        orm: this.#store.orm,
+        rule: this.#participation.ruleFor(this.#store.orm, chatId, chat.type),
+        chatId: internalChatId,
+        telegramChatId: chatId,
+        conversationId: stored.conversationId,
+        message,
+        bot: { id: this.#botId, username: this.#botUsername },
+        receivedAt,
+        eligibleHuman: stored.eligibleHuman,
+      });
+      if (schedule) {
+        bucketId = this.#appendToBucket(internalChatId, threadId, stored, receivedAt, decision.bucketCreationAllowed);
+      }
     }
     return {
       messageId: stored.id,
@@ -339,6 +358,7 @@ export class TelegramIngestion {
     return {
       id: messageId,
       revisionId,
+      conversationId,
       eligibleHuman,
       companionOnly: !eligibleHuman,
     };
@@ -417,7 +437,13 @@ export class TelegramIngestion {
     return row.id;
   }
 
-  #appendToBucket(chatId: bigint, threadId: bigint, message: StoredMessage, receivedAt: Date): bigint | undefined {
+  #appendToBucket(
+    chatId: bigint,
+    threadId: bigint,
+    message: StoredMessage,
+    receivedAt: Date,
+    participationAllowed: boolean,
+  ): bigint | undefined {
     if (isChatPaused(this.#store.orm, chatId)) {
       return undefined;
     }
@@ -440,6 +466,12 @@ export class TelegramIngestion {
     let bucketId = collecting?.id;
     if (bucketId === undefined) {
       if (!message.eligibleHuman) {
+        return undefined;
+      }
+      // Participation gate: outside the chat's active periods and attention
+      // window a quiet conversation keeps storing messages but opens no bucket,
+      // so they only reach the model as history of a later triggered session.
+      if (!participationAllowed) {
         return undefined;
       }
       const now = receivedAt.toISOString();

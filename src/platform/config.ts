@@ -68,6 +68,29 @@ const CustomProviderSchema = Type.Object(
   },
   Strict,
 );
+// Local wall-clock times, resolved against the chat's timezone. `24:00` is the
+// end of the day, so `00:00-24:00` covers a full day.
+const ParticipationWindowSchema = Type.Object(
+  {
+    start: Type.String({ pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }),
+    end: Type.String({ pattern: '^(([01][0-9]|2[0-3]):[0-5][0-9]|24:00)$' }),
+    days: Type.Optional(Type.Array(Type.Integer({ minimum: 1, maximum: 7 }), { minItems: 1, uniqueItems: true })),
+  },
+  Strict,
+);
+// `active_windows` and `trigger_keywords` are admin-authored lists whose length
+// carries no behavioral meaning, so they stay unbounded like every other list in
+// this file. An empty list is meaningful: no scheduled periods means the chat is
+// reachable only through a trigger, and no keywords means only mentions and
+// replies trigger it.
+const ParticipationSchema = Type.Object(
+  {
+    active_windows: Type.Optional(Type.Array(ParticipationWindowSchema)),
+    trigger_keywords: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true })),
+    attention_window_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 86_400 })),
+  },
+  Strict,
+);
 const ChatSchema = Type.Object(
   {
     id: Type.Integer(),
@@ -75,6 +98,7 @@ const ChatSchema = Type.Object(
     ignored_user_ids: Type.Optional(Type.Array(PositiveInteger, { uniqueItems: true })),
     timezone: Type.Optional(Type.String({ minLength: 1 })),
     instructions_file: Type.Optional(Type.String({ minLength: 1 })),
+    participation: Type.Optional(ParticipationSchema),
   },
   Strict,
 );
@@ -144,6 +168,7 @@ export const ConfigSchema = Type.Object(
         process_bot_messages: Type.Boolean(),
         sticker_trigger_enabled: Type.Optional(Type.Boolean()),
         bucket_window_seconds: Type.Integer({ minimum: 0, maximum: 300 }),
+        participation: Type.Optional(ParticipationSchema),
         chats: Type.Array(ChatSchema, { minItems: 1 }),
         admins: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }), { uniqueItems: true })),
         sticker_sets: Type.Optional(Type.Array(StickerSetSchema)),
@@ -208,6 +233,8 @@ export const ConfigSchema = Type.Object(
 export type SecretRef = Static<typeof SecretRefSchema>;
 export type FileConfig = Static<typeof ConfigSchema>;
 export type FileChat = FileConfig['telegram']['chats'][number];
+export type ParticipationConfig = Static<typeof ParticipationSchema>;
+export type ParticipationWindowConfig = Static<typeof ParticipationWindowSchema>;
 export type RawConfig = Omit<FileConfig, 'agent' | 'telegram'> & {
   agent: Omit<FileConfig['agent'], 'system_prompt_file'> & { system_prompt: string };
   telegram: Omit<FileConfig['telegram'], 'chats'> & {
@@ -323,6 +350,7 @@ export async function assertConfigPermissions(configPath: string): Promise<void>
 
 function validateSemantics(config: FileConfig): void {
   validateTimezone(config.timezone, 'timezone');
+  validateParticipation(config.telegram.participation, 'telegram.participation');
   const chatIds = new Set<number>();
   for (const chat of config.telegram.chats) {
     if (!Number.isSafeInteger(chat.id) || chat.id === 0) {
@@ -332,6 +360,12 @@ function validateSemantics(config: FileConfig): void {
       throw new Error(`Duplicate Telegram chat ID: ${chat.id}`);
     }
     chatIds.add(chat.id);
+    if (chat.participation !== undefined) {
+      if (chat.id > 0) {
+        throw new Error(`Chat ${chat.id} is a private chat and cannot configure participation`);
+      }
+      validateParticipation(chat.participation, `chat ${chat.id} participation`);
+    }
     if (chat.timezone !== undefined) {
       validateTimezone(chat.timezone, `chat ${chat.id} timezone`);
     }
@@ -442,6 +476,16 @@ function validateEndpoint(value: string, label: string, options: { allowQuery?: 
   ) {
     const forbiddenParts = options.allowQuery ? 'credentials or fragment' : 'credentials, query, or fragment';
     throw new Error(`${label} must be an HTTP(S) URL without ${forbiddenParts}`);
+  }
+}
+
+// A zero-length window can never match, so it is a configuration mistake
+// rather than a quiet way to disable one entry.
+function validateParticipation(participation: ParticipationConfig | undefined, label: string): void {
+  for (const window of participation?.active_windows ?? []) {
+    if (window.start === window.end) {
+      throw new Error(`${label} has an empty active window: ${window.start}-${window.end}`);
+    }
   }
 }
 

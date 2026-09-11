@@ -580,6 +580,29 @@ export const chatContextCutoffs = sqliteTable('chat_context_cutoffs', {
   updatedAt: text('updated_at').notNull(),
 });
 
+/**
+ * Post-trigger attention window, at most one row per conversation. While
+ * `expiresAt` is in the future the conversation keeps starting invocations
+ * even though its chat is outside every scheduled active period.
+ */
+export const conversationAttention = sqliteTable(
+  'conversation_attention',
+  {
+    conversationId: sqliteBigIntId('conversation_id')
+      .primaryKey()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    expiresAt: text('expires_at').notNull(),
+    triggeredAt: text('triggered_at').notNull(),
+    triggerKind: text('trigger_kind').notNull(),
+    triggerTelegramMessageId: sqliteBigInt('trigger_telegram_message_id'),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [
+    check('conversation_attention_trigger_kind_check', sql`trigger_kind IN ('mention', 'reply_to_bot', 'keyword')`),
+    index('conversation_attention_expiry_idx').on(t.expiresAt),
+  ],
+);
+
 export const alarms = sqliteTable(
   'alarms',
   {

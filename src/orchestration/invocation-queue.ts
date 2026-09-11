@@ -3,6 +3,7 @@ import { AGENT_PROMPT_VERSION } from '../platform/agent-protocol.ts';
 import type { RawConfig } from '../platform/config.ts';
 import { type SqliteStore, asRunResult, isChatPaused, resolveChatConfig } from '../store/database.ts';
 import { snapshotInvocation } from '../store/invocation-snapshot.ts';
+import { ParticipationRegistry, isConversationActive } from '../store/participation.ts';
 import { activeSleepUntil } from '../store/sleep.ts';
 import { alarms, appState, bucketMessages, buckets, invocations } from '../store/schema.ts';
 
@@ -31,6 +32,7 @@ interface StartupMessageRow {
   readonly conversation_id: bigint;
   readonly chat_id: bigint;
   readonly telegram_chat_id: bigint;
+  readonly chat_type: string;
   readonly telegram_message_id: bigint;
   readonly telegram_date: string;
 }
@@ -53,11 +55,13 @@ export class InvocationQueueService {
   readonly #store: SqliteStore;
   readonly #config: RawConfig;
   readonly #configHash: string;
+  readonly #participation: ParticipationRegistry;
 
   constructor(store: SqliteStore, config: RawConfig, configHash: string) {
     this.#store = store;
     this.#config = config;
     this.#configHash = configHash;
+    this.#participation = new ParticipationRegistry(config);
   }
 
   recover(now = new Date()): void {
@@ -131,7 +135,7 @@ export class InvocationQueueService {
       }
       const selected = this.#store.orm.all<StartupMessageRow>(
         sql`WITH session_messages AS (
-           SELECT m.id, m.conversation_id, m.chat_id, c.telegram_chat_id,
+           SELECT m.id, m.conversation_id, m.chat_id, c.telegram_chat_id, c.type AS chat_type,
                   m.telegram_message_id, m.telegram_date,
                   CASE WHEN r.kind <> 'service' AND COALESCE(s.is_bot, 0) = 0
                             AND (r.kind <> 'sticker' OR r.text IS NOT NULL OR r.caption IS NOT NULL
@@ -150,7 +154,7 @@ export class InvocationQueueService {
            FROM session_messages
            WHERE chat_id IN (SELECT chat_id FROM session_messages WHERE eligible_human = 1)
          )
-         SELECT id, conversation_id, chat_id, telegram_chat_id, telegram_message_id, telegram_date
+         SELECT id, conversation_id, chat_id, telegram_chat_id, chat_type, telegram_message_id, telegram_date
          FROM ranked
          WHERE message_rank <= ${BigInt(this.#config.agent.history_messages)}
          ORDER BY chat_id, telegram_date, telegram_message_id`,
@@ -179,7 +183,9 @@ export class InvocationQueueService {
               ? 'chat_paused'
               : sleepUntil !== null
                 ? 'sleeping'
-                : undefined;
+                : this.#participationBlocks(latest, now)
+                  ? 'participation_gated'
+                  : undefined;
         const created =
           skipReason === undefined
             ? this.#store.orm
@@ -364,6 +370,13 @@ export class InvocationQueueService {
       return 'topic_removed';
     }
     return undefined;
+  }
+
+  // A chat outside its active periods only receives a catch-up bucket when a
+  // mention, reply, or keyword hit already refreshed its attention window.
+  #participationBlocks(message: StartupMessageRow, now: Date): boolean {
+    const rule = this.#participation.ruleFor(this.#store.orm, message.telegram_chat_id, message.chat_type);
+    return rule !== undefined && !isConversationActive(this.#store.orm, rule, message.conversation_id, now);
   }
 
   #chatRunning(chatId: bigint): boolean {

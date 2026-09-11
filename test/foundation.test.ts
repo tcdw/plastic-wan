@@ -225,6 +225,54 @@ describe('configuration', () => {
     await Bun.write(configPath, '{ "version": 1,, }');
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid JSONC');
   });
+
+  test('strips HTML comments from prompt files', async () => {
+    const { directory, configPath } = await fixture();
+    await writeTestConfig(
+      directory,
+      configPath,
+      testConfigJsonc(directory),
+      '# Persona\n<!-- Why this rule exists: operators read the file too -->\nStay kind.\n',
+      'private<!-- and keep quiet -->',
+    );
+    const loaded = await loadConfig(configPath);
+    expect(loaded.config.agent.system_prompt).toBe('# Persona\nStay kind.\n');
+    expect(loaded.config.telegram.chats[0]?.instructions).toBe('private');
+  });
+
+  test('ignores template expressions inside prompt annotations', async () => {
+    const { directory, configPath } = await fixture();
+    await writeTestConfig(
+      directory,
+      configPath,
+      testConfigJsonc(directory),
+      'You run as {{ agent.model }}.<!-- {{ agent.api_key }} is an annotation, not a template -->',
+    );
+    const loaded = await loadConfig(configPath);
+    expect(loaded.config.agent.system_prompt).toBe('You run as {{ agent.model }}.');
+  });
+
+  test('a comment-only prompt edit still changes the config hash', async () => {
+    const { directory, configPath } = await fixture();
+    await writeTestConfig(directory, configPath, testConfigJsonc(directory), '# Persona\nStay kind.\n');
+    const plain = await loadConfig(configPath);
+    await writeTestConfig(directory, configPath, testConfigJsonc(directory), '# Persona\n<!-- note -->\nStay kind.\n');
+    const annotated = await loadConfig(configPath);
+    expect(annotated.config.agent.system_prompt).toBe(plain.config.agent.system_prompt);
+    expect(annotated.hash).not.toBe(plain.hash);
+  });
+
+  test('rejects a system prompt that holds nothing but annotations', async () => {
+    const { directory, configPath } = await fixture();
+    await writeTestConfig(directory, configPath, testConfigJsonc(directory), '<!-- TODO: write the persona -->\n');
+    await expect(loadConfig(configPath)).rejects.toThrow('is empty or contains only HTML comments');
+  });
+
+  test('rejects a prompt file containing a NUL character', async () => {
+    const { directory, configPath } = await fixture();
+    await writeTestConfig(directory, configPath, testConfigJsonc(directory), 'Persona\u0000here');
+    await expect(loadConfig(configPath)).rejects.toThrow('contains a NUL character');
+  });
 });
 
 describe('secrets', () => {

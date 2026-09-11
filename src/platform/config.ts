@@ -3,6 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
+import { stripHtmlComments } from './prompt-markdown.ts';
 import { validatePromptTemplate } from './prompt-template.ts';
 
 const Strict = { additionalProperties: false } as const;
@@ -295,7 +296,9 @@ async function resolvePrompts(
     promptFiles,
   );
   if (systemPrompt.length === 0) {
-    throw new Error(`agent.system_prompt_file is empty: ${fileConfig.agent.system_prompt_file}`);
+    throw new Error(
+      `agent.system_prompt_file is empty or contains only HTML comments: ${fileConfig.agent.system_prompt_file}`,
+    );
   }
   validatePromptTemplate(systemPrompt, 'agent.system_prompt_file');
   const chats: Array<Omit<FileChat, 'instructions_file'> & { instructions: string }> = [];
@@ -324,14 +327,19 @@ async function resolvePrompts(
 }
 
 async function readPromptFile(path: string, label: string, sink: PromptFile[]): Promise<string> {
-  let content: string;
+  let raw: string;
   try {
-    content = await Bun.file(path).text();
+    raw = await Bun.file(path).text();
   } catch (error) {
     throw new Error(`Cannot read ${label} file ${path}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  sink.push({ content });
-  return content;
+  if (raw.includes('\u0000')) {
+    throw new Error(`${label} file ${path} contains a NUL character`);
+  }
+  // The hash keeps covering the raw file, so a comment-only edit still changes
+  // config_hash; the prompt itself sees only the text outside HTML comments.
+  sink.push({ content: raw });
+  return stripHtmlComments(raw);
 }
 
 export async function assertConfigPermissions(configPath: string): Promise<void> {

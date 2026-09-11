@@ -36,7 +36,7 @@ bun test test/prompt-template.test.ts test/tui-configure.test.ts
 | `telegram-ingestion.test.ts` | allowlist、Revision、Bot/Service、Topic 隔离 |
 | `startup-catch-up.test.ts` | 每 Chat 一个追赶 Invocation、`history_messages` 上限、`ignored_user_ids` 与 `sticker_trigger_enabled` 生效、排空后切换实时 Bucket、Reply 的 Topic 路由 |
 | `scheduler.test.ts` | 配置 deadline、冻结快照、恢复和并发串行 |
-| `sleep.test.ts` | 5% 阈值边界与 `zzz` 可见性、跨轮次工具注册表更新、睡眠跳过 due/queued 会话、跨进程持久化、UTC 预算重置唤醒、并发 `zzz` 幂等 |
+| `sleep.test.ts` | 5% 阈值边界与 `zzz` 可见性、跨轮次工具注册表与 system prompt 睡眠状态行同步、睡眠跳过 due/queued 会话、跨进程持久化、UTC 预算重置唤醒、并发 `zzz` 幂等 |
 | `context-send.test.ts` | Context 可见性、Reply capability、发送次数与未知结果 |
 | `cut-topic.test.ts` | `/cut_topic` 切点排除命令消息及更早历史、切点前移、按 Chat 隔离、非管理员拒绝、重建服务后仍生效 |
 | `agent-runtime.test.ts` | Fresh Agent、Tool 循环、预算、transcript 隔离与工具可见性审计 |

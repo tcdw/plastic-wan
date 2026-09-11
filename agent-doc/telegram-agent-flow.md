@@ -134,6 +134,8 @@ System Skills 是随 runtime 发布的只读文档包，位于 `src/system-resou
 
 全局当日 `model_tokens` 剩余比例严格低于 5% 时，当前 Agent 才会看到 `zzz`；恰好 5% 不可见。全局用量是所有 Chat 的主 Agent 与聊天触发 `read_image` 用量之和，同时保留各 Chat 的归属统计。运行中的会话越过阈值后，在下一次 model turn 边界更新工具注册表，不为此额外创建会话。
 
+`zzz` 可见性与 system prompt 末尾的睡眠状态行由同一个判断渲染：只要 `zzz` 可见，system prompt 就带一段自然语义的状态说明（现在很困、该睡就睡、静默结束也应该直接睡），而不是只让模型从 tool description 推断自己的状态。会话中途越过阈值时，工具注册表与状态行在同一次 turn 边界一起增删。`zzz` 的 description 同样只用自然语义描述睡意，不暴露 token、budget、quota 等实现细节。
+
 `zzz` 把全局 `bot_sleep_until` 写入 `app_state`，取 `max(调用时间 + 8 小时, 下一次 UTC 日预算重置)`。写入使用 SQLite IMMEDIATE transaction，重复或并发调用保持同一状态。调用后当前会话停止下一轮模型请求，后续实际 Tool Call 被阻止。
 
 睡眠期间 Telegram Update、Message、Revision 与 Bucket 仍照常保存；Scheduler 将到期 Bucket 和尚未启动的 queued Invocation 标记为 `skipped_budget`/`sleeping`，不创建新 Agent。首次在 `sleep_until` 之后检查状态时原子删除该键并恢复调度，因此状态可跨进程重启且不会因预算提前重置而提前唤醒。

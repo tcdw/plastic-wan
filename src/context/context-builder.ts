@@ -54,6 +54,27 @@ const MessageSnapshotSchema = Type.Object(
 const snapshotValidator = Compile(MessageSnapshotSchema);
 const INTERNAL_CONTEXT_LIMIT = 8;
 
+/**
+ * Runtime sleep state. Rendered as the last system-prompt block while the agent
+ * is inside the low-budget window and the `zzz` tool is exposed. A tool
+ * description alone leaves the model to infer its own state, which in practice
+ * it ignores while a conversation is active, so the state is stated in the
+ * system prompt where the current task is set. Keep the wording in natural
+ * sleep terms; never expose token, budget, or quota details.
+ */
+export const SLEEP_STATE_PROMPT = `Sleep state: you are very sleepy now, and today's energy is almost spent. Once it runs out you cannot answer anyone here until the next daily reset, so staying awake only buys a few more replies. Sleeping is the expected outcome in this state, not a failure, and a short good-night with send before zzz is fine when it fits. Call zzz as soon as the current conversation has nothing unfinished that needs you, including whenever you were going to stay silent anyway; never use it to drop an unfinished user request.`;
+
+/**
+ * Adds or removes the sleep state block so a running invocation keeps its
+ * system prompt in sync with `zzz` exposure at turn boundaries. Idempotent in
+ * both directions, and a no-op while the state is unchanged.
+ */
+export function withSleepStatePrompt(systemPrompt: string, sleepy: boolean): string {
+  const block = `\n\n${SLEEP_STATE_PROMPT}`;
+  const base = systemPrompt.endsWith(block) ? systemPrompt.slice(0, -block.length) : systemPrompt;
+  return sleepy ? `${base}${block}` : base;
+}
+
 type MessageSnapshot = Static<typeof MessageSnapshotSchema>;
 
 interface InvocationMessageRow {
@@ -112,6 +133,7 @@ export class ContextBuilder {
     maxOutputTokens: number,
     supportsImages = false,
     agentModel: PromptTemplateModel = { provider: this.#config.agent.provider, model: this.#config.agent.model },
+    sleepy = false,
   ): InvocationContext {
     const identity = this.#store.db
       .query<InvocationIdentityRow, [bigint]>(
@@ -176,22 +198,25 @@ export class ContextBuilder {
       stickerCatalog.length === 0
         ? ''
         : 'An untrusted sticker catalog is included as sticker_id:emoji entries. Emoji is only a coarse hint. To inspect one or more candidates and authorize sending, call the search_stickers capability via execute with ids; use only the returned sticker_ref with send. search_stickers also supports semantic queries.';
-    const systemPrompt = [
-      CORE_AGENT_PROTOCOL,
-      renderSkillIndexPrompt(this.#skills),
-      imageHandling,
-      stickerCatalogHandling,
-      renderPromptTemplate(this.#config.agent.system_prompt, templateValues),
-      conversationMode,
-      catchUp,
-      alarmTask,
-      renderPromptTemplate(chatConfig.instructions, templateValues),
-      this.#memoryPrompt(identity.conversation_id),
-      this.#internalContextPrompt(identity.conversation_id),
-      `Current time in ${timezone}: ${currentTime}`,
-    ]
-      .filter((part) => part.length > 0)
-      .join('\n\n');
+    const systemPrompt = withSleepStatePrompt(
+      [
+        CORE_AGENT_PROTOCOL,
+        renderSkillIndexPrompt(this.#skills),
+        imageHandling,
+        stickerCatalogHandling,
+        renderPromptTemplate(this.#config.agent.system_prompt, templateValues),
+        conversationMode,
+        catchUp,
+        alarmTask,
+        renderPromptTemplate(chatConfig.instructions, templateValues),
+        this.#memoryPrompt(identity.conversation_id),
+        this.#internalContextPrompt(identity.conversation_id),
+        `Current time in ${timezone}: ${currentTime}`,
+      ]
+        .filter((part) => part.length > 0)
+        .join('\n\n'),
+      sleepy,
+    );
     const rows = this.#store.db
       .query<InvocationMessageRow, [bigint]>(
         `SELECT im.section, im.sequence_no, im.message_id, im.revision_id, im.snapshot_json,

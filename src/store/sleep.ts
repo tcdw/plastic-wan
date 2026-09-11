@@ -130,7 +130,7 @@ export function createZzzTool(options: {
     name: 'zzz',
     label: 'Sleep',
     description:
-      'You are very sleepy now. Use this only when the current conversation is at a natural stopping point and no useful response, clarification, or required side effect remains. Do not use it to abandon an unfinished user request. Calling it ends normal participation until the sleep period expires.',
+      'You are very sleepy now: today is almost out of energy, and calling this ends normal participation until the sleep period expires. Call it whenever the current conversation has nothing unfinished that still needs you, including the times you would otherwise stay silent; staying awake only buys a few more replies. A short good-night via send first is fine when it fits. Do not use it to abandon an unfinished user request.',
     parameters: ZzzInputSchema,
     executionMode: 'sequential',
     execute: async (toolCallId, input) => {

@@ -13,7 +13,7 @@ import {
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { KeyedSemaphore } from '../platform/concurrency.ts';
 import type { RawConfig } from '../platform/config.ts';
-import { ContextBuilder } from '../context/context-builder.ts';
+import { ContextBuilder, withSleepStatePrompt } from '../context/context-builder.ts';
 import { resolveChatConfig, type SqliteStore } from '../store/database.ts';
 import type { InvocationContext } from '../platform/invocation-context.ts';
 import { serializeModelRequestForAudit } from '../platform/model-request-audit.ts';
@@ -207,6 +207,7 @@ export class AgentRuntime {
       model.maxTokens,
       model.input.includes('image'),
       { provider: model.provider, model: model.id },
+      zzzExposed,
     );
     const tools = [
       ...buildPrimitives(context, this.#capabilityTools?.(context, state, deadline) ?? []),
@@ -335,7 +336,8 @@ export class AgentRuntime {
       },
       prepareNextTurnWithContext: async (turn) => {
         let nextTools = turn.context.tools;
-        let toolsChanged = false;
+        let nextSystemPrompt = turn.context.systemPrompt;
+        let registryChanged = false;
         const budget = readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens);
         const shouldExposeZzz = !isAlarm && isLowDailyTokenBudget(budget);
         if (shouldExposeZzz !== zzzExposed) {
@@ -349,17 +351,37 @@ export class AgentRuntime {
             this.#logZzzExposure(invocationId, context.chatId, budget);
             estimatedInputTokens += Math.ceil(estimateToolDefinitionCharacters(zzz) / 4);
           }
-          toolsChanged = true;
+          // The sleep state lives in the system prompt, so a request that
+          // crosses the budget threshold mid-run keeps the prompt and the tool
+          // list telling the model the same thing.
+          nextSystemPrompt = withSleepStatePrompt(nextSystemPrompt, shouldExposeZzz);
+          estimatedInputTokens += Math.ceil(
+            Math.max(0, nextSystemPrompt.length - turn.context.systemPrompt.length) / 4,
+          );
+          registryChanged = true;
         }
         const stopThreshold = Math.floor(model.contextWindow * this.#config.agent.context_stop_ratio);
         if (estimatedInputTokens < stopThreshold) {
-          return toolsChanged && nextTools !== undefined
-            ? { context: { ...turn.context, tools: nextTools } }
-            : undefined;
+          if (!registryChanged) {
+            return undefined;
+          }
+          return {
+            context: {
+              ...turn.context,
+              systemPrompt: nextSystemPrompt,
+              ...(nextTools === undefined ? {} : { tools: nextTools }),
+            },
+          };
         }
         closing = true;
         const closingTools = nextTools?.filter((tool) => tool.name === 'send' || tool.name === 'zzz');
-        return { context: { ...turn.context, ...(closingTools === undefined ? {} : { tools: closingTools }) } };
+        return {
+          context: {
+            ...turn.context,
+            systemPrompt: nextSystemPrompt,
+            ...(closingTools === undefined ? {} : { tools: closingTools }),
+          },
+        };
       },
     });
     const unsubscribe = agent.subscribe((event) => {

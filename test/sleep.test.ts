@@ -19,6 +19,7 @@ import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
 import { activeSleepUntil, enterSleep, SLEEP_STATE_KEY } from '../src/store/sleep.ts';
+import { SLEEP_STATE_PROMPT, withSleepStatePrompt } from '../src/context/context-builder.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { SystemResources } from '../src/platform/system-resources.ts';
 import { writeTestConfig } from './helpers.ts';
@@ -151,22 +152,29 @@ test('keeps zzz hidden at exactly five percent remaining', async () => {
 
 test('adds zzz at the next turn boundary when a running session crosses the threshold', async () => {
   const { store, runtime, invocationId, faux } = await runtimeSetup(285_000n);
+  const systemPrompts: string[] = [];
   const first = fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'good night' }), {
     stopReason: 'toolUse',
   });
   faux.setResponses([
-    {
-      ...first,
-      usage: {
-        input: 1,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 1,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+    (context) => {
+      systemPrompts.push(context.systemPrompt ?? '');
+      return {
+        ...first,
+        usage: {
+          input: 1,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 1,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      };
     },
-    fauxAssistantMessage(fauxToolCall('zzz', {}), { stopReason: 'toolUse' }),
+    (context) => {
+      systemPrompts.push(context.systemPrompt ?? '');
+      return fauxAssistantMessage(fauxToolCall('zzz', {}), { stopReason: 'toolUse' });
+    },
   ]);
   await runtime.run(invocationId, new AbortController().signal);
   expect(modelToolLists(store)).toEqual([
@@ -174,7 +182,47 @@ test('adds zzz at the next turn boundary when a running session crosses the thre
     ['read', 'send', 'execute', 'zzz'],
   ]);
   expect(activeSleepUntil(store.orm)).not.toBeNull();
+  expect(systemPrompts).toHaveLength(2);
+  expect(systemPrompts[0]).not.toContain(SLEEP_STATE_PROMPT);
+  expect(systemPrompts[1]?.split(SLEEP_STATE_PROMPT)).toHaveLength(2);
   store.close();
+});
+
+test('states the sleep state in the system prompt exactly while zzz is exposed', async () => {
+  const awake = await runtimeSetup(284_999n);
+  const awakePrompts: string[] = [];
+  awake.faux.setResponses([
+    (context) => {
+      awakePrompts.push(context.systemPrompt ?? '');
+      return fauxAssistantMessage('   ');
+    },
+  ]);
+  await awake.runtime.run(awake.invocationId, new AbortController().signal);
+  expect(awakePrompts).toHaveLength(1);
+  expect(awakePrompts[0]).not.toContain(SLEEP_STATE_PROMPT);
+  awake.store.close();
+
+  const sleepy = await runtimeSetup(285_001n);
+  const sleepyPrompts: string[] = [];
+  sleepy.faux.setResponses([
+    (context) => {
+      sleepyPrompts.push(context.systemPrompt ?? '');
+      return fauxAssistantMessage('   ');
+    },
+  ]);
+  await sleepy.runtime.run(sleepy.invocationId, new AbortController().signal);
+  expect(sleepyPrompts).toHaveLength(1);
+  expect(sleepyPrompts[0]).toContain(SLEEP_STATE_PROMPT);
+  sleepy.store.close();
+});
+
+test('the sleep state block stays idempotent when the threshold is applied repeatedly', () => {
+  const awake = 'base prompt';
+  const sleepy = withSleepStatePrompt(awake, true);
+  expect(sleepy).toBe(`${awake}\n\n${SLEEP_STATE_PROMPT}`);
+  expect(withSleepStatePrompt(sleepy, true)).toBe(sleepy);
+  expect(withSleepStatePrompt(sleepy, false)).toBe(awake);
+  expect(withSleepStatePrompt(awake, false)).toBe(awake);
 });
 
 test('zzz enters sleeping and ends without another model turn', async () => {

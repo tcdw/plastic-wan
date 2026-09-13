@@ -9,14 +9,19 @@ import { alarms, appState, bucketMessages, buckets, invocationBuckets, invocatio
 
 export const RECOVERY_MAX_AGE_MS = 5 * 60_000;
 export const STARTUP_CATCH_UP_STATE_KEY = 'telegram_startup_catch_up';
+/** Floor for re-checking a batch that is due but whose conversation is mid-round. */
+export const MINIMUM_DEFER_MS = 250;
 
 /**
  * Attach side of long-lived invocations. The queue service owns every database
- * transition; it only needs these two answers from the runtime that owns the
- * in-memory agent: "is this run still accepting work" and "wake it up".
+ * transition; it only needs these answers from the runtime that owns the
+ * in-memory agent: "is this run still accepting work", "is it between rounds"
+ * and "wake it up".
  */
 export interface BucketAttachmentTarget {
   isClosing(conversationId: bigint): boolean;
+  /** True from the moment a batch is injected until that round's last turn ends. */
+  isRoundInProgress(conversationId: bigint): boolean;
   queueInjection(conversationId: bigint, bucketId: bigint): void;
 }
 
@@ -292,6 +297,16 @@ export class InvocationQueueService {
       for (const bucket of due) {
         const running = this.#runningInvocation(bucket.conversation_id);
         if (running !== undefined) {
+          // A run that is still working on its round has not been free for the
+          // batch's window yet, so the batch keeps collecting: its window starts
+          // when the round ends (`AgentRuntime` pushes the deadline then). Handing
+          // it over here would inject a batch that collected almost nothing, and
+          // would also split the messages that arrive during a long round across
+          // two batches.
+          if (this.#attachment?.isRoundInProgress(bucket.conversation_id) === true) {
+            this.#deferBucket(bucket, now);
+            continue;
+          }
           if (this.#attachBucket(bucket, running, now, sleepUntil)) {
             continue;
           }
@@ -363,6 +378,21 @@ export class InvocationQueueService {
       }),
     );
     return true;
+  }
+
+  /**
+   * Keeps a due batch collecting because its conversation is mid-round. The
+   * window restarts from now, which is only an approximation — the exact anchor
+   * is the round end, which the runtime writes when it gets there — but it also
+   * keeps the scheduler from waking on an already-passed deadline over and over.
+   */
+  #deferBucket(bucket: BucketRow, now: Date): void {
+    const deferMilliseconds = Math.max(this.#config.telegram.bucket_window_seconds * 1_000, MINIMUM_DEFER_MS);
+    const atLeast = new Date(now.getTime() + deferMilliseconds).toISOString();
+    this.#store.orm.run(
+      sql`UPDATE buckets SET deadline_at = ${atLeast}, updated_at = ${now.toISOString()}
+         WHERE id = ${bucket.id} AND state = 'collecting' AND deadline_at < ${atLeast}`,
+    );
   }
 
   /**

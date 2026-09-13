@@ -474,7 +474,9 @@ export class TelegramIngestion {
         return undefined;
       }
       const now = receivedAt.toISOString();
-      // Every bucket collects one full window from its own first message. The
+      // Every bucket starts a window at its own first message and the runtime
+      // extends that anchor to the end of the round that was running at the time,
+      // so a batch always collects one full window of *free* agent time. The
       // deadline is deliberately not snapped to a chat-wide grid and does not
       // depend on the previous invocation's state:
       //
@@ -487,6 +489,10 @@ export class TelegramIngestion {
       //   harmless while a due bucket could not be consumed until the run ended,
       //   but with attach it made every single message its own zero-length bucket
       //   and its own injection.
+      // - Anchoring here alone (ignoring the running round) would hand a batch to
+      //   the runtime the moment a long round ends, no matter how little it had
+      //   collected; `AgentRuntime#deferCollectingBucket` therefore only ever
+      //   pushes this deadline later, to `round end + window`.
       const deadline = receivedAt.getTime() + this.#config.telegram.bucket_window_seconds * 1_000;
       const created = this.#store.orm
         .insert(buckets)

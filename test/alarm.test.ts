@@ -575,7 +575,11 @@ describe('alarm scheduler', () => {
 describe('alarm runtime budget bypass', () => {
   test('an alarm invocation bypasses the daily token gate while an ordinary invocation still blocks', async () => {
     const { store, ingestion, scheduler, loaded } = await setup();
-    const received = new Date('2026-08-15T00:00:00.000Z');
+    // Real-clock-relative dates: the runtime anchors a batch's collection window
+    // to the instant the agent becomes free, so a test that drives ingestion with
+    // frozen dates in the past would compare fake instants against real ones.
+    const start = Date.now();
+    const received = new Date(start);
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
     if (conversation === null) {
@@ -589,8 +593,8 @@ describe('alarm runtime budget bypass', () => {
       )
       .run(today, '123456789', BigInt(loaded.config.agent.daily_budget.max_tokens), new Date().toISOString());
 
-    insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z');
-    const [alarmInvocation] = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
+    insertAlarm(store, conversation.id, new Date(start - 60_000).toISOString());
+    const [alarmInvocation] = scheduler.processAlarmsDue(new Date(start));
     if (alarmInvocation === undefined) {
       throw new Error('Expected alarm invocation');
     }
@@ -636,8 +640,12 @@ describe('alarm runtime budget bypass', () => {
         "UPDATE buckets SET state = 'completed', finished_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
       )
       .run(new Date().toISOString(), alarmInvocation);
-    ingestion.ingest(update(2, 11, 'next'), new Date('2026-08-15T00:00:30.000Z'));
-    const [normalInvocation] = scheduler.processDue(new Date('2026-08-15T00:00:45.000Z'));
+    ingestion.ingest(update(2, 11, 'next'), new Date(start));
+    // The alarm run re-anchored the collecting batch to its round end, so the
+    // batch is due one bucket window after that: ask for a moment past it.
+    const [normalInvocation] = scheduler.processDue(
+      new Date(Math.max(Date.now(), start) + loaded.config.telegram.bucket_window_seconds * 1_000 + 1_000),
+    );
     if (normalInvocation === undefined) {
       throw new Error('Expected normal invocation');
     }

@@ -357,6 +357,7 @@ export class AgentRuntime {
         agentModel: { provider: model.provider, model: model.id },
       });
       contextState.applyInjection(injection);
+      runtime.beginRound(conversationId);
       const images = supportsImages ? ((await this.#directImageLoader?.(contextState, signal)) ?? []) : [];
       pendingUserTags.push('checkpoint');
       state.turnsSinceInjection = 0;
@@ -386,7 +387,19 @@ export class AgentRuntime {
       }
       return true;
     };
+    /**
+     * The instant the agent is free again — a turn that called no tools, or a run
+     * that is ending — is where the next batch's collection window starts, so a
+     * batch whose messages arrived during this round collects a full window of
+     * free-agent time instead of being handed over the moment the round ends.
+     */
+    const freeAgent = (): void => {
+      runtime.endRound(conversationId);
+      this.#deferCollectingBucket(conversationId, Date.now());
+    };
     const stop = (reason: StopReason): true => {
+      // A run that ends frees the agent just like the end of a round does.
+      freeAgent();
       state.stopReason = reason;
       state.contextClosing = true;
       runtime.beginClosing(conversationId);
@@ -538,9 +551,10 @@ export class AgentRuntime {
       // Safety net first, before anything that can extend the run: a newer batch
       // (or the idle grace) would otherwise swallow the current batch's draft.
       // Only when this turn produced no tool calls (a would-be final message), so
-      // we never interrupt an in-progress workflow.
+      // we never interrupt an in-progress workflow. The round is deliberately not
+      // treated as over here: the agent still owes a published answer.
+      const hasToolCalls = turn.message.content.some((entry) => entry.type === 'toolCall');
       if (this.#config.agent.send_nudge_enabled === true && !state.sendUsed && !state.nudged) {
-        const hasToolCalls = turn.message.content.some((entry) => entry.type === 'toolCall');
         const text = turn.message.content
           .filter((entry) => entry.type === 'text')
           .map((entry) => entry.text)
@@ -559,7 +573,19 @@ export class AgentRuntime {
         return false;
       }
       const idleGraceMilliseconds = this.#config.agent.context.idle_grace_seconds * 1_000;
-      if (idleGraceMilliseconds > 0 && Date.now() < deadline) {
+      // The grace belongs to the end of a round, not to every turn. A turn that
+      // ended with tool calls, or one with a batch already queued to inject, is
+      // followed by another turn regardless, so waiting here would only delay it:
+      // a three-step round used to pay the grace after every step, and a batch
+      // injected while the model was working paid it before being answered.
+      // A batch that becomes due while a tool runs is still picked up at the next
+      // turn boundary, and if that boundary falls just before the attach lands the
+      // queued injection wakes this wait immediately.
+      const roundIsOver = !hasToolCalls && !runtime.hasPendingInjections(conversationId);
+      if (roundIsOver) {
+        freeAgent();
+      }
+      if (roundIsOver && idleGraceMilliseconds > 0 && Date.now() < deadline) {
         const waited = await runtime.waitForInjection(
           conversationId,
           Math.min(idleGraceMilliseconds, Math.max(0, deadline - Date.now())),
@@ -646,6 +672,10 @@ export class AgentRuntime {
       // of this Conversation continues where this one stopped.
       agent.clearAllQueues();
       runtime.endClosing(conversationId);
+      // Backstop for the paths that never reach `freeAgent` (abort mid-round, a
+      // thrown error): the flag must not outlive the run, or the conversation
+      // would look busy forever and its batches would never be attached.
+      runtime.endRound(conversationId);
       this.#contexts.clearActiveInvocation(invocationId);
       this.#contexts.touch(header, null);
       if (agent.state.errorMessage !== undefined) {
@@ -665,6 +695,24 @@ export class AgentRuntime {
       sendsPerWindow: this.#config.agent.rate_limits.sends_per_window,
       windowSeconds: this.#config.agent.rate_limits.window_seconds,
     };
+  }
+
+  /**
+   * Anchors the next batch's collection window at the moment the agent becomes
+   * free. A batch that collected while the model was working (its messages
+   * arrived mid-round) would otherwise be handed over the instant the round ends,
+   * having collected far less than `telegram.bucket_window_seconds`.
+   *
+   * Extension-only: a batch whose own deadline is already later — one whose first
+   * message arrived after this round ended — keeps it. The write is what also
+   * re-schedules the scheduler, which recomputes its next wake from deadlines.
+   */
+  #deferCollectingBucket(conversationId: bigint, freeSince: number): void {
+    const atLeast = new Date(freeSince + this.#config.telegram.bucket_window_seconds * 1_000).toISOString();
+    this.#store.orm.run(
+      sql`UPDATE buckets SET deadline_at = ${atLeast}, updated_at = ${new Date(freeSince).toISOString()}
+         WHERE conversation_id = ${conversationId} AND state = 'collecting' AND deadline_at < ${atLeast}`,
+    );
   }
 
   #capabilitiesFor(header: ContextHeader): CapabilityRefResolver {

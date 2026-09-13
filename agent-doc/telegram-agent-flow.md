@@ -62,24 +62,26 @@
 Chat（群）空闲时，第一条可触发消息创建该 Conversation 的 `collecting` Bucket，并先等待一个完整节拍：
 
 ```text
-first_received_at = T
-first session      = T + telegram.bucket_window_seconds
+anchor   = max(first_received_at, 该 Conversation 上一轮结束时刻)
+deadline = anchor + telegram.bucket_window_seconds
 ```
+
+「上一轮结束」指 Agent 空下来的那一刻：该轮的 turn 没有 Tool Call、队列里也没有待注入批次。Agent 本来就空闲时，anchor 就是第一条消息自己。
 
 `telegram.bucket_window_seconds` 是全局配置，接受 0–300 的整数秒；`0` 表示新消息可以立即触发，不表示持续轮询。**Agent 会话按 Chat 串行**，消息收集仍按 Conversation 隔离：
 
 1. 不同 Forum Topic 的消息各自进入自己的 `collecting` Bucket；Context 与 Reply 只包含本 Topic 内容，互不混入。
 2. 同一 Chat 同时最多一个 queued/running Invocation；运行期间任何 Topic 的新消息只进入自己的 Bucket，不修改当前 Invocation。
-3. 每个 Bucket 的 deadline 只由它**自己的第一条消息**决定：`first_received_at + bucket_window_seconds`，按 Conversation 计算。它与前一次 Invocation 的 `started_at`/`finished_at` 和状态都无关。
+3. 每个 Bucket 的 deadline 是 **`max(第一条消息时刻, 该 Conversation 上一轮结束时刻) + bucket_window_seconds`**，按 Conversation 计算。Agent 空闲时它退化成 `first_received_at + bucket_window_seconds`；若第一条消息到达时上一轮还在跑，这批的窗口从该轮结束才开始，因此至少收集满一个窗口。deadline 与 Invocation 的 `started_at`/`finished_at`、queued/running 状态无关，也不会提前。
 4. 没有新的可触发消息时不创建 Bucket，也不启动空会话。`sticker_trigger_enabled` 默认为 `false`：单独的人类 Sticker 不开 Bucket，但可以加入已有 collecting Bucket；设为 `true` 后可以单独触发。
 5. 到达 deadline 后，Scheduler 冻结 `history` 与 `new` 快照并创建 Invocation；若该 **Conversation** 已有 running Invocation，则改为 attach，见「长活 Invocation 与热注入」。
-6. Invocation 结束时，该 Chat 仍 `collecting` 的 Bucket 若**已经到期**（或已在这次运行期间到期）会被立刻处理；尚未到期的保持自己的窗口不变。Scheduler 只会把 deadline 往后推（到 `max(finished_at, started_at + bucket_window_seconds)`），不会提前裁剪一个已建立的批次。
+6. 每一轮结束时，该 Conversation 仍 `collecting` 的 Bucket 会把 deadline 推到至少 `本轮结束 + bucket_window_seconds`（只往后推，已有更晚的 deadline 不动）；Invocation 结束时，已到期的 collecting Bucket 立刻被处理，尚未到期的保持自己的窗口。deadline 从不被提前裁剪，已建立的批次也不会被打断。
 
-因此，如果 Agent 会话耗时为 0 且群友持续发送消息，会话开始时间相隔 `bucket_window_seconds`；一旦某一轮运行超过一个窗口，后续批次改由各自的第一条消息起算（可能比固定网格略晚），与该群有多少活跃 Topic 无关。Bot 自己通过 `send` 产生的消息写入可见历史，但不会触发下一 Bucket。
+因此，只要 Agent 每轮都很快结束，会话开始时间仍大致相隔 `bucket_window_seconds`；某一轮超过一个窗口时，该轮期间到达的消息统一从该轮结束起算，这批会比固定网格晚一些，与该群有多少活跃 Topic 无关。Bot 自己通过 `send` 产生的消息写入可见历史，但不会触发下一 Bucket。
 
-deadline 不看「前一次运行是否仍在 queued/running」。长活 Invocation 会立刻消费到期的 Bucket，若把「运行中」当成「立刻到期」，运行超过一个窗口后每条消息都会各自变成零长度 Bucket 并各自注入一批（实测：1.4 秒内 6 条消息 → 6 次注入），节拍就没有了。同理不把 deadline 吸附到 `前一次运行 started_at + bucket_window_seconds` 的网格点：那会让运行开始后一个窗口内到达的消息只收集几毫秒（实测 805 ms）就到期，表现为偶尔秒回。运行期间到达的消息始终按窗口成批，注入粒度仍是 Bucket。
+deadline 不看「前一次运行是否仍在 queued/running」，但**运行中的批次不会在轮中途被交出去**：该轮还没结束时，该 Conversation 已到期的 collecting Bucket 只会留在 `collecting`（Scheduler 会把它的 deadline 至少推到 `now + bucket_window_seconds`，轮结束时再由运行时精确锚到轮结束），不会注入。若把「运行中」当成「立刻到期」，运行超过一个窗口后每条消息都会各自变成零长度 Bucket 并各自注入一批（实测：1.4 秒内 6 条消息 → 6 次注入），节拍就没有了。同理不把 deadline 吸附到 `前一次运行 started_at + bucket_window_seconds` 的网格点：那会让运行开始后一个窗口内到达的消息只收集几毫秒（实测 805 ms）就到期，表现为偶尔秒回。
 
-代价是明确接受的：前一次运行**长于一个窗口**且消息在运行结束前一个窗口内到达时，该消息等满自己的窗口才启动，而不是在前一次运行结束的瞬间启动；这一段内批次不再严格对齐同一个网格。
+代价是明确接受的：一轮很长（例如 40 秒）时，该轮期间到达的**所有**消息会被并成一批，在该轮结束后满一个窗口才注入——活跃对话因此可能多等一个窗口，换来的是「一轮期间的消息不会把上下文切成若干碎片批次」。
 
 配置了 `participation` 时，「可触发消息」还要先通过下一节的闸门。
 
@@ -95,12 +97,28 @@ Bucket 到期
 
 规则：
 
-- **注入粒度是 Bucket，不是单条消息。** 入库侧的收集与节拍推算完全不变：运行期间到达的消息进入下一个 `collecting` Bucket，等满自己的窗口才成为一批。
+- **注入粒度是 Bucket，不是单条消息。** 运行期间到达的消息进入下一个 `collecting` Bucket（同一 Conversation 同时只有一个 collecting Bucket），窗口从该轮结束起算，等满一个窗口才成为一批。
+
+一轮完整循环（`bucket_window_seconds = 15`、`idle_grace_seconds = 60`，假设 Agent 每轮耗时 2 秒）：
+
+```text
+T+0    消息 A 到达 → 创建 collecting Bucket 1，deadline = T+15
+T+3    消息 B、C 到达 → 进入 Bucket 1（同一个 Bucket）
+T+15   Bucket 1 到期 → 该 Conversation 无 running Invocation → 创建 Invocation I 注入，本轮开始
+T+16   消息 D 到达（I 还在跑本轮）→ 创建 collecting Bucket 2；它还没等到 Agent 空下来
+T+17   I 完成本轮 send → 本轮结束 → Bucket 2 的 deadline 推到 T+17+15 = T+32
+T+32   Bucket 2 到期 → attach 到 I 并注入同一 invocation_id，本轮开始
+T+34   本轮结束；消息 E 到达 → 新建 Bucket 3，deadline = T+34+15 = T+49 …循环
+T+94   若期间再没有新 Bucket 到期，空闲等待耗尽，I 结束
+```
+
+要点：**窗口从 `max(第一条消息时刻, 上一轮结束时刻)` 起算**，所以每一批都至少收集满一个窗口；运行期间到达的消息统一归入一批，在该轮结束满一个窗口后注入——既不在一轮中途被切开，也不会在轮结束的瞬间就注入。空闲等待耗尽的时刻若还有未到期的 collecting Bucket，I 正常结束，那批到期时按「无 running Invocation」开新的 Invocation。
 - attach 只发生在**同一个 Conversation**。同一 Chat 另一个 Forum Topic 到期的 Bucket 不会 attach，它属于另一个 Conversation Context，等该 Chat 空闲后开新的 Invocation。
 - attach 时对该 Bucket 调用 `snapshotInvocation(..., includeHistory: false)`，按 `sequence_no` 续写到 `invocation_messages`，因此「冻结模型输入」的不变量不变：之后编辑已注入的消息不会改动已注入的批次。
-- 一批注入即是一个 checkpoint（见「Context 生命周期」），注入方式是 `agent.steer()`；`steer` 的可见点是 turn 边界，长 Tool 批次期间到达的消息会延迟到该批次结束。
-- 结束判定顺序：睡眠/暂停/每日预算触顶 → 结束；有已 attach 未注入的 Bucket → 注入后继续；空闲等待至多 `idle_grace_seconds`，期间有 Bucket 到期 → 注入后继续；超过 `max_wall_clock_seconds` → 结束；其余结束。
-- **`idle_grace_seconds = 0` 是关闭开关**：不空闲等待、到期 Bucket 不 attach，节拍行为与「一次 Bucket 一次 Invocation」完全一致，但 Conversation Context 依然持久。这是唯一受支持的降级方式，代码里没有第二套模式或 mode 分支。
+- 一批注入即是一个 checkpoint（见「Context 生命周期」），注入方式是 `agent.steer()`；`steer` 的可见点是 turn 边界，长 Tool 批次期间到达的消息会延迟到该批次结束，并且**不等 grace**：待注入的批次会先被注入，再回答它。
+- **空闲等待发生在每一轮结束时，不在每个 turn 上**：该 turn 没有 Tool Call、且队列里没有待注入批次时，才等待至多 `idle_grace_seconds`。回合内的工具步骤、以及刚注入一批还没回答的 turn 都不等待，否则一轮里的每一步都要白等一个 grace（回归：一轮内两次 `send` 曾各等满 3 秒）。
+- 结束判定顺序：睡眠/暂停/每日预算触顶 → 结束；有已 attach 未注入的 Bucket → 注入后继续；一轮结束时先标记 Agent 空闲并把 collecting Bucket 的 deadline 推到至少 `本轮结束 + bucket_window_seconds`，再空闲等待至多 `idle_grace_seconds`，期间有 Bucket 到期 → 注入后继续；超过 `max_wall_clock_seconds` → 结束；其余结束。
+- **`idle_grace_seconds = 0` 是关闭开关**：不空闲等待、到期 Bucket 不 attach，退回「一次 Bucket 一次 Invocation」，但 Conversation Context 依然持久，且运行期间到达的批次仍从本轮结束起算窗口（比从消息自身起算可能晚一个窗口）。这是唯一受支持的降级方式，代码里没有第二套模式或 mode 分支。
 - 防失控靠 `agent.rate_limits`：`turns_per_injection` 限制每批注入后最多跑多少轮（注入即重置），`sends_per_window`/`window_seconds` 限制同一 Chat 滑动窗口内的 `send` 次数，`max_wall_clock_seconds` 限制单次运行总时长。per-Invocation 的 `max_turns`/`max_sends`/`timeout_seconds` 已删除。
 - attach 但从未注入的 Bucket 在运行结束时重新排队成新 Invocation（`invocation_buckets.injected_at` 为 NULL），不会被丢弃。
 - `/pause` 会中断处于空闲等待中的 Invocation。

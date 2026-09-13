@@ -211,6 +211,14 @@
 8. `/pause` 的 `pauseChat`（`scheduler.ts:76`）必须能中断处于空闲等待中的 Invocation（`agent.abort()` 已经能做到，但要加测试钉死）。
 9. `one_running_invocation_per_conversation` 唯一索引（`schema.ts:286`）与 `#launchQueued` 的 `NOT EXISTS` 检查（`scheduler.ts:205-209`）从「顺手的不变量」变成**承重结构**：attach 路径依赖「同一 Conversation 至多一个 running Invocation」。注意 Agent 会话按 **Chat** 串行、Bucket 按 **Conversation** 收集（`telegram-agent-flow.md:69`）这一既有非对称性仍然成立：同一 Chat 的另一个 Topic 到期的 Bucket **不能** attach 到当前 Invocation，它属于另一个 Conversation Context。
 
+#### 实施注记（与本节原文的偏离）
+
+本节写于实施之前，交付时的实际行为在这三处不同，均以 `telegram-agent-flow.md` 与源码为准：
+
+1. **入库侧的节拍推算被替换，不是「不变」。** 原文第 190 行保留 `remainsOnPriorPace` / `priorPaceAt`；实施后这两个字段与其查询全部删除。取而代之：每条消息仍按自己的 `first_received_at + bucket_window_seconds` 建 Bucket，但**不再**把「前一次运行仍在 queued/running」当作「立即到期」。（实施中发现：长活 Invocation 会在运行中消费到期 Bucket，于是运行超过一个窗口后每条消息都变成零长度 Bucket 并各自注入一批，实测 1.4 秒内 6 条消息 → 6 次注入。）
+2. **`idle_grace_seconds = 0` 的「节拍行为与今日完全一致」不再严格成立。** 取 0 时不空闲等待，但运行期间到达的批次同样从**本轮结束**起算窗口（见下一条），因此它可能比「从消息自身起算」晚一个窗口才启动。取 0 仍是唯一受支持的降级方式，`check-config` 校验规则不变。
+3. **第 7 条「注入可见性延迟 = Bucket 节拍剩余时长 + 当前 Tool 批次剩余时长」改为：延迟 = **`max(本条消息时刻, 上一轮结束时刻) + bucket_window_seconds`** 起算的窗口剩余时长 + 当前 Tool 批次/轮次的剩余时长。** 即批次不在轮中途被交出，也不会在轮结束的瞬间就注入：Agent 空下来（该轮无 Tool Call、且没有待注入批次）的那一刻起，批次才重新获得一个完整窗口（`AgentRuntime#deferCollectingBucket` 把该 Conversation 仍在 `collecting` 的 deadline 推到 `max(第一条消息时刻, 本轮结束) + bucket_window_seconds`，只往后推）。`InvocationQueueService#processDue` 在轮中途遇到已到期 Bucket 时跳过 attach 并把 deadline 至少推到 `now + max(window, 250 ms)`，以免调度器空转。第 4.6 节末尾与第 12 节第 9 条「不要试图用消息一到就注入来消除延迟」的取向不变；变的是延迟的锚点。
+
 ### 4.7 引用（capability）持久化
 
 1. 媒体引用 `img_*`、Sticker 引用 `stk_*`、Reply 目标共用一张 `context_refs` 表，按 Conversation Context 隔离，带 `expires_at`。

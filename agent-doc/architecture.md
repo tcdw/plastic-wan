@@ -104,7 +104,7 @@ src/
 - 进程启动时恢复未完成 Bucket/Invocation。
 - 小于 5 分钟的工作可重新排队；更旧工作标记为过期或恢复失败，避免无限重放。
 - 到期 Alarm 先原子 `pending → firing` 再创建 Invocation；进程恢复遗留 `firing` 关闭为 `fired`/`outcome_unknown`，绝不退回 `pending`。
-- 同一 Chat 最多一个 queued/running Invocation；Invocation 完成后，该 Chat 仍 collecting 的 Bucket 若已到期会被立即处理，未到期的保持 `first_received_at + bucket_window_seconds` 不变（Scheduler 只把 deadline 往后推，不提前裁剪）。
+- 同一 Chat 最多一个 queued/running Invocation；每轮结束时该 Conversation 仍 collecting 的 Bucket 把 deadline 推到至少 `本轮结束 + bucket_window_seconds`，Invocation 结束后已到期的会被立即处理，未到期的保持自己的窗口（Scheduler 只把 deadline 往后推，不提前裁剪）。
 - attach 到运行中 Invocation 但从未注入的 Bucket 在运行结束时重新排队成新 Invocation，不会被静默丢弃。
 - 一旦 Tool 产生不可逆副作用，未知结果不得盲目重试；状态进入 `outcome_unknown` 供审计处理。
 

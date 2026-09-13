@@ -29,6 +29,7 @@ interface ConversationState {
   pendingBuckets: bigint[];
   wake: (() => void) | undefined;
   closing: boolean;
+  roundInProgress: boolean;
 }
 
 export interface ConversationRuntimeOptions {
@@ -99,6 +100,28 @@ export class ConversationRuntime {
 
   isClosing(conversationId: bigint): boolean {
     return this.#states.get(conversationId.toString())?.closing === true;
+  }
+
+  /**
+   * A round runs from the moment a batch is injected until the model produces a
+   * turn that calls no tools. The distinction is load-bearing for pacing: while a
+   * round is in progress the agent is not free, so the next batch's collection
+   * window has not started yet and the batch must keep collecting instead of being
+   * handed over (see `InvocationQueueService.processDue`).
+   */
+  beginRound(conversationId: bigint): void {
+    this.#state(conversationId).roundInProgress = true;
+  }
+
+  endRound(conversationId: bigint): void {
+    const state = this.#states.get(conversationId.toString());
+    if (state !== undefined) {
+      state.roundInProgress = false;
+    }
+  }
+
+  isRoundInProgress(conversationId: bigint): boolean {
+    return this.#states.get(conversationId.toString())?.roundInProgress === true;
   }
 
   /** Queues one attached bucket and wakes a run waiting for new messages. */
@@ -187,7 +210,7 @@ export class ConversationRuntime {
     const key = conversationId.toString();
     let state = this.#states.get(key);
     if (state === undefined) {
-      state = { agent: undefined, pendingBuckets: [], wake: undefined, closing: false };
+      state = { agent: undefined, pendingBuckets: [], wake: undefined, closing: false, roundInProgress: false };
       this.#states.set(key, state);
     }
     return state;

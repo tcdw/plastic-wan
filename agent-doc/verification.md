@@ -147,16 +147,18 @@ bun run src/cli.ts serve --config dev-data/config.jsonc
 
 - 空闲 Chat 的第一条消息等待 `telegram.bucket_window_seconds` 后启动 Invocation。
 - `agent.context.idle_grace_seconds` 大于 0 时，Invocation 是运行窗口：运行期间到期的 Bucket 通过 `agent.steer()` 注入**同一个** Invocation，不新开会话；日志出现 `bucket_attached`，随后是同 Invocation 的第二次 `context_injected`。
-- 注入粒度是 Bucket：运行期间连续发送多条消息，仍先进入各自 Topic 的 `collecting` Bucket，等满自己的窗口才成为一批；`steer` 在 turn 边界可见，长 Tool 批次期间到达的消息要等该批次结束才进入上下文。
+- 注入粒度是 Bucket：运行期间连续发送多条消息，仍先进入各自 Topic 的 `collecting` Bucket，窗口从该轮结束起算，等满一个窗口才成为一批；`steer` 在 turn 边界可见，长 Tool 批次期间到达的消息要等该批次结束才进入上下文。
+- 运行期间到达的消息在下一轮开始时被回答，不额外等待 grace：同一轮里连续两次 `send` 之间不应出现等于 `idle_grace_seconds` 的停顿。
 - 同一 Chat 的 Invocation 仍串行：运行期间另一个 Forum Topic 到期的 Bucket 不 attach，等该 Chat 空闲后才开新 Invocation。
 - attach 但从未注入的 Bucket 在运行结束时重新排队（`invocation_buckets.injected_at` 为 NULL，日志 `bucket_requeued`），不会被静默丢弃。
 - Forum Topic 消息各自收集；一个 Topic 的会话不会让另一个 Topic 的消息混入 Context。
 - 前一个 Invocation 短于窗口：下一 Bucket 仍等满自己的窗口（`first_received_at + bucket_window_seconds`）才启动，不因上一轮提前结束而缩短。
-- 前一个 Invocation 长于窗口：运行期间已到期的 Bucket 在结束后立即处理；运行结束前一个窗口内才创建、尚未到期的 Bucket 仍等满自己的窗口。
+- 前一个 Invocation 长于窗口：运行期间到达的消息不会被注入到该轮中途，它们留在 `collecting`，deadline 被推到 `本轮结束 + bucket_window_seconds`，等满一个完整窗口才作为一批 attach。
 - 前一个 Invocation 结束且没有新消息：不创建新的 Invocation。
-- 运行期间（无论运行了多久）群里再发消息：该消息进入新的 `collecting` Bucket 并**等满自己的窗口**才注入（`deadline_at - first_received_at >= bucket_window_seconds`），不是立刻注入；连续快速发多条也只成为同一批。
-- 运行开始后一个窗口内发消息：同样等满自己的窗口，不出现几毫秒就注入的「秒回」（回归：吸附到运行起点网格时实测 805 ms）。
-- `idle_grace_seconds = 0` 是唯一受支持的降级：到期 Bucket 不再 attach，退回“一次 Bucket 一次 Invocation”，节拍不变。
+- 消息在某一轮**运行期间**到达（无论该轮跑了多久）：它只在一个完整窗口后注入，且 `injected_at - 本轮结束时刻 >= bucket_window_seconds`；连续快速发多条也只成为同一批，不出现「上一轮一结束就注入」或几毫秒就注入的「秒回」（回归：吸附到运行起点网格时实测 805 ms）。
+- 消息在某一轮**结束之后**到达：窗口从消息自身起算（`deadline_at - first_received_at >= bucket_window_seconds`），不因上一轮存在而额外延长。
+- `idle_grace_seconds = 0` 是唯一受支持的降级：到期 Bucket 不再 attach，退回“一次 Bucket 一次 Invocation”，Context 依然持久；运行期间到达的批次仍从本轮结束起算窗口。
+- 锚点自动化用例：`test/context-hot-inject.test.ts`「a batch that collects during a round is injected one window after that round ends」——`bucket_window_seconds = 1` 且一轮耗时约 1.5 秒，断言注入发生在该轮结束之后至少一个窗口（而不是轮一结束就注入）；同文件「keeps a batch collecting while the round runs instead of attaching it mid-round」断言轮中途不会 attach。
 - 不同 Chat 的 Invocation 可以并发。
 - Bucket 冻结前编辑：使用新 Revision；冻结后编辑：已注入的批次不变，之后的 history 使用新 Revision。
 

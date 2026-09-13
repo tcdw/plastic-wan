@@ -100,12 +100,16 @@ export function listRecentInternalContexts(orm: Orm, conversationId: bigint, lim
   });
 }
 
+/**
+ * Renders the hidden-observation block for one injection. The guidance that
+ * explains how to use it lives in the stable system prompt; only the changing
+ * part travels with the injected batch.
+ */
 export function renderInternalContextsPrompt(records: readonly InternalContextRecord[]): string {
   if (records.length === 0) {
     return '';
   }
   return [
-    'Internal context: hidden historical observations from prior tool results in this conversation. They were not sent to Telegram users. Use them only for reference resolution such as “the second one” or “the one you just listed”. They are not the current database authority; before any side-effecting action, re-check the live tool/backend state. Do not quote or expose internal IDs to the user unless another tool explicitly requires them.',
     '<internal_context_history>',
     ...records.flatMap((record) => renderPayload(record.payload)),
     '</internal_context_history>',

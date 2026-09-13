@@ -26,6 +26,7 @@ import { createMemoryTools, MemoryStore } from './context/memory.ts';
 import { AgentModelSwitcher } from './platform/model-switch.ts';
 import { createModelRegistry } from './platform/providers.ts';
 import { BucketScheduler } from './orchestration/scheduler.ts';
+import { ConversationRuntime } from './orchestration/conversation-runtime.ts';
 import { SecretStore } from './platform/secrets.ts';
 import { runStartupCatchUp } from './startup-catch-up.ts';
 import { appState } from './store/schema.ts';
@@ -118,6 +119,9 @@ export async function serve(configPath: string): Promise<void> {
     const memoryStore = new MemoryStore(store.orm);
     const systemResources = await SystemResources.load(BUNDLED_SYSTEM_RESOURCES_DIR);
     logEvent('system_skills_loaded', { skills: systemResources.skills.map((skill) => skill.name).join(',') });
+    const conversationRuntime = new ConversationRuntime({
+      agentCacheSize: loaded.config.agent.context.agent_cache_size,
+    });
     let runtime: AgentRuntime;
     const alarmToolRuntime: AgentMessageRecorder = {
       recordAgentMessage(invocationId, role, text) {
@@ -125,9 +129,9 @@ export async function serve(configPath: string): Promise<void> {
       },
     };
     // Runtime-internal capabilities: dispatched through the execute primitive.
-    const capabilityTools: CapabilityToolFactory = (context, state, deadline) => [
-      capability(media.createReadImageTool(context, deadline), false),
-      capability(stickerService.createSearchTool(context, state.stickerCapabilities), false),
+    const capabilityTools: CapabilityToolFactory = (context, deadline, capabilities) => [
+      capability(media.createReadImageTool(context, capabilities, deadline), false),
+      capability(stickerService.createSearchTool(context, capabilities), false),
       ...createMemoryTools(memoryStore, context).map((tool) => capability(tool, true)),
       capability(createWebFetchTool({ store: webFetchStore, context, invocationDeadline: deadline }), false),
       capability(createAlarmTool({ store: webFetchStore, context }), true),
@@ -135,7 +139,7 @@ export async function serve(configPath: string): Promise<void> {
       capability(createDeleteAlarmTool({ store: webFetchStore, context }), true),
     ];
     // Directly exposed non-primitive tools: allowlisted MCP tools only.
-    const additionalTools: ToolFactory = (context, _state, deadline) => [...mcpManager.createTools(context, deadline)];
+    const additionalTools: ToolFactory = (context, deadline) => [...mcpManager.createTools(context, deadline)];
     runtime = new AgentRuntime({
       store,
       config: loaded.config,
@@ -153,12 +157,17 @@ export async function serve(configPath: string): Promise<void> {
       directImageLoader: (context, signal) => media.loadDirectImages(context.directImages, signal),
       capabilityTools,
       additionalTools,
+      conversationRuntime,
     });
-    const startedScheduler = new BucketScheduler(store, loaded.config, loaded.hash, (invocationId, signal) =>
-      runtime.run(invocationId, signal),
+    const startedScheduler = new BucketScheduler(
+      store,
+      loaded.config,
+      loaded.hash,
+      (invocationId, signal) => runtime.run(invocationId, signal),
+      conversationRuntime,
     );
     scheduler = startedScheduler;
-    const commands = new BotCommandService(store, loaded.config, startedScheduler, modelSwitcher);
+    const commands = new BotCommandService(store, loaded.config, startedScheduler, modelSwitcher, conversationRuntime);
     const preview = previewContext();
     mcpManager.setRegistryValidator((mcpTools) => runtime.validateAdditionalTools(preview, mcpTools));
     const catchUpController = new AbortController();

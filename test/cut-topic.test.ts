@@ -9,6 +9,7 @@ import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
+import { ConversationContextStore } from '../src/context/context-store.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
@@ -196,6 +197,43 @@ describe('cut_topic', () => {
       new Date(start.getTime() + BUCKET_WINDOW_MS + 2_000),
     );
     expect(history).toEqual([]);
+    store.close();
+  });
+
+  test('cut_topic also clears the retained Conversation Context', async () => {
+    const { store, ingestion, scheduler, commands } = await setup();
+    const start = new Date('2026-08-15T00:00:00.000Z');
+    ingestion.ingest(groupUpdate(1, 10, 'polluted', FIRST_CHAT), start);
+    const invocationId = scheduler.processDue(new Date(start.getTime() + BUCKET_WINDOW_MS))[0];
+    if (invocationId === undefined) {
+      throw new Error('Expected an invocation');
+    }
+    const conversationId = store.db
+      .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
+      .get(invocationId)?.conversation_id;
+    if (conversationId === undefined) {
+      throw new Error('Expected a conversation');
+    }
+    // A retained transcript the model would otherwise keep seeing.
+    const contexts = new ConversationContextStore(store);
+    const { header } = contexts.open(conversationId, 'hash-a');
+    contexts.append(header, {
+      invocationId: null,
+      isCheckpoint: true,
+      estTokens: 10,
+      json: JSON.stringify({ role: 'user', content: 'old note', timestamp: 1 }),
+      role: 'user',
+    });
+    expect(contexts.retained(header)).toHaveLength(1);
+
+    const command = ingestion.ingest(commandUpdate(3, 12, FIRST_CHAT), new Date(start.getTime() + 2_000)).command;
+    expect(commands.run(command!, FIRST_CHAT, ALICE)).toContain('清空');
+
+    // The truncation has to reach the transcript too: otherwise the command
+    // would only trim the rendered history while the model kept its memory.
+    const reopened = contexts.header(conversationId);
+    expect(reopened?.headSeq).toBe(reopened?.nextSeq);
+    expect(contexts.retained(reopened!)).toEqual([]);
     store.close();
   });
 

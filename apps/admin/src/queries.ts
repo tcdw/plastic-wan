@@ -1,6 +1,7 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import {
   getAgentModel,
+  getConversationContext,
   getInvocation,
   getMessage,
   getOverview,
@@ -8,6 +9,7 @@ import {
   getUsage,
   listAlarms,
   listBotAdmins,
+  listConversationContexts,
   listInvocations,
   listMemories,
   listMemoryChats,
@@ -74,6 +76,17 @@ export function memoriesQuery(filters: ListFilters) {
 
 export function alarmsQuery(filters: ListFilters) {
   return infiniteList("alarms", listAlarms, filters);
+}
+
+export function conversationContextsQuery(filters: ListFilters) {
+  return infiniteList("contexts", listConversationContexts, filters);
+}
+
+export function conversationContextQuery(conversationId: string) {
+  return queryOptions({
+    queryKey: ["context", conversationId],
+    queryFn: () => getConversationContext(conversationId),
+  });
 }
 
 export const memoryChatsQuery = queryOptions({

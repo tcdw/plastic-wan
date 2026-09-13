@@ -7,7 +7,6 @@ import type { Update } from 'grammy/types';
 import sharp from 'sharp';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
-import { ContextBuilder } from '../src/context/context-builder.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
 import { createLottieCommand } from '../src/capabilities/media/media-image.ts';
@@ -16,8 +15,7 @@ import type { ModelRegistry } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { writeTestConfig } from './helpers.ts';
-
+import { invocationCapabilities, renderInvocationContext, writeTestConfig } from './helpers.ts';
 const directories: string[] = [];
 
 afterAll(async () => {
@@ -77,7 +75,11 @@ test('read_image normalizes once and reuses the 30-day description cache', async
   if (invocationId === undefined) {
     throw new Error('Expected a due invocation');
   }
-  const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
+  const context = renderInvocationContext(store, loaded.config, invocationId, {
+    contextWindow: 200_000,
+    maxOutputTokens: 32768,
+  });
+  const capabilities = invocationCapabilities(store, loaded.config, context.header);
   const [imageRef] = context.imageCapabilities.keys();
   if (imageRef === undefined) {
     throw new Error('Expected an image capability');
@@ -117,7 +119,7 @@ test('read_image normalizes once and reuses the 30-day description cache', async
     mediaClient: downloader,
     modelGate: new KeyedSemaphore(),
   });
-  const tool = media.createReadImageTool(context, Date.now() + 60_000);
+  const tool = media.createReadImageTool(context, capabilities, Date.now() + 60_000);
   const first = await tool.execute('read-1', { image_ref: imageRef });
   const second = await tool.execute('read-2', { image_ref: imageRef });
   expect(first.content).toEqual([{ type: 'text', text: 'A translucent red rectangle.' }]);

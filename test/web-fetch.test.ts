@@ -3,13 +3,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/platform/config.ts';
-import { ContextBuilder } from '../src/context/context-builder.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import type { InvocationContext } from '../src/platform/invocation-context.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { createWebFetchTool } from '../src/capabilities/web-fetch.ts';
-import { writeTestConfig } from './helpers.ts';
+import { renderInvocationContext, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -55,7 +54,10 @@ async function fixture(): Promise<Fixture> {
   if (invocationId === undefined) {
     throw new Error('Expected a due invocation');
   }
-  const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32_768, false);
+  const context = renderInvocationContext(store, loaded.config, invocationId, {
+    contextWindow: 200_000,
+    maxOutputTokens: 32768,
+  });
   return { store, context };
 }
 

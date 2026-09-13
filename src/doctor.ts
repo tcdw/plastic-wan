@@ -174,7 +174,7 @@ async function runDoctorChecks(
       modelGate,
       systemResources: await SystemResources.load(BUNDLED_SYSTEM_RESOURCES_DIR),
       directImageLoader: (context, signal) => media.loadDirectImages(context.directImages, signal),
-      additionalTools: (context, _state, deadline) => [...manager.createTools(context, deadline)],
+      additionalTools: (context, deadline) => [...manager.createTools(context, deadline)],
     });
     const preview = previewContext();
     manager.setRegistryValidator((mcpTools) => runtime.validateAdditionalTools(preview, mcpTools));

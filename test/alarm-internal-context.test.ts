@@ -5,11 +5,10 @@ import { join } from 'node:path';
 import type { Update } from 'grammy/types';
 import { createAlarmTool, createDeleteAlarmTool, createListAlarmTool } from '../src/capabilities/alarm.ts';
 import { loadConfig } from '../src/platform/config.ts';
-import { ContextBuilder } from '../src/context/context-builder.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig, renderInvocationContext, type TestContextOptions } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -42,7 +41,8 @@ async function setup() {
       state: 'completed',
       reason: 'done',
     })),
-    builder: new ContextBuilder(store, loaded.config),
+    build: (invocationId: bigint, options: TestContextOptions = {}) =>
+      renderInvocationContext(store, loaded.config, invocationId, options),
   };
 }
 
@@ -111,7 +111,7 @@ function insertAlarm(
 
 describe('alarm internal context and ownership', () => {
   test('list_alarm returns only caller pending alarms, persists ordered hidden mapping, and send path does not leak it', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, '我有哪些闹钟'), received);
     const invocationId = processOne(scheduler, new Date(received.getTime() + 15_000));
@@ -135,7 +135,7 @@ describe('alarm internal context and ownership', () => {
       .run('2026-08-16T12:01:00.000Z', '2026-08-16T12:01:00.000Z', a3);
     const pending = insertAlarm(store, conversationId, 42n, '复盘', '2026-08-16T14:00:00.000Z');
 
-    const context = builder.build(invocationId, 200_000, 0, 32768);
+    const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
     expect(context.systemPrompt).not.toContain('<internal_context_history>');
     const tool = createListAlarmTool({
       store,
@@ -189,25 +189,28 @@ describe('alarm internal context and ownership', () => {
 
     ingestion.ingest(update(2, 11, '第二个删掉'), new Date(received.getTime() + 20_000));
     const secondInvocation = processOne(scheduler, new Date(received.getTime() + 35_000));
-    const secondContext = builder.build(secondInvocation, 200_000, 0, 32768);
-    expect(secondContext.systemPrompt).toContain('<internal_context_history>');
-    expect(secondContext.systemPrompt).toContain(
+    const secondContext = build(secondInvocation, { contextWindow: 200_000, maxOutputTokens: 32768 });
+    // Internal context is per-invocation state, so it arrives with the injected
+    // batch; the stable system prompt only explains how to use it.
+    expect(secondContext.userPrompt).toContain('<internal_context_history>');
+    expect(secondContext.userPrompt).toContain(
       `1. alarm_id=${a2.toString()}; scheduled_at=2026-08-16T10:00:00.000Z; summary="吃饭"`,
     );
-    expect(secondContext.systemPrompt).toContain(
+    expect(secondContext.userPrompt).toContain(
       `2. alarm_id=${pending.toString()}; scheduled_at=2026-08-16T14:00:00.000Z; summary="复盘"`,
     );
-    expect(secondContext.userPrompt).not.toContain(pending.toString());
-    expect(secondContext.userPrompt).not.toContain('internal_context_history');
+    expect(secondContext.userPrompt).toContain(pending.toString());
+    expect(secondContext.systemPrompt).toContain('hidden historical observations');
+    expect(secondContext.systemPrompt).not.toContain('<internal_context_history>');
     store.close();
   });
 
   test('Alice can list/delete alarms she created for Bob, while Bob cannot operate them', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, '提醒 Bob', 42), received);
     const aliceInvocation = processOne(scheduler, new Date(received.getTime() + 15_000));
-    const aliceContext = builder.build(aliceInvocation, 200_000, 0, 32768);
+    const aliceContext = build(aliceInvocation, { contextWindow: 200_000, maxOutputTokens: 32768 });
     const created = await createAlarmTool({ store, context: aliceContext }).execute('alice-create', {
       target_user_id: '42',
       summary: '提醒 Bob 开会',
@@ -236,7 +239,7 @@ describe('alarm internal context and ownership', () => {
 
     ingestion.ingest(update(2, 11, '我有哪些闹钟', 99), new Date(received.getTime() + 20_000));
     const bobInvocation = processOne(scheduler, new Date(received.getTime() + 35_000));
-    const bobContext = builder.build(bobInvocation, 200_000, 0, 32768);
+    const bobContext = build(bobInvocation, { contextWindow: 200_000, maxOutputTokens: 32768 });
     const bobList = await createListAlarmTool({
       store,
       context: bobContext,
@@ -259,11 +262,11 @@ describe('alarm internal context and ownership', () => {
   });
 
   test('delete_alarm only cancels caller own pending alarm and normalizes failures to not_found', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, '删闹钟'), received);
     const invocationId = processOne(scheduler, new Date(received.getTime() + 15_000));
-    const context = builder.build(invocationId, 200_000, 0, 32768);
+    const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
     const conversationId = context.conversationId;
     const own = insertAlarm(store, conversationId, 42n, '自己', '2026-08-16T06:00:00.000Z', 42n);
     const other = insertAlarm(store, conversationId, 99n, '别人', '2026-08-16T07:00:00.000Z', 99n);
@@ -300,7 +303,7 @@ describe('alarm internal context and ownership', () => {
   });
 
   test('alarm uses latest new user sender as caller even with multi-user visible history', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'alice old', 42), received);
     const firstInvocation = processOne(scheduler, new Date(received.getTime() + 15_000));
@@ -308,7 +311,7 @@ describe('alarm internal context and ownership', () => {
     ingestion.ingest(update(2, 11, 'alice history', 42), new Date(received.getTime() + 20_000));
     ingestion.ingest(update(3, 12, 'bob latest new', 99), new Date(received.getTime() + 21_000));
     const invocationId = processOne(scheduler, new Date(received.getTime() + 36_000));
-    const context = builder.build(invocationId, 200_000, 0, 32768);
+    const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
     expect(context.visibleSenders.size).toBe(2);
     expect(context.callerUserId).toBe(99n);
     const tool = createAlarmTool({ store, context });
@@ -329,7 +332,7 @@ describe('alarm internal context and ownership', () => {
   });
 
   test('tools fail closed when caller identity is not reliably available from new user messages', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'seed', 42), received);
     const seedInvocation = processOne(scheduler, new Date(received.getTime() + 15_000));
@@ -351,7 +354,7 @@ describe('alarm internal context and ownership', () => {
       )
       .run();
     const invocationId = processOne(scheduler, new Date(received.getTime() + 35_000));
-    const context = builder.build(invocationId, 200_000, 0, 32768);
+    const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
     const listTool = createListAlarmTool({
       store,
       context,
@@ -392,11 +395,11 @@ describe('alarm internal context and ownership', () => {
   });
 
   test('legacy alarms with nullable creator are hidden from list and delete', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, '看看闹钟', 42), received);
     const invocationId = processOne(scheduler, new Date(received.getTime() + 15_000));
-    const context = builder.build(invocationId, 200_000, 0, 32768);
+    const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
     const legacy = insertAlarm(store, context.conversationId, 42n, '旧闹钟', '2026-08-16T06:00:00.000Z', null);
     const list = await createListAlarmTool({
       store,
@@ -420,11 +423,11 @@ describe('alarm internal context and ownership', () => {
   });
 
   test('internal context survives close and reopen and retention removes it with online window', async () => {
-    const { directory, loaded, store, ingestion, scheduler, builder } = await setup();
+    const { directory, loaded, store, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, '列出闹钟'), received);
     const invocationId = processOne(scheduler, new Date(received.getTime() + 15_000));
-    const context = builder.build(invocationId, 200_000, 0, 32768);
+    const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
     insertAlarm(store, context.conversationId, 42n, '持久化', '2026-08-16T06:00:00.000Z');
     const tool = createListAlarmTool({
       store,
@@ -445,7 +448,6 @@ describe('alarm internal context and ownership', () => {
     store.close();
 
     const reopened = await SqliteStore.open(loaded.config, false);
-    const secondBuilder = new ContextBuilder(reopened, loaded.config);
     const reopenedIngestion = new TelegramIngestion(reopened, loaded.config, { id: 999 });
     reopenedIngestion.ingest(update(2, 11, '第二个'), new Date(received.getTime() + 20_000));
     const secondScheduler = new BucketScheduler(reopened, loaded.config, loaded.hash, async () => ({
@@ -453,8 +455,11 @@ describe('alarm internal context and ownership', () => {
       reason: 'done',
     }));
     const secondInvocation = processOne(secondScheduler, new Date(received.getTime() + 35_000));
-    const secondContext = secondBuilder.build(secondInvocation, 200_000, 0, 32768);
-    expect(secondContext.systemPrompt).toContain('alarm_id=');
+    const secondContext = renderInvocationContext(reopened, loaded.config, secondInvocation, {
+      contextWindow: 200_000,
+      maxOutputTokens: 32768,
+    });
+    expect(secondContext.userPrompt).toContain('alarm_id=');
     reopened.close();
 
     const reopenedForPurge = await SqliteStore.open(loaded.config, false);

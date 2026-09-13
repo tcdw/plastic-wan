@@ -126,6 +126,50 @@ export interface ContextMessageEntry {
   readonly snapshot_json: string;
 }
 
+export interface ConversationContextListItem {
+  readonly id: string;
+  readonly conversation_id: string;
+  readonly telegram_chat_id: string;
+  readonly chat_type: string;
+  readonly chat_title: string | null;
+  readonly message_thread_id: number;
+  readonly head_seq: number;
+  readonly next_seq: number;
+  readonly send_count_total: number;
+  readonly message_count: number;
+  readonly last_active_at: string;
+  readonly last_gc_at: string | null;
+  readonly active_invocation_id: string | null;
+}
+
+export interface ConversationContextMessageEntry {
+  readonly seq: number;
+  readonly role: string;
+  readonly is_checkpoint: boolean;
+  readonly send_seq: number | null;
+  readonly est_tokens: number;
+  readonly invocation_id: string | null;
+  readonly evicted_at: string | null;
+  readonly created_at: string;
+  readonly payload_preview: string;
+  readonly payload_truncated: boolean;
+}
+
+export interface ConversationContextRefEntry {
+  readonly ref: string;
+  readonly kind: string;
+  readonly source_seq: number;
+  readonly expires_at: string;
+}
+
+export interface ConversationContextDetail extends ConversationContextListItem {
+  readonly system_prompt_hash: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly messages: readonly ConversationContextMessageEntry[];
+  readonly refs: readonly ConversationContextRefEntry[];
+}
+
 export interface InvocationDetail extends InvocationListItem {
   readonly bucket_id: string;
   readonly prompt_version: number;
@@ -401,6 +445,7 @@ export interface ListFilters {
   readonly set?: string | undefined;
   readonly search?: string | undefined;
   readonly target?: string | undefined;
+  readonly conversation?: string | undefined;
 }
 
 export interface Credentials {
@@ -434,7 +479,7 @@ function listPath(path: string, filters: ListFilters): string {
   const params = new URLSearchParams();
   if (filters.limit !== undefined) params.set("limit", String(filters.limit));
   if (filters.cursor !== undefined && filters.cursor !== null) params.set("cursor", filters.cursor);
-  for (const key of ["state", "chat", "set", "search", "target"] as const) {
+  for (const key of ["state", "chat", "set", "search", "target", "conversation"] as const) {
     const value = filters[key];
     if (value !== undefined && value.length > 0) params.set(key, value);
   }
@@ -499,6 +544,16 @@ export function listMemories(filters: ListFilters): Promise<Page<MemoryEntry>> {
 
 export function listAlarms(filters: ListFilters): Promise<Page<AlarmListItem>> {
   return call<Page<AlarmListItem>>(listPath("/alarms", filters));
+}
+
+export function listConversationContexts(
+  filters: ListFilters,
+): Promise<Page<ConversationContextListItem>> {
+  return call<Page<ConversationContextListItem>>(listPath("/contexts", filters));
+}
+
+export function getConversationContext(conversationId: string): Promise<ConversationContextDetail> {
+  return call<ConversationContextDetail>(`/contexts/${encodeURIComponent(conversationId)}`);
 }
 
 export function cancelAlarm(id: string): Promise<{ status: string }> {

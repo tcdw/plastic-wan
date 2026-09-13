@@ -111,6 +111,41 @@ describe('Telegram ingestion', () => {
     store.close();
   });
 
+  test('waits a full window for a message that arrives while the conversation is being served', async () => {
+    // Regression: with the pace rule once treating every message that arrived
+    // during an active invocation as immediately due, a long-lived run consumed
+    // each such bucket on the spot — one message became one zero-length bucket
+    // and one injection, so the fixed window disappeared.
+    const { store, ingestion } = await setup((config) => {
+      config.telegram.bucket_window_seconds = 6;
+    });
+    const start = new Date('2026-08-15T00:00:00.000Z');
+    ingestion.ingest(textUpdate(1, 10, 'first'), start);
+    // The conversation is being served right now, past its own window.
+    store.db
+      .query(
+        `INSERT INTO invocations(bucket_id, conversation_id, state, config_hash, prompt_version, started_at, created_at)
+         VALUES ((SELECT id FROM buckets LIMIT 1), (SELECT id FROM conversations LIMIT 1), 'running', 'hash', 1, ?, ?)`,
+      )
+      .run(new Date(start.getTime() + 6_000).toISOString(), start.toISOString());
+    store.db.query("UPDATE buckets SET state = 'running' WHERE id = (SELECT bucket_id FROM invocations LIMIT 1)").run();
+
+    ingestion.ingest(textUpdate(2, 11, 'late arrival'), new Date(start.getTime() + 20_000));
+    const bucket = store.db
+      .query<{ state: string; first_received_at: string; deadline_at: string }, []>(
+        'SELECT state, first_received_at, deadline_at FROM buckets ORDER BY id DESC LIMIT 1',
+      )
+      .get();
+    // Due one window after it arrived, not the moment it landed: the batch has
+    // to be able to collect the messages that follow it.
+    expect(bucket).toEqual({
+      state: 'collecting',
+      first_received_at: '2026-08-15T00:00:20.000Z',
+      deadline_at: '2026-08-15T00:00:26.000Z',
+    });
+    store.close();
+  });
+
   test('edits append revisions without creating or extending buckets', async () => {
     const { store, ingestion } = await setup();
     const receivedAt = new Date('2026-08-15T00:00:00.000Z');

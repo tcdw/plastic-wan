@@ -1,11 +1,11 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import { and, eq, lt, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { GrammyError, HttpError } from 'grammy';
 import type { MessageEntity } from 'grammy/types';
 import Type, { type Static } from 'typebox';
-import type { InvocationContext } from '../platform/invocation-context.ts';
-import { asRunResult, rejectToolCall, type SqliteStore } from '../store/database.ts';
+import type { CapabilityRefResolver, InvocationContext } from '../platform/invocation-context.ts';
+import { rejectToolCall, type SqliteStore } from '../store/database.ts';
 import {
   chats,
   invocations,
@@ -83,8 +83,14 @@ export interface SendToolEnvironment {
   readonly store: SqliteStore;
   readonly api: TelegramSendApi;
   readonly context: InvocationContext;
-  readonly stickerCapabilities: ReadonlyMap<string, string>;
-  readonly maxSends: number;
+  /** Context-scoped reference resolver for reply targets and sticker refs. */
+  readonly capabilities: CapabilityRefResolver;
+  /**
+   * Sliding-window send rate limit, applied per Telegram chat: a long-lived
+   * invocation may legitimately send many times, but a loop must never flood
+   * one group.
+   */
+  readonly sendRateLimit: { readonly sendsPerWindow: number; readonly windowSeconds: number };
   readonly maxTextLength: number | undefined;
   readonly disallowBlankLines: boolean;
   readonly deadline: number;
@@ -130,7 +136,7 @@ export function createSendTool(
   return {
     name: 'send',
     label: 'Send to Telegram',
-    description: `Publish exactly one warranted user-visible Telegram message or sticker. Use this only after deciding the new messages or an alarm task require a reply, clarification, or confirmation; do not use it merely because the tool is available, to answer history-only content, or to publish private reasoning. Keep the message concise and self-contained. For text, kind may be omitted; omit parse_mode for plain text, or set parse_mode to MarkdownV2 only when the text is correctly escaped. ${textConstraints} For a sticker, kind must be sticker and sticker_ref must be a stk_ value returned by the search_stickers capability (via execute) in this invocation; img_ refs cannot be sent. Set reply_to_message_id only to a visible message, preferring the relevant new message. Success means Telegram accepted the send; if the tool fails or reports an unknown outcome, do not claim it was sent and do not blindly retry.`,
+    description: `Publish exactly one warranted user-visible Telegram message or sticker. Use this only after deciding the new messages or an alarm task require a reply, clarification, or confirmation; do not use it merely because the tool is available, to answer history-only content, or to publish private reasoning. Keep the message concise and self-contained. For text, kind may be omitted; omit parse_mode for plain text, or set parse_mode to MarkdownV2 only when the text is correctly escaped. ${textConstraints} For a sticker, kind must be sticker and sticker_ref must be a stk_ value returned by the search_stickers capability (via execute); img_ refs cannot be sent. Set reply_to_message_id only to a message visible in this conversation, preferring the relevant new message. Success means Telegram accepted the send; if the tool fails or reports an unknown outcome, do not claim it was sent and do not blindly retry. Repeated sends are rate limited per chat, so say what matters in one message instead of splitting it.`,
     parameters: SendInputSchema,
     executionMode: 'sequential',
     execute: async (toolCallId, input, signal) => {
@@ -142,10 +148,10 @@ export function createSendTool(
       const replyTarget =
         send.reply_to_message_id === undefined
           ? undefined
-          : environment.context.replyTargets.get(send.reply_to_message_id);
+          : environment.capabilities.resolveReplyTarget(send.reply_to_message_id);
       if (send.reply_to_message_id !== undefined && replyTarget === undefined) {
         recordRejectedSend(environment, toolCallId, input, 'reply_not_visible');
-        throw new Error('reply_to_message_id is not visible in this invocation');
+        throw new Error('reply_to_message_id is not visible in this conversation context');
       }
       const targetConversationId = replyTarget?.conversationId ?? environment.context.conversationId;
       const targetThreadId = replyTarget?.threadId ?? environment.context.threadId;
@@ -176,10 +182,11 @@ export function createSendTool(
           throw new Error('text must not contain blank lines; separate paragraphs with single newlines');
         }
       }
-      const stickerFileId = send.kind === 'sticker' ? environment.stickerCapabilities.get(send.sticker_ref) : undefined;
+      const stickerFileId =
+        send.kind === 'sticker' ? environment.capabilities.resolveStickerRef(send.sticker_ref) : undefined;
       if (send.kind === 'sticker' && stickerFileId === undefined) {
         recordRejectedSend(environment, toolCallId, input, 'sticker_ref_not_authorized');
-        throw new Error('sticker_ref was not returned by search_stickers in this invocation');
+        throw new Error('sticker_ref is not authorized in this conversation context');
       }
       const pending = environment.store.transaction(() => {
         const now = new Date().toISOString();
@@ -200,26 +207,22 @@ export function createSendTool(
           throw new Error('tool_calls insert returned no row');
         }
         const toolId = createdToolCall.id;
-        const quota = asRunResult(
-          environment.store.orm
-            .update(invocations)
-            .set({ sendsUsed: sql`${invocations.sendsUsed} + 1`, sideEffectStarted: true })
-            .where(
-              and(
-                eq(invocations.id, environment.context.invocationId),
-                lt(invocations.sendsUsed, BigInt(environment.maxSends)),
-              ),
-            )
-            .run(),
-        );
-        if (quota.changes === 0) {
+        if (recentSendCount(environment, new Date()) >= environment.sendRateLimit.sendsPerWindow) {
           environment.store.orm
             .update(toolCalls)
-            .set({ state: 'error', errorCode: 'send_limit', finishedAt: now })
+            .set({ state: 'error', errorCode: 'send_rate_limited', finishedAt: now })
             .where(eq(toolCalls.id, toolId))
             .run();
           return { toolId, sendId: null };
         }
+        // Audit counters, not a limit: the sliding window above is the brake.
+        // `side_effect_started` marks the invocation from the moment a send is
+        // attempted, which is what turns a crash into `outcome_unknown`.
+        environment.store.orm
+          .update(invocations)
+          .set({ sendsUsed: sql`${invocations.sendsUsed} + 1`, sideEffectStarted: true })
+          .where(eq(invocations.id, environment.context.invocationId))
+          .run();
         const createdSend = environment.store.orm
           .insert(telegramSends)
           .values({
@@ -238,7 +241,9 @@ export function createSendTool(
         return { toolId, sendId: createdSend.id };
       });
       if (pending.sendId === null) {
-        throw new Error(`send limit of ${environment.maxSends} reached`);
+        throw new Error(
+          `send rate limit of ${environment.sendRateLimit.sendsPerWindow} per ${environment.sendRateLimit.windowSeconds}s window reached`,
+        );
       }
       const sendId = pending.sendId;
       const options = {
@@ -265,7 +270,7 @@ export function createSendTool(
                 options,
               );
             } else {
-              throw new Error('sticker_ref was not returned by search_stickers in this invocation');
+              throw new Error('sticker_ref is not authorized in this conversation context');
             }
             break;
           } catch (error) {
@@ -351,6 +356,27 @@ export function createSendTool(
       }
     },
   };
+}
+
+/**
+ * Sends already made in this chat inside the rate-limit window. Pending and
+ * unknown outcomes count too: during a Telegram hiccup those are exactly the
+ * sends a runaway loop would pile up.
+ */
+function recentSendCount(environment: SendToolEnvironment, now: Date): number {
+  const since = new Date(now.getTime() - environment.sendRateLimit.windowSeconds * 1_000).toISOString();
+  const row = environment.store.db
+    .query<{ count: bigint }, [bigint, string]>(
+      `SELECT COUNT(*) AS count
+       FROM telegram_sends ts
+       JOIN conversations v ON v.id = ts.conversation_id
+       JOIN chats c ON c.id = v.chat_id
+       WHERE c.telegram_chat_id = ?
+         AND ts.state IN ('success', 'pending', 'outcome_unknown')
+         AND ts.created_at >= ?`,
+    )
+    .get(environment.context.chatId, since);
+  return Number(row?.count ?? 0n);
 }
 
 function recordRejectedSend(

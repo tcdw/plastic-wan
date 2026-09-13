@@ -97,7 +97,7 @@ describe('bucket scheduler', () => {
     expect(snapshot === null ? null : JSON.parse(snapshot.snapshot_json).text).toBe('after');
     expect(
       store.db.query<{ prompt_version: bigint }, []>('SELECT prompt_version FROM invocations').get()?.prompt_version,
-    ).toBe(4n);
+    ).toBe(5n);
     store.close();
   });
 
@@ -190,7 +190,7 @@ describe('bucket scheduler', () => {
     store.close();
   });
 
-  test('starts the next busy-period bucket on the prior session pace', async () => {
+  test('starts the next busy-period bucket one window after its own first message', async () => {
     const { store, ingestion, scheduler } = await setup((config) => {
       config.telegram.bucket_window_seconds = 6;
     });
@@ -219,11 +219,15 @@ describe('bucket scheduler', () => {
         "UPDATE buckets SET state = 'completed', finished_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
       )
       .run(new Date(start.getTime() + 10_000).toISOString(), firstInvocation);
-    expect(scheduler.processDue(new Date(start.getTime() + 12_000))).toHaveLength(1);
+    // The batch is measured from its own first message, so the previous session
+    // ending early does not shorten it.
+    expect(scheduler.processDue(new Date(start.getTime() + 12_000))).toHaveLength(0);
+    expect(scheduler.processDue(new Date(start.getTime() + 14_999))).toHaveLength(0);
+    expect(scheduler.processDue(new Date(start.getTime() + 15_000))).toHaveLength(1);
     const secondDeadline = store.db
       .query<{ deadline_at: string }, []>('SELECT deadline_at FROM buckets ORDER BY id DESC LIMIT 1')
       .get();
-    expect(secondDeadline?.deadline_at).toBe('2026-08-15T00:00:12.000Z');
+    expect(secondDeadline?.deadline_at).toBe('2026-08-15T00:00:15.000Z');
     store.close();
   });
 
@@ -258,6 +262,59 @@ describe('bucket scheduler', () => {
     expect(scheduler.processDue(new Date(start.getTime() + 20_000))).toHaveLength(1);
     store.close();
   });
+
+  test('records a failing handler as an invocation_error instead of a bare error name', async () => {
+    // Regression: the thrown error's `name` was persisted as the completion
+    // reason, so a runtime fault showed up as `completion_reason = 'Error'` with
+    // no code and no message anywhere in the audit trail.
+    const { store, ingestion, scheduler } = await setup(
+      (config) => {
+        // A zero-second window lets the running scheduler open the invocation
+        // itself; a pre-created one would be recovered as stale by start().
+        config.telegram.bucket_window_seconds = 0;
+      },
+      async () => {
+        throw new Error('Stored context message does not match its schema');
+      },
+    );
+    scheduler.start();
+    try {
+      ingestion.ingest(textUpdate(1, 10, 'only'), new Date());
+      scheduler.wake();
+      const deadline = Date.now() + 10_000;
+      let invocation: { id: bigint; state: string; completion_reason: string | null } | null = null;
+      while (Date.now() < deadline) {
+        invocation = store.db
+          .query<{ id: bigint; state: string; completion_reason: string | null }, []>(
+            'SELECT id, state, completion_reason FROM invocations ORDER BY id DESC LIMIT 1',
+          )
+          .get();
+        if (invocation !== null && invocation.state !== 'queued' && invocation.state !== 'running') {
+          break;
+        }
+        await Bun.sleep(10);
+      }
+      if (invocation === null) {
+        throw new Error('Expected an invocation');
+      }
+      // The audit row names the failure class instead of a bare "Error".
+      expect({ state: invocation.state, completion_reason: invocation.completion_reason }).toEqual({
+        state: 'failed',
+        completion_reason: 'invocation_error',
+      });
+      // The bucket this run consumed fails with it instead of staying open.
+      expect(
+        store.db
+          .query<{ state: string }, [bigint]>(
+            'SELECT state FROM buckets WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)',
+          )
+          .get(invocation.id)?.state,
+      ).toBe('failed');
+    } finally {
+      await scheduler.stop();
+      store.close();
+    }
+  }, 20_000);
 
   test('does not create another invocation without new human messages', async () => {
     const { store, ingestion, scheduler } = await setup();

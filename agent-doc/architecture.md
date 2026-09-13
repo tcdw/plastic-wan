@@ -36,22 +36,24 @@ TelegramIngestion
   └─ 收集进配置长度的 Bucket
         │
         ▼
-BucketScheduler
+BucketScheduler / ConversationRuntime
   ├─ 冻结 history/new 消息快照
-  ├─ 创建 Invocation
+  ├─ Conversation 无 running Invocation：创建 Invocation
+  ├─ Conversation 已有 running Invocation：attach 并注入该 Invocation
   ├─ 恢复、节拍判定
   └─ 调用 AgentRuntime
         │
         ▼
-ContextBuilder / MediaService
-  ├─ 系统提示与 Chat 指令（含 System Skill 索引）
-  ├─ 最近历史和本 Bucket 新消息
-  ├─ Reply 可见集合
-  ├─ 模型支持 image：Photo/图片 Document 多模态载荷
+ContextBuilder（稳定 system prompt + 本批注入块）
+  ├─ 稳定段：Core Agent Protocol、System Skill 索引、人格与 Chat 指令、能力说明
+  ├─ 注入段：当前时间、睡眠状态、Alarm 任务、Memory、Internal context + 本批新消息
+  ├─ 历史来自 canonical Conversation Context，不重新渲染
+  ├─ Reply 可见集合来自 context_refs
+  ├─ 模型支持 image：本批 Photo/图片 Document 多模态载荷
   └─ 模型不支持 image：图片 capability 引用
         │
         ▼
-Fresh Pi Agent
+Pi Agent（按 Conversation 缓存，播种自 canonical history）
   ├─ runtime 原语（直接暴露）
   ├─ execute → runtime 内部能力（按需发现与调用）
   └─ allowlisted MCP tools（直接暴露）
@@ -60,7 +62,7 @@ Fresh Pi Agent
 send Tool → Telegram API → 审计
 ```
 
-每个 Invocation 创建新的 Agent 实例。会话连续性来自 SQLite 中冻结的消息快照，不来自进程内长期记忆；Conversation 级短期记忆（`memories`）在每次 Invocation 时按创建时间升序注入 system prompt 倒数第二段（当前时间之前），TTL 到期或 Agent 主动删除后消失。
+每个 Conversation 持有一份持久化的 **Conversation Context**（`conversation_contexts` + `context_messages`）：它是 canonical history，进程重启与 Agent 缓存驱逐都不影响它。Pi Agent 实例按 Conversation 缓存在 `ConversationRuntime` 里，启动时从 canonical history 播种，是**可丢弃的缓存**而不是事实源。一次 Invocation 是一个运行窗口——期间可以注入多批新消息、多次调用模型与 Tool、多次 `send`——但 Invocation 最终仍会结束，Context 保留到下一次。Context 的增长由 checkpoint + 丢弃式 GC 控制（见 [Context 生命周期](telegram-agent-flow.md#context-生命周期)），没有 summarization 或 compaction。Conversation 级短期记忆（`memories`）随每一批注入，按创建时间升序排列在注入块内，TTL 到期或 Agent 主动删除后消失。
 
 ## 模块职责
 
@@ -81,16 +83,18 @@ src/
 
 模块职责基本能从层级和文件名推出，源码是唯一事实源。只有几处放置位置和名字不直观，需要单独记住：
 
-- `platform/agent-protocol.ts` 是代码固化的 **Core Agent Protocol**——消息分区、沉默判断、Tool 选择原则与副作用成功判定都在这里，不在人格 Prompt 文件里。
+- `application.ts` 装配的 AgentRuntime 与 Scheduler 共享一个 `ConversationRuntime`；`orchestration/conversation-runtime.ts` 拥有 Agent 实例 LRU 缓存与「已 attach 待注入的 Bucket」队列，是 runtime 与调度之间的唯一握手点。
+- `platform/agent-protocol.ts` 是代码固化的 **Core Agent Protocol**——消息分区、沉默判断、Tool 选择原则与副作用成功判定都在这里，不在人格 Prompt 文件里。它属于稳定段：改动它等于重建所有 Conversation Context。
 - [platform/system-resources.ts](../src/platform/system-resources.ts) 加载只读 **System Skills**；索引注入、按需读取和调用契约统一见 [Skills 与受控能力调用](telegram-agent-flow.md#skills-与受控能力调用)。Skill 提供操作知识而不授予权限，能力是否注册仍由组合根决定。
 - 不是所有 Agent Tool 都在 `capabilities/`：`zzz` 定义在 `store/sleep.ts`，`add_memory`/`delete_memory` 定义在 `context/memory.ts`，各自与所属状态放在一起。找某个 Tool 的实现时按名字 grep，别只翻 `capabilities/`。
-- `store/invocation-snapshot.ts` 是 Invocation 消息快照的冻结边界；`orchestration/invocation-queue.ts` 负责 Bucket/Alarm → Invocation 的同步状态转换、恢复与 Startup Catch-up。这两个名字容易和 `scheduler.ts` 混淆——Scheduler 只管事件循环与并发。
-- `platform/invocation-context.ts` 是无依赖的叶子类型模块，存在的唯一目的是打断 import 环，不要往里加逻辑。
+- `store/invocation-snapshot.ts` 是 Invocation 消息快照的冻结边界；`orchestration/invocation-queue.ts` 负责 Bucket/Alarm → Invocation 的同步状态转换、attach、恢复与 Startup Catch-up。这两个名字容易和 `scheduler.ts` 混淆——Scheduler 只管事件循环与并发。
+- `platform/invocation-context.ts` 是无依赖的叶子类型模块，存在的唯一目的是打断 import 环，不要往里加逻辑；它同时定义 `CapabilityRefResolver`（引用解析边界）与 `InvocationContextState`（一次运行中可被新批次刷新的可变上下文）。
 
 ## 并发模型
 
 - Scheduler 最多并行运行 `agent.max_concurrency` 个 Invocation。
-- 同一 Conversation 只允许一个 running Invocation。
+- 同一 Conversation 只允许一个 running Invocation；长活 Invocation 依赖这条不变量接收 attach。
+- 同一 Chat 的 Invocation 仍然串行：另一个 Forum Topic 到期的 Bucket 不会 attach 到当前 Invocation，它属于另一个 Conversation Context。
 - `KeyedSemaphore` 避免同一 Chat 的 Agent 与 `read_image` Vision 并发占用模型。
 - Vision 总并发由 `vision.max_concurrency` 限制；后台 Sticker 索引固定单并发，且优先级低于前台 `read_image`。
 - MCP 每个 Server 有独立的调用 semaphore、重连状态和审计。
@@ -100,22 +104,25 @@ src/
 - 进程启动时恢复未完成 Bucket/Invocation。
 - 小于 5 分钟的工作可重新排队；更旧工作标记为过期或恢复失败，避免无限重放。
 - 到期 Alarm 先原子 `pending → firing` 再创建 Invocation；进程恢复遗留 `firing` 关闭为 `fired`/`outcome_unknown`，绝不退回 `pending`。
-- 同一 Chat 最多一个 queued/running Invocation；Invocation 完成后，该 Chat 仍 collecting 的 Bucket deadline 重算为 `max(finished_at, started_at + bucket_window_seconds)`。
+- 同一 Chat 最多一个 queued/running Invocation；Invocation 完成后，该 Chat 仍 collecting 的 Bucket 若已到期会被立即处理，未到期的保持 `first_received_at + bucket_window_seconds` 不变（Scheduler 只把 deadline 往后推，不提前裁剪）。
+- attach 到运行中 Invocation 但从未注入的 Bucket 在运行结束时重新排队成新 Invocation，不会被静默丢弃。
 - 一旦 Tool 产生不可逆副作用，未知结果不得盲目重试；状态进入 `outcome_unknown` 供审计处理。
 
 ## 信任边界
 
 以下内容全部是不可信数据：Telegram 文本与媒体、Reply/Forward 元数据、MCP Tool 描述、MCP 结果、模型生成的 Tool 参数。
 
-Memory 内容是模型自己写入的持久化数据，按 Conversation 隔离，每条由 `add_memory` 写入时限 150 字符；注入 system prompt 前不做额外校验。它不构成任何授权来源，管理员可在面板中人工审核或删除。
+Memory 内容是模型自己写入的持久化数据，按 Conversation 隔离，每条由 `add_memory` 写入时限 150 字符；注入前不做额外校验。它不构成任何授权来源，管理员可在面板中人工审核或删除。
+
+Conversation Context 是运行时自己写下的历史，但它由模型输出与 Telegram 输入拼装而成，因此其中的文本、Tool 参数与 Tool 结果仍然只是数据：恢复旧 transcript 不等于恢复旧授权。
 
 代码而不是 Prompt 执行授权：
 
 - Chat/Topic allowlist 在入库边界校验。
-- Reply Message ID、媒体引用、Sticker Set 和 Sticker ID 必须来自当前 Context capability。
+- Reply Message ID、媒体引用（`img_`）、Sticker 引用（`stk_`）必须来自**当前 Conversation Context** 的 capability 且未过期：引用按 context 隔离，永不跨 Conversation 解析，被 GC 淘汰的消息携带的引用立即失效。
 - 普通 Assistant 文本不会发往 Telegram；模型驱动的 Telegram 输出只能经过 `send`。确定性的 Bot 命令回复直接调用 Bot API，不经过模型，见 [Bot Commands](telegram-agent-flow.md#bot-commands)。
 - `read` 只能读取 `system:///` 树内的 Markdown 文档：URI 段校验拒绝 `..`、反斜杠、百分号转义与非 Markdown 资源；Skill 内容是 runtime 文档，不是授权来源。
-- `execute` 只 dispatch 组合根注册的内部能力；`read`/`send`/`execute`/`zzz` 四个原语与 MCP Tool 不在注册表内，无法被间接调用。`execute.call` 返回 `{text, refs}` 封套：文本截断到 32 KiB，引用只能是以 Invocation 级 token 形式返回的 capability 引用（如 `sticker_ref`），由 `send` 在边界处校验后消费。
+- `execute` 只 dispatch 组合根注册的内部能力；`read`/`send`/`execute`/`zzz` 四个原语与 MCP Tool 不在注册表内，无法被间接调用。`execute.call` 返回 `{text, refs}` 封套：文本截断到 32 KiB，引用只能是以 Context 级 token 形式返回的 capability 引用（如 `sticker_ref`），由 `send` 在边界处校验后消费。
 - MCP Tool 必须通过配置 allowlist、策略、超时和大小限制。
 - `web_fetch` 只允许默认端口的公网 HTTP(S) GET；每次 DNS 与跳转目标都重新校验，连接固定到已校验地址，且不发送 Cookie 或认证信息。
 - 模型不能取得 Bash、任意进程、任意文件或原始 Telegram file ID 能力；模型也永远不能创建、修改或删除 Skill。

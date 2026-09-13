@@ -19,7 +19,7 @@ import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
 import { activeSleepUntil, enterSleep, SLEEP_STATE_KEY } from '../src/store/sleep.ts';
-import { SLEEP_STATE_PROMPT, withSleepStatePrompt } from '../src/context/context-builder.ts';
+import { SLEEP_STATE_PROMPT } from '../src/context/context-builder.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { SystemResources } from '../src/platform/system-resources.ts';
 import { writeTestConfig } from './helpers.ts';
@@ -183,12 +183,16 @@ test('adds zzz at the next turn boundary when a running session crosses the thre
   ]);
   expect(activeSleepUntil(store.orm)).not.toBeNull();
   expect(systemPrompts).toHaveLength(2);
+  // The sleep state never enters the system prompt: it would invalidate the
+  // whole Conversation Context on every budget transition. The prompt stays
+  // byte-identical across the boundary, and the state is restated with the next
+  // injected batch instead.
   expect(systemPrompts[0]).not.toContain(SLEEP_STATE_PROMPT);
-  expect(systemPrompts[1]?.split(SLEEP_STATE_PROMPT)).toHaveLength(2);
+  expect(systemPrompts[1]).toBe(systemPrompts[0]);
   store.close();
 });
 
-test('states the sleep state in the system prompt exactly while zzz is exposed', async () => {
+test('states the sleep state only while zzz is exposed', async () => {
   const awake = await runtimeSetup(284_999n);
   const awakePrompts: string[] = [];
   awake.faux.setResponses([
@@ -200,6 +204,13 @@ test('states the sleep state in the system prompt exactly while zzz is exposed',
   await awake.runtime.run(awake.invocationId, new AbortController().signal);
   expect(awakePrompts).toHaveLength(1);
   expect(awakePrompts[0]).not.toContain(SLEEP_STATE_PROMPT);
+  expect(
+    awake.store.db
+      .query<{ payload_json: string }, []>(
+        "SELECT payload_json FROM context_messages WHERE role = 'user' ORDER BY seq DESC LIMIT 1",
+      )
+      .get()?.payload_json,
+  ).not.toContain(SLEEP_STATE_PROMPT);
   awake.store.close();
 
   const sleepy = await runtimeSetup(285_001n);
@@ -212,17 +223,15 @@ test('states the sleep state in the system prompt exactly while zzz is exposed',
   ]);
   await sleepy.runtime.run(sleepy.invocationId, new AbortController().signal);
   expect(sleepyPrompts).toHaveLength(1);
-  expect(sleepyPrompts[0]).toContain(SLEEP_STATE_PROMPT);
+  expect(sleepyPrompts[0]).not.toContain(SLEEP_STATE_PROMPT);
+  expect(
+    sleepy.store.db
+      .query<{ payload_json: string }, []>(
+        "SELECT payload_json FROM context_messages WHERE role = 'user' ORDER BY seq DESC LIMIT 1",
+      )
+      .get()?.payload_json,
+  ).toContain(SLEEP_STATE_PROMPT);
   sleepy.store.close();
-});
-
-test('the sleep state block stays idempotent when the threshold is applied repeatedly', () => {
-  const awake = 'base prompt';
-  const sleepy = withSleepStatePrompt(awake, true);
-  expect(sleepy).toBe(`${awake}\n\n${SLEEP_STATE_PROMPT}`);
-  expect(withSleepStatePrompt(sleepy, true)).toBe(sleepy);
-  expect(withSleepStatePrompt(sleepy, false)).toBe(awake);
-  expect(withSleepStatePrompt(awake, false)).toBe(awake);
 });
 
 test('zzz enters sleeping and ends without another model turn', async () => {
@@ -230,7 +239,7 @@ test('zzz enters sleeping and ends without another model turn', async () => {
   faux.setResponses([fauxAssistantMessage(fauxToolCall('zzz', {}), { stopReason: 'toolUse' })]);
   expect(await runtime.run(invocationId, new AbortController().signal)).toEqual({
     state: 'completed',
-    reason: 'completed',
+    reason: 'sleep',
   });
   expect(activeSleepUntil(store.orm)).not.toBeNull();
   expect(modelToolLists(store)).toHaveLength(1);

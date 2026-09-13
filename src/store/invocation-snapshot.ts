@@ -28,6 +28,10 @@ export interface MessageSnapshotRow {
  * Freezes one invocation's model input: history (bounded by the per-chat
  * context cutoff) plus the bucket's current messages, each rendered as a
  * versioned JSON snapshot so later edits never mutate a running invocation.
+ *
+ * `append` continues the sequence numbering for a bucket attached to an
+ * invocation that already has messages, keeping one batch per `source_bucket_id`
+ * while `sequence_no` stays monotonic per invocation.
  */
 export function snapshotInvocation(
   store: SqliteStore,
@@ -36,6 +40,7 @@ export function snapshotInvocation(
   bucketId: bigint,
   conversationId: bigint,
   includeHistory: boolean,
+  options: { readonly append?: boolean } = {},
 ): void {
   // History stops at the per-chat context cutoff (`/cut_topic`), if one
   // exists: messages at or below the cutoff Telegram message ID never enter
@@ -74,7 +79,7 @@ export function snapshotInvocation(
        LEFT JOIN senders s ON s.id = r.sender_id
        WHERE bm.bucket_id = ${bucketId} ORDER BY bm.sequence_no`,
   );
-  let sequence = 1n;
+  let sequence = options.append === true ? nextSequence(store, invocationId) : 1n;
   for (const message of history) {
     insertSnapshot(store, invocationId, message, 'history', sequence);
     sequence += 1n;
@@ -83,6 +88,16 @@ export function snapshotInvocation(
     insertSnapshot(store, invocationId, message, 'new', sequence);
     sequence += 1n;
   }
+}
+
+function nextSequence(store: SqliteStore, invocationId: bigint): bigint {
+  return (
+    store.orm
+      .all<{ value: bigint }>(
+        sql`SELECT COALESCE(MAX(sequence_no), 0) + 1 AS value FROM invocation_messages WHERE invocation_id = ${invocationId}`,
+      )
+      .at(0)?.value ?? 1n
+  );
 }
 
 function insertSnapshot(

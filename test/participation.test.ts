@@ -5,6 +5,9 @@ import { join } from 'node:path';
 import type { Message, Update } from 'grammy/types';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
+import { ConversationContextStore } from '../src/context/context-store.ts';
+import { ContextRefStore } from '../src/context/context-refs.ts';
+import { ContextBuilder } from '../src/context/context-builder.ts';
 import { type FileConfig, type RawConfig, loadConfig } from '../src/platform/config.ts';
 import {
   type ParticipationRule,
@@ -14,7 +17,7 @@ import {
 } from '../src/platform/participation.ts';
 import { type StartupCatchUpApi, runStartupCatchUp } from '../src/startup-catch-up.ts';
 import { SqliteStore, purgeExpiredData } from '../src/store/database.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { renderInvocationContext, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -459,6 +462,68 @@ describe('participation gate', () => {
     ingestion.ingest(groupMessage(2, 11, { text: 'quiet companion' }), new Date('2026-08-15T13:00:05.000Z'));
     expect(bucketCount(store)).toBe(1n);
     expect(bucketMessages(store)).toBe(2n);
+    store.close();
+  });
+
+  test('re-renders a message that was suppressed while the transcript already exists', async () => {
+    const { store, config, ingestion, scheduler } = await setup({
+      global: { active_windows: [DAY_WINDOW], attention_window_seconds: 60 },
+    });
+    // First run: a mention opens a bucket and the invocation seeds the context.
+    ingestion.ingest(groupMessage(1, 10, mentionText()), OUTSIDE_PERIOD);
+    const [first] = scheduler.processDue(new Date('2026-08-15T13:00:20.000Z'));
+    if (first === undefined) {
+      throw new Error('Expected the first invocation');
+    }
+    const conversationId = store.db
+      .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
+      .get(first)?.conversation_id;
+    if (conversationId === undefined) {
+      throw new Error('Expected a conversation');
+    }
+    const contexts = new ConversationContextStore(store);
+    const stable = new ContextBuilder(
+      store,
+      config,
+      new ContextRefStore(store, { ttlHours: config.agent.context.ref_ttl_hours }),
+    ).buildSystemPrompt(
+      {
+        invocationId: first,
+        conversationId,
+        chatId: BigInt(GROUP_CHAT_ID),
+        threadId: 0n,
+        chatType: 'supergroup',
+        bucketKind: 'realtime',
+        alarm: null,
+        timezone: config.timezone,
+      },
+      false,
+      { provider: config.agent.provider, model: config.agent.model },
+    );
+    contexts.open(conversationId, stable.systemPromptHash);
+    store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
+    store.db
+      .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+      .run(first);
+
+    // The window lapses, so this message never opens a bucket on its own.
+    const suppressed = ingestion.ingest(
+      groupMessage(2, 11, { text: 'quiet words' }),
+      new Date('2026-08-15T13:05:00.000Z'),
+    );
+    expect(suppressed.bucketId).toBeUndefined();
+
+    // A later trigger opens a bucket whose history section carries it. Because
+    // the transcript does not hold it, the next injection still has to render
+    // it — otherwise the model would never learn that it was said.
+    ingestion.ingest(groupMessage(3, 12, mentionText()), new Date('2026-08-15T13:06:00.000Z'));
+    const [second] = scheduler.processDue(new Date('2026-08-15T13:06:20.000Z'));
+    if (second === undefined) {
+      throw new Error('Expected the second invocation');
+    }
+    const context = renderInvocationContext(store, config, second, { contextWindow: 200_000, maxOutputTokens: 32_768 });
+    expect(context.userPrompt).toContain('quiet words');
+    expect(context.userPrompt).toContain('<untrusted_telegram_history>');
     store.close();
   });
 

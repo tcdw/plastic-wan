@@ -177,8 +177,9 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
     parameters: Type.Object({}, { additionalProperties: false }),
     execute: async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} }),
   };
-  // 6 tool turns x 3 calls = 18 tool calls, past the former max_tool_calls cap
-  // of 12 (removed; audit counting stays). The 7th turn ends naturally.
+  // 6 tool turns x 3 calls = 18 tool calls: the former max_tool_calls cap of 12
+  // is gone, so only the per-injection turn budget (8) bounds the run. That
+  // budget stops the run at the 8th turn, which is what 'turn_budget' records.
   const faux = fauxProvider({
     provider: 'agent',
     models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
@@ -190,8 +191,6 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
       }),
     ),
     fauxAssistantMessage('done'),
-    // The send nudge fires once for the non-empty draft above; the model then
-    // confirms silence with an empty draft and the invocation ends.
     fauxAssistantMessage(''),
   ]);
   const models = createModels();
@@ -213,7 +212,7 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
     additionalTools: () => [noop],
   });
   const outcome = await runtime.run(invocationId, new AbortController().signal);
-  expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+  expect(outcome).toEqual({ state: 'completed', reason: 'turn_budget' });
   const audited = store.db
     .query<{ tool_calls_used: bigint }, [bigint]>('SELECT tool_calls_used FROM invocations WHERE id = ?')
     .get(invocationId);
@@ -617,7 +616,9 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
     },
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),
-    capabilityTools: (context, _state, deadline) => [capability(media.createReadImageTool(context, deadline), false)],
+    capabilityTools: (context, deadline, capabilities) => [
+      capability(media.createReadImageTool(context, capabilities, deadline), false),
+    ],
   });
   const outcome = await runtime.run(secondInvocation, new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
@@ -744,7 +745,9 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
     },
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),
-    capabilityTools: (context, _state, deadline) => [capability(media.createReadImageTool(context, deadline), false)],
+    capabilityTools: (context, deadline, capabilities) => [
+      capability(media.createReadImageTool(context, capabilities, deadline), false),
+    ],
   });
   const outcome = await runtime.run(invocationId, new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });

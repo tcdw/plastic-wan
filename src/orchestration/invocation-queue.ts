@@ -1,14 +1,24 @@
-import { and, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
 import { AGENT_PROMPT_VERSION } from '../platform/agent-protocol.ts';
 import type { RawConfig } from '../platform/config.ts';
 import { type SqliteStore, asRunResult, isChatPaused, resolveChatConfig } from '../store/database.ts';
 import { snapshotInvocation } from '../store/invocation-snapshot.ts';
 import { ParticipationRegistry, isConversationActive } from '../store/participation.ts';
 import { activeSleepUntil } from '../store/sleep.ts';
-import { alarms, appState, bucketMessages, buckets, invocations } from '../store/schema.ts';
+import { alarms, appState, bucketMessages, buckets, invocationBuckets, invocations } from '../store/schema.ts';
 
 export const RECOVERY_MAX_AGE_MS = 5 * 60_000;
 export const STARTUP_CATCH_UP_STATE_KEY = 'telegram_startup_catch_up';
+
+/**
+ * Attach side of long-lived invocations. The queue service owns every database
+ * transition; it only needs these two answers from the runtime that owns the
+ * in-memory agent: "is this run still accepting work" and "wake it up".
+ */
+export interface BucketAttachmentTarget {
+  isClosing(conversationId: bigint): boolean;
+  queueInjection(conversationId: bigint, bucketId: bigint): void;
+}
 
 interface BucketRow {
   readonly id: bigint;
@@ -56,12 +66,14 @@ export class InvocationQueueService {
   readonly #config: RawConfig;
   readonly #configHash: string;
   readonly #participation: ParticipationRegistry;
+  readonly #attachment: BucketAttachmentTarget | undefined;
 
-  constructor(store: SqliteStore, config: RawConfig, configHash: string) {
+  constructor(store: SqliteStore, config: RawConfig, configHash: string, attachment?: BucketAttachmentTarget) {
     this.#store = store;
     this.#config = config;
     this.#configHash = configHash;
     this.#participation = new ParticipationRegistry(config);
+    this.#attachment = attachment;
   }
 
   recover(now = new Date()): void {
@@ -70,6 +82,12 @@ export class InvocationQueueService {
       const staleBefore = new Date(now.getTime() - RECOVERY_MAX_AGE_MS).toISOString();
       this.#store.orm.run(
         sql`UPDATE invocations SET state = CASE WHEN side_effect_started = 1 THEN 'outcome_unknown' ELSE 'aborted' END, completion_reason = 'process_restart', finished_at = ${nowIso} WHERE state = 'running'`,
+      );
+      // Every attached bucket — the opening one included — decides its state
+      // from the invocation it was attached to, not from `invocations.bucket_id`.
+      this.#store.orm.run(
+        sql`UPDATE buckets SET state = CASE WHEN EXISTS (SELECT 1 FROM invocation_buckets ib JOIN invocations i ON i.id = ib.invocation_id WHERE ib.bucket_id = buckets.id AND i.state = 'outcome_unknown') THEN 'outcome_unknown' ELSE 'aborted' END, error_code = 'process_restart', finished_at = ${nowIso}, updated_at = ${nowIso}
+           WHERE state = 'running' AND EXISTS (SELECT 1 FROM invocation_buckets ib WHERE ib.bucket_id = buckets.id)`,
       );
       this.#store.orm.run(
         sql`UPDATE buckets SET state = CASE WHEN EXISTS (SELECT 1 FROM invocations i WHERE i.bucket_id = buckets.id AND i.state = 'outcome_unknown') THEN 'outcome_unknown' ELSE 'aborted' END, error_code = 'process_restart', finished_at = ${nowIso}, updated_at = ${nowIso} WHERE state = 'running'`,
@@ -250,6 +268,12 @@ export class InvocationQueueService {
   processDue(now = new Date()): bigint[] {
     const sleepUntil = activeSleepUntil(this.#store.orm, now);
     return this.#store.transaction(() => {
+      // A bucket whose conversation already has a *running* invocation is
+      // injected into it (below) instead of starting its own run. Everything
+      // else keeps the previous chat-level pacing: a queued invocation will
+      // open with this bucket, and a running invocation of a *different*
+      // conversation in the same chat still owns the chat, because agent
+      // sessions stay serialized per chat.
       const due = this.#store.orm.all<BucketRow>(
         sql`SELECT b.id, b.conversation_id, b.first_received_at, b.deadline_at
          FROM buckets b
@@ -259,12 +283,22 @@ export class InvocationQueueService {
            AND NOT EXISTS (
              SELECT 1 FROM invocations i
              JOIN conversations v2 ON v2.id = i.conversation_id
-             WHERE v2.chat_id = v.chat_id AND i.state IN ('queued', 'running')
+             WHERE v2.chat_id = v.chat_id
+               AND (i.state = 'queued' OR (i.state = 'running' AND i.conversation_id <> b.conversation_id))
            )
          ORDER BY b.deadline_at, b.id`,
       );
       const invocations: bigint[] = [];
       for (const bucket of due) {
+        const running = this.#runningInvocation(bucket.conversation_id);
+        if (running !== undefined) {
+          if (this.#attachBucket(bucket, running, now, sleepUntil)) {
+            continue;
+          }
+          // The run is closing and cannot take this batch; leave the bucket
+          // collecting so the next invocation picks it up.
+          continue;
+        }
         const invocationId = this.#queueBucket(bucket, now, sleepUntil);
         if (invocationId !== undefined) {
           invocations.push(invocationId);
@@ -272,6 +306,111 @@ export class InvocationQueueService {
       }
       return invocations;
     });
+  }
+
+  /**
+   * Hands one due bucket to the invocation already running for its
+   * Conversation. The frozen-input invariant is kept: the batch is snapshotted
+   * into `invocation_messages` now, so later edits cannot change what the model
+   * will see.
+   */
+  #attachBucket(bucket: BucketRow, invocationId: bigint, now: Date, sleepUntil: string | null): boolean {
+    const attachment = this.#attachment;
+    if (attachment === undefined || attachment.isClosing(bucket.conversation_id)) {
+      return false;
+    }
+    const chat = this.#store.orm
+      .all<{ telegram_chat_id: bigint; paused: bigint }>(
+        sql`SELECT c.telegram_chat_id,
+                EXISTS(SELECT 1 FROM chat_pause p WHERE p.chat_id = c.id) AS paused
+         FROM conversations v JOIN chats c ON c.id = v.chat_id WHERE v.id = ${bucket.conversation_id}`,
+      )
+      .at(0);
+    if (chat === undefined) {
+      throw new Error(`Bucket ${bucket.id} has no chat`);
+    }
+    const timestamp = now.toISOString();
+    this.#store.orm
+      .insert(invocationBuckets)
+      .values({ invocationId, bucketId: bucket.id, attachedAt: timestamp })
+      .run();
+    this.#store.orm
+      .update(buckets)
+      .set({ state: 'running', startedAt: timestamp, updatedAt: timestamp })
+      .where(and(eq(buckets.id, bucket.id), eq(buckets.state, 'collecting')))
+      .run();
+    snapshotInvocation(
+      this.#store,
+      this.#config.agent.history_messages,
+      invocationId,
+      bucket.id,
+      bucket.conversation_id,
+      false,
+      { append: true },
+    );
+    if (sleepUntil !== null) {
+      this.#logSleepingSkip(chat.telegram_chat_id, bucket.id, invocationId, sleepUntil);
+    }
+    attachment.queueInjection(bucket.conversation_id, bucket.id);
+    console.log(
+      JSON.stringify({
+        event: 'bucket_attached',
+        invocation_id: invocationId.toString(),
+        bucket_id: bucket.id.toString(),
+        conversation_id: bucket.conversation_id.toString(),
+        chat_id: chat.telegram_chat_id.toString(),
+        at: timestamp,
+      }),
+    );
+    return true;
+  }
+
+  /**
+   * Re-queues buckets that were attached mid-run but never injected, so a batch
+   * that arrived while the model was working is not silently dropped. The
+   * opening bucket is excluded: it is the trigger of the run and follows the
+   * invocation's terminal state, exactly like before.
+   */
+  releaseUninjectedBuckets(invocationId: bigint, now: Date): void {
+    const rows = this.#store.orm
+      .select({ bucketId: invocationBuckets.bucketId, conversationId: buckets.conversationId })
+      .from(invocationBuckets)
+      .innerJoin(buckets, eq(buckets.id, invocationBuckets.bucketId))
+      .innerJoin(invocations, eq(invocations.id, invocationBuckets.invocationId))
+      .where(
+        and(
+          eq(invocationBuckets.invocationId, invocationId),
+          isNull(invocationBuckets.injectedAt),
+          ne(invocationBuckets.bucketId, invocations.bucketId),
+        ),
+      )
+      .all();
+    for (const row of rows) {
+      const timestamp = now.toISOString();
+      this.#store.orm
+        .update(buckets)
+        .set({ state: 'queued', queuedAt: timestamp, updatedAt: timestamp })
+        .where(and(eq(buckets.id, row.bucketId), eq(buckets.state, 'running')))
+        .run();
+      this.#insertInvocation(row.bucketId, row.conversationId, now, false);
+      console.log(
+        JSON.stringify({
+          event: 'bucket_requeued',
+          invocation_id: invocationId.toString(),
+          bucket_id: row.bucketId.toString(),
+          conversation_id: row.conversationId.toString(),
+          at: timestamp,
+        }),
+      );
+    }
+  }
+
+  #runningInvocation(conversationId: bigint): bigint | undefined {
+    return this.#store.orm
+      .all<{ id: bigint }>(
+        sql`SELECT id FROM invocations WHERE conversation_id = ${conversationId} AND state = 'running' ORDER BY id DESC LIMIT 1`,
+      )
+      .at(0)?.id;
   }
 
   processAlarmsDue(now = new Date()): bigint[] {
@@ -474,6 +613,9 @@ export class InvocationQueueService {
       throw new Error('invocations insert returned no row');
     }
     const invocationId = created.id;
+    // The opening bucket is joined like every attached one, so terminal state
+    // transitions and un-injected releases can be uniform.
+    this.#store.orm.insert(invocationBuckets).values({ invocationId, bucketId, attachedAt: now.toISOString() }).run();
     snapshotInvocation(
       this.#store,
       this.#config.agent.history_messages,

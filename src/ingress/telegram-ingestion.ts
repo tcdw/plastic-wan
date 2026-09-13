@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Message, Update } from 'grammy/types';
 import { type ParsedCommand, parseBotCommand } from '../orchestration/bot-commands.ts';
 import type { RawConfig } from '../platform/config.ts';
@@ -10,7 +10,6 @@ import {
   chatMigrations,
   chats,
   conversations,
-  invocations,
   media as mediaTable,
   messageRevisions,
   messages,
@@ -475,25 +474,20 @@ export class TelegramIngestion {
         return undefined;
       }
       const now = receivedAt.toISOString();
-      const latestInvocation = this.#store.orm
-        .select({ state: invocations.state, startedAt: invocations.startedAt })
-        .from(invocations)
-        .innerJoin(conversations, eq(invocations.conversationId, conversations.id))
-        .where(eq(conversations.chatId, chatId))
-        .orderBy(desc(invocations.id))
-        .limit(1)
-        .get();
-      const priorPaceAt =
-        latestInvocation?.startedAt === null || latestInvocation?.startedAt === undefined
-          ? receivedAt.getTime()
-          : Date.parse(latestInvocation.startedAt) + this.#config.telegram.bucket_window_seconds * 1_000;
-      const remainsOnPriorPace =
-        latestInvocation?.state === 'queued' ||
-        latestInvocation?.state === 'running' ||
-        receivedAt.getTime() < priorPaceAt;
-      const deadline = remainsOnPriorPace
-        ? Math.max(receivedAt.getTime(), priorPaceAt)
-        : receivedAt.getTime() + this.#config.telegram.bucket_window_seconds * 1_000;
+      // Every bucket collects one full window from its own first message. The
+      // deadline is deliberately not snapped to a chat-wide grid and does not
+      // depend on the previous invocation's state:
+      //
+      // - Snapping to `previous start + window` (what the pace rule used to do)
+      //   left a band right after every run start in which a bucket could collect
+      //   almost nothing, down to a few milliseconds when a message landed on the
+      //   grid point. A long-lived invocation consumes due buckets on the spot, so
+      //   that band showed up as an occasional instant reply.
+      // - Treating "an invocation is queued or running" as immediately due was
+      //   harmless while a due bucket could not be consumed until the run ended,
+      //   but with attach it made every single message its own zero-length bucket
+      //   and its own injection.
+      const deadline = receivedAt.getTime() + this.#config.telegram.bucket_window_seconds * 1_000;
       const created = this.#store.orm
         .insert(buckets)
         .values({

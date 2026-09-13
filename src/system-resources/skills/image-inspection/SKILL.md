@@ -15,7 +15,7 @@ Use when visual details of a visible Telegram Photo, image Document, or Sticker 
 
 `execute.call` with tool `read_image` and input `{ "image_ref": "<img_ ref>" }`.
 
-Accepts only an `img_` image_ref shown in this invocation's message JSON. Directly attached photos (`figure_N` refs) are already visible to a multimodal model and are never accepted by `read_image`.
+Accepts only an `img_` image_ref from this conversation's retained context. Older refs keep working for a limited time; once one stops resolving, say that the image is no longer available instead of guessing. Directly attached photos (`figure_N` refs) are already visible to a multimodal model and are never accepted by `read_image`.
 
 ## Result handling
 

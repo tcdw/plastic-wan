@@ -646,6 +646,99 @@ export const alarms = sqliteTable(
   ],
 );
 
+/**
+ * One persistent canonical history per Conversation. `head_seq` is the first
+ * retained row after discard-only GC; `next_seq` is the next free row. The
+ * agent transcript is seeded from `context_messages` and written back to it, so
+ * continuity survives process restarts and agent-cache eviction.
+ */
+export const conversationContexts = sqliteTable('conversation_contexts', {
+  id: sqliteBigIntId('id').primaryKey(),
+  conversationId: sqliteBigInt('conversation_id')
+    .notNull()
+    .unique()
+    .references(() => conversations.id, { onDelete: 'cascade' }),
+  headSeq: sqliteBigInt('head_seq').notNull().default(1n),
+  nextSeq: sqliteBigInt('next_seq').notNull().default(1n),
+  sendCountTotal: sqliteBigInt('send_count_total').notNull().default(0n),
+  systemPromptHash: text('system_prompt_hash').notNull(),
+  activeInvocationId: sqliteBigInt('active_invocation_id').references(() => invocations.id, { onDelete: 'set null' }),
+  lastActiveAt: text('last_active_at').notNull(),
+  lastGcAt: text('last_gc_at'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const contextMessages = sqliteTable(
+  'context_messages',
+  {
+    contextId: sqliteBigInt('context_id')
+      .notNull()
+      .references(() => conversationContexts.id, { onDelete: 'cascade' }),
+    seq: sqliteBigInt('seq').notNull(),
+    role: text('role').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    invocationId: sqliteBigInt('invocation_id').references(() => invocations.id, { onDelete: 'set null' }),
+    isCheckpoint: integer('is_checkpoint', { mode: 'boolean' }).notNull().default(false),
+    sendSeq: sqliteBigInt('send_seq'),
+    estTokens: sqliteBigInt('est_tokens').notNull(),
+    evictedAt: text('evicted_at'),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.contextId, t.seq] }),
+    check('context_messages_role_check', sql`role IN ('user', 'assistant', 'toolResult')`),
+    index('context_messages_checkpoint_idx').on(t.contextId, t.isCheckpoint, t.seq),
+    index('context_messages_evicted_idx').on(t.evictedAt),
+  ],
+);
+
+/**
+ * Capability references scoped to a Conversation Context with a TTL, so a
+ * reference quoted in retained history stays usable across invocations.
+ * `sourceSeq` is the context message that carried the reference.
+ */
+export const contextRefs = sqliteTable(
+  'context_refs',
+  {
+    contextId: sqliteBigInt('context_id')
+      .notNull()
+      .references(() => conversationContexts.id, { onDelete: 'cascade' }),
+    ref: text('ref').notNull(),
+    kind: text('kind').notNull(),
+    sourceSeq: sqliteBigInt('source_seq').notNull(),
+    mediaId: sqliteBigInt('media_id').references(() => media.id, { onDelete: 'cascade' }),
+    stickerFileId: text('sticker_file_id'),
+    targetConversationId: sqliteBigInt('target_conversation_id').references(() => conversations.id, {
+      onDelete: 'cascade',
+    }),
+    targetThreadId: sqliteBigInt('target_thread_id'),
+    expiresAt: text('expires_at').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.contextId, t.ref] }),
+    check('context_refs_kind_check', sql`kind IN ('media', 'sticker', 'reply')`),
+    index('context_refs_expiry_idx').on(t.expiresAt),
+  ],
+);
+
+/** Bucket-to-invocation join: one long-lived invocation may consume many buckets. */
+export const invocationBuckets = sqliteTable(
+  'invocation_buckets',
+  {
+    invocationId: sqliteBigInt('invocation_id')
+      .notNull()
+      .references(() => invocations.id, { onDelete: 'cascade' }),
+    bucketId: sqliteBigInt('bucket_id')
+      .notNull()
+      .references(() => buckets.id, { onDelete: 'cascade' }),
+    attachedAt: text('attached_at').notNull(),
+    injectedAt: text('injected_at'),
+  },
+  (t) => [primaryKey({ columns: [t.invocationId, t.bucketId] }), index('invocation_buckets_bucket_idx').on(t.bucketId)],
+);
+
 export const internalContexts = sqliteTable(
   'internal_contexts',
   {

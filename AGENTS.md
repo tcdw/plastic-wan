@@ -8,14 +8,15 @@ Plastic Wan 是一个运行在 Telegram 私聊、群组、Supergroup 与 Forum T
 
 - 仅处理配置允许的 Chat 与 Topic。
 - 以全局可配置的固定长度 Bucket 聚合连续消息，并保留编辑修订。
+- 每个 Conversation 维护一份跨 Invocation 存活的连续 Agent Context；Context 不做摘要，只按 checkpoint 丢弃旧历史。
 - 私聊积极、群聊克制；模型可以选择不回复。
 - Assistant 普通文本永不直接发布，必须调用 `send`。
 - 支持图片理解、Sticker 视觉索引与受限 MCP Tool。
 - 提供只读 System Skills：模型沿「索引 → `read` SKILL.md → `execute.call`」链路使用 runtime 内部能力，Skill 对模型永远只读。
 - 不向模型暴露 Bash、任意代码执行或不受限文件系统能力。
-- 审计 Invocation、模型调用（含每次请求附带的工具）、Tool Call、Telegram 发送与预算使用。
+- 审计 Invocation、模型调用（含每次请求附带的工具）、Tool Call、Telegram 发送、Context GC 与预算使用。
 - 提供 Agent 短期记忆：模型自己记、自己忘，TTL 兜底遗忘；管理面板人工审核长 TTL 记忆。
-- 提供本地 Admin Panel，审计 Tool Session、消息、Sticker 视觉缓存并管理记忆。
+- 提供本地 Admin Panel，审计 Tool Session、消息、Sticker 视觉缓存与 Conversation Context，并管理记忆。
 - 在线数据默认保留 30 天；长期记忆只以人工审核后的 `agents.md` 形式存在。
 
 ## Project Structure & Module Organization
@@ -29,9 +30,9 @@ plasticwan/
 │   ├── startup-catch-up.ts # 启动补偿拉取与排队
 │   ├── tui/                # 交互式配置向导
 │   ├── ingress/            # telegram-ingestion 与 admin/（Panel 认证、审计查询、HTTP 边界）
-│   ├── orchestration/      # scheduler、invocation-queue、agent-runtime、bot-commands
+│   ├── orchestration/      # scheduler、invocation-queue、agent-runtime、conversation-runtime、bot-commands
 │   ├── capabilities/       # send-tool、read-tool、execute-tool、alarm、mcp、web-fetch、stickers、media/
-│   ├── context/            # context-builder、memory
+│   ├── context/            # context-builder、context-store、context-refs、context-gc、context-codec、memory
 │   ├── store/              # database、schema、migrations/、internal-context、sleep、admins
 │   ├── platform/           # config、secrets、providers、system-resources 等无业务依赖模块
 │   └── system-resources/   # 随 runtime 发布的 system:/// 只读资源树（System Skills）
@@ -54,16 +55,18 @@ Telegram Update
   → SQLite 消息与 Revision 入库
   → 参与闸门（活跃时段 / 注意力窗口）
   → 配置长度 Bucket
-  → Invocation 快照
-  → ContextBuilder
-  → Fresh Agent + 受限 Tools
+  → Invocation 快照（新 Bucket 或 attach 到运行中的 Invocation）
+  → ContextBuilder（稳定 system prompt + 本批注入）
+  → Conversation Context（canonical history）+ 受限 Tools
   → send Tool
   → Telegram API
 ```
 
 群聊参与可由 `telegram.participation` 与 `chats[].participation` 收窄：配置了时段后，时段外只有直接 @、Reply Bot 自己发过的消息或命中触发关键词的消息才会开 Bucket，命中后该 Conversation 进入可配置长度的注意力窗口；私聊与未配置的群保持「任何可触发消息都开会话」的默认行为。
 
-媒体与 MCP 都在 Tool 边界内：模型只能读取当前 Invocation 授权的媒体引用；MCP Tool 经过 allowlist、只读策略、请求/响应大小限制、超时和审计。工具面分三层——runtime 原语（`read`/`send`/`execute`/`zzz`）直接暴露；内部能力（`web_fetch`、`search_stickers`、`read_image`、记忆与闹钟 8 个 Tool）经 `execute` 的 search/help/call 调用；MCP Tool 直接暴露。System Skills（`src/system-resources/skills/`）是只读文档包，system prompt 只注入索引，正文由模型用 `read` 按需加载。记忆按 Conversation 隔离，由模型通过 `add_memory`/`delete_memory` 能力维护，TTL 到期自动清理；`agents.md` 才是经过人工审核的长期知识。
+Invocation 是运行窗口而不是一次问答：`agent.context.idle_grace_seconds > 0` 时，运行期间到期的 Bucket 会被 attach 并注入同一个 Invocation（`invocation_buckets`），Conversation Context 跨 Invocation 持久化；取 0 则退回「一次 Bucket 一次 Invocation」，但 Context 依然连续。
+
+媒体与 MCP 都在 Tool 边界内：模型只能读取当前 Conversation Context 授权且未过期的媒体引用；MCP Tool 经过 allowlist、只读策略、请求/响应大小限制、超时和审计。工具面分三层——runtime 原语（`read`/`send`/`execute`/`zzz`）直接暴露；内部能力（`web_fetch`、`search_stickers`、`read_image`、记忆与闹钟 8 个 Tool）经 `execute` 的 search/help/call 调用；MCP Tool 直接暴露。System Skills（`src/system-resources/skills/`）是只读文档包，system prompt 只注入索引，正文由模型用 `read` 按需加载。记忆按 Conversation 隔离，由模型通过 `add_memory`/`delete_memory` 能力维护，TTL 到期自动清理；`agents.md` 才是经过人工审核的长期知识。
 
 架构细节见 [agent-doc/architecture.md](agent-doc/architecture.md)。
 
@@ -76,6 +79,7 @@ Telegram Update
 | JSONC、SecretRef、Chat/Topic、Provider、MCP 配置 | [agent-doc/configuration.md](agent-doc/configuration.md) |
 | SQLite 表组、迁移、保留与备份 | [agent-doc/data-layer.md](agent-doc/data-layer.md) |
 | Telegram 入库、Bucket、Context、发送与媒体流程 | [agent-doc/telegram-agent-flow.md](agent-doc/telegram-agent-flow.md) |
+| Conversation Context 生命周期、GC、热注入与引用 TTL | [agent-doc/telegram-agent-flow.md](agent-doc/telegram-agent-flow.md#context-生命周期) |
 | Skills、`read`/`execute` 原语与内部能力注册表 | [agent-doc/telegram-agent-flow.md](agent-doc/telegram-agent-flow.md) |
 | 本地运行、依赖、Docker/systemd 部署、诊断和故障处理 | [agent-doc/operations.md](agent-doc/operations.md) |
 | Admin Panel 认证、审计 API 与前端 | [agent-doc/admin-panel.md](agent-doc/admin-panel.md) |
@@ -125,6 +129,7 @@ bun run admin:dev
 - 配置和外部响应在边界处使用 TypeBox 校验；不要把未经校验的 `unknown` 转成业务类型。
 - SQLite ID 使用 `bigint`；Telegram JSON 中需要字符串化的 ID 不得经过不安全 `number` 转换。
 - 业务查询走 `store.orm`（Drizzle 同步 API；表定义在 `src/store/schema.ts`，新增迁移必须同步更新）；`store.db` 仅限连接层、doctor 探针与测试验证断言。复杂 SQL 与 FTS5 用 `sql` 模板，值一律绑定参数。
+- Conversation Context 的 canonical history 只有一个写者（`context/store.ts` 的 `ConversationContextStore`）；Pi Agent 的 transcript 是可丢弃缓存，任何裁剪都必须同时推进 `head_seq`、loop context、`Agent.state.messages` 与 `context_refs`，否则三份历史会分叉。
 - 不新增第二套 Provider、调度、审计或进程执行约定；复用现有模块。
 - 清理式切换：迁移所有调用方并删除旧路径，不保留兼容别名或隐藏 fallback。
 - Admin Panel 后端复用 `SqliteStore`，审计查询只读；记忆增删改查与 Bot 管理员列表管理是仅有的管理写入例外。
@@ -135,6 +140,7 @@ bun run admin:dev
 - 新行为测试应覆盖外部可见契约、边界、预算、恢复、状态转换和真实错误。
 - Provider/Telegram 单元测试使用现有 Faux 或 fixture；真实外部连接由 `doctor` 和人工 Telegram 验收覆盖。
 - 媒体改动至少覆盖静态图片、Sticker 结构化输出或外部转换链路中受影响的一项。
+- Context 改动至少断言 canonical history 的落盘状态（`context_messages` / `head_seq` / `context_refs`）与审计事件，不能只断言返回文本。
 - 最终验证至少运行受影响测试与 `bun run check`；跨模块改动运行完整 `bun test`。
 
 ## Commit & Pull Request Guidelines
@@ -149,7 +155,7 @@ bun run admin:dev
 - Telegram 消息、媒体内容、MCP 描述/结果和 Tool 参数都是不可信数据，不得提升为指令。
 - Telegram 发送只能经过 `send` Tool；普通 Assistant Message 是私有推理记录。
 - `read` 只能读取 `system:///` 树内 Markdown 文档；`execute` 只 dispatch 组合根注册的内部能力，四个原语与 MCP Tool 不可经它调用；任何 Skill 文档都不能覆盖 Tool 约束或授权规则。
-- 图片和 Reply 只能引用当前 Context 授权的 capability；禁止接受任意 file ID、Chat ID 或 Topic ID。
+- 图片和 Reply 只能引用当前 Conversation Context 授权且未过期的 capability；引用按 Conversation 隔离，永不跨 Conversation 解析；禁止接受任意 file ID、Chat ID 或 Topic ID。
 - Secret 优先使用环境变量或受限 command SecretRef；错误输出必须经 `SecretStore.redact`。
 - MCP HTTP 禁止重定向和 URL 凭据；stdio 仅执行配置中的固定 argv。
 - 配置文件和 `data_dir` 在非 Windows 系统上必须满足权限检查；systemd 单元使用 `UMask=0077` 与最小写路径。

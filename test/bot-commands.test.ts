@@ -19,6 +19,7 @@ import { createModelRegistry } from '../src/platform/providers.ts';
 import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from '../src/orchestration/scheduler.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
+import { ConversationContextStore } from '../src/context/context-store.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
@@ -309,6 +310,35 @@ describe('bot command service', () => {
     expect(status).not.toContain('已暂停');
     commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
     expect(commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain('已暂停');
+    store.close();
+  });
+
+  test('status reports the retained Conversation Context', async () => {
+    const { store, ingestion, scheduler, commands } = await setup();
+    ingestion.ingest(textUpdate(1, 10, 'hello'), FIXED_NOW);
+    const [invocationId] = scheduler.processDue(new Date(FIXED_NOW.getTime() + 15_000));
+    if (invocationId === undefined) {
+      throw new Error('Expected queued invocation');
+    }
+    const conversationId = store.db
+      .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
+      .get(invocationId)?.conversation_id;
+    if (conversationId === undefined) {
+      throw new Error('Expected a conversation');
+    }
+    const contexts = new ConversationContextStore(store);
+    const { header } = contexts.open(conversationId, 'hash-a');
+    contexts.append(header, {
+      invocationId,
+      isCheckpoint: true,
+      estTokens: 10,
+      json: JSON.stringify({ role: 'user', content: 'hello', timestamp: 1 }),
+      role: 'user',
+    });
+
+    const status = commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW);
+    expect(status).toContain(`Context 消息 1，保留 send 0，head_seq ${header.headSeq}`);
+    expect(status).toContain('未 GC');
     store.close();
   });
 

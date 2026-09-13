@@ -40,11 +40,46 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 ## 表组
 
-表与列定义见 [src/store/schema.ts](../src/store/schema.ts) 和 [迁移目录](../src/store/migrations/)，不在文档维护表数量或字段副本。下面只记录 schema 读不出来的语义。
+表与列定义见 [src/store/schema.ts](../src/store/schema.ts) 和 [迁移目录](../src/store/migrations/)，不在文档维护表数量或字段类型副本；类型、可空性与 CHECK 约束以 schema、迁移与源码为准。下面只记录 schema 读不出来的语义。
 
 ### 冻结与重放边界
 
-`invocation_messages` 是可重放边界，保存 `history`/`new` 两个区段的 Message Revision 快照。消息在 Invocation 创建后被编辑只影响未来 Context，不改写已经冻结的快照。`buckets` 区分 `realtime`（配置长度窗口）与 `startup_catch_up`（启动追赶）两种来源，状态机相同。`agent_messages` 是 Agent 内部 transcript——**Assistant 文本不等于 Telegram 发送**，真正发出去的只有 `telegram_sends` 里的行。
+`invocation_messages` 是可重放边界，保存 `history`/`new` 两个区段的 Message Revision 快照；长生命周期 Invocation 的多个批次按 `source_bucket_id` 追加进同一个 Invocation（`sequence_no` 在 Invocation 内保持单调）。消息在 Invocation 创建后被编辑只影响未来 Context，不改写已经冻结的快照。`buckets` 区分 `realtime`（配置长度窗口）与 `startup_catch_up`（启动追赶）两种来源，状态机相同。`agent_messages` 是**按 Invocation 展开的扁平审计轨迹**（人类可读的 `assistant`/`tool_result`/`harness_nudge` 文本行），完整可重放的 transcript 属于 Conversation，见下一节——**Assistant 文本不等于 Telegram 发送**，真正发出去的只有 `telegram_sends` 里的行。
+
+### Conversation Context（长期会话 transcript）
+
+`conversation_contexts` + `context_messages` 是 Agent 的**规范 transcript**：粒度是 Conversation（Chat + Forum Topic），跨 Invocation、跨进程重启长期存在。内存里的 Pi agent 只是可丢弃的缓存，缓存被 LRU 逐出或进程重启后都从这里重新播种。
+
+- `conversation_contexts.conversation_id` 带 UNIQUE 约束：**每个 Conversation 至多一行 context**。
+- 保留窗口是半开区间 `[head_seq, next_seq)`：`next_seq` 是下一个空位，`head_seq` 是第一条保留行；`context_messages` 以 `(context_id, seq)` 为主键，`seq` 只增不减，被丢弃的行不从编号里移除。
+- `send_count_total` 是该 context 累计的成功 `send` 次数，跨 Invocation 累计，`head_seq` 前移时不清零。
+- `system_prompt_hash` 是稳定系统提示的 SHA-256。打开 context 时 hash 不一致按「重建」处理：删除该 context 的全部 `context_messages` 与 `context_refs`，`head_seq`/`next_seq` 复位为 1、`send_count_total` 归零、`active_invocation_id` 清空。
+- `active_invocation_id` 指向当前拥有该 context 的 running Invocation，运行结束时清空；Invocation 行本身被清理时置 `NULL`。
+- `last_active_at` 在每次追加行与 `touch`（Invocation 开始/结束）时刷新，是保留清理判定「空闲 Conversation」的依据；`last_gc_at` 记录最近一次 GC 时间。
+- `context_messages.payload_json` 保存**完整 AgentMessage JSON**（含 thinking 与 tool call 结构），可以直接解码重放，而不是从文本反推；`role` 只有 `user`/`assistant`/`toolResult`。
+- `agent_messages` 与 `context_messages` 的分工：前者是审计轨迹（每 Invocation 扁平展开、人可读、把 harness 提醒单独标成 `harness_nudge`），后者是重放来源（完整结构与 thinking、按 Conversation 长期保留）；两者都由 `agent-runtime` 写入，互不替代。
+- `is_checkpoint` 标记一条注入批次的首条 user 消息；GC 只会把 `head_seq` 推到 checkpoint 行上。
+- `send_seq` 只在「成功 `send` 的 toolResult」行上非空，值等于写入时的 `send_count_total + 1`；GC 用它统计保留窗内还剩几次发送。
+- `est_tokens` 是逐行 Token 估算，供 GC 与收尾判定使用，不是精确计数。
+- `evicted_at` 是软删除标记：GC 不立即物理删除行，只打标记；行保留到在线窗口之后才由 `purgeExpiredData` 真正删除（见「保留清理」）。
+- `invocation_id` 记录写入该行的 Invocation，Invocation 被清理时置 `NULL`，历史行本身不随之删除。
+
+写路径只有一处：`advanceHead` 把 `head_seq` 前移时，在同一事务里软标记被丢弃的行、删除这些行携带的 `context_refs`、更新 `head_seq` 与 `last_gc_at`。GC 是**纯丢弃，从不做摘要**：`planContextGc` 决定新起点（默认跳到「仍保留至少 `retained_sends_target` 次发送」的最新 checkpoint，发送稀疏但 Token 压力大的历史退回 Token 预算判定），保留段还必须通过 `isRenderable` 结构检查（不得以 `toolResult` 开头，每个 tool result 都要有对应的 assistant tool call），否则这一轮不裁剪。
+
+`context_refs` 是**按 Conversation Context 记账的能力引用**，取代了原来按 Invocation 记账的引用：
+
+- `kind` 为 `media`/`sticker`/`reply`，`ref` 分别是 `img_<uuid>`、`stk_<uuid>`、`reply:<telegram_message_id>`；对应 payload 落在 `media_id` / `sticker_file_id` / `target_conversation_id` + `target_thread_id`。
+- 授权规则只有一条：`source_seq >= head_seq` 且 `expires_at > now`。`source_seq` 是携带该引用的 context 行，该行被 GC 逐出后引用立即失效，不需要额外的撤销步骤。
+- 查询始终带 `context_id`，因此**引用永不跨 Conversation 解析**：另一个 Chat/Topic 的引用即使格式相同也解析不出来。
+- `expires_at = 写入时刻 + agent.context.ref_ttl_hours`（reply 引用每次重新注册都会续期）；同一 (context, media) 在未过期时复用同一条 `ref`，避免前缀抖动。
+
+`invocation_buckets` 是 Bucket 到 Invocation 的 join 表：长生命周期的 Invocation 会消费多个 Bucket，`invocations.bucket_id` 只保留「开场 Bucket」这一历史字段。
+
+- 主键 `(invocation_id, bucket_id)`，`attached_at` 是挂载时间。
+- `injected_at` 为 `NULL` 表示「已挂到该 Invocation，但还没进入模型 transcript」。Invocation 结束时 `releaseUninjectedBuckets` 把这些 Bucket（开场 Bucket 除外）重新排队成新的 Invocation，批次不会被静默丢弃。
+- Bucket 终态与重启恢复按 join 表判断：Invocation 结束时把它名下的所有 running Bucket 一起置为同一终态，进程重启时也只把这些 Bucket 标成 `aborted`/`outcome_unknown`。
+
+`/status` 命令与 Admin Panel 的 `contexts` 接口只读展示 `head_seq`/`next_seq`/`send_count_total`、保留消息数与最近 GC 时间，不写入该表组。
 
 ### 隐藏工作上下文
 
@@ -85,7 +120,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 MCP 只有 `mcp_server_state` 一张自己的表（Server 状态、Tool registry hash、重连次数、错误码）；Tool 调用复用 `tool_calls`，没有自己的调用配额。
 
-Admin 侧的 `admin_users`/`admin_sessions`/`bot_admins` 语义见 [admin-panel.md](admin-panel.md#数据表)。密码明文和 Session Token 原文都不入库；`admin_users` 与 `admin_sessions` 不参与在线保留清理（管理员账号不是会话数据），过期 Session 由 `AdminAuth` 在认证、新建 Session 和服务启动时删除。`chat_pause` 记录 `/pause` 暂停的 Chat，`chat_context_cutoffs` 记录 `/cut_topic` 的每 Chat 上下文切点（Telegram message ID），仅影响新 Invocation 的 history。
+Admin 侧的 `admin_users`/`admin_sessions`/`bot_admins` 语义见 [admin-panel.md](admin-panel.md#数据表)。密码明文和 Session Token 原文都不入库；`admin_users` 与 `admin_sessions` 不参与在线保留清理（管理员账号不是会话数据），过期 Session 由 `AdminAuth` 在认证、新建 Session 和服务启动时删除。`chat_pause` 记录 `/pause` 暂停的 Chat，`chat_context_cutoffs` 记录 `/cut_topic` 的每 Chat 上下文切点（Telegram message ID）：切点同时决定新批次 history 的下界，并在同一步清空被切 Topic 的 Conversation Context（保留行打上 `evicted_at`、删除其 `context_refs`、`head_seq` 推到 `next_seq`），否则切点只会裁掉渲染用的 history，模型仍然能从 transcript 里看到全部旧消息。
 
 ## ID 与 JSON 规则
 
@@ -107,6 +142,10 @@ Admin 侧的 `admin_users`/`admin_sessions`/`bot_admins` 语义见 [admin-panel.
 - Sticker 长期视觉索引不按普通图片策略删除。
 - `alarms` 的 `pending`/`firing` 行保留（未来仍需执行）；`fired`/`cancelled` 终态行随在线审计窗口清理。
 - `internal_contexts` 不是长期 memory，也不单独配置 TTL；它随在线会话窗口清理，默认保留到 `created_at < now - retention.online_days` 时删除。
+- `context_refs` 中 `expires_at <= now` 的行（TTL 到期即删，与在线保留窗口无关）。
+- `context_messages` 中已软标记 `evicted_at` 且早于在线窗口的行；软标记本身保留一个在线窗口，便于审计 GC 丢掉了什么。
+- `last_active_at` 早于在线窗口的 `conversation_contexts`，连带级联删除其 `context_messages` 与 `context_refs`；空闲 Conversation 的长期 transcript 因此不会无限增长。
+- `invocation_buckets` 没有独立清理规则，随 `invocations`/`buckets` 的删除级联消失。
 
 不要把 `DELETE FROM messages WHERE received_at < ...` 当作等价实现；外键和冻结快照要求分阶段清理。
 

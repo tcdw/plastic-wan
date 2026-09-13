@@ -4,13 +4,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
 import { createSendTool, type TelegramSendApi } from '../src/capabilities/send-tool.ts';
-import { ContextBuilder } from '../src/context/context-builder.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from '../src/orchestration/scheduler.ts';
 import { type FileConfig, loadConfig } from '../src/platform/config.ts';
 import { runStartupCatchUp, type StartupCatchUpApi } from '../src/startup-catch-up.ts';
 import { SqliteStore } from '../src/store/database.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import {
+  invocationCapabilities,
+  renderInvocationContext,
+  testConfigJsonc,
+  writeTestConfig,
+  type TestContextOptions,
+  type TestInvocationContext,
+} from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -87,9 +93,10 @@ async function setup(
   transform?: (config: FileConfig) => void,
 ): Promise<{
   readonly store: SqliteStore;
+  readonly loaded: Awaited<ReturnType<typeof loadConfig>>;
   readonly ingestion: TelegramIngestion;
   readonly scheduler: BucketScheduler;
-  readonly builder: ContextBuilder;
+  readonly build: (invocationId: bigint, options?: TestContextOptions) => TestInvocationContext;
 }> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-startup-catch-up-'));
   directories.push(directory);
@@ -109,12 +116,14 @@ async function setup(
   const store = await SqliteStore.open(loaded.config);
   return {
     store,
+    loaded,
     ingestion: new TelegramIngestion(store, loaded.config, { id: 999 }),
     scheduler: new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
       state: 'completed',
       reason: 'done',
     })),
-    builder: new ContextBuilder(store, loaded.config),
+    build: (invocationId: bigint, options: TestContextOptions = {}) =>
+      renderInvocationContext(store, loaded.config, invocationId, options),
   };
 }
 
@@ -273,7 +282,7 @@ describe('startup catch-up', () => {
   });
 
   test('routes replies to the visible message topic', async () => {
-    const { store, ingestion, scheduler, builder } = await setup(false);
+    const { store, loaded, ingestion, scheduler, build } = await setup(false);
     const result = await runStartupCatchUp({
       api: fakeApi([
         topicUpdate(1, 10, FIRST_CHAT_ID, 100, 1_700_000_000),
@@ -289,7 +298,7 @@ describe('startup catch-up', () => {
     if (invocationId === undefined) {
       throw new Error('Expected startup catch-up invocation');
     }
-    const context = builder.build(invocationId, 200_000, 0, 32768);
+    const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
     const sentThreads: Array<number | undefined> = [];
     const api: TelegramSendApi = {
       sendMessage: async (_chatId, _text, options) => {
@@ -302,8 +311,8 @@ describe('startup catch-up', () => {
       store,
       api,
       context,
-      stickerCapabilities: new Map(),
-      maxSends: 6,
+      capabilities: invocationCapabilities(store, loaded.config, context.header),
+      sendRateLimit: { sendsPerWindow: 6, windowSeconds: 300 },
       maxTextLength: undefined,
       disallowBlankLines: false,
       deadline: Date.now() + 30_000,

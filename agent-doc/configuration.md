@@ -55,7 +55,7 @@ command SecretRef：
 | `timezone` | 默认 IANA 时区 |
 | `telegram` | Token、Bucket 窗口、Chat/Topic allowlist、Sticker Set |
 | `providers` | 内置或自定义 Provider 别名 |
-| `agent` | 对话模型、Prompt、轮次、超时、并发和全局 Token 预算 |
+| `agent` | 对话模型、Prompt、并发与限流、上下文保留策略、全局 Token 预算 |
 | `vision` | Sticker 视觉模型、并发、Prompt 版本和预算 |
 | `mcp` | 可选的 stdio/Streamable HTTP Server |
 | `admin` | 可选的本地只读 Admin Panel |
@@ -86,7 +86,7 @@ command SecretRef：
 
 规则：
 
-- `bucket_window_seconds` 是全局 Agent 会话节拍，单位秒，示例值为 15。`0` 表示有新消息时不额外延迟，但不会创建空会话。节拍按 Chat（群）计算：同一时刻每个群最多一个 Agent 会话，下一会话在前一会话开始满一个节拍、且前一会话结束后启动。
+- `bucket_window_seconds` 是全局 Agent 会话节拍，单位秒，示例值为 15。`0` 表示有新消息时不额外延迟，但不会创建空会话。每个 `collecting` Bucket 的 deadline 是它自己第一条消息加一个节拍，与前一次会话的起止无关；同一时刻每个群最多一个 Agent 会话（按 Chat 串行），未到期的批次不会被提前消费。若该 Conversation 已有 running Invocation，到期的 Bucket 会挂到这个运行中的 Invocation 上（不再新开会话）并注入其 transcript；运行结束后是否继续等待下一个 Bucket 由 `agent.context.idle_grace_seconds` 决定，见「Conversation Context」。
 - `sticker_trigger_enabled` 可选，默认 `false`。关闭时，单独收到的人类 Sticker 仍会持久化，但不会创建 Bucket 或触发 Invocation；已有 collecting Bucket 时仍会加入。设为 `true` 后，单独的 Sticker 可以创建 Bucket。
 - 消息收集仍按 Conversation 隔离：Forum Topic 各自收集、Context 互不混入，只是 Agent 会话在群内串行。
 - Chat ID 必须是非零安全整数且不可重复。
@@ -222,17 +222,17 @@ participation 放行 = 未配置 participation || 处于活跃时段 || 更新�
 - `system_prompt_file`: 指向运维侧人格提示的 Markdown 文件，路径相对配置文件目录，内容必须非空（剔除 HTML 注释后仍需有正文）。消息分区、安全边界、Tool 选择原则和副作用成功判定由代码内 Core Agent Protocol 固化；具体 Tool 的触发条件、禁用情形、调用顺序与收尾规则由 Tool description 固化，不应重复塞入人格文件。人格提示和 Chat 的 `instructions_file` 支持 `{{ agent.provider }}`、`{{ agent.model }}`、`{{ vision.provider }}`、`{{ vision.model }}`、`{{ timezone }}` 模板变量；模板只执行严格白名单替换，未知或格式错误的表达式会拒绝配置。
 - Prompt 注释：`system_prompt_file` 与 `instructions_file` 中的 `<!-- ... -->` HTML 注释在加载时被剔除，可以写给人看的说明而不占模型上下文；注释可跨行，整行只有注释时该行一并消失。未闭合的 `<!--` 不构成注释，按原文保留；模板校验在剔除之后进行，因此注释里可以出现任意 `{{ ... }}` 文本。提示文件含 NUL 字符时拒绝加载。
 - 模板中的 `agent.provider` 与 `agent.model` 是当前 Invocation 实际使用的模型，因此 Admin Panel 或 `/model` 的运行时切换会反映到下一次会话；`vision.*` 始终来自配置。模板值只注入 Prompt，不会注入记忆；记忆内容按原文保留。
-- `max_concurrency`: 全局并行 running Invocation 上限；`max_turns`/`max_sends`/`timeout_seconds` 是单次 Invocation 的硬上限（历史上的 `max_tool_calls` 已移除，调用次数只做审计统计），`history_messages` 是注入 Context 的历史条数。
+- `max_concurrency`: 全局并行 running Invocation 上限；`history_messages` 是冷启动批次（该 Conversation Context 尚无历史，例如新建或刚重建）随注入附加的 history 区段条数上限。单次运行不再有 `max_turns`/`max_sends`/`timeout_seconds`（字段已删除，写进配置会被拒绝），运行边界见「Conversation Context」。
 - `context_stop_ratio`: 估算输入 Token 占模型窗口的比例达到该阈值后，进入收尾模式，只保留 `send` 和当时可用的 `zzz`，而不是立即停止 Tool 循环；估算输入加预留输出达到模型窗口时才按上下文限制终止。
 - `send_max_text_length`（可选，默认不限制）：`send` 工具文本消息的最大字符数。超出时 Tool Call 记为 `send_text_too_long` 错误，不消耗发送配额、不调用 Telegram；Sticker 不受影响。
 - `send_disallow_blank_lines`（可选，默认 `false`）：开启后，文本包含任何空行（两个换行符之间只有空格/Tab 也算空行）时 Tool Call 记为 `send_blank_lines` 错误，不消耗发送配额、不调用 Telegram；段落只能用单个换行分隔。Sticker 不受影响。
 - `memory_ttl_warning_days`（可选，默认 30）：Agent 记忆剩余寿命超过该天数时，Admin Panel 显示 warning，提示管理员判断保留、删除或提升进 `agents.md`。系统不禁止长 TTL。
-- `send_nudge_enabled`（可选，默认 `false`）：开启后，当 agent 即将自然停止、本轮未调用任何工具且产生了去除首尾空白后非空的普通 Assistant 文本，又从未调用过 `send` 时，注入一条 harness 级 user 消息提醒其用 `send` 发送面向群聊的文本。每次 Invocation 至多触发一次；触发与提醒文本记录在 `agent_messages` 中，role 为 `harness_nudge`。用于稳定性不足、偶尔把回复写成私文本却忘记调用 `send` 的模型。
+- `send_nudge_enabled`（可选，默认 `false`）：开启后，当 agent 即将自然停止、本轮未调用任何工具且产生了去除首尾空白后非空的普通 Assistant 文本，又从未调用过 `send` 时，注入一条 harness 级 user 消息提醒其用 `send` 发送面向群聊的文本。判定排在「注入下一批」与空闲等待之前，因此该提醒按**注入批次**计数（每个批次至多触发一次），而不是按 Invocation 计数；触发与提醒文本记录在 `agent_messages` 中，role 为 `harness_nudge`。用于稳定性不足、偶尔把回复写成私文本却忘记调用 `send` 的模型。
 - `thinking_level`: Provider 仍可能限制具体模型支持的级别，Schema 通过不代表模型接受。
 
 Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用目标模型在 provider 中声明的 `max_tokens`。Provider 注册的模型必须满足 `max_tokens ≤ context_window`，且 agent 模型必须支持 text。
 
-运行时热切换：Admin Panel「Model」页面（`GET/PUT/DELETE /api/model`）可在已配置的 provider/模型之间切换 agent 模型。切换是内存态，立即对后续启动的 agent session（Invocation）生效，不影响进行中的会话；重启 `serve` 后恢复 `config.jsonc` 的默认值。`/status` 命令展示当前生效模型。
+运行时热切换：Admin Panel「Model」页面（`GET/PUT/DELETE /api/model`）可在已配置的 provider/模型之间切换 agent 模型。切换是内存态，立即对后续启动的 agent session（Invocation）生效，不影响进行中的会话；重启 `serve` 后恢复 `config.jsonc` 的默认值。若稳定系统提示的渲染结果因此变化（模板里出现 `{{ agent.provider }}`/`{{ agent.model }}`，或模型的图片能力改变了图片处理说明），该 Conversation 的 Context 会在下一次运行时重建，见「Conversation Context」。`/status` 命令展示当前生效模型。
 
 `vision` 约束：
 
@@ -241,6 +241,56 @@ Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用
 - `background_sticker_concurrency` 当前必须为 `1`。
 - `prompt_version` 参与视觉缓存版本；改变描述规则时递增。
 - `daily_budget` 同时限制 Token 和图片数。
+
+## Conversation Context
+
+每个 Conversation（Chat + Forum Topic）只有一份持久 transcript，跨 Invocation 与进程重启存在；`agent.context` 控制这份历史如何保留与裁剪，`agent.rate_limits` 控制长生命周期运行的节流。表的语义见 [data-layer.md](data-layer.md#conversation-context长期会话-transcript)。
+
+```jsonc
+{
+  "agent": {
+    "context_stop_ratio": 0.75,
+    "history_messages": 30,
+    "context": {
+      "retained_sends_target": 20,
+      "retained_sends_max": 40,
+      "hard_token_ratio": 0.7,
+      "ref_ttl_hours": 72,
+      "idle_grace_seconds": 60,
+      "max_wall_clock_seconds": 900,
+      "agent_cache_size": 32,
+    },
+    "rate_limits": {
+      "sends_per_window": 3,
+      "window_seconds": 120,
+      "turns_per_injection": 24,
+    },
+  },
+}
+```
+
+`agent.context` 与 `agent.rate_limits` 都是必填对象，新增字段会因 `Strict` 被拒绝；升级旧配置时漏写或残留旧键都会让 `check-config`/`serve` 直接失败，错误信息会点名缺失与多余的键。`agent.context`：
+
+- `retained_sends_target` / `retained_sends_max`: 保留窗口的目标与上限，单位是成功 `send` 的次数。只有在保留窗内发送数超过 `retained_sends_max`（或触发 Token 压力）时才裁剪，裁剪把窗口起点跳到「仍保留至少 `retained_sends_target` 次发送」的最新 checkpoint，因此一次 GC 会跨过若干次发送，而不是逐条消息裁。
+- `hard_token_ratio`: Token 安全阀，相对模型的 `context_window`。估算输入加预留输出达到 `context_window × hard_token_ratio` 就会触发 GC，用于发送稀疏但 Tool 链很长的历史；这类历史找不到满足发送目标的 checkpoint 时，退回「保留段估算 Token 不超过 `context_window × hard_token_ratio × 0.8`」的最新 checkpoint。
+- `ref_ttl_hours`: 能力引用（`img_`/`stk_`/`reply:`）在 Conversation Context 内的有效期；引用一旦到期，或携带它的历史行被 GC 丢弃，就解析不出来了。
+- `idle_grace_seconds`: 运行本该自然结束时，仍保持打开等待下一个 Bucket 的秒数；等待期间有新批次就继续这一轮，否则结束；`0` 表示关闭长生命周期运行（每批消息都会结束这次运行，下一次由新的调度启动）。
+- `max_wall_clock_seconds`: 单次运行的墙上时钟上限，达到即结束这次运行。
+- `agent_cache_size`: 内存中缓存 Pi agent 实例的 Conversation 数（LRU）。缓存只是加速——被逐出或进程重启后都从 SQLite 的 Conversation Context 重新播种，不丢历史。
+
+`agent.rate_limits`：
+
+- `sends_per_window` / `window_seconds`: 按 Telegram Chat 计算的滑动窗口发送上限，统计窗口内 `success`/`pending`/`outcome_unknown` 的 `telegram_sends`。命中时 Tool Call 记为 `send_rate_limited` 错误，不调用 Telegram；长生命周期运行可以发很多次，但循环不能刷屏。
+- `turns_per_injection`: 自最近一次消息注入以来允许的最大 turn 数，达到即结束这次运行；注入新批次后计数清零。
+
+`check-config` 另外校验这些关系（Schema 通过不代表组合合法）：
+
+- `retained_sends_target < retained_sends_max`。
+- `hard_token_ratio <= agent.context_stop_ratio`。
+- `idle_grace_seconds` 为 `0`（关闭长生命周期运行）或不小于 `telegram.bucket_window_seconds`；比一个 Bucket 窗口还短的等待会在下一个 Bucket 到期前就结束运行，看似启用实则无效，因此在配置期直接拒绝。
+- `max_wall_clock_seconds > idle_grace_seconds`。
+
+稳定系统提示与重建：系统提示被拆成两部分。**稳定部分**（Core Agent Protocol、Skill 索引、图片与 Sticker 处理说明、人格提示、对话模式、记忆与内部上下文指引、Chat `instructions`，含模板变量渲染结果）不随运行期状态变化，它的 SHA-256 记在 `conversation_contexts.system_prompt_hash`；**每批注入部分**（当前时间、记忆列表、内部上下文、睡眠状态、闹钟任务、启动追赶说明、不可信的 Sticker 目录与本次 Telegram 快照）改由每批注入的消息携带（`ContextBuilder.renderInjection`），不再进入系统提示。稳定部分的内容一变（改 Prompt 文件或 `instructions_file`、模板渲染结果变化等），该 Conversation 的整份 Context 会重建：已保留的 transcript 与能力引用全部丢弃，`head_seq`/`next_seq` 复位为 1。只改运行期状态不会触发重建。
 
 ## MCP
 

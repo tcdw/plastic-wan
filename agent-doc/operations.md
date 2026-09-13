@@ -125,6 +125,7 @@ bun run src/cli.ts doctor --config dev-data/config.jsonc --output-agent-prompt
 3. Invocation 是否 completed。
 4. `sends_used = 0`：Agent 主动不发言。
 5. 有 `tool_calls` 时继续检查 `send`/`read_image`/MCP 状态；image-capable Agent 的图片直传失败时检查 Invocation 的 `completion_reason`。
+6. 看到成片 `state = failed` 且快速失败：`completion_reason = invocation_error` 表示运行时异常，到日志里搜 `agent_invocation_error` 拿消息与堆栈；`model_error` 才是 Provider 侧问题。若是解不开的 `context_messages`（日志里报 `does not match its schema`），`/cut_topic` 或清空该 Conversation 的 canonical history 能让对话先恢复。
 
 ### 图片或 Sticker 理解失败
 

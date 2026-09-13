@@ -6,7 +6,6 @@ import type { Update } from 'grammy/types';
 import Compile from 'typebox/compile';
 import { AdminServer } from '../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
-import { ContextBuilder } from '../src/context/context-builder.ts';
 import { purgeExpiredData, SqliteStore } from '../src/store/database.ts';
 import {
   AddMemoryInputSchema,
@@ -16,7 +15,7 @@ import {
 } from '../src/context/memory.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { renderInvocationContext, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -127,7 +126,10 @@ test('add_memory and delete_memory audit tool calls and respect conversation sco
   const { store, loaded, conversationId, invocationId } = await fixture();
   try {
     const memory = new MemoryStore(store.orm);
-    const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768, false);
+    const context = renderInvocationContext(store, loaded.config, invocationId, {
+      contextWindow: 200_000,
+      maxOutputTokens: 32768,
+    });
     expect(context.conversationId).toBe(conversationId);
     const [addTool, deleteTool] = createMemoryTools(memory, context);
     if (addTool === undefined || deleteTool === undefined) {
@@ -205,7 +207,7 @@ test('add_memory and delete_memory audit tool calls and respect conversation sco
   }
 });
 
-test('the system prompt injects active memories in creation order', async () => {
+test('the injected batch carries active memories in creation order', async () => {
   const { store, loaded, conversationId, invocationId } = await fixture();
   try {
     const memory = new MemoryStore(store.orm);
@@ -215,19 +217,26 @@ test('the system prompt injects active memories in creation order', async () => 
     memory.add(conversationId, 'short note', 60, now);
     memory.add(secondConversation(store, conversationId), 'other conversation note', 30 * 86_400, now);
 
-    const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768, false);
-    expect(context.systemPrompt).toContain('<memory_list>');
-    const firstIndex = context.systemPrompt.indexOf(`- ${first.id}: first note`);
-    const secondIndex = context.systemPrompt.indexOf(`- ${second.id}: second note`);
+    const context = renderInvocationContext(store, loaded.config, invocationId, {
+      contextWindow: 200_000,
+      maxOutputTokens: 32768,
+    });
+    // Memories change per invocation, so they travel with the injected batch:
+    // the system prompt has to stay byte-identical for the whole context.
+    expect(context.systemPrompt).not.toContain('<memory_list>');
+    expect(context.userPrompt).toContain('<memory_list>');
+    const firstIndex = context.userPrompt.indexOf(`- ${first.id}: first note`);
+    const secondIndex = context.userPrompt.indexOf(`- ${second.id}: second note`);
     expect(firstIndex).toBeGreaterThan(0);
     expect(secondIndex).toBeGreaterThan(firstIndex);
     expect(context.systemPrompt).toContain('100 characters');
-    expect(context.systemPrompt).not.toContain('short note');
-    expect(context.systemPrompt).not.toContain('other conversation note');
-    // The per-invocation timestamp must sit after the memory block; anything
-    // below it can never be covered by the provider prefix cache.
-    expect(context.systemPrompt.indexOf('Current time in ')).toBeGreaterThan(
-      context.systemPrompt.indexOf('</memory_list>'),
+    expect(context.userPrompt).not.toContain('short note');
+    expect(context.userPrompt).not.toContain('other conversation note');
+    // The current time is per-batch state too, and the untrusted batch follows
+    // the trusted runtime_state block.
+    expect(context.userPrompt.indexOf('current_time: ')).toBeGreaterThan(0);
+    expect(context.userPrompt.indexOf('current_time: ')).toBeLessThan(
+      context.userPrompt.indexOf('<untrusted_new_messages>'),
     );
   } finally {
     store.close();

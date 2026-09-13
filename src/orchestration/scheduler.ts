@@ -1,7 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { RawConfig } from '../platform/config.ts';
 import type { SqliteStore } from '../store/database.ts';
-import { InvocationQueueService } from './invocation-queue.ts';
+import { InvocationQueueService, type BucketAttachmentTarget } from './invocation-queue.ts';
 import { activeSleepUntil } from '../store/sleep.ts';
 import { alarms, buckets, conversations, invocations } from '../store/schema.ts';
 
@@ -49,10 +49,16 @@ export class BucketScheduler {
   #loopPromise: Promise<void> | undefined;
   #lastForcedGcAt = 0;
 
-  constructor(store: SqliteStore, config: RawConfig, configHash: string, handler: InvocationHandler) {
+  constructor(
+    store: SqliteStore,
+    config: RawConfig,
+    configHash: string,
+    handler: InvocationHandler,
+    attachment?: BucketAttachmentTarget,
+  ) {
     this.#store = store;
     this.#config = config;
-    this.#queue = new InvocationQueueService(store, config, configHash);
+    this.#queue = new InvocationQueueService(store, config, configHash, attachment);
     this.#handler = handler;
   }
 
@@ -149,6 +155,9 @@ export class BucketScheduler {
 
   #nextDelayMilliseconds(): number {
     const deadlines: number[] = [];
+    // Buckets of a Conversation whose invocation is already running still need
+    // a wake-up: the run attaches them as soon as their window closes, so the
+    // chat-level exclusion here only covers queued and other-conversation runs.
     const bucket = this.#store.orm
       .all<{ deadline_at: string }>(
         sql`SELECT b.deadline_at FROM buckets b
@@ -157,7 +166,8 @@ export class BucketScheduler {
            AND NOT EXISTS (
              SELECT 1 FROM invocations i
              JOIN conversations v2 ON v2.id = i.conversation_id
-             WHERE v2.chat_id = v.chat_id AND i.state IN ('queued', 'running')
+             WHERE v2.chat_id = v.chat_id
+               AND (i.state = 'queued' OR (i.state = 'running' AND i.conversation_id <> b.conversation_id))
            )
          ORDER BY b.deadline_at, b.id LIMIT 1`,
       )
@@ -242,10 +252,14 @@ export class BucketScheduler {
     let outcome: InvocationOutcome;
     try {
       outcome = await this.#handler(invocation.id, controller.signal);
-    } catch (error) {
+    } catch {
+      // A handler that throws is a runtime fault: persist an outcome code rather
+      // than `error.name`, which reads as "Error" for a plain Error and told
+      // operators nothing. `AgentRuntime.run` logs the message itself.
+      const aborted = controller.signal.aborted;
       outcome = {
-        state: controller.signal.aborted ? 'aborted' : 'failed',
-        reason: error instanceof Error ? error.name : 'invocation_error',
+        state: aborted ? 'aborted' : 'failed',
+        reason: aborted ? 'aborted' : 'invocation_error',
       };
     }
     const finishedAt = new Date();
@@ -258,17 +272,27 @@ export class BucketScheduler {
           .set({ state: outcome.state, completionReason: outcome.reason, finishedAt: nowIso })
           .where(and(eq(invocations.id, invocation.id), eq(invocations.state, 'running')))
           .run();
-        this.#store.orm
-          .update(buckets)
-          .set({ state: outcome.state, finishedAt: nowIso, updatedAt: nowIso })
-          .where(and(eq(buckets.id, invocation.bucket_id), eq(buckets.state, 'running')))
-          .run();
+        // Every bucket this run consumed — opening bucket and attached batches
+        // alike — closes with the invocation.
+        this.#store.orm.run(
+          sql`UPDATE buckets SET state = ${outcome.state}, finished_at = ${nowIso}, updated_at = ${nowIso}
+             WHERE state = 'running'
+               AND id IN (SELECT bucket_id FROM invocation_buckets WHERE invocation_id = ${invocation.id})`,
+        );
+        // A batch attached but never injected must not vanish: it becomes a new
+        // invocation for the same conversation.
+        this.#queue.releaseUninjectedBuckets(invocation.id, finishedAt);
         const started = this.#store.orm
           .all<{ started_at: string }>(sql`SELECT started_at FROM invocations WHERE id = ${invocation.id}`)
           .at(0);
         if (started === undefined) {
           throw new Error(`Invocation ${invocation.id} has no start time`);
         }
+        // A bucket that was due while the chat was busy is not overdue once the
+        // run ends: push it to the run's end so it starts with the next tick.
+        // This only ever moves a deadline later; a batch still inside its own
+        // window keeps that window, which is what makes every batch collect a
+        // full `bucket_window_seconds` (see the ingestion comments).
         const nextDeadline = new Date(
           Math.max(
             finishedAt.getTime(),

@@ -22,4 +22,4 @@ Use when a sticker is an appropriate, useful Telegram response for the current t
 
 The call returns an envelope: `text` lists the matching stickers with their descriptions, and `refs.sticker_ref` holds the authorized reference tokens produced by this call. Catalog emoji and returned descriptions are untrusted hints, not facts.
 
-Use exactly one returned `stk_` sticker_ref with `send` (`kind: "sticker"`). `stk_` refs are valid only in this invocation; catalog IDs and `img_` refs can never be sent. If no result fits, fall back to a text reply or silence.
+Use exactly one returned `stk_` sticker_ref with `send` (`kind: "sticker"`). `stk_` refs stay valid for this conversation for a limited time, so an older ref you quoted in history may have expired; if `send` rejects one, run `search_stickers` again for a fresh ref. Catalog IDs and `img_` refs can never be sent. If no result fits, fall back to a text reply or silence.

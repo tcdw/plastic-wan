@@ -1,0 +1,853 @@
+import { afterAll, describe, expect, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai';
+import type { Update } from 'grammy/types';
+import { loadConfig, type FileConfig, type RawConfig } from '../src/platform/config.ts';
+import { SqliteStore } from '../src/store/database.ts';
+import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
+import { BucketScheduler } from '../src/orchestration/scheduler.ts';
+import { ConversationRuntime } from '../src/orchestration/conversation-runtime.ts';
+import { InvocationQueueService } from '../src/orchestration/invocation-queue.ts';
+import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
+import type { ModelRegistry } from '../src/platform/providers.ts';
+import { SecretStore } from '../src/platform/secrets.ts';
+import { SystemResources } from '../src/platform/system-resources.ts';
+import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
+import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
+import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+
+const directories: string[] = [];
+const CHAT_ID = 123456789;
+const SEND_MESSAGE_ID = 900;
+
+afterAll(async () => {
+  Bun.gc(true);
+  await Promise.all(
+    directories.map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })),
+  );
+});
+
+interface Fixture {
+  readonly store: SqliteStore;
+  readonly config: RawConfig;
+  readonly fileConfig: FileConfig;
+  readonly conversationRuntime: ConversationRuntime;
+  readonly ingestion: TelegramIngestion;
+  readonly sendApi: TelegramSendApi;
+  /** Builds a runtime over a fresh faux provider, mirroring the composition root. */
+  runtimeWith(faux: ReturnType<typeof fauxProvider>, overrides?: { readonly systemPrompt?: string }): AgentRuntime;
+}
+
+async function fixture(transform?: (config: FileConfig) => void): Promise<Fixture> {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-hot-inject-'));
+  directories.push(directory);
+  const configPath = join(directory, 'config.jsonc');
+  const jsonc = testConfigJsonc(directory, (config) => {
+    // Zero-second windows keep the scheduler deterministic: a bucket is due the
+    // moment its message lands, and the idle grace is the only thing that keeps
+    // a run alive afterwards.
+    config.telegram.bucket_window_seconds = 0;
+    config.agent.send_nudge_enabled = false;
+    config.agent.context.idle_grace_seconds = 2;
+    config.agent.context.max_wall_clock_seconds = 60;
+    transform?.(config);
+  });
+  await writeTestConfig(directory, configPath, jsonc);
+  const loaded = await loadConfig(configPath);
+  const store = await SqliteStore.open(loaded.config);
+  const sendApi: TelegramSendApi = {
+    sendMessage: async () => ({ message_id: SEND_MESSAGE_ID, date: 1_700_000_100, chat: { id: CHAT_ID } }),
+    sendSticker: async () => ({ message_id: SEND_MESSAGE_ID + 1, date: 1_700_000_100, chat: { id: CHAT_ID } }),
+  };
+  const conversationRuntime = new ConversationRuntime({
+    agentCacheSize: loaded.config.agent.context.agent_cache_size,
+  });
+  return {
+    store,
+    config: loaded.config,
+    fileConfig: loaded.fileConfig,
+    conversationRuntime,
+    ingestion: new TelegramIngestion(store, loaded.config, { id: 999 }),
+    sendApi,
+    runtimeWith: (faux, overrides = {}) => {
+      const models = createModels();
+      models.setProvider(faux.provider);
+      const model = faux.getModel();
+      const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+      const config: RawConfig =
+        overrides.systemPrompt === undefined
+          ? loaded.config
+          : { ...loaded.config, agent: { ...loaded.config.agent, system_prompt: overrides.systemPrompt } };
+      return new AgentRuntime({
+        store,
+        config,
+        secrets: new SecretStore(),
+        registry,
+        modelSwitcher: new AgentModelSwitcher(config, registry.models),
+        telegramApi: sendApi,
+        bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+        systemResources: SystemResources.empty(),
+        conversationRuntime,
+      });
+    },
+  };
+}
+
+function fauxAgent(): ReturnType<typeof fauxProvider> {
+  return fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+}
+
+function update(updateId: number, messageId: number, text: string, threadId?: number): Update {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: messageId,
+      ...(threadId === undefined ? {} : { message_thread_id: threadId, is_topic_message: true }),
+      date: 1_700_000_000 + messageId,
+      chat:
+        threadId === undefined
+          ? { id: CHAT_ID, type: 'private', first_name: 'Owner' }
+          : { id: CHAT_ID, type: 'supergroup', title: 'Forum', is_forum: true },
+      from: { id: 42, is_bot: false, first_name: 'Alice' },
+      text,
+    },
+  };
+}
+
+/** Polls until the condition holds, so timing-sensitive steps fail loudly. */
+async function until(condition: () => boolean, label: string, timeoutMilliseconds = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    if (condition()) {
+      return;
+    }
+    await Bun.sleep(10);
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+describe('long-lived invocation', () => {
+  test('a message sent while the run is active still waits its own bucket window', async () => {
+    // Regression: the ingestion pace rule used to treat any message arriving
+    // while an invocation was active as immediately due. That was harmless while
+    // a due bucket could not be consumed before the run ended, but a long-lived
+    // invocation consumes due buckets on the spot — so once a run outlived one
+    // window, every single message became its own zero-length bucket and its own
+    // injection (observed in production: six messages sent inside 1.4 s produced
+    // six separate injections).
+    const fixtureSetup = await fixture((config) => {
+      config.telegram.bucket_window_seconds = 1;
+      // Must stay >= the bucket window, else check-config rejects the pairing.
+      config.agent.context.idle_grace_seconds = 3;
+    });
+    const faux = fauxAgent();
+    const requests: string[] = [];
+    faux.setResponses([
+      (context) => {
+        requests.push(JSON.stringify(context.messages));
+        return fauxAssistantMessage('first answer');
+      },
+      (context) => {
+        requests.push(JSON.stringify(context.messages));
+        return fauxAssistantMessage('');
+      },
+      (context) => {
+        requests.push(JSON.stringify(context.messages));
+        return fauxAssistantMessage('');
+      },
+    ]);
+    const runtime = fixtureSetup.runtimeWith(faux);
+    const scheduler = new BucketScheduler(
+      fixtureSetup.store,
+      fixtureSetup.config,
+      'hash',
+      async (invocationId, signal) => runtime.run(invocationId, signal),
+      fixtureSetup.conversationRuntime,
+    );
+    try {
+      scheduler.start();
+      fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
+      scheduler.wake();
+      await until(() => requests.length === 1, 'the first model call');
+
+      // Sent while the run is active: it must still collect a full window of its
+      // own before it is injected, however long the run has been going.
+      const secondIngestAt = Date.now();
+      fixtureSetup.ingestion.ingest(update(2, 11, 'second'), new Date());
+      scheduler.wake();
+      await Bun.sleep(150);
+
+      const bucket = fixtureSetup.store.db
+        .query<{ id: bigint; state: string; first_received_at: string; deadline_at: string }, []>(
+          'SELECT id, state, first_received_at, deadline_at FROM buckets ORDER BY id DESC LIMIT 1',
+        )
+        .get();
+      if (bucket === null) {
+        throw new Error('Expected a second bucket');
+      }
+      // The bucket is still collecting its own window instead of being injected a
+      // few milliseconds after it was created.
+      expect(bucket.state).toBe('collecting');
+      const windowMilliseconds = Date.parse(bucket.deadline_at) - Date.parse(bucket.first_received_at);
+      expect(windowMilliseconds).toBeGreaterThanOrEqual(1_000);
+      expect(
+        fixtureSetup.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM invocation_buckets').get()
+          ?.count,
+      ).toBe(1n);
+
+      // It is injected once its own window closes, into the same invocation.
+      await until(() => requests.length === 2, 'the second batch');
+      const attachments = fixtureSetup.store.db
+        .query<{ invocation_id: bigint; bucket_id: bigint; injected_at: string | null }, []>(
+          'SELECT invocation_id, bucket_id, injected_at FROM invocation_buckets ORDER BY bucket_id',
+        )
+        .all();
+      expect(attachments).toHaveLength(2);
+      expect(attachments[0]?.invocation_id).toBe(attachments[1]?.invocation_id);
+      const injectedAt = Date.parse(attachments[1]?.injected_at ?? '');
+      expect(injectedAt - secondIngestAt).toBeGreaterThanOrEqual(950);
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
+  test('injects a bucket that expires while the run is idle and keeps one invocation', async () => {
+    const fixtureSetup = await fixture();
+    const faux = fauxAgent();
+    const requests: string[] = [];
+    faux.setResponses([
+      (context, options) => {
+        requests.push(JSON.stringify(context.messages));
+        options?.onPayload?.({ model: 'agent-model', messages: context.messages }, faux.getModel());
+        return fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'first answer' }), {
+          stopReason: 'toolUse',
+        });
+      },
+      (context, options) => {
+        requests.push(JSON.stringify(context.messages));
+        options?.onPayload?.({ model: 'agent-model', messages: context.messages }, faux.getModel());
+        return fauxAssistantMessage('');
+      },
+    ]);
+    const runtime = fixtureSetup.runtimeWith(faux);
+    const started: bigint[] = [];
+    let finished!: () => void;
+    const finishedSignal = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    const scheduler = new BucketScheduler(
+      fixtureSetup.store,
+      fixtureSetup.config,
+      'hash',
+      async (invocationId, signal) => {
+        started.push(invocationId);
+        const outcome = await runtime.run(invocationId, signal);
+        finished();
+        return outcome;
+      },
+      fixtureSetup.conversationRuntime,
+    );
+    try {
+      scheduler.start();
+      fixtureSetup.ingestion.ingest(update(1, 10, 'hello'), new Date());
+      scheduler.wake();
+      await until(() => requests.length === 1, 'the first model call');
+      // The bucket expires while the run sits in its idle wait, so it is
+      // injected into the *running* invocation instead of opening a new one.
+      fixtureSetup.ingestion.ingest(update(2, 11, 'second message'), new Date());
+      scheduler.wake();
+      await finishedSignal;
+      // Let the scheduler's terminal-state transaction land before asserting.
+      await Bun.sleep(50);
+
+      expect(started).toHaveLength(1);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toContain('second message');
+      const attached = fixtureSetup.store.db
+        .query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM invocation_buckets')
+        .get();
+      expect(attached?.count).toBe(2n);
+      expect(fixtureSetup.store.db.query<{ state: string }, []>('SELECT state FROM buckets ORDER BY id').all()).toEqual(
+        [{ state: 'completed' }, { state: 'completed' }],
+      );
+      const head = fixtureSetup.store.db
+        .query<{ is_checkpoint: bigint; role: string }, []>(
+          'SELECT is_checkpoint, role FROM context_messages ORDER BY seq',
+        )
+        .all()
+        .filter((row) => row.is_checkpoint === 1n);
+      // One checkpoint per injected batch, always on the batch's user message.
+      expect(head).toEqual([
+        { is_checkpoint: 1n, role: 'user' },
+        { is_checkpoint: 1n, role: 'user' },
+      ]);
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
+  test('a pause interrupts a run that is waiting for the next bucket', async () => {
+    const fixtureSetup = await fixture();
+    const faux = fauxAgent();
+    const requests: string[] = [];
+    faux.setResponses([
+      (context) => {
+        requests.push(JSON.stringify(context.messages));
+        return fauxAssistantMessage('idle answer');
+      },
+      (context) => {
+        requests.push(JSON.stringify(context.messages));
+        return fauxAssistantMessage('');
+      },
+    ]);
+    const runtime = fixtureSetup.runtimeWith(faux);
+    const started: bigint[] = [];
+    let finished!: () => void;
+    const finishedSignal = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    const scheduler = new BucketScheduler(
+      fixtureSetup.store,
+      fixtureSetup.config,
+      'hash',
+      async (invocationId, signal) => {
+        started.push(invocationId);
+        const outcome = await runtime.run(invocationId, signal);
+        finished();
+        return outcome;
+      },
+      fixtureSetup.conversationRuntime,
+    );
+    try {
+      scheduler.start();
+      fixtureSetup.ingestion.ingest(update(1, 10, 'hello'), new Date());
+      scheduler.wake();
+      await until(() => requests.length === 1, 'the first model call');
+      // The run now sits in its idle grace (2 s). Aborting must end it right
+      // away; if it did not, this test would time out waiting for the grace.
+      const chatId = fixtureSetup.store.db
+        .query<{ chat_id: bigint }, []>('SELECT chat_id FROM conversations LIMIT 1')
+        .get()?.chat_id;
+      if (chatId === undefined) {
+        throw new Error('Expected a chat');
+      }
+      const abortedAt = Date.now();
+      scheduler.pauseChat(chatId);
+      await finishedSignal;
+      expect(Date.now() - abortedAt).toBeLessThan(1_500);
+      expect(started).toHaveLength(1);
+      expect(requests).toHaveLength(1);
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
+  test('idle_grace_seconds = 0 keeps one bucket per invocation but the context persists', async () => {
+    const fixtureSetup = await fixture((config) => {
+      config.agent.context.idle_grace_seconds = 0;
+    });
+    const faux = fauxAgent();
+    const requests: string[] = [];
+    faux.setResponses([
+      (context) => {
+        requests.push(JSON.stringify(context.messages));
+        return fauxAssistantMessage('first answer');
+      },
+      (context) => {
+        requests.push(JSON.stringify(context.messages));
+        return fauxAssistantMessage('');
+      },
+    ]);
+    const runtime = fixtureSetup.runtimeWith(faux);
+    const started: bigint[] = [];
+    let secondFinished!: () => void;
+    const secondFinishedSignal = new Promise<void>((resolve) => {
+      secondFinished = resolve;
+    });
+    const scheduler = new BucketScheduler(
+      fixtureSetup.store,
+      fixtureSetup.config,
+      'hash',
+      async (invocationId, signal) => {
+        started.push(invocationId);
+        const outcome = await runtime.run(invocationId, signal);
+        if (started.length === 2) {
+          secondFinished();
+        }
+        return outcome;
+      },
+      fixtureSetup.conversationRuntime,
+    );
+    try {
+      scheduler.start();
+      fixtureSetup.ingestion.ingest(update(1, 10, 'hello'), new Date());
+      scheduler.wake();
+      await until(() => started.length === 1 && requests.length === 1, 'the first invocation');
+      await Bun.sleep(50);
+      fixtureSetup.ingestion.ingest(update(2, 11, 'next'), new Date());
+      scheduler.wake();
+      await secondFinishedSignal;
+
+      // Turning long-lived invocations off changes the attach behaviour only:
+      // each bucket still opens its own run, and each attaches exactly one.
+      expect(started).toHaveLength(2);
+      for (const invocationId of started) {
+        const attached = fixtureSetup.store.db
+          .query<{ count: bigint }, [bigint]>(
+            'SELECT COUNT(*) AS count FROM invocation_buckets WHERE invocation_id = ?',
+          )
+          .get(invocationId);
+        expect(attached?.count).toBe(1n);
+      }
+      // ...but the transcript is still continuous across the two runs.
+      expect(requests[1]).toContain('first answer');
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
+  test('nudges the batch that was drafted as private text before injecting the next one', async () => {
+    // Regression: with a live idle grace the reminder used to sit behind the
+    // inject and wait paths, so a batch whose draft was never sent got swallowed
+    // as soon as another bucket arrived inside the grace — the model kept its
+    // reply private and the chat saw nothing.
+    const fixtureSetup = await fixture((config) => {
+      config.agent.send_nudge_enabled = true;
+    });
+    const faux = fauxAgent();
+    const requests: string[] = [];
+    const lastUserText = (context: { messages: { role: string; content: unknown }[] }): string => {
+      const lastUser = [...context.messages].reverse().find((message) => message.role === 'user');
+      const content = lastUser?.content;
+      if (!Array.isArray(content)) {
+        return typeof content === 'string' ? content : '';
+      }
+      return content
+        .filter((block: { type: string; text?: string }) => block.type === 'text')
+        .map((block: { text?: string }) => block.text ?? '')
+        .join('');
+    };
+    faux.setResponses([
+      (context) => {
+        requests.push(lastUserText(context));
+        // The first batch is answered as private assistant text, never sent.
+        return fauxAssistantMessage('draft for the first batch');
+      },
+      (context) => {
+        requests.push(lastUserText(context));
+        return fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'published first batch' }), {
+          stopReason: 'toolUse',
+        });
+      },
+      (context) => {
+        requests.push(lastUserText(context));
+        return fauxAssistantMessage('');
+      },
+      (context) => {
+        requests.push(lastUserText(context));
+        return fauxAssistantMessage('');
+      },
+    ]);
+    const runtime = fixtureSetup.runtimeWith(faux);
+    const scheduler = new BucketScheduler(
+      fixtureSetup.store,
+      fixtureSetup.config,
+      'hash',
+      async (invocationId, signal) => runtime.run(invocationId, signal),
+      fixtureSetup.conversationRuntime,
+    );
+    try {
+      scheduler.start();
+      fixtureSetup.ingestion.ingest(update(1, 10, 'first message'), new Date());
+      scheduler.wake();
+      await until(() => requests.length >= 1, 'the first model call');
+      // A second bucket lands inside the grace. It must not cost the first batch
+      // its reply: the reminder has to be raised before this batch is injected.
+      fixtureSetup.ingestion.ingest(update(2, 11, 'second message'), new Date());
+      scheduler.wake();
+      await until(() => requests.some((request) => request.includes('second message')), 'the second batch');
+      await Bun.sleep(50);
+
+      expect(requests[0]).toContain('first message');
+      expect(requests[1]).toContain('call the send tool');
+      expect(
+        fixtureSetup.store.db
+          .query<{ text: string }, []>('SELECT text FROM agent_messages')
+          .all()
+          .map((row) => row.text),
+      ).toContain('draft for the first batch');
+      const published = fixtureSetup.store.db
+        .query<{ arguments_json: string }, []>("SELECT arguments_json FROM tool_calls WHERE tool_name = 'send'")
+        .all();
+      expect(published).toHaveLength(1);
+      expect(published[0]?.arguments_json).toContain('published first batch');
+      // The reminder precedes the newer batch, so the model is told about the
+      // unpublished draft while its own batch is still the newest one.
+      const seqs = fixtureSetup.store.db
+        .query<{ seq: bigint; payload_json: string }, []>('SELECT seq, payload_json FROM context_messages ORDER BY seq')
+        .all();
+      const nudgeSeq = seqs.find((row) => row.payload_json.includes('call the send tool'))?.seq;
+      const secondBatchSeq = seqs.find((row) => row.payload_json.includes('second message'))?.seq;
+      expect(nudgeSeq).toBeDefined();
+      expect(secondBatchSeq).toBeDefined();
+      expect(nudgeSeq! < secondBatchSeq!).toBe(true);
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
+  test('another forum topic of the same chat never attaches to the running invocation', async () => {
+    const fixtureSetup = await fixture();
+    try {
+      // The first conversation opens an invocation; a bucket that becomes due in
+      // another topic of the same chat must wait for the chat to go idle instead
+      // of being injected into a context it does not belong to.
+      fixtureSetup.ingestion.ingest(update(1, 10, 'main thread'), new Date());
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', {
+        isClosing: () => false,
+        queueInjection: () => {
+          throw new Error('A bucket must never be injected into another conversation');
+        },
+      });
+      const [invocationId] = service.processDue(new Date());
+      if (invocationId === undefined) {
+        throw new Error('Expected an opening invocation');
+      }
+      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
+      fixtureSetup.store.db
+        .query("UPDATE buckets SET state = 'running' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .run(invocationId);
+
+      fixtureSetup.ingestion.ingest(update(2, 11, 'topic', 100), new Date());
+      expect(service.processDue(new Date())).toHaveLength(0);
+      expect(
+        fixtureSetup.store.db
+          .query<{ count: bigint }, [bigint]>(
+            'SELECT COUNT(*) AS count FROM invocation_buckets WHERE invocation_id = ?',
+          )
+          .get(invocationId)?.count,
+      ).toBe(1n);
+      expect(
+        fixtureSetup.store.db
+          .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM buckets WHERE state = 'collecting'")
+          .get()?.count,
+      ).toBe(1n);
+    } finally {
+      fixtureSetup.store.close();
+    }
+  });
+
+  test('re-queues a bucket that was attached but never injected', async () => {
+    const fixtureSetup = await fixture();
+    try {
+      fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', {
+        isClosing: () => false,
+        queueInjection: () => undefined,
+      });
+      const [invocationId] = service.processDue(new Date());
+      if (invocationId === undefined) {
+        throw new Error('Expected an opening invocation');
+      }
+      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
+      fixtureSetup.store.db
+        .query("UPDATE buckets SET state = 'running' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .run(invocationId);
+      fixtureSetup.ingestion.ingest(update(2, 11, 'attached later'), new Date());
+      expect(service.processDue(new Date())).toHaveLength(0);
+      expect(
+        fixtureSetup.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM invocation_buckets').get()
+          ?.count,
+      ).toBe(2n);
+
+      // The run ended before injecting the batch: it becomes its own invocation
+      // instead of being dropped, and the invocation that owned it keeps its
+      // opening bucket as the only member.
+      service.releaseUninjectedBuckets(invocationId, new Date());
+      expect(
+        fixtureSetup.store.db
+          .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM invocations WHERE state = 'queued'")
+          .get()?.count,
+      ).toBe(1n);
+      expect(fixtureSetup.store.db.query<{ state: string }, []>('SELECT state FROM buckets ORDER BY id').all()).toEqual(
+        [{ state: 'running' }, { state: 'queued' }],
+      );
+    } finally {
+      fixtureSetup.store.close();
+    }
+  });
+
+  test('does not attach to a run that is already closing', async () => {
+    const fixtureSetup = await fixture();
+    try {
+      fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
+      const injected: bigint[] = [];
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', {
+        isClosing: () => true,
+        queueInjection: (_conversationId, bucketId) => injected.push(bucketId),
+      });
+      const [invocationId] = service.processDue(new Date());
+      if (invocationId === undefined) {
+        throw new Error('Expected an opening invocation');
+      }
+      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
+      fixtureSetup.store.db
+        .query("UPDATE buckets SET state = 'running' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .run(invocationId);
+      fixtureSetup.ingestion.ingest(update(2, 11, 'too late'), new Date());
+      // A run that already decided to stop leaves the bucket collecting for the
+      // next invocation instead of swallowing it.
+      expect(service.processDue(new Date())).toHaveLength(0);
+      expect(injected).toEqual([]);
+      expect(
+        fixtureSetup.store.db.query<{ state: string }, []>('SELECT state FROM buckets ORDER BY id DESC LIMIT 1').get()
+          ?.state,
+      ).toBe('collecting');
+    } finally {
+      fixtureSetup.store.close();
+    }
+  });
+});
+
+describe('conversation continuity', () => {
+  // The idle grace is off here: these tests care about the transcript, not about
+  // waiting for new buckets, and 0 keeps them fast and deterministic.
+  const withoutIdleWait = (config: FileConfig): void => {
+    config.agent.context.idle_grace_seconds = 0;
+  };
+
+  test('a later invocation replays the earlier transcript instead of re-rendering history', async () => {
+    const fixtureSetup = await fixture(withoutIdleWait);
+    const faux = fauxAgent();
+    // Each invocation in this test needs its own call the way the loop drives
+    // them: the opening answer, its closing turn, then one turn per later run.
+    faux.setResponses([
+      (context, options) => {
+        options?.onPayload?.({ model: 'agent-model', messages: context.messages }, faux.getModel());
+        return fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'first answer' }), {
+          stopReason: 'toolUse',
+        });
+      },
+      (context, options) => {
+        options?.onPayload?.({ model: 'agent-model', messages: context.messages }, faux.getModel());
+        return fauxAssistantMessage('');
+      },
+      (context, options) => {
+        options?.onPayload?.({ model: 'agent-model', messages: context.messages }, faux.getModel());
+        return fauxAssistantMessage('second answer');
+      },
+      (context, options) => {
+        options?.onPayload?.({ model: 'agent-model', messages: context.messages }, faux.getModel());
+        return fauxAssistantMessage('');
+      },
+    ]);
+    const runtime = fixtureSetup.runtimeWith(faux);
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.config, 'hash', async () => ({
+      state: 'completed',
+      reason: 'done',
+    }));
+    try {
+      for (const [index, text] of ['first', 'second', 'third'].entries()) {
+        fixtureSetup.ingestion.ingest(update(index + 1, 10 + index, text), new Date());
+        const [invocationId] = scheduler.processDue(new Date());
+        if (invocationId === undefined) {
+          throw new Error(`Expected invocation ${index + 1}`);
+        }
+        const outcome = await runtime.run(invocationId, new AbortController().signal);
+        expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+        fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(invocationId);
+        fixtureSetup.store.db
+          .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+          .run(invocationId);
+      }
+
+      const requests = fixtureSetup.store.db
+        .query<{ request_json: string | null }, []>(
+          "SELECT request_json FROM model_calls WHERE role = 'agent' AND request_json IS NOT NULL ORDER BY id",
+        )
+        .all();
+      // Four calls: the opening answer plus its closing turn, then one turn for
+      // each of the two later invocations.
+      expect(requests).toHaveLength(4);
+      const latest = JSON.parse(requests[3]?.request_json ?? '{}') as {
+        messages: { role: string; content: unknown }[];
+      };
+      const latestUser = [...latest.messages].reverse().find((message) => message.role === 'user');
+      const latestText =
+        (latestUser?.content as { type: string; text?: string }[] | undefined)
+          ?.filter((block) => block.type === 'text')
+          .map((block) => block.text ?? '')
+          .join('\n') ?? '';
+      // The newest batch carries only the new message: everything the transcript
+      // already holds is not re-rendered as history.
+      expect(latestText).toContain('"message_id":"12"');
+      expect(latestText).not.toContain('"message_id":"10"');
+      expect(latestText).not.toContain('"message_id":"900"');
+      // The earlier turns — the first answer and its send result included —
+      // travel as transcript entries instead of a re-rendered history block.
+      const transcript = JSON.stringify(latest.messages);
+      expect(transcript).toContain('first answer');
+      expect(transcript).toContain(`Sent Telegram message ${SEND_MESSAGE_ID}`);
+      expect(transcript).toContain('second answer');
+      const head = fixtureSetup.store.db
+        .query<{ head_seq: bigint; next_seq: bigint }, []>('SELECT head_seq, next_seq FROM conversation_contexts')
+        .get();
+      // Nothing was collected, so the whole history stays inside the window.
+      expect(head?.head_seq).toBe(1n);
+      expect(
+        fixtureSetup.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM context_messages').get()
+          ?.count,
+      ).toBe((head?.next_seq ?? 0n) - 1n);
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
+  test('runs a later invocation after the cached agent is dropped from a provider-shaped history', async () => {
+    // Regression: the canonical history is written from what the provider
+    // returned, and providers report their own usage counters. A decoder that
+    // enumerated a fixed set of them rejected the stored rows, so seeding threw
+    // before the first model call and every later invocation of the conversation
+    // failed instantly — but only once the in-memory agent was gone (process
+    // restart or LRU eviction), which is why a whole conversation went dark right
+    // after a restart.
+    const fixtureSetup = await fixture(withoutIdleWait);
+    const faux = fauxAgent();
+    const requests: string[] = [];
+    faux.setResponses([
+      () => fauxAssistantMessage('first answer'),
+      (context, options) => {
+        requests.push(JSON.stringify(context.messages));
+        options?.onPayload?.({ model: 'agent-model', messages: context.messages }, faux.getModel());
+        return fauxAssistantMessage('');
+      },
+    ]);
+    const runtime = fixtureSetup.runtimeWith(faux);
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.config, 'hash', async () => ({
+      state: 'completed',
+      reason: 'done',
+    }));
+    try {
+      fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
+      const [first] = scheduler.processDue(new Date());
+      if (first === undefined) {
+        throw new Error('Expected the first invocation');
+      }
+      await runtime.run(first, new AbortController().signal);
+      fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
+      fixtureSetup.store.db
+        .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .run(first);
+      // Rewrite the stored row the way a real provider payload reads: the
+      // encoder copies `usage` verbatim, so `reasoning` and the cache write split
+      // sit in the column exactly like this.
+      const stored = fixtureSetup.store.db
+        .query<{ seq: bigint; payload_json: string }, []>(
+          "SELECT seq, payload_json FROM context_messages WHERE role = 'assistant'",
+        )
+        .get();
+      if (stored === null) {
+        throw new Error('Expected a stored assistant message');
+      }
+      const payload = JSON.parse(stored.payload_json) as { usage: Record<string, unknown> };
+      payload.usage.reasoning = 0;
+      payload.usage.cacheWrite1h = 12;
+      fixtureSetup.store.db
+        .query('UPDATE context_messages SET payload_json = ? WHERE seq = ?')
+        .run(JSON.stringify(payload), stored.seq);
+
+      // The agent cache is gone — a restart in production, an LRU eviction here.
+      const conversationId = fixtureSetup.store.db
+        .query<{ id: bigint }, []>('SELECT id FROM conversations LIMIT 1')
+        .get()?.id;
+      if (conversationId === undefined) {
+        throw new Error('Expected a conversation');
+      }
+      fixtureSetup.conversationRuntime.forget(conversationId);
+
+      fixtureSetup.ingestion.ingest(update(2, 11, 'second'), new Date());
+      const [second] = scheduler.processDue(new Date());
+      if (second === undefined) {
+        throw new Error('Expected the second invocation');
+      }
+      const outcome = await runtime.run(second, new AbortController().signal);
+      expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+      const carried = JSON.parse(requests[0] ?? '[]') as { role: string; content: unknown }[];
+      // The stored assistant turn was replayed from SQLite, not lost.
+      expect(JSON.stringify(carried)).toContain('first answer');
+      const latestUser = [...carried].reverse().find((message) => message.role === 'user');
+      const latestText =
+        (latestUser?.content as { type: string; text?: string }[] | undefined)
+          ?.filter((block) => block.type === 'text')
+          .map((block) => block.text ?? '')
+          .join('\n') ?? '';
+      expect(latestText).toContain('"message_id":"11"');
+      expect(latestText).not.toContain('"message_id":"10"');
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
+  test('rebuilds the context when the stable system prompt changes', async () => {
+    const fixtureSetup = await fixture(withoutIdleWait);
+    const faux = fauxAgent();
+    faux.setResponses([() => fauxAssistantMessage('')]);
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.config, 'hash', async () => ({
+      state: 'completed',
+      reason: 'done',
+    }));
+    try {
+      fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
+      const [first] = scheduler.processDue(new Date());
+      if (first === undefined) {
+        throw new Error('Expected the first invocation');
+      }
+      await fixtureSetup.runtimeWith(faux, { systemPrompt: 'prompt A' }).run(first, new AbortController().signal);
+      fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
+      fixtureSetup.store.db
+        .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .run(first);
+      const before = fixtureSetup.store.db
+        .query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM context_messages')
+        .get();
+      expect(before?.count).toBeGreaterThan(0n);
+
+      fixtureSetup.ingestion.ingest(update(2, 11, 'second'), new Date());
+      const [second] = scheduler.processDue(new Date());
+      if (second === undefined) {
+        throw new Error('Expected the second invocation');
+      }
+      await fixtureSetup.runtimeWith(faux, { systemPrompt: 'prompt B' }).run(second, new AbortController().signal);
+
+      // The old rows were dropped, so every row left in the canonical history
+      // belongs to the new run and the retained window starts fresh.
+      const retained = fixtureSetup.store.db
+        .query<{ invocation_id: bigint }, [bigint]>(
+          'SELECT invocation_id FROM context_messages WHERE seq >= (SELECT head_seq FROM conversation_contexts)',
+        )
+        .all(second);
+      expect(retained.length).toBeGreaterThan(0n);
+      expect(retained.every((row) => row.invocation_id === second)).toBe(true);
+      const head = fixtureSetup.store.db
+        .query<{ head_seq: bigint; next_seq: bigint }, []>('SELECT head_seq, next_seq FROM conversation_contexts')
+        .get();
+      expect(head?.head_seq).toBe(1n);
+      expect(head?.next_seq).toBe(BigInt(retained.length) + 1n);
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+});

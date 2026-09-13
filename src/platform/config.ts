@@ -3,6 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
+import type { TLocalizedValidationError } from 'typebox/error';
 import { stripHtmlComments } from './prompt-markdown.ts';
 import { validatePromptTemplate } from './prompt-template.ts';
 
@@ -191,16 +192,33 @@ export const ConfigSchema = Type.Object(
           Type.Literal('xhigh'),
         ]),
         system_prompt_file: Type.String({ minLength: 1 }),
-        max_turns: Type.Integer({ minimum: 1, maximum: 8 }),
-        max_sends: Type.Integer({ minimum: 1, maximum: 6 }),
         send_max_text_length: Type.Optional(Type.Integer({ minimum: 1, maximum: 4096 })),
         send_disallow_blank_lines: Type.Optional(Type.Boolean()),
-        timeout_seconds: Type.Number({ exclusiveMinimum: 0, maximum: 90 }),
         max_concurrency: PositiveInteger,
         context_stop_ratio: Type.Number({ exclusiveMinimum: 0, maximum: 0.8 }),
         history_messages: Type.Integer({ minimum: 1 }),
         memory_ttl_warning_days: Type.Optional(PositiveInteger),
         send_nudge_enabled: Type.Optional(Type.Boolean()),
+        context: Type.Object(
+          {
+            retained_sends_target: Type.Integer({ minimum: 1 }),
+            retained_sends_max: Type.Integer({ minimum: 2 }),
+            hard_token_ratio: Type.Number({ exclusiveMinimum: 0, maximum: 0.8 }),
+            ref_ttl_hours: Type.Integer({ minimum: 1, maximum: 720 }),
+            idle_grace_seconds: Type.Integer({ minimum: 0, maximum: 3_600 }),
+            max_wall_clock_seconds: Type.Integer({ minimum: 1, maximum: 86_400 }),
+            agent_cache_size: Type.Integer({ minimum: 1, maximum: 1_024 }),
+          },
+          Strict,
+        ),
+        rate_limits: Type.Object(
+          {
+            sends_per_window: Type.Integer({ minimum: 1, maximum: 100 }),
+            window_seconds: Type.Integer({ minimum: 1, maximum: 86_400 }),
+            turns_per_injection: Type.Integer({ minimum: 1, maximum: 100 }),
+          },
+          Strict,
+        ),
       },
       Strict,
     ),
@@ -267,7 +285,7 @@ export async function loadConfig(path: string): Promise<LoadedConfig> {
     const details = validator
       .Errors(parsed)
       .slice(0, 10)
-      .map((error) => `${error.instancePath || '/'}: ${error.message}`)
+      .map((error) => `${error.instancePath || '/'}: ${formatValidationError(error)}`)
       .join('; ');
     throw new Error(`Invalid config: ${details}`);
   }
@@ -279,6 +297,17 @@ export async function loadConfig(path: string): Promise<LoadedConfig> {
     hash.update(`\u0000${file.content}`);
   }
   return { config, fileConfig: parsed, configPath, hash: hash.digest('hex') };
+}
+
+/**
+ * TypeBox reports an unexpected key as a bare "must not have additional properties", which forces
+ * callers to diff their file against the schema by hand. The offending names live in `params`.
+ */
+function formatValidationError(error: TLocalizedValidationError): string {
+  if (error.keyword === 'additionalProperties') {
+    return `${error.message}: ${error.params.additionalProperties.join(', ')}`;
+  }
+  return error.message;
 }
 
 interface PromptFile {
@@ -359,6 +388,7 @@ export async function assertConfigPermissions(configPath: string): Promise<void>
 function validateSemantics(config: FileConfig): void {
   validateTimezone(config.timezone, 'timezone');
   validateParticipation(config.telegram.participation, 'telegram.participation');
+  validateContextConfig(config);
   const chatIds = new Set<number>();
   for (const chat of config.telegram.chats) {
     if (!Number.isSafeInteger(chat.id) || chat.id === 0) {
@@ -494,6 +524,30 @@ function validateParticipation(participation: ParticipationConfig | undefined, l
     if (window.start === window.end) {
       throw new Error(`${label} has an empty active window: ${window.start}-${window.end}`);
     }
+  }
+}
+
+/**
+ * Conversation Context invariants. `idle_grace_seconds = 0` is the supported way
+ * to turn long-lived invocations off, but a grace shorter than one bucket
+ * window would look enabled while every run ends before the next bucket is due:
+ * a silent degradation, rejected here instead of at 3 a.m. in production.
+ */
+function validateContextConfig(config: FileConfig): void {
+  const context = config.agent.context;
+  if (context.retained_sends_target >= context.retained_sends_max) {
+    throw new Error('agent.context.retained_sends_target must be smaller than retained_sends_max');
+  }
+  if (context.hard_token_ratio > config.agent.context_stop_ratio) {
+    throw new Error('agent.context.hard_token_ratio must not exceed agent.context_stop_ratio');
+  }
+  if (context.idle_grace_seconds > 0 && context.idle_grace_seconds < config.telegram.bucket_window_seconds) {
+    throw new Error(
+      'agent.context.idle_grace_seconds must be 0 (long-lived invocations off) or at least telegram.bucket_window_seconds',
+    );
+  }
+  if (context.max_wall_clock_seconds <= context.idle_grace_seconds) {
+    throw new Error('agent.context.max_wall_clock_seconds must exceed idle_grace_seconds');
   }
 }
 

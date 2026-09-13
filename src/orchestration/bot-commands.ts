@@ -7,14 +7,18 @@ import { type SqliteStore, isChatPaused, resolveChatConfig } from '../store/data
 import { ParticipationRegistry, chatAttentionUntil } from '../store/participation.ts';
 import type { AgentModelOption, AgentModelSwitcher } from '../platform/model-switch.ts';
 import type { BucketScheduler } from './scheduler.ts';
+import type { ConversationRuntime } from './conversation-runtime.ts';
+import { ConversationContextStore, listConversationContexts } from '../context/context-store.ts';
 import { readDailyTokenBudget } from '../store/sleep.ts';
-import { botAdmins, chatContextCutoffs, chatPause, chats, dailyUsage } from '../store/schema.ts';
+import { botAdmins, chatContextCutoffs, chatPause, chats, conversations, dailyUsage } from '../store/schema.ts';
 
 export interface ParsedCommand {
   readonly name: 'pause' | 'resume' | 'status' | 'model' | 'cut_topic';
   readonly argument?: string;
   /** Telegram message ID of the command message itself; used by cut_topic. */
   readonly messageId?: bigint;
+  /** Forum topic the command was sent in; the Conversation Context to cut. */
+  readonly threadId?: bigint;
 }
 
 export interface CommandSender {
@@ -82,7 +86,12 @@ export function parseBotCommand(message: Message, botUsername: string | null): P
           const argument = message.text.slice(entity.offset + entity.length).trim();
           return argument.length === 0 ? { name: 'model' } : { name: 'model', argument };
         })();
-  return message.message_id === undefined ? base : { ...base, messageId: BigInt(message.message_id) };
+  const scoped: ParsedCommand = {
+    ...base,
+    ...(message.message_id === undefined ? {} : { messageId: BigInt(message.message_id) }),
+    ...(message.message_thread_id === undefined ? {} : { threadId: BigInt(message.message_thread_id) }),
+  };
+  return scoped;
 }
 
 // Chat-scoped control commands. State changes and replies are deterministic
@@ -93,13 +102,23 @@ export class BotCommandService {
   readonly #scheduler: BucketScheduler;
   readonly #modelSwitcher: AgentModelSwitcher | undefined;
   readonly #participation: ParticipationRegistry;
+  readonly #contexts: ConversationContextStore;
+  readonly #conversationRuntime: ConversationRuntime | undefined;
 
-  constructor(store: SqliteStore, config: RawConfig, scheduler: BucketScheduler, modelSwitcher?: AgentModelSwitcher) {
+  constructor(
+    store: SqliteStore,
+    config: RawConfig,
+    scheduler: BucketScheduler,
+    modelSwitcher?: AgentModelSwitcher,
+    conversationRuntime?: ConversationRuntime,
+  ) {
     this.#store = store;
     this.#config = config;
     this.#scheduler = scheduler;
     this.#modelSwitcher = modelSwitcher;
     this.#participation = new ParticipationRegistry(config);
+    this.#contexts = new ConversationContextStore(store);
+    this.#conversationRuntime = conversationRuntime;
   }
 
   run(command: ParsedCommand, telegramChatId: bigint, sender: CommandSender | null, now = new Date()): string {
@@ -113,7 +132,9 @@ export class BotCommandService {
       case 'model':
         return this.#adminGate(sender) ? this.#modelSwitch(command.argument) : DENIED_REPLY;
       case 'cut_topic':
-        return this.#adminGate(sender) ? this.#cutTopic(telegramChatId, command.messageId) : DENIED_REPLY;
+        return this.#adminGate(sender)
+          ? this.#cutTopic(telegramChatId, command.messageId, command.threadId, now)
+          : DENIED_REPLY;
     }
   }
 
@@ -185,7 +206,11 @@ export class BotCommandService {
   // stores the command's Telegram message ID, so the command and everything
   // before it drop out of future invocations. Only the new cutoff matters, so
   // replying is safe even when this chat has never triggered the agent.
-  #cutTopic(telegramChatId: bigint, messageId: bigint | undefined): string {
+  //
+  // The continuous Conversation Context is cleared in the same step. Without
+  // that, the command would only trim the rendered history while the model kept
+  // seeing everything through its retained transcript.
+  #cutTopic(telegramChatId: bigint, messageId: bigint | undefined, threadId: bigint | undefined, now: Date): string {
     if (messageId === undefined) {
       throw new Error(`cut_topic command is missing its Telegram message ID`);
     }
@@ -193,7 +218,7 @@ export class BotCommandService {
     if (chatId === null) {
       throw new Error(`Chat ${telegramChatId} has no stored row`);
     }
-    const timestamp = new Date().toISOString();
+    const timestamp = now.toISOString();
     this.#store.orm
       .insert(chatContextCutoffs)
       .values({ chatId, telegramMessageId: messageId, createdAt: timestamp, updatedAt: timestamp })
@@ -202,7 +227,29 @@ export class BotCommandService {
         set: { telegramMessageId: messageId, updatedAt: timestamp },
       })
       .run();
-    return '已切掉此消息及更早的历史，仅对之后的新会话生效。';
+    const conversationId = this.#store.orm
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(eq(conversations.chatId, chatId), eq(conversations.messageThreadId, threadId ?? 0n)))
+      .get()?.id;
+    if (conversationId !== undefined) {
+      const header = this.#contexts.header(conversationId);
+      if (header !== undefined) {
+        this.#contexts.clear(header, now);
+        console.log(
+          JSON.stringify({
+            event: 'context_cleared',
+            conversation_id: conversationId.toString(),
+            chat_id: telegramChatId.toString(),
+            head_seq: header.headSeq.toString(),
+            at: timestamp,
+          }),
+        );
+      }
+      // Drop the in-memory transcript too; the canonical history is the truth.
+      this.#conversationRuntime?.forget(conversationId);
+    }
+    return '已切掉此消息及更早的历史，并清空该话题的连续 Context。';
   }
 
   #modelSwitch(argument: string | undefined): string {
@@ -320,13 +367,33 @@ export class BotCommandService {
     ];
     if (paused) {
       lines.push('互动: 已暂停');
+      lines.push(...this.#contextLines(telegramChatId));
       return lines.join('\n');
     }
     const participation = this.#participationLine(telegramChatId, chatId, now);
     if (participation !== null) {
       lines.push(participation);
     }
+    lines.push(...this.#contextLines(telegramChatId));
     return lines.join('\n');
+  }
+
+  /**
+   * Conversation Context visibility: how much retained history the agent sees,
+   * how many sends are inside the GC window, and when the last collection ran.
+   */
+  #contextLines(telegramChatId: bigint): string[] {
+    const rows = listConversationContexts(this.#store, { telegramChatId });
+    if (rows.length === 0) {
+      return ['Context: 尚未建立'];
+    }
+    return rows.map((row) => {
+      const topic = row.messageThreadId === 0n ? '' : `#${row.messageThreadId.toString()} `;
+      const header = this.#contexts.header(row.conversationId);
+      const stats = header === undefined ? null : this.#contexts.stats(header);
+      const gc = stats?.lastGcAt == null ? '未 GC' : `上次 GC ${stats.lastGcAt}`;
+      return `Context ${topic}消息 ${stats?.messageCount ?? Number(row.messageCount)}，保留 send ${stats?.retainedSends ?? 0}，head_seq ${row.headSeq}，${gc}`;
+    });
   }
 
   // Only chats with a configured schedule report a participation line, so chats

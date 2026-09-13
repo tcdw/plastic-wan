@@ -7,7 +7,6 @@ import type { Update } from 'grammy/types';
 import sharp from 'sharp';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
-import { ContextBuilder } from '../src/context/context-builder.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
 import { MediaService } from '../src/capabilities/media/media.ts';
@@ -17,7 +16,7 @@ import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { createSendTool, type TelegramSendApi } from '../src/capabilities/send-tool.ts';
 import { StickerService } from '../src/capabilities/stickers.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { invocationCapabilities, renderInvocationContext, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -137,11 +136,14 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
   if (invocationId === undefined) {
     throw new Error('Expected a due invocation');
   }
-  const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
+  const context = renderInvocationContext(store, loaded.config, invocationId, {
+    contextWindow: 200_000,
+    maxOutputTokens: 32768,
+  });
   expect(context.userPrompt).toContain(
     `<untrusted_sticker_catalog>\n${stickerRow.id}:😭\n</untrusted_sticker_catalog>`,
   );
-  const capabilities = new Map<string, string>();
+  const capabilities = invocationCapabilities(store, loaded.config, context.header);
   const search = stickers.createSearchTool(context, capabilities);
   const semanticResult = await search.execute('search-1', { query: '委屈猫', set: 'cats', limit: 5 });
   expect(semanticResult.details.count).toBe(1);
@@ -176,8 +178,8 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
     store,
     api,
     context,
-    stickerCapabilities: capabilities,
-    maxSends: 6,
+    capabilities,
+    sendRateLimit: { sendsPerWindow: 6, windowSeconds: 300 },
     maxTextLength: undefined,
     disallowBlankLines: false,
     deadline: Date.now() + 30_000,

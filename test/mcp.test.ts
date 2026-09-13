@@ -7,13 +7,12 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { Update } from 'grammy/types';
 import { z } from 'zod';
 import { loadConfig } from '../src/platform/config.ts';
-import { ContextBuilder } from '../src/context/context-builder.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { McpManager } from '../src/capabilities/mcp.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { renderInvocationContext, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -87,7 +86,10 @@ test('stdio MCP discovery, result bounds, audit, and unmetered repeat calls', as
     if (invocationId === undefined) {
       throw new Error('Expected a due invocation');
     }
-    const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
+    const context = renderInvocationContext(store, loaded.config, invocationId, {
+      contextWindow: 200_000,
+      maxOutputTokens: 32768,
+    });
     const [tool] = manager.createTools(context, Date.now() + 30_000);
     if (tool === undefined) {
       throw new Error('MCP tool was not exposed');
@@ -208,7 +210,10 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
     if (invocationId === undefined) {
       throw new Error('Expected a due invocation');
     }
-    const context = new ContextBuilder(store, loaded.config).build(invocationId, 200_000, 0, 32768);
+    const context = renderInvocationContext(store, loaded.config, invocationId, {
+      contextWindow: 200_000,
+      maxOutputTokens: 32768,
+    });
     const [tool] = manager.createTools(context, Date.now() + 30_000);
     if (tool === undefined) {
       throw new Error('HTTP MCP tool was not exposed');

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Agent, type AgentTool } from '@earendil-works/pi-agent-core';
+import { Agent, type AgentMessage, type AgentTool } from '@earendil-works/pi-agent-core';
 import {
   type Api,
   type AssistantMessage,
@@ -13,9 +13,19 @@ import {
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { KeyedSemaphore } from '../platform/concurrency.ts';
 import type { RawConfig } from '../platform/config.ts';
-import { ContextBuilder, withSleepStatePrompt } from '../context/context-builder.ts';
-import { resolveChatConfig, type SqliteStore } from '../store/database.ts';
-import type { InvocationContext } from '../platform/invocation-context.ts';
+import { type ContextIdentity, ContextBuilder, type Injection, type StablePrompt } from '../context/context-builder.ts';
+import { encodeContextMessage, estimateMessageTokens } from '../context/context-codec.ts';
+import { planContextGc, type ContextGcPlan } from '../context/context-gc.ts';
+import { ContextRefStore, createCapabilityResolver } from '../context/context-refs.ts';
+import { ConversationContextStore, type ContextHeader } from '../context/context-store.ts';
+import type { SqliteStore } from '../store/database.ts';
+import {
+  type CapabilityRefResolver,
+  type InvocationContext,
+  InvocationContextState,
+  unavailableCapabilities,
+  type VisibleSender,
+} from '../platform/invocation-context.ts';
 import { serializeModelRequestForAudit } from '../platform/model-request-audit.ts';
 import type { AgentModelSwitcher } from '../platform/model-switch.ts';
 import type { ModelRegistry } from '../platform/providers.ts';
@@ -34,10 +44,7 @@ import {
   isLowDailyTokenBudget,
   readDailyTokenBudget,
 } from '../store/sleep.ts';
-
-export interface ToolRuntimeState {
-  readonly stickerCapabilities: Map<string, string>;
-}
+import { ConversationRuntime, type CachedConversationAgent } from './conversation-runtime.ts';
 
 /**
  * Builds per-invocation tools. Used for the execute registry (runtime-internal
@@ -45,14 +52,14 @@ export interface ToolRuntimeState {
  */
 export type ToolFactory = (
   context: InvocationContext,
-  state: ToolRuntimeState,
   deadline: number,
+  capabilities: CapabilityRefResolver,
 ) => readonly AgentTool[];
 export type AdditionalToolFactory = ToolFactory;
 export type CapabilityToolFactory = (
   context: InvocationContext,
-  state: ToolRuntimeState,
   deadline: number,
+  capabilities: CapabilityRefResolver,
 ) => readonly ExecutableCapability[];
 export type DirectImageLoader = (context: InvocationContext, signal: AbortSignal) => Promise<readonly ImageContent[]>;
 
@@ -72,19 +79,42 @@ export interface AgentRuntimeOptions {
   readonly additionalTools?: ToolFactory;
   readonly directImageLoader?: DirectImageLoader;
   readonly modelGate?: KeyedSemaphore;
+  /** Shared with the scheduler so the attach path and the runtime agree. */
+  readonly conversationRuntime?: ConversationRuntime;
 }
 
 /**
  * Safety net for models that draft a group-facing reply as ordinary assistant
  * text and then stop without calling send. Ordinary assistant text is private
- * and never published, so such a reply is silently lost. When the agent is
- * about to stop after producing any non-empty private text without ever
- * calling send, inject one harness-level reminder to use send. Fires at most
- * once per invocation; if the model still does not send, we stop and let it
- * stay silent.
+ * and never published, so such a reply is silently lost. When a turn ends on
+ * non-empty private text without calling send since the newest injected batch,
+ * inject one harness-level reminder to use send. Fires at most once per injected
+ * batch; if the model still does not send, we stop and let it stay silent.
+ *
+ * The check has to run before the inject and idle-grace paths: both extend the
+ * run, and a draft is only recoverable while its batch is still the newest one.
+ * Left after them, the reminder only ever fires once the conversation has been
+ * quiet for a whole grace period, so every batch that is followed by another
+ * bucket within the grace silently loses its reply.
  */
 const SEND_NUDGE_TEXT =
   'You produced a reply as ordinary assistant text. Ordinary assistant text is private and is never published to Telegram. If that text is meant for the chat, call the send tool to publish it now. You will not be reminded again.';
+
+/** Why a run decided to stop; audit-only, the state comes from `InvocationOutcome`. */
+type StopReason = 'completed' | 'context_limit' | 'turn_budget' | 'wall_clock' | 'sleep' | 'budget';
+
+interface RunState {
+  turns: number;
+  turnsSinceInjection: number;
+  toolCalls: number;
+  estimatedInputTokens: number;
+  sendUsed: boolean;
+  nudged: boolean;
+  sleepRequested: boolean;
+  modelBudgetBlocked: boolean;
+  contextClosing: boolean;
+  stopReason: StopReason;
+}
 
 export class AgentRuntime {
   readonly #store: SqliteStore;
@@ -99,8 +129,11 @@ export class AgentRuntime {
   readonly #capabilityTools: CapabilityToolFactory | undefined;
   readonly #additionalTools: ToolFactory | undefined;
   readonly #directImageLoader: DirectImageLoader | undefined;
-  readonly #contextBuilder: ContextBuilder;
   readonly #modelGate: KeyedSemaphore;
+  readonly #contextBuilder: ContextBuilder;
+  readonly #contexts: ConversationContextStore;
+  readonly #refs: ContextRefStore;
+  readonly #conversationRuntime: ConversationRuntime;
 
   constructor(options: AgentRuntimeOptions) {
     this.#store = options.store;
@@ -116,15 +149,30 @@ export class AgentRuntime {
     this.#additionalTools = options.additionalTools;
     this.#directImageLoader = options.directImageLoader;
     this.#modelGate = options.modelGate ?? new KeyedSemaphore();
-    this.#contextBuilder = new ContextBuilder(options.store, options.config, options.systemResources.skills);
+    this.#contexts = new ConversationContextStore(options.store);
+    this.#refs = new ContextRefStore(options.store, { ttlHours: options.config.agent.context.ref_ttl_hours });
+    this.#conversationRuntime =
+      options.conversationRuntime ??
+      new ConversationRuntime({ agentCacheSize: options.config.agent.context.agent_cache_size });
+    this.#contextBuilder = new ContextBuilder(
+      options.store,
+      options.config,
+      this.#refs,
+      options.systemResources.skills,
+    );
   }
+
+  get conversationRuntime(): ConversationRuntime {
+    return this.#conversationRuntime;
+  }
+
   validateAdditionalTools(context: InvocationContext, additionalTools: readonly AgentTool[]): void {
     const send = createSendTool({
       store: this.#store,
       api: this.#telegramApi,
       context,
-      stickerCapabilities: new Map(),
-      maxSends: this.#config.agent.max_sends,
+      capabilities: this.#staticCapabilities,
+      sendRateLimit: this.#sendRateLimit(),
       maxTextLength: this.#config.agent.send_max_text_length,
       disallowBlankLines: this.#config.agent.send_disallow_blank_lines === true,
       deadline: Number.MAX_SAFE_INTEGER,
@@ -142,263 +190,413 @@ export class AgentRuntime {
   }
 
   async run(invocationId: bigint, schedulerSignal: AbortSignal): Promise<InvocationOutcome> {
-    // Resolved at session start: a runtime model switch applies from here on,
-    // never to an invocation already in flight.
+    try {
+      return await this.#runInvocation(invocationId, schedulerSignal);
+    } catch (error) {
+      // The scheduler persists an outcome vocabulary, not a message, so an error
+      // that escapes the run would leave `completion_reason: 'invocation_error'`
+      // and nothing else. A stored row that no longer decodes once did exactly
+      // that and failed every invocation of one conversation until someone read
+      // the database by hand; the message has to reach the log.
+      if (!schedulerSignal.aborted) {
+        this.#logInvocationError(invocationId, error);
+      }
+      throw error;
+    }
+  }
+
+  async #runInvocation(invocationId: bigint, schedulerSignal: AbortSignal): Promise<InvocationOutcome> {
+    // Resolved at run start: a runtime model switch applies from here on, never
+    // to an invocation already in flight.
     const model = this.#modelSwitcher.model();
-    const state: ToolRuntimeState = { stickerCapabilities: new Map() };
-    const provisionalContext = this.#contextBuilder.build(
+    const identity = this.#contextBuilder.identity(invocationId);
+    const supportsImages = model.input.includes('image');
+    const stable = this.#contextBuilder.buildSystemPrompt(identity, supportsImages, {
+      provider: model.provider,
+      model: model.id,
+    });
+    const opened = this.#contexts.open(identity.conversationId, stable.systemPromptHash);
+    const header = opened.header;
+    if (opened.rebuilt) {
+      // A changed stable system prompt restarts the Conversation Context: the
+      // same conversation under two different prompts is not replayable.
+      this.#conversationRuntime.forget(identity.conversationId);
+      this.#logContextRebuilt(identity, stable.systemPromptHash);
+    }
+    const isAlarm = identity.alarm !== null;
+    const startedAt = Date.now();
+    const deadline = startedAt + this.#config.agent.context.max_wall_clock_seconds * 1_000;
+    const contextState = new InvocationContextState({
       invocationId,
-      model.contextWindow,
-      0,
-      model.maxTokens,
-      model.input.includes('image'),
-      { provider: model.provider, model: model.id },
-    );
-    const isAlarm = provisionalContext.alarm !== null;
-    const deadline = Date.now() + this.#config.agent.timeout_seconds * 1000;
-    let sleepRequested = false;
+      conversationId: identity.conversationId,
+      chatId: identity.chatId,
+      threadId: identity.threadId,
+      alarm: identity.alarm,
+    });
+    contextState.setSystemPrompt(stable.systemPrompt);
+    const capabilities = this.#capabilitiesFor(header);
+    const state: RunState = {
+      turns: 0,
+      turnsSinceInjection: 0,
+      toolCalls: 0,
+      estimatedInputTokens: 0,
+      sendUsed: false,
+      nudged: false,
+      sleepRequested: false,
+      modelBudgetBlocked: false,
+      contextClosing: false,
+      stopReason: 'completed',
+    };
     const zzz = createZzzTool({
       orm: this.#store.orm,
       invocationId,
-      chatId: provisionalContext.chatId,
+      chatId: identity.chatId,
       onSleep: () => {
-        sleepRequested = true;
+        state.sleepRequested = true;
       },
     });
-    const chat = resolveChatConfig(this.#config, this.#store.orm, provisionalContext.chatId);
-    if (chat === undefined) {
-      throw new Error(`Invocation ${invocationId} chat is no longer configured`);
-    }
     const initialBudget = readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens);
     let zzzExposed = !isAlarm && isLowDailyTokenBudget(initialBudget);
     if (zzzExposed) {
-      this.#logZzzExposure(invocationId, provisionalContext.chatId, initialBudget);
+      this.#logZzzExposure(invocationId, identity.chatId, initialBudget);
     }
-    const buildSend = (target: InvocationContext): AgentTool =>
+    const buildTools = (target: InvocationContext, exposeZzz: boolean): readonly AgentTool[] => [
+      createReadTool({ store: this.#store, context: target, resources: this.#systemResources }),
       createSendTool({
         store: this.#store,
         api: this.#telegramApi,
         context: target,
-        stickerCapabilities: state.stickerCapabilities,
-        maxSends: this.#config.agent.max_sends,
+        capabilities,
+        sendRateLimit: this.#sendRateLimit(),
         maxTextLength: this.#config.agent.send_max_text_length,
         disallowBlankLines: this.#config.agent.send_disallow_blank_lines === true,
         deadline,
         bot: this.#bot,
-      });
-    const buildPrimitives = (
-      target: InvocationContext,
-      capabilities: readonly ExecutableCapability[],
-    ): readonly AgentTool[] => [
-      createReadTool({ store: this.#store, context: target, resources: this.#systemResources }),
-      buildSend(target),
-      createExecuteTool({ store: this.#store, context: target, capabilities }),
+      }),
+      createExecuteTool({
+        store: this.#store,
+        context: target,
+        capabilities: this.#capabilityTools?.(target, deadline, capabilities) ?? [],
+      }),
+      ...(this.#additionalTools?.(target, deadline, capabilities) ?? []),
+      ...(exposeZzz ? [zzz] : []),
     ];
-    const preliminaryTools = [
-      ...buildPrimitives(provisionalContext, this.#capabilityTools?.(provisionalContext, state, deadline) ?? []),
-      ...(this.#additionalTools?.(provisionalContext, state, deadline) ?? []),
-      ...(zzzExposed ? [zzz] : []),
-    ];
-    const preliminaryToolDefinitionCharacters = estimateToolRegistryCharacters(preliminaryTools);
-    const context = this.#contextBuilder.build(
-      invocationId,
-      model.contextWindow,
-      preliminaryToolDefinitionCharacters,
-      model.maxTokens,
-      model.input.includes('image'),
-      { provider: model.provider, model: model.id },
-      zzzExposed,
-    );
-    const tools = [
-      ...buildPrimitives(context, this.#capabilityTools?.(context, state, deadline) ?? []),
-      ...(this.#additionalTools?.(context, state, deadline) ?? []),
-      ...(zzzExposed ? [zzz] : []),
-    ];
+    const tools = buildTools(contextState, zzzExposed);
     validateToolRegistry(tools, model.contextWindow);
     const toolDefinitionCharacters = estimateToolRegistryCharacters(tools);
     this.#recordToolRegistry(invocationId, tools);
+
+    const conversationId = identity.conversationId;
+    const runtime = this.#conversationRuntime;
+    let entry = runtime.cachedAgent(conversationId);
+    if (entry !== undefined && (entry.header.id !== header.id || entry.systemPromptHash !== stable.systemPromptHash)) {
+      runtime.forget(conversationId);
+      entry = undefined;
+    }
+    if (entry === undefined) {
+      entry = this.#createCachedAgent(identity, header, stable, model, tools);
+      runtime.remember(entry);
+    }
+    const cached: CachedConversationAgent = entry;
+    /**
+     * The visible sender set follows the retained transcript: senders from
+     * batches that were collected away must not stay alarm targets.
+     */
+    const rebuildVisibleState = (retained: readonly AgentMessage[]): void => {
+      const senders = new Map<string, VisibleSender>();
+      let callerUserId: bigint | null = null;
+      for (const message of retained) {
+        if (message.role !== 'user') {
+          continue;
+        }
+        const text =
+          typeof message.content === 'string'
+            ? message.content
+            : message.content
+                .filter((block) => block.type === 'text')
+                .map((block) => block.text)
+                .join('\n');
+        const collected = ContextBuilder.collectVisibleSenders(text);
+        if (collected.length > 0) {
+          callerUserId = collected.at(-1)?.userId ?? callerUserId;
+        }
+        for (const sender of collected) {
+          senders.set(sender.userId.toString(), sender);
+        }
+      }
+      contextState.retainVisibleSenders([...senders.values()]);
+      if (callerUserId !== null) {
+        contextState.setCallerUserId(callerUserId);
+      }
+    };
+    rebuildVisibleState(cached.agent.state.messages);
+    const agent = cached.agent;
+    // Hooks close over this run's state, so a cached agent is re-bound on every
+    // invocation instead of being rebuilt from the canonical history.
+    agent.state.systemPrompt = stable.systemPrompt;
+    agent.state.model = model;
+    agent.state.tools = [...tools];
+    agent.maxRetryDelayMs = Math.max(0, deadline - Date.now());
+    state.estimatedInputTokens = this.#estimateInputTokens(cached, toolDefinitionCharacters);
     const timeoutSignal = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
     const signal = AbortSignal.any([schedulerSignal, timeoutSignal]);
-    let turns = 0;
-    let toolCalls = 0;
-    let estimatedInputTokens = Math.ceil(
-      (context.systemPrompt.length + context.userPrompt.length + toolDefinitionCharacters) / 4,
-    );
-    let closing = false;
-    let modelBudgetBlocked = false;
-    let sendUsed = false;
-    let nudged = false;
-    const agent = new Agent({
-      initialState: {
-        systemPrompt: context.systemPrompt,
-        model,
-        thinkingLevel: this.#config.agent.thinking_level,
-        tools,
-      },
-      streamFn: async (model, modelContext, options) => {
-        if (
-          !isAlarm &&
-          isDailyTokenBudgetReached(readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens))
-        ) {
-          modelBudgetBlocked = true;
-          return errorStream(model, 'daily_token_budget');
-        }
-        const release = await this.#modelGate.acquire(context.chatId.toString(), signal);
-        // Per-request visibility audit: the exact tool names this llmContext
-        // carried (the loop can trim tools to send-only near the context limit).
-        const callId = this.#startModelCall(invocationId, model, modelContext.tools?.map((tool) => tool.name) ?? []);
-        try {
-          const stream = this.#models.streamSimple(model, modelContext, {
-            ...options,
-            signal,
-            maxTokens: model.maxTokens,
-            maxRetries: 2,
-            maxRetryDelayMs: Math.max(0, deadline - Date.now()),
-            // Snapshot audit: capture the provider request payload without
-            // retaining inline image bytes, plus the HTTP response status, so
-            // rendered context and transport outcome stay inspectable.
-            onPayload: (payload) => {
-              this.#recordModelCallRequest(callId, payload);
-              return undefined;
-            },
-            onResponse: (response) => {
-              this.#recordModelCallResponse(callId, response);
-            },
-          });
-          void stream
-            .result()
-            .then(
-              (message) => {
-                estimatedInputTokens = Math.max(estimatedInputTokens, message.usage.input);
-                this.#finishModelCall(callId, context.chatId, message);
-              },
-              (error) => this.#failModelCall(callId, 'stream_rejected', error),
-            )
-            .finally(release)
-            .catch(() => undefined);
-          return stream;
-        } catch (error) {
-          release();
-          this.#failModelCall(callId, 'model_setup_error', error);
-          return errorStream(model, this.#secrets.redactError(error));
-        }
-      },
-      toolExecution: 'sequential',
-      maxRetryDelayMs: Math.max(0, deadline - Date.now()),
-      beforeToolCall: async ({ toolCall }) => {
-        if (toolCall.name !== 'zzz' && !isAlarm && (sleepRequested || activeSleepUntil(this.#store.orm) !== null)) {
-          return { block: true, reason: 'The bot is sleeping', terminate: true };
-        }
-        if (
-          toolCall.name === 'zzz' &&
-          !isLowDailyTokenBudget(readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens))
-        ) {
-          return { block: true, reason: 'You are no longer sleepy' };
-        }
-        // Audit-only counter: the per-invocation tool-call cap was removed;
-        // runaway loops stay bounded by max_turns, timeout, and token budget.
-        toolCalls += 1;
-        this.#store.orm
-          .update(invocations)
-          .set({ toolCallsUsed: BigInt(toolCalls) })
-          .where(eq(invocations.id, invocationId))
-          .run();
-        return undefined;
-      },
-      shouldStopAfterTurn: async (turn) => {
-        if (!isAlarm && (sleepRequested || activeSleepUntil(this.#store.orm) !== null)) {
-          return true;
-        }
-        if (turns >= this.#config.agent.max_turns || closing) {
-          return true;
-        }
-        const stopThreshold = Math.floor(model.contextWindow * this.#config.agent.context_stop_ratio);
-        if (estimatedInputTokens + model.maxTokens >= model.contextWindow && estimatedInputTokens >= stopThreshold) {
-          return true;
-        }
-        // Safety net: the agent is about to stop naturally. If it drafted a
-        // group-facing reply as private text and never called send, remind it
-        // once. Only when this turn produced no tool calls (a would-be final
-        // message), so we never interrupt an in-progress tool workflow.
-        if (this.#config.agent.send_nudge_enabled === true && !sendUsed && !nudged) {
-          const hasToolCalls = turn.message.content.some((entry) => entry.type === 'toolCall');
-          const text = turn.message.content
-            .filter((entry) => entry.type === 'text')
-            .map((entry) => entry.text)
-            .join('');
-          if (!hasToolCalls && text.trim().length > 0) {
-            nudged = true;
-            agent.steer({ role: 'user', content: [{ type: 'text', text: SEND_NUDGE_TEXT }], timestamp: Date.now() });
-            this.recordAgentMessage(invocationId, 'harness_nudge', SEND_NUDGE_TEXT);
-          }
-        }
+    const pendingUserTags: ('checkpoint' | 'harness')[] = [];
+    const injectBatch = async (bucketId: bigint): Promise<AgentMessage> => {
+      const injection = this.#contextBuilder.renderInjection({
+        header,
+        identity,
+        bucketId,
+        seq: header.nextSeq,
+        injectedMessageIds: collectTranscriptMessageIds(agent.state.messages),
+        sleepy: zzzExposed,
+        supportsImages,
+        contextWindow: model.contextWindow,
+        toolDefinitionCharacters,
+        maxOutputTokens: model.maxTokens,
+        transcriptCharacters: estimateTranscriptCharacters(cached),
+        agentModel: { provider: model.provider, model: model.id },
+      });
+      contextState.applyInjection(injection);
+      const images = supportsImages ? ((await this.#directImageLoader?.(contextState, signal)) ?? []) : [];
+      pendingUserTags.push('checkpoint');
+      state.turnsSinceInjection = 0;
+      state.sendUsed = false;
+      state.nudged = false;
+      state.estimatedInputTokens = Math.max(
+        state.estimatedInputTokens,
+        estimateMessagesTokens(agent.state.messages) +
+          Math.ceil((injection.text.length + toolDefinitionCharacters) / 4),
+      );
+      this.#logContextInjected(invocationId, identity, bucketId, injection, header.nextSeq);
+      return {
+        role: 'user',
+        content: [{ type: 'text', text: injection.text }, ...images],
+        timestamp: Date.now(),
+      };
+    };
+    const injectPending = async (): Promise<boolean> => {
+      const pending = runtime.takeInjections(conversationId);
+      if (pending.length === 0) {
         return false;
-      },
-      prepareNextTurnWithContext: async (turn) => {
-        let nextTools = turn.context.tools;
-        let nextSystemPrompt = turn.context.systemPrompt;
-        let registryChanged = false;
-        const budget = readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens);
-        const shouldExposeZzz = !isAlarm && isLowDailyTokenBudget(budget);
-        if (shouldExposeZzz !== zzzExposed) {
-          zzzExposed = shouldExposeZzz;
-          nextTools = shouldExposeZzz
-            ? [...(nextTools ?? tools), zzz]
-            : (nextTools ?? tools).filter((tool) => tool.name !== 'zzz');
-          validateToolRegistry(nextTools, model.contextWindow);
-          this.#recordToolRegistry(invocationId, nextTools);
-          if (shouldExposeZzz) {
-            this.#logZzzExposure(invocationId, context.chatId, budget);
-            estimatedInputTokens += Math.ceil(estimateToolDefinitionCharacters(zzz) / 4);
-          }
-          // The sleep state lives in the system prompt, so a request that
-          // crosses the budget threshold mid-run keeps the prompt and the tool
-          // list telling the model the same thing.
-          nextSystemPrompt = withSleepStatePrompt(nextSystemPrompt, shouldExposeZzz);
-          estimatedInputTokens += Math.ceil(
-            Math.max(0, nextSystemPrompt.length - turn.context.systemPrompt.length) / 4,
-          );
-          registryChanged = true;
-        }
-        const stopThreshold = Math.floor(model.contextWindow * this.#config.agent.context_stop_ratio);
-        if (estimatedInputTokens < stopThreshold) {
-          if (!registryChanged) {
+      }
+      for (const bucketId of pending) {
+        const message = await injectBatch(bucketId);
+        agent.steer(message);
+        this.#markBucketInjected(invocationId, bucketId);
+      }
+      return true;
+    };
+    const stop = (reason: StopReason): true => {
+      state.stopReason = reason;
+      state.contextClosing = true;
+      runtime.beginClosing(conversationId);
+      return true;
+    };
+
+    agent.streamFunction = async (streamModel, modelContext, options) => {
+      if (
+        !isAlarm &&
+        isDailyTokenBudgetReached(readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens))
+      ) {
+        state.modelBudgetBlocked = true;
+        return errorStream(streamModel, 'daily_token_budget');
+      }
+      const release = await this.#modelGate.acquire(identity.chatId.toString(), signal);
+      // Per-request visibility audit: the exact tool names this llmContext
+      // carried (the loop can trim tools to send-only near the context limit).
+      const callId = this.#startModelCall(
+        invocationId,
+        streamModel,
+        modelContext.tools?.map((tool) => tool.name) ?? [],
+      );
+      try {
+        const stream = this.#models.streamSimple(streamModel, modelContext, {
+          ...options,
+          signal,
+          maxTokens: streamModel.maxTokens,
+          maxRetries: 2,
+          maxRetryDelayMs: Math.max(0, deadline - Date.now()),
+          // Snapshot audit: capture the provider request payload without
+          // retaining inline image bytes, plus the HTTP response status, so
+          // rendered context and transport outcome stay inspectable.
+          onPayload: (payload) => {
+            this.#recordModelCallRequest(callId, payload);
             return undefined;
-          }
-          return {
-            context: {
-              ...turn.context,
-              systemPrompt: nextSystemPrompt,
-              ...(nextTools === undefined ? {} : { tools: nextTools }),
+          },
+          onResponse: (response) => {
+            this.#recordModelCallResponse(callId, response);
+          },
+        });
+        void stream
+          .result()
+          .then(
+            (message) => {
+              state.estimatedInputTokens =
+                Math.max(state.estimatedInputTokens, message.usage.input) + Math.ceil(toolDefinitionCharacters / 4);
+              this.#finishModelCall(callId, identity.chatId, message);
             },
-          };
+            (error) => this.#failModelCall(callId, 'stream_rejected', error),
+          )
+          .finally(release)
+          .catch(() => undefined);
+        return stream;
+      } catch (error) {
+        release();
+        this.#failModelCall(callId, 'model_setup_error', error);
+        return errorStream(streamModel, this.#secrets.redactError(error));
+      }
+    };
+    agent.beforeToolCall = async ({ toolCall }) => {
+      if (toolCall.name !== 'zzz' && !isAlarm && (state.sleepRequested || activeSleepUntil(this.#store.orm) !== null)) {
+        return { block: true, reason: 'The bot is sleeping', terminate: true };
+      }
+      if (
+        toolCall.name === 'zzz' &&
+        !isLowDailyTokenBudget(readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens))
+      ) {
+        return { block: true, reason: 'You are no longer sleepy' };
+      }
+      // Audit-only counter: there is no per-invocation tool-call cap. Runaway
+      // loops stay bounded by the per-injection turn budget, the wall clock,
+      // the context stop ratio, and the daily token budget.
+      state.toolCalls += 1;
+      this.#store.orm
+        .update(invocations)
+        .set({ toolCallsUsed: BigInt(state.toolCalls) })
+        .where(eq(invocations.id, invocationId))
+        .run();
+      return undefined;
+    };
+    agent.prepareNextTurnWithContext = async (turn) => {
+      let nextTools = turn.context.tools;
+      let registryChanged = false;
+      const budget = readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens);
+      const shouldExposeZzz = !isAlarm && isLowDailyTokenBudget(budget);
+      if (shouldExposeZzz !== zzzExposed) {
+        zzzExposed = shouldExposeZzz;
+        nextTools = shouldExposeZzz
+          ? [...(nextTools ?? tools), zzz]
+          : (nextTools ?? tools).filter((tool) => tool.name !== 'zzz');
+        validateToolRegistry(nextTools, model.contextWindow);
+        this.#recordToolRegistry(invocationId, nextTools);
+        if (shouldExposeZzz) {
+          this.#logZzzExposure(invocationId, identity.chatId, budget);
+          state.estimatedInputTokens += Math.ceil(estimateToolDefinitionCharacters(zzz) / 4);
         }
-        closing = true;
-        const closingTools = nextTools?.filter((tool) => tool.name === 'send' || tool.name === 'zzz');
+        registryChanged = true;
+      }
+      // The only safe collection point: after the tool batch closed, before the
+      // next model call. Never during streaming.
+      const collected = this.#maybeCollect(
+        cached,
+        turn.context.messages,
+        invocationId,
+        state.estimatedInputTokens,
+        rebuildVisibleState,
+      );
+      const messages = collected === undefined ? undefined : turn.context.messages.slice(collected.retainedIndex);
+      const stopThreshold = Math.floor(model.contextWindow * this.#config.agent.context_stop_ratio);
+      if (state.estimatedInputTokens >= stopThreshold) {
+        state.contextClosing = true;
+        state.stopReason = 'context_limit';
+        const closingTools = (nextTools ?? tools).filter((tool) => tool.name === 'send' || tool.name === 'zzz');
         return {
           context: {
             ...turn.context,
-            systemPrompt: nextSystemPrompt,
+            ...(messages === undefined ? {} : { messages }),
             ...(closingTools === undefined ? {} : { tools: closingTools }),
           },
         };
-      },
-    });
+      }
+      if (messages === undefined && !registryChanged) {
+        return undefined;
+      }
+      return {
+        context: {
+          ...turn.context,
+          ...(messages === undefined ? {} : { messages }),
+          ...(nextTools === undefined ? {} : { tools: nextTools }),
+        },
+      };
+    };
+    agent.shouldStopAfterTurn = async (turn) => {
+      if (!isAlarm && (state.sleepRequested || activeSleepUntil(this.#store.orm) !== null)) {
+        return stop('sleep');
+      }
+      if (
+        !isAlarm &&
+        isDailyTokenBudgetReached(readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens))
+      ) {
+        return stop('budget');
+      }
+      if (state.contextClosing) {
+        return stop(state.stopReason);
+      }
+      if (state.turnsSinceInjection >= this.#config.agent.rate_limits.turns_per_injection) {
+        return stop('turn_budget');
+      }
+      // Safety net first, before anything that can extend the run: a newer batch
+      // (or the idle grace) would otherwise swallow the current batch's draft.
+      // Only when this turn produced no tool calls (a would-be final message), so
+      // we never interrupt an in-progress workflow.
+      if (this.#config.agent.send_nudge_enabled === true && !state.sendUsed && !state.nudged) {
+        const hasToolCalls = turn.message.content.some((entry) => entry.type === 'toolCall');
+        const text = turn.message.content
+          .filter((entry) => entry.type === 'text')
+          .map((entry) => entry.text)
+          .join('');
+        if (!hasToolCalls && text.trim().length > 0) {
+          state.nudged = true;
+          pendingUserTags.push('harness');
+          agent.steer({ role: 'user', content: [{ type: 'text', text: SEND_NUDGE_TEXT }], timestamp: Date.now() });
+          this.recordAgentMessage(invocationId, 'harness_nudge', SEND_NUDGE_TEXT);
+          return false;
+        }
+      }
+      // A bucket attached while the model was working is injected before any
+      // stop decision, so an attach never loses its batch.
+      if (await injectPending()) {
+        return false;
+      }
+      const idleGraceMilliseconds = this.#config.agent.context.idle_grace_seconds * 1_000;
+      if (idleGraceMilliseconds > 0 && Date.now() < deadline) {
+        const waited = await runtime.waitForInjection(
+          conversationId,
+          Math.min(idleGraceMilliseconds, Math.max(0, deadline - Date.now())),
+          signal,
+        );
+        if (waited === 'pending' && (await injectPending())) {
+          return false;
+        }
+        if (waited === 'aborted') {
+          return false;
+        }
+      }
+      if (Date.now() >= deadline) {
+        return stop('wall_clock');
+      }
+      // Nothing to force: the loop ends on its own once the model stops calling
+      // tools. Forcing a stop here would cut the answer short.
+      return false;
+    };
     const unsubscribe = agent.subscribe((event) => {
       if (event.type === 'turn_end') {
-        turns += 1;
+        state.turns += 1;
+        state.turnsSinceInjection += 1;
         this.#store.orm
           .update(invocations)
-          .set({ turnsUsed: BigInt(turns) })
+          .set({ turnsUsed: BigInt(state.turns) })
           .where(eq(invocations.id, invocationId))
           .run();
       }
       if (event.type === 'tool_execution_end' && event.toolName === 'send') {
-        sendUsed = true;
+        state.sendUsed = true;
       }
       if (event.type !== 'message_end') {
         return;
       }
+      const tag = event.message.role === 'user' ? (pendingUserTags.shift() ?? 'harness') : undefined;
+      this.#persistMessage(cached, invocationId, event.message, tag === 'checkpoint');
       if (event.message.role === 'assistant') {
         const text = event.message.content
           .filter((entry) => entry.type === 'text')
@@ -410,7 +608,6 @@ export class AgentRuntime {
           .filter((entry) => entry.type === 'text')
           .map((entry) => entry.text)
           .join('');
-        estimatedInputTokens += Math.ceil(text.length / 4);
         this.recordAgentMessage(invocationId, 'tool_result', text);
       }
     });
@@ -418,8 +615,11 @@ export class AgentRuntime {
     signal.addEventListener('abort', abortAgent, { once: true });
     let outcome: InvocationOutcome | undefined;
     try {
-      const directImages = (await this.#directImageLoader?.(context, signal)) ?? [];
-      await agent.prompt(context.userPrompt, [...directImages]);
+      this.#contexts.touch(header, invocationId);
+      const openingBucket = this.#openingBucketId(invocationId);
+      const opening = await injectBatch(openingBucket);
+      this.#markBucketInjected(invocationId, openingBucket);
+      await agent.prompt(opening);
       if (signal.aborted) {
         const unknown =
           this.#store.orm
@@ -432,22 +632,175 @@ export class AgentRuntime {
           state: unknown ? 'outcome_unknown' : 'aborted',
           reason: timeoutSignal.aborted ? 'timeout' : 'aborted',
         };
-      } else if (modelBudgetBlocked) {
+      } else if (state.modelBudgetBlocked) {
         outcome = { state: 'failed', reason: 'daily_token_budget' };
       } else if (agent.state.errorMessage !== undefined) {
         outcome = { state: 'failed', reason: 'model_error' };
       } else {
-        outcome = { state: 'completed', reason: closing ? 'context_limit' : 'completed' };
+        outcome = { state: 'completed', reason: state.stopReason };
       }
     } finally {
       signal.removeEventListener('abort', abortAgent);
       unsubscribe();
-      agent.reset();
+      // The cached agent keeps its transcript on purpose: the next invocation
+      // of this Conversation continues where this one stopped.
+      agent.clearAllQueues();
+      runtime.endClosing(conversationId);
+      this.#contexts.clearActiveInvocation(invocationId);
+      this.#contexts.touch(header, null);
+      if (agent.state.errorMessage !== undefined) {
+        // A failed run must not leave a half-broken transcript behind that the
+        // next invocation would happily replay.
+        runtime.forget(conversationId);
+      }
     }
     if (outcome === undefined) {
       throw new Error('Agent run ended without an outcome');
     }
     return outcome;
+  }
+
+  #sendRateLimit(): { sendsPerWindow: number; windowSeconds: number } {
+    return {
+      sendsPerWindow: this.#config.agent.rate_limits.sends_per_window,
+      windowSeconds: this.#config.agent.rate_limits.window_seconds,
+    };
+  }
+
+  #capabilitiesFor(header: ContextHeader): CapabilityRefResolver {
+    return createCapabilityResolver(this.#refs, header);
+  }
+
+  get #staticCapabilities(): CapabilityRefResolver {
+    return unavailableCapabilities();
+  }
+
+  /**
+   * Seeds a Pi agent from the canonical history. Everything the agent knows at
+   * this point comes from `context_messages`; the transcript cache is rebuilt
+   * identically after an eviction or a process restart.
+   */
+  #createCachedAgent(
+    identity: ContextIdentity,
+    header: ContextHeader,
+    stable: StablePrompt,
+    model: Model<Api>,
+    tools: readonly AgentTool[],
+  ): CachedConversationAgent {
+    const retained = this.#contexts.retained(header);
+    const agent = new Agent({
+      initialState: {
+        systemPrompt: stable.systemPrompt,
+        model,
+        thinkingLevel: this.#config.agent.thinking_level,
+        tools: [...tools],
+        messages: retained.map((row) => row.message),
+      },
+      streamFn: () => {
+        throw new Error('Agent stream function is bound per invocation');
+      },
+    });
+    agent.toolExecution = 'sequential';
+    return {
+      conversationId: identity.conversationId,
+      agent,
+      header,
+      transcriptSeqs: retained.map((row) => row.seq),
+      systemPromptHash: stable.systemPromptHash,
+      lastUsedAt: Date.now(),
+    };
+  }
+
+  #persistMessage(
+    entry: CachedConversationAgent,
+    invocationId: bigint,
+    message: AgentMessage,
+    isCheckpoint: boolean,
+  ): bigint | undefined {
+    const encoded = encodeContextMessage(message);
+    if (encoded === undefined) {
+      entry.transcriptSeqs.push(null);
+      return undefined;
+    }
+    const seq = this.#contexts.append(entry.header, {
+      invocationId,
+      isCheckpoint,
+      estTokens: estimateMessageTokens(message),
+      json: encoded.json,
+      role: encoded.role,
+      countedSend:
+        encoded.role === 'toolResult' &&
+        message.role === 'toolResult' &&
+        message.toolName === 'send' &&
+        message.isError !== true,
+    });
+    entry.transcriptSeqs.push(seq);
+    if (entry.transcriptSeqs.length !== entry.agent.state.messages.length) {
+      throw new Error('Conversation transcript diverged from the canonical history');
+    }
+    return seq;
+  }
+
+  #openingBucketId(invocationId: bigint): bigint {
+    const row = this.#store.orm
+      .select({ bucketId: invocations.bucketId })
+      .from(invocations)
+      .where(eq(invocations.id, invocationId))
+      .get();
+    if (row === undefined) {
+      throw new Error(`Invocation ${invocationId} does not exist`);
+    }
+    return row.bucketId;
+  }
+
+  #markBucketInjected(invocationId: bigint, bucketId: bigint): void {
+    this.#store.orm.run(
+      sql`UPDATE invocation_buckets SET injected_at = ${new Date().toISOString()}
+          WHERE invocation_id = ${invocationId} AND bucket_id = ${bucketId} AND injected_at IS NULL`,
+    );
+  }
+
+  /**
+   * Discard-only collection at a turn boundary. Four things must move together
+   * or the transcript forks: the canonical `head_seq`, the loop context, the
+   * cached `Agent.state.messages`, and the references carried by evicted rows.
+   */
+  #maybeCollect(
+    entry: CachedConversationAgent,
+    loopMessages: readonly AgentMessage[],
+    invocationId: bigint,
+    estimatedInputTokens: number,
+    onRetained: (retained: readonly AgentMessage[]) => void,
+  ): ContextGcPlan | undefined {
+    const header = entry.header;
+    const plan = planContextGc({
+      retainedSendsTarget: this.#config.agent.context.retained_sends_target,
+      retainedSendsMax: this.#config.agent.context.retained_sends_max,
+      hardTokenRatio: this.#config.agent.context.hard_token_ratio,
+      contextWindow: this.#model.contextWindow,
+      maxOutputTokens: this.#model.maxTokens,
+      estimatedInputTokens,
+      headSeq: header.headSeq,
+      transcriptSeqs: entry.transcriptSeqs,
+      window: this.#contexts.window(header),
+      messages: loopMessages,
+    });
+    if (plan === undefined) {
+      return undefined;
+    }
+    this.#contexts.advanceHead(header, plan.targetSeq);
+    const retained = loopMessages.slice(plan.retainedIndex);
+    entry.transcriptSeqs = entry.transcriptSeqs.slice(plan.retainedIndex);
+    entry.agent.state.messages = [...retained];
+    onRetained(retained);
+    this.#logContextGc(invocationId, header, plan);
+    return plan;
+  }
+
+  #estimateInputTokens(entry: CachedConversationAgent, toolDefinitionCharacters: number): number {
+    const window = this.#contexts.window(entry.header);
+    const retained = window.reduce((total, row) => total + Number(row.estTokens), 0);
+    return retained + Math.ceil(toolDefinitionCharacters / 4);
   }
 
   #recordToolRegistry(invocationId: bigint, tools: readonly AgentTool[]): void {
@@ -484,6 +837,79 @@ export class AgentRuntime {
         event: 'zzz_tool_exposed',
         invocation_id: invocationId.toString(),
         chat_id: chatId.toString(),
+        at: new Date().toISOString(),
+      }),
+    );
+  }
+
+  #logInvocationError(invocationId: bigint, error: unknown): void {
+    try {
+      console.log(
+        JSON.stringify({
+          event: 'agent_invocation_error',
+          invocation_id: invocationId.toString(),
+          error_name: error instanceof Error ? error.name : typeof error,
+          error_message: this.#secrets.redactError(error),
+          at: new Date().toISOString(),
+        }),
+      );
+    } catch {
+      // A failing log line must never replace the error it was meant to explain.
+    }
+  }
+
+  #logContextRebuilt(identity: ContextIdentity, systemPromptHash: string): void {
+    console.log(
+      JSON.stringify({
+        event: 'context_rebuilt',
+        conversation_id: identity.conversationId.toString(),
+        chat_id: identity.chatId.toString(),
+        thread_id: identity.threadId.toString(),
+        system_prompt_hash: systemPromptHash,
+        at: new Date().toISOString(),
+      }),
+    );
+  }
+
+  #logContextInjected(
+    invocationId: bigint,
+    identity: ContextIdentity,
+    bucketId: bigint,
+    injection: Injection,
+    seq: bigint,
+  ): void {
+    console.log(
+      JSON.stringify({
+        event: 'context_injected',
+        invocation_id: invocationId.toString(),
+        conversation_id: identity.conversationId.toString(),
+        chat_id: identity.chatId.toString(),
+        bucket_id: bucketId.toString(),
+        seq: seq.toString(),
+        checkpoint: true,
+        message_count: injection.messageCount,
+        history_count: injection.historyCount,
+        omitted_new_messages: injection.omittedNewMessages,
+        characters: injection.text.length,
+        at: new Date().toISOString(),
+      }),
+    );
+  }
+
+  #logContextGc(invocationId: bigint, header: ContextHeader, plan: ContextGcPlan): void {
+    console.log(
+      JSON.stringify({
+        event: 'context_gc',
+        invocation_id: invocationId.toString(),
+        conversation_id: header.conversationId.toString(),
+        head_seq: header.headSeq.toString(),
+        target_seq: plan.targetSeq.toString(),
+        before_tokens: plan.beforeTokens,
+        after_tokens: plan.afterTokens,
+        before_sends: plan.beforeSends,
+        after_sends: plan.afterSends,
+        before_messages: plan.beforeMessages,
+        after_messages: plan.afterMessages,
         at: new Date().toISOString(),
       }),
     );
@@ -624,6 +1050,38 @@ function estimateToolDefinitionCharacters(tool: AgentTool): number {
 
 function estimateToolRegistryCharacters(tools: readonly AgentTool[]): number {
   return tools.reduce((total, tool) => total + estimateToolDefinitionCharacters(tool), 0);
+}
+
+function estimateTranscriptCharacters(entry: CachedConversationAgent): number {
+  return estimateMessagesTokens(entry.agent.state.messages) * 4;
+}
+
+function estimateMessagesTokens(messages: readonly AgentMessage[]): number {
+  return messages.reduce((total, message) => total + estimateMessageTokens(message), 0);
+}
+
+/**
+ * Telegram message IDs the retained transcript already carries, so the next
+ * injection renders only the history rows that never reached the model.
+ */
+function collectTranscriptMessageIds(messages: readonly AgentMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== 'user') {
+      continue;
+    }
+    const text =
+      typeof message.content === 'string'
+        ? message.content
+        : message.content
+            .filter((block) => block.type === 'text')
+            .map((block) => block.text)
+            .join('\n');
+    for (const id of ContextBuilder.collectInjectedMessageIds(text)) {
+      ids.add(id);
+    }
+  }
+  return ids;
 }
 
 function validateToolRegistry(tools: readonly AgentTool[], contextWindow: number): void {

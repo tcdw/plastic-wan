@@ -278,6 +278,11 @@ export function purgeExpiredData(orm: Orm, config: RawConfig, now = new Date()):
         sql`DELETE FROM alarms WHERE state IN ('fired', 'cancelled') AND COALESCE(fired_at, cancelled_at, updated_at) < ${cutoff}`,
       );
       orm.run(sql`DELETE FROM daily_usage WHERE utc_date < ${cutoff.slice(0, 10)}`);
+      // Conversation Context housekeeping: soft-evicted rows and unused
+      // references go first, then contexts that have been idle past retention.
+      orm.run(sql`DELETE FROM context_refs WHERE expires_at <= ${now.toISOString()}`);
+      orm.run(sql`DELETE FROM context_messages WHERE evicted_at IS NOT NULL AND evicted_at < ${cutoff}`);
+      orm.run(sql`DELETE FROM conversation_contexts WHERE last_active_at < ${cutoff}`);
     },
     { behavior: 'immediate' },
   );

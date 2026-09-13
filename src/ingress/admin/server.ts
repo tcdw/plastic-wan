@@ -10,9 +10,11 @@ import { addBotAdmin, listBotAdmins, parseAdminUserId, removeBotAdmin } from '..
 import { cancelAlarm, listAlarms, parseAlarmId } from './alarm-admin.ts';
 import {
   AdminQueryError,
+  getConversationContext,
   getInvocation,
   getMessage,
   type ListQuery,
+  listConversationContexts,
   listInvocations,
   listMessages,
   listStickerSets,
@@ -210,6 +212,7 @@ export class AdminServer {
       set: url.searchParams.get('set'),
       search: url.searchParams.get('search'),
       target: url.searchParams.get('target'),
+      conversation: url.searchParams.get('conversation'),
     };
     if (route === 'memories' && request.method === 'GET') {
       return json(listMemories(this.#store.orm, query, this.#memoryWarningDays));
@@ -294,6 +297,15 @@ export class AdminServer {
     if (segments[0] === 'invocations' && segments.length === 2) {
       const found = getInvocation(this.#store.orm, parseId(segments[1] ?? '', 'id'));
       return found === null ? json({ error: 'not_found', message: 'Invocation does not exist' }, 404) : json(found);
+    }
+    if (route === 'contexts') {
+      return json(listConversationContexts(this.#store.orm, query));
+    }
+    if (segments[0] === 'contexts' && segments.length === 2) {
+      const found = getConversationContext(this.#store.orm, parseId(segments[1] ?? '', 'id'));
+      return found === null
+        ? json({ error: 'not_found', message: 'Conversation context does not exist' }, 404)
+        : json(found);
     }
     if (route === 'messages') {
       return json(listMessages(this.#store.orm, query));

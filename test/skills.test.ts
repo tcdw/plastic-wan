@@ -27,7 +27,7 @@ import { SecretStore } from '../src/platform/secrets.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { StickerService } from '../src/capabilities/stickers.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { testConfigJsonc, writeTestConfig, bundledSystemResources } from './helpers.ts';
+import { bundledSystemResources, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -225,7 +225,7 @@ test('the skill index reaches the system prompt and primitives stay directly cal
     },
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: await bundledSystemResources(),
-    capabilityTools: (context, _state, deadline) => [
+    capabilityTools: (context, deadline) => [
       ...createMemoryTools(memoryStore, context).map((tool) => capability(tool, true)),
       capability(createWebFetchTool({ store, context, invocationDeadline: deadline }), false),
     ],
@@ -306,8 +306,8 @@ test('search_stickers runs through execute and its refs authorize a sticker send
     },
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: await bundledSystemResources(),
-    capabilityTools: (context, state, _deadline) => [
-      capability(stickers.createSearchTool(context, state.stickerCapabilities), false),
+    capabilityTools: (context, _deadline, capabilities) => [
+      capability(stickers.createSearchTool(context, capabilities), false),
     ],
   });
   expect(await runtime.run(setup.invocationId, new AbortController().signal)).toEqual({

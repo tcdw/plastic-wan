@@ -14,7 +14,6 @@ import { AlarmInputSchema, createAlarmTool, createListAlarmTool } from '../src/c
 import { BotCommandService } from '../src/orchestration/bot-commands.ts';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
-import { ContextBuilder } from '../src/context/context-builder.ts';
 import { purgeExpiredData, SqliteStore } from '../src/store/database.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
@@ -24,7 +23,13 @@ import { enterSleep } from '../src/store/sleep.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { capability } from '../src/capabilities/execute-tool.ts';
 import { SystemResources } from '../src/platform/system-resources.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import {
+  invocationCapabilities,
+  renderInvocationContext,
+  testConfigJsonc,
+  writeTestConfig,
+  type TestContextOptions,
+} from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -52,7 +57,8 @@ async function setup() {
       state: 'completed',
       reason: 'done',
     })),
-    builder: new ContextBuilder(store, loaded.config),
+    build: (invocationId: bigint, options: TestContextOptions = {}) =>
+      renderInvocationContext(store, loaded.config, invocationId, options),
   };
 }
 
@@ -181,11 +187,11 @@ function insertAlarm(
 
 describe('alarm tool', () => {
   test('validates schema boundaries and persists a pending alarm with UTC deadline', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
-    const context = builder.build(invocationId, 200_000, 0, 32768);
+    const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
 
     expect(Compile(AlarmInputSchema).Check({ target_user_id: '42', summary: 'x', datetime: futureIso(3600_000) })).toBe(
       true,
@@ -234,11 +240,11 @@ describe('alarm tool', () => {
   });
 
   test('rejects unauthorized targets, bad datetimes, and enforces a per-invocation quota', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello', 42), received);
     const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
-    const context = builder.build(invocationId, 200_000, 0, 32768);
+    const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
     const tool = createAlarmTool({ store, context });
 
     await expect(
@@ -290,11 +296,11 @@ describe('alarm tool', () => {
   });
 
   test('list_alarm parameters schema is a strict empty object accepted by provider adapters', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
-    const context = builder.build(invocationId, 200_000, 0, 32768);
+    const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
     const tool = createListAlarmTool({
       store,
       context,
@@ -468,7 +474,7 @@ describe('alarm tool', () => {
 
 describe('alarm scheduler', () => {
   test('claims a due alarm into an invocation and leaves the topic conversation untouched', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
@@ -485,9 +491,12 @@ describe('alarm scheduler', () => {
       .get(alarmId);
     expect(alarm?.state).toBe('firing');
     expect(alarm?.invocation_id).toBe(invocations[0]);
-    const context = builder.build(invocations[0] ?? 0n, 200_000, 0, 32768);
+    const context = build(invocations[0] ?? 0n, { contextWindow: 200_000, maxOutputTokens: 32768 });
     expect(context.alarm?.userId).toBe(42n);
-    expect(context.systemPrompt).toContain('test alarm');
+    // The alarm task is per-invocation state and travels with the injected batch.
+    expect(context.userPrompt).toContain('test alarm');
+    expect(context.userPrompt).toContain('triggered by an alarm');
+    expect(context.systemPrompt).not.toContain('test alarm');
     const newCount = store.db
       .query<{ count: bigint }, [bigint]>(
         "SELECT COUNT(*) AS count FROM invocation_messages WHERE invocation_id = ? AND section = 'new'",
@@ -642,7 +651,7 @@ describe('alarm runtime budget bypass', () => {
 
 describe('alarm send mention', () => {
   test('prefixes the first successful text send with a target mention and leaves later sends alone', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, loaded, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
@@ -654,7 +663,7 @@ describe('alarm send mention', () => {
     if (alarmInvocation === undefined) {
       throw new Error('Expected alarm invocation');
     }
-    const context = builder.build(alarmInvocation, 200_000, 0, 32768);
+    const context = build(alarmInvocation, { contextWindow: 200_000, maxOutputTokens: 32768 });
     expect(context.alarm).not.toBe(null);
 
     const requests: Array<{ text: string; options: Parameters<TelegramSendApi['sendMessage']>[2] }> = [];
@@ -665,18 +674,25 @@ describe('alarm send mention', () => {
       },
       sendSticker: async () => ({ message_id: 600, date: 1_700_000_101, chat: { id: 123456789 } }),
     };
+    const capabilities = invocationCapabilities(store, loaded.config, context.header);
     const tool = createSendTool({
       store,
       api,
       context,
-      stickerCapabilities: new Map([['stk_1', 'file-id']]),
-      maxSends: 6,
+      capabilities,
+      sendRateLimit: { sendsPerWindow: 6, windowSeconds: 300 },
       maxTextLength: undefined,
       disallowBlankLines: false,
       deadline: Date.now() + 30_000,
       bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     });
-    await tool.execute('sticker-1', { kind: 'sticker', sticker_ref: 'stk_1' });
+    // A sticker ref comes from search_stickers: without one, send refuses, and a
+    // successful sticker send carries no alarm mention.
+    await expect(tool.execute('sticker-1', { kind: 'sticker', sticker_ref: 'stk_unknown' })).rejects.toThrow(
+      'not authorized',
+    );
+    const stickerRef = capabilities.registerStickerRef('file-id');
+    await tool.execute('sticker-2', { kind: 'sticker', sticker_ref: stickerRef });
     expect(requests).toHaveLength(0);
     await tool.execute('text-1', { kind: 'text', text: 'how are you now?' });
     expect(requests[0]?.text).toBe('@Alice how are you now?');
@@ -973,7 +989,7 @@ describe('alarm retention', () => {
 
 describe('alarm send mention', () => {
   test('retries the first target contact after a Telegram text failure', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, loaded, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
@@ -985,7 +1001,7 @@ describe('alarm send mention', () => {
     if (alarmInvocation === undefined) {
       throw new Error('Expected alarm invocation');
     }
-    const context = builder.build(alarmInvocation, 200_000, 0, 32768);
+    const context = build(alarmInvocation, { contextWindow: 200_000, maxOutputTokens: 32768 });
 
     const requests: Array<{ text: string; options: Parameters<TelegramSendApi['sendMessage']>[2] }> = [];
     let calls = 0;
@@ -1005,12 +1021,13 @@ describe('alarm send mention', () => {
       },
       sendSticker: async () => ({ message_id: 600, date: 1_700_000_200, chat: { id: 123456789 } }),
     };
+    const capabilities = invocationCapabilities(store, loaded.config, context.header);
     const tool = createSendTool({
       store,
       api,
       context,
-      stickerCapabilities: new Map(),
-      maxSends: 6,
+      capabilities,
+      sendRateLimit: { sendsPerWindow: 6, windowSeconds: 300 },
       maxTextLength: undefined,
       disallowBlankLines: false,
       deadline: Date.now() + 30_000,
@@ -1036,7 +1053,7 @@ describe('alarm send mention', () => {
   });
 
   test('keeps MarkdownV2 parsing while adding the first-text mention', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, loaded, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
@@ -1048,7 +1065,7 @@ describe('alarm send mention', () => {
     if (alarmInvocation === undefined) {
       throw new Error('Expected alarm invocation');
     }
-    const context = builder.build(alarmInvocation, 200_000, 0, 32768);
+    const context = build(alarmInvocation, { contextWindow: 200_000, maxOutputTokens: 32768 });
 
     const requests: Array<{ text: string; options: Parameters<TelegramSendApi['sendMessage']>[2] }> = [];
     const api: TelegramSendApi = {
@@ -1058,12 +1075,13 @@ describe('alarm send mention', () => {
       },
       sendSticker: async () => ({ message_id: 600, date: 1_700_000_200, chat: { id: 123456789 } }),
     };
+    const capabilities = invocationCapabilities(store, loaded.config, context.header);
     const tool = createSendTool({
       store,
       api,
       context,
-      stickerCapabilities: new Map(),
-      maxSends: 6,
+      capabilities,
+      sendRateLimit: { sendsPerWindow: 6, windowSeconds: 300 },
       maxTextLength: undefined,
       disallowBlankLines: false,
       deadline: Date.now() + 30_000,
@@ -1077,7 +1095,7 @@ describe('alarm send mention', () => {
   });
 
   test('applies length and blank-line checks after adding the mention prefix', async () => {
-    const { store, ingestion, scheduler, builder } = await setup();
+    const { store, loaded, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations').get();
@@ -1089,7 +1107,7 @@ describe('alarm send mention', () => {
     if (alarmInvocation === undefined) {
       throw new Error('Expected alarm invocation');
     }
-    const context = builder.build(alarmInvocation, 200_000, 0, 32768);
+    const context = build(alarmInvocation, { contextWindow: 200_000, maxOutputTokens: 32768 });
 
     let sendCalls = 0;
     const api: TelegramSendApi = {
@@ -1099,12 +1117,13 @@ describe('alarm send mention', () => {
       },
       sendSticker: async () => ({ message_id: 600, date: 1_700_000_200, chat: { id: 123456789 } }),
     };
+    const capabilities = invocationCapabilities(store, loaded.config, context.header);
     const tool = createSendTool({
       store,
       api,
       context,
-      stickerCapabilities: new Map(),
-      maxSends: 6,
+      capabilities,
+      sendRateLimit: { sendsPerWindow: 6, windowSeconds: 300 },
       maxTextLength: 20,
       disallowBlankLines: true,
       deadline: Date.now() + 30_000,

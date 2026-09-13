@@ -43,6 +43,7 @@
 | [20260901 Bun 到 Node 迁移 Epic](design/20260901%20Bun%20到%20Node%20迁移%20Epic.md) | 运行时迁移分阶段计划与决策记录 | **进行中**：Phase 2（Drizzle 查询层）已完成，Phase 1/3–6 未开始 |
 | [20260903 Skills 机制设计计划](design/20260903%20塑料碗%20Skills%20机制设计计划.md) | Skills 机制 | **Phase 1 已实现**（System Skills、`read`/`execute` 原语、8 个内部能力迁入 execute），见 [telegram-agent-flow.md](telegram-agent-flow.md)；Phase 2（Admin Skills、容器脚本）未开始 |
 | [20260911 定时活跃模式设计计划](design/20260911%20定时活跃模式设计计划.md) | 活跃时段、触发关键词与注意力窗口 | 已实现，见 [configuration.md](configuration.md)、[telegram-agent-flow.md](telegram-agent-flow.md) |
+| [20260913 连续 Context 与长活 Invocation 设计计划](design/20260913%20连续%20Context%20与长活%20Invocation%20设计计划.md) | Conversation Context、checkpoint 丢弃式 GC、Invocation 内消息热注入 | **未开始**：含 Pi 0.84.2 框架行为实测结论与 Step 0–5 实施顺序 |
 
 ## 文档边界
 

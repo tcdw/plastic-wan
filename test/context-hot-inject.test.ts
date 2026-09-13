@@ -787,6 +787,188 @@ describe('long-lived invocation', () => {
       fixtureSetup.store.close();
     }
   });
+
+  test('the input estimate does not grow with the number of model calls', async () => {
+    // Regression: every model call added one tool-registry estimate on top of the
+    // reported input tokens, which already count the tool schemas the request
+    // carried. The estimate therefore grew by one registry per turn, so a long run
+    // crossed `hard_token_ratio` and then `context_stop_ratio` on turn count alone:
+    // GC discarded live history and the run ended as `context_limit` while the real
+    // context was still tiny.
+    const fixtureSetup = await fixture((config) => {
+      config.agent.rate_limits.turns_per_injection = 40;
+    });
+    // A window just wide enough for the registry: the drift used to cross
+    // `context_stop_ratio` (0.8) well inside the turn budget below.
+    const faux = fauxProvider({
+      provider: 'agent',
+      models: [{ id: 'agent-model', input: ['text'], contextWindow: 40_000, maxTokens: 1_000 }],
+    });
+    const responses = Array.from(
+      { length: 30 },
+      () => () =>
+        fauxAssistantMessage(fauxToolCall('read', { path: 'system:///missing.md' }), { stopReason: 'toolUse' }),
+    );
+    faux.setResponses([...responses, () => fauxAssistantMessage('done')]);
+    const runtime = fixtureSetup.runtimeWith(faux);
+    try {
+      fixtureSetup.ingestion.ingest(update(1, 10, 'hello'), new Date());
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', {
+        isClosing: () => false,
+        isRoundInProgress: () => false,
+        queueInjection: () => undefined,
+      });
+      const [invocationId] = service.processDue(new Date());
+      if (invocationId === undefined) {
+        throw new Error('Expected an opening invocation');
+      }
+      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
+
+      const outcome = await runtime.run(invocationId, new AbortController().signal);
+      // The run ends because the model stopped calling tools, not because the
+      // estimate said the window was full.
+      expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+      const requests = fixtureSetup.store.db
+        .query<{ tools_json: string }, []>('SELECT tools_json FROM model_calls ORDER BY id')
+        .all();
+      expect(requests).toHaveLength(31);
+      // Closing mode trims the registry to send-only, so a full registry on the
+      // last request is the observable proof that the estimate stayed put.
+      expect(JSON.parse(requests.at(-1)?.tools_json ?? '[]')).toContain('execute');
+    } finally {
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
+  test('releases an un-injected batch before the run closes its buckets', async () => {
+    // Regression: the terminal transaction closed every bucket in
+    // `invocation_buckets` first and released the un-injected ones afterwards, so
+    // the release found nothing in state `running` and only its bucket-state write
+    // was a no-op — the new invocation was still queued. The batch was therefore
+    // re-processed while its bucket read `completed`, and the state never returned
+    // to the normal queued → running → terminal path.
+    const fixtureSetup = await fixture();
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
+    // A stub attachment target is what makes this deterministic: the real runtime
+    // would inject the batch at its next turn boundary, and the state under test is
+    // the one where the run ends before that boundary is reached.
+    const attachment = {
+      isClosing: () => false,
+      isRoundInProgress: () => false,
+      queueInjection: () => undefined,
+    };
+    const scheduler = new BucketScheduler(
+      fixtureSetup.store,
+      fixtureSetup.config,
+      'hash',
+      async () => {
+        await gate;
+        return { state: 'completed', reason: 'completed' };
+      },
+      attachment,
+    );
+    try {
+      fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
+      scheduler.start();
+      scheduler.wake();
+      await until(
+        () =>
+          fixtureSetup.store.db
+            .query<{ id: bigint }, []>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1")
+            .get() !== null,
+        'the opening invocation to start',
+      );
+      const openingInvocation = fixtureSetup.store.db
+        .query<{ id: bigint }, []>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1")
+        .get();
+      fixtureSetup.ingestion.ingest(update(2, 11, 'attached but never injected'), new Date());
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', attachment);
+      expect(service.processDue(new Date())).toHaveLength(0);
+      expect(
+        fixtureSetup.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM invocation_buckets').get()
+          ?.count,
+      ).toBe(2n);
+
+      // Stop first so the released invocation is not launched before the assertions;
+      // `stop` clears the running flag synchronously, then waits for this run.
+      const stopping = scheduler.stop();
+      release();
+      await stopping;
+
+      // The opening bucket closes with the run; the un-injected batch goes back to
+      // `queued` and owns the fresh invocation that will replay it.
+      expect(
+        fixtureSetup.store.db
+          .query<{ id: bigint; state: string }, []>('SELECT id, state FROM buckets ORDER BY id')
+          .all(),
+      ).toEqual([
+        { id: 1n, state: 'completed' },
+        { id: 2n, state: 'queued' },
+      ]);
+      const queued = fixtureSetup.store.db
+        .query<{ id: bigint; bucket_id: bigint }, []>("SELECT id, bucket_id FROM invocations WHERE state = 'queued'")
+        .all();
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.bucket_id).toBe(2n);
+      expect(queued[0]?.id).not.toBe(openingInvocation?.id);
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
+  test('drops a queued batch that the run never injected instead of replaying it later', async () => {
+    // Regression: `pendingBuckets` outlived the run. A batch attached between rounds
+    // and left un-injected (here because the turn budget ends the run before the
+    // inject step) stayed in memory, so the next invocation of the same Conversation
+    // took it from the queue and injected it a second time — on top of the opening
+    // injection that same batch had become in the meantime.
+    const fixtureSetup = await fixture((config) => {
+      config.agent.rate_limits.turns_per_injection = 1;
+    });
+    const faux = fauxAgent();
+    faux.setResponses([() => fauxAssistantMessage('answered')]);
+    const runtime = fixtureSetup.runtimeWith(faux);
+    try {
+      fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', {
+        isClosing: () => false,
+        isRoundInProgress: () => false,
+        queueInjection: () => undefined,
+      });
+      const [invocationId] = service.processDue(new Date());
+      if (invocationId === undefined) {
+        throw new Error('Expected an opening invocation');
+      }
+      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
+      const conversationId = fixtureSetup.store.db
+        .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
+        .get(invocationId)?.conversation_id;
+      if (conversationId === undefined) {
+        throw new Error('Expected a conversation');
+      }
+      // Models the attach that lands before the opening injection, when no round is
+      // in progress yet: the batch is queued but the run stops on its turn budget
+      // before any turn boundary drains the queue.
+      fixtureSetup.ingestion.ingest(update(2, 11, 'attached before the opening injection'), new Date());
+      fixtureSetup.conversationRuntime.queueInjection(conversationId, 2n);
+
+      const outcome = await runtime.run(invocationId, new AbortController().signal);
+      expect(outcome).toEqual({ state: 'completed', reason: 'turn_budget' });
+      expect(fixtureSetup.conversationRuntime.hasPendingInjections(conversationId)).toBe(false);
+      // Only the opening batch reached the transcript.
+      expect(
+        fixtureSetup.store.db
+          .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM context_messages WHERE role = 'user'")
+          .get()?.count,
+      ).toBe(1n);
+    } finally {
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
 });
 
 describe('conversation continuity', () => {

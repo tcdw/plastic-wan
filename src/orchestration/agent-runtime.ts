@@ -444,8 +444,14 @@ export class AgentRuntime {
           .result()
           .then(
             (message) => {
-              state.estimatedInputTokens =
-                Math.max(state.estimatedInputTokens, message.usage.input) + Math.ceil(toolDefinitionCharacters / 4);
+              // Reported input tokens already cover the tool schemas this request
+              // carried, so adding the registry estimate on top would double count
+              // it — and because this runs per model call, the addend accumulated:
+              // the estimate drifted upward by one registry per turn regardless of
+              // how much history there actually was. In a long-lived invocation
+              // that crossed `hard_token_ratio` on turn count alone, so GC threw
+              // away live history and the run then ended as `context_limit`.
+              state.estimatedInputTokens = Math.max(state.estimatedInputTokens, message.usage.input);
               this.#finishModelCall(callId, identity.chatId, message);
             },
             (error) => this.#failModelCall(callId, 'stream_rejected', error),
@@ -601,6 +607,14 @@ export class AgentRuntime {
       if (Date.now() >= deadline) {
         return stop('wall_clock');
       }
+      if (roundIsOver) {
+        // The loop is about to end on its own: no tool calls this turn and nothing
+        // queued, which is exactly Pi's own exit condition. `stop()` never runs on
+        // this path, so without marking the run closing here the attach path stayed
+        // open for the whole teardown and could hand over a batch that no turn
+        // boundary would ever inject.
+        runtime.beginClosing(conversationId);
+      }
       // Nothing to force: the loop ends on its own once the model stops calling
       // tools. Forcing a stop here would cut the answer short.
       return false;
@@ -671,6 +685,12 @@ export class AgentRuntime {
       // The cached agent keeps its transcript on purpose: the next invocation
       // of this Conversation continues where this one stopped.
       agent.clearAllQueues();
+      // A batch that was attached but never reached a turn boundary must not stay
+      // queued in memory: the next run of this Conversation would take it from the
+      // queue and inject it a second time, on top of the opening injection it has
+      // by then become. The database side is the scheduler's job — those rows still
+      // have `injected_at IS NULL`, so `releaseUninjectedBuckets` re-queues them.
+      runtime.takeInjections(conversationId);
       runtime.endClosing(conversationId);
       // Backstop for the paths that never reach `freeAgent` (abort mid-round, a
       // thrown error): the flag must not outlive the run, or the conversation

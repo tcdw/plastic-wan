@@ -272,16 +272,19 @@ export class BucketScheduler {
           .set({ state: outcome.state, completionReason: outcome.reason, finishedAt: nowIso })
           .where(and(eq(invocations.id, invocation.id), eq(invocations.state, 'running')))
           .run();
-        // Every bucket this run consumed — opening bucket and attached batches
-        // alike — closes with the invocation.
+        // Release first, close second. The two statements both target buckets in
+        // `invocation_buckets`, and closing first left every un-injected batch in
+        // a terminal state, which made the release a no-op that still queued a new
+        // invocation: the batch was re-processed while its bucket read `completed`.
+        this.#queue.releaseUninjectedBuckets(invocation.id, finishedAt);
+        // Every bucket this run actually consumed — opening bucket and injected
+        // batches alike — closes with the invocation. Released batches are already
+        // back to `queued` and must keep that state.
         this.#store.orm.run(
           sql`UPDATE buckets SET state = ${outcome.state}, finished_at = ${nowIso}, updated_at = ${nowIso}
              WHERE state = 'running'
                AND id IN (SELECT bucket_id FROM invocation_buckets WHERE invocation_id = ${invocation.id})`,
         );
-        // A batch attached but never injected must not vanish: it becomes a new
-        // invocation for the same conversation.
-        this.#queue.releaseUninjectedBuckets(invocation.id, finishedAt);
         const started = this.#store.orm
           .all<{ started_at: string }>(sql`SELECT started_at FROM invocations WHERE id = ${invocation.id}`)
           .at(0);

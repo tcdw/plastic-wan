@@ -86,7 +86,7 @@ export function createExecuteTool(
     name: 'execute',
     label: 'Call a runtime capability',
     description:
-      'Controlled gateway to runtime-internal capabilities (web fetching, sticker search, image analysis, memory notes, alarms). Actions: search finds capabilities for a need, e.g. query "fetch a web page", and returns [{name, summary}]; help returns one capability\'s full description and parameters; call invokes one capability with a JSON object input. Prefer the system skill index and skill documents for how to use a capability; use search only when no skill covers the need, and check help when unsure about the input contract. call returns an envelope {text, refs}: text is bounded evidence or structured data, refs holds invocation-scoped reference tokens (such as sticker_ref) that only their named consumer tool accepts after validation — never guess, reuse from other invocations, or fabricate them. The directly exposed tools (read, send, execute, zzz) and MCP tools are never callable through execute. On failure, do not invent results and do not blindly retry side effects.',
+      'Controlled gateway to runtime-internal capabilities (web fetching, sticker search, image analysis, memory notes, alarms). Actions: search finds capabilities for a need, e.g. query "fetch a web page", and returns [{name, summary}]; help returns one capability\'s full description and parameters; call invokes one capability with a JSON object input. Prefer the system skill index and skill documents for how to use a capability; use search only when no skill covers the need, and check help when unsure about the input contract. call returns an envelope {text, refs}: text is bounded evidence or structured data, refs holds conversation-scoped reference tokens (such as sticker_ref) that only their named consumer tool accepts after validation. A ref stays valid in this conversation for a limited time, so one returned earlier in the retained history may be reused while it still resolves instead of repeating the call — never guess or fabricate them. The directly exposed tools (read, send, execute, zzz) and MCP tools are never callable through execute. On failure, do not invent results and do not blindly retry side effects.',
     parameters: ExecuteInputSchema,
     executionMode: 'sequential',
     execute: async (toolCallId, input, signal) => {
@@ -199,7 +199,7 @@ async function executeCall(
   try {
     const result = await target.entry.tool.execute(`${toolCallId}:${toolName}`, callInput, signal);
     // Text payload: bounded and truncated. Reference payload: non-text
-    // artifacts only ever leave as invocation-scoped tokens from details.refs.
+    // artifacts only ever leave as conversation-scoped tokens from details.refs.
     const innerText = result.content
       .filter((entry) => entry.type === 'text')
       .map((entry) => entry.text)

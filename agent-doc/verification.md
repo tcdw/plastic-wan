@@ -41,7 +41,7 @@ bun test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-conf
 | `sleep.test.ts` | 5% 阈值边界与 `zzz` 可见性、跨轮次工具注册表、睡眠状态只随注入批次下发而不进入 system prompt、睡眠跳过 due/queued 会话、跨进程持久化、UTC 预算重置唤醒、并发 `zzz` 幂等 |
 | `context-store.test.ts` | 淘汰行不会因为陈旧 header 的低 `head_seq` 复活、`AgentMessage` 编解码往返与过滤、保留段结构守卫、canonical history 追加与 checkpoint/send 计数、system prompt 变化触发重建、`advanceHead` 淘汰行并回收其引用、整段清空、capability 引用按 Context 隔离与 TTL |
 | `context-gc.test.ts` | 丢弃式 GC 计划：send 数未超上限且无 token 压力时不动、滑到仍保留 `retained_sends_target` 次 send 的最新 checkpoint、没有可用 checkpoint 时不裁剪、Tool 多 send 少时退回 token 判据、保留段会以 `toolResult` 开头时放弃 |
-| `context-hot-inject.test.ts` | 空闲等待期间到期的 Bucket 注入同一 Invocation（`invocation_buckets` 两行、一次运行两次模型调用）、`/pause` 立即打断空闲等待、`idle_grace_seconds = 0` 退回一 Bucket 一 Invocation 但 transcript 仍连续、同 Chat 另一个 Topic 不 attach、attach 未注入的 Bucket 重新排队（且不会被下一次运行重复注入）、已 closing 的运行不再接收 attach、输入估算不随模型调用次数增长、保留窗口首行不是 `user` 时播种前先对齐到 turn 边界或整段丢弃 |
+| `context-hot-inject.test.ts` | 空闲等待期间到期的 Bucket 注入同一 Invocation（`invocation_buckets` 两行、一次运行两次模型调用）、`/pause` 立即打断空闲等待、`idle_grace_seconds = 0` 退回一 Bucket 一 Invocation 但 transcript 仍连续、同 Chat 另一个 Topic 不 attach、attach 未注入的 Bucket 重新排队（且不会被下一次运行重复注入）、已 closing 的运行不再接收 attach、输入估算不随模型调用次数增长、复用缓存的运行里每一批注入各自锚定自己的行（`context_injected.seq` 递增，`context_refs.source_seq` 等于承载该批的 user 行）、保留窗口首行不是 `user` 时播种前先对齐到 turn 边界或整段丢弃 |
 | `context-send.test.ts` | Context 可见性、Reply capability、滑动窗口内的 `send` 速率限制与 `send_rate_limited` 审计、未知网络结果不重试 |
 | `cut-topic.test.ts` | `/cut_topic` 切点排除命令消息及更早历史、切点前移、按 Chat 隔离、非管理员拒绝、重建服务后仍生效、同时清空该 Conversation 的 Conversation Context、中断仍持有切点前 transcript 的运行 |
 | `agent-runtime.test.ts` | 按 Conversation 播种的 Agent、Tool 循环、每批注入的 turn 预算、transcript 隔离与工具可见性审计 |
@@ -168,7 +168,7 @@ bun run src/cli.ts serve --config dev-data/config.jsonc
 
 - 同一次运行里连续回答两条消息：`invocations` 只有一行、`invocation_buckets` 有两行，两次 `context_injected` 的 `invocation_id` 相同而 `seq` 递增，`buckets` 两行都以 `completed` 收尾。
 - 重启进程后继续同一 Conversation：新 Invocation 的 `model_calls.request_json` 仍带着重启前的 transcript（含上次的 assistant 文本与 `send` 结果），`conversation_contexts.head_seq` 保持不变；`context_rebuilt` 只在 system prompt 或 Chat instructions 变化时出现，出现即表示整段上下文已重建。
-- 连续对话直到保留段超过 `retained_sends_max`：日志出现 `context_gc`，`target_seq` 落在 checkpoint 上、保留段仍含至少 `retained_sends_target` 次 `send`；之后请求里不再出现被淘汰的那几轮，`head_seq` 与日志一致。
+- 连续对话直到保留段超过 `retained_sends_max`：日志出现 `context_gc`，`target_seq` 落在 checkpoint 上、`previous_head_seq` 小于 `target_seq`、保留段仍含至少 `retained_sends_target` 次 `send`；之后请求里不再出现被淘汰的那几轮，`head_seq` 与日志一致。
 - 被 GC 淘汰的消息携带的引用立即失效：引用旧 `img_`/`stk_`/reply 的 `send` 必须被拒绝，而不是照旧发出。
 - 睡眠状态只随注入批次下发：`zzz` 暴露前后两次请求的 system prompt 逐字节相同，睡眠状态出现在注入批次的 `<runtime_state>` 里；`zzz` 结束时 Invocation 的 `completion_reason` 是 `sleep`。
 - `send_nudge_enabled = true` 且模型持续只写私文本：每个批次的提醒紧跟该批次（`agent_messages` 里 `harness_nudge` 排在下一次注入的 batch 之前，`telegram_sends` 逐批出现），而不是整段运行只提醒一次、其余批次的回复全部丢掉。

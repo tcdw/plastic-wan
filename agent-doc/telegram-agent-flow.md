@@ -154,6 +154,8 @@ system prompt 拆分：
 - 目标 checkpoint：从最新往回找第一个仍保留至少 `retained_sends_target` 次 `send` 的 checkpoint（`send` 少而 Tool 多的历史退回 token 判据），一次跨过多个 `send`，形成 sliding window。
 - 安全校验：目标必须是 checkpoint 的 `user` 消息、必须前进、保留段头部不能是 `toolResult`、保留段内每个 `toolResult` 都要有对应的 assistant toolCall。任一不过就放弃本次 GC，等下一个 turn 边界（最高优先级守卫：provider 不会修孤儿 `toolResult`）。
 - GC 后必须同步四处：`head_seq` 前移（旧行软标记 `evicted_at`）、loop context 的 `messages`、`Agent.state.messages`、被淘汰消息携带的 `context_refs`。缺任何一处都会让三份历史分叉。
+- 一份 Context 在运行期只允许一个 `ContextHeader` 对象。`ConversationContextStore` 会就地推进传入的 header，而写入方（`#persistMessage`、`#maybeCollect`）走 `entry.header`、注入与引用解析走 `open()` 的句柄，所以缓存命中时必须把新句柄赋给缓存条目。留成两个对象时后者永不推进：复用缓存的运行里，第一批之后的每一批都会把「本次运行开始时的 `next_seq`」写成自己 `img_`/reply 引用的 `source_seq`，于是这些引用会比应有的时间早一次 GC 失效；同时引用解析比对的 `head_seq` 也看不到运行中途的 GC。
+- `context_gc` 日志的 `previous_head_seq` 是裁剪前的 head，`head_seq` 与 `target_seq` 是裁剪后的位置；只看后两者无法判断这次丢了多少。
 - 一个 checkpoint 都没有（冷启动首轮）时不 GC，只能靠收尾模式处理。
 
 ## 引用（capability）生命周期

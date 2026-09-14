@@ -979,6 +979,96 @@ describe('conversation continuity', () => {
     config.agent.context.idle_grace_seconds = 0;
   };
 
+  test('every batch of a cache-reusing run anchors its references at its own row', async () => {
+    // Regression: one Context had two header objects. The writers used the header
+    // stored on the cached agent, while the injection path and the capability
+    // resolver used the handle from `open()`, which never advanced. From the second
+    // invocation of a Conversation on, every batch after the first recorded the
+    // run's opening `next_seq` as the `source_seq` of its media and reply
+    // references, so a later GC revoked them one collection too early even though
+    // their message was still retained. Observed in production as a frozen `seq` in
+    // `context_injected`: seven batches of one run all reported the same number.
+    const fixtureSetup = await fixture(withoutIdleWait);
+    const faux = fauxAgent();
+    faux.setResponses([
+      () => fauxAssistantMessage('first answer'),
+      () => fauxAssistantMessage('second answer'),
+      () => fauxAssistantMessage('third answer'),
+    ]);
+    const runtime = fixtureSetup.runtimeWith(faux);
+    // The real runtime is the attachment target, so the queued batch reaches the
+    // run through the same path production uses.
+    const service = new InvocationQueueService(
+      fixtureSetup.store,
+      fixtureSetup.config,
+      'hash',
+      fixtureSetup.conversationRuntime,
+    );
+    try {
+      // Run one builds the cached agent.
+      fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
+      const [first] = service.processDue(new Date());
+      if (first === undefined) {
+        throw new Error('Expected the first invocation');
+      }
+      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(first);
+      await runtime.run(first, new AbortController().signal);
+      fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
+      fixtureSetup.store.db
+        .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .run(first);
+
+      // Run two reuses it, and takes two batches: its opening bucket and one attach.
+      fixtureSetup.ingestion.ingest(update(2, 11, 'second'), new Date());
+      const [second] = service.processDue(new Date());
+      if (second === undefined) {
+        throw new Error('Expected the second invocation');
+      }
+      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(second);
+      fixtureSetup.ingestion.ingest(update(3, 12, 'third'), new Date());
+      expect(service.processDue(new Date())).toHaveLength(0);
+      const conversationId = fixtureSetup.store.db
+        .query<{ id: bigint }, []>('SELECT id FROM conversations LIMIT 1')
+        .get()?.id;
+      if (conversationId === undefined) {
+        throw new Error('Expected a conversation');
+      }
+      expect(fixtureSetup.conversationRuntime.hasPendingInjections(conversationId)).toBe(true);
+
+      const outcome = await runtime.run(second, new AbortController().signal);
+      expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+
+      // Each batch's reply reference points at the row that batch occupies, so the
+      // two batches of run two do not share one anchor.
+      const refs = new Map(
+        fixtureSetup.store.db
+          .query<{ ref: string; source_seq: bigint }, []>(
+            "SELECT ref, source_seq FROM context_refs WHERE kind = 'reply'",
+          )
+          .all()
+          .map((row) => [row.ref, row.source_seq] as const),
+      );
+      const openingSeq = refs.get('reply:11');
+      const attachedSeq = refs.get('reply:12');
+      expect(openingSeq).toBeDefined();
+      expect(attachedSeq).toBeDefined();
+      expect(attachedSeq! > openingSeq!).toBe(true);
+      // Stronger than "it moved": the anchor is the sequence number of the user row
+      // that actually carries the batch.
+      const userRows = fixtureSetup.store.db
+        .query<{ seq: bigint; payload_json: string }, []>(
+          "SELECT seq, payload_json FROM context_messages WHERE role = 'user' ORDER BY seq",
+        )
+        .all();
+      const rowCarrying = (messageId: string): bigint | undefined =>
+        userRows.find((row) => row.payload_json.includes(`\\"message_id\\":\\"${messageId}\\"`))?.seq;
+      expect(openingSeq).toBe(rowCarrying('11'));
+      expect(attachedSeq).toBe(rowCarrying('12'));
+    } finally {
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
   test('a later invocation replays the earlier transcript instead of re-rendering history', async () => {
     const fixtureSetup = await fixture(withoutIdleWait);
     const faux = fauxAgent();

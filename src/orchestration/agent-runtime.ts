@@ -296,6 +296,17 @@ export class AgentRuntime {
     if (entry === undefined) {
       entry = this.#createCachedAgent(identity, header, stable, model, tools);
       runtime.remember(entry);
+    } else {
+      // One Context, one header object. A cached entry carries the header of the
+      // run that built it, and every writer here works through `entry.header`
+      // (`#persistMessage`, `#maybeCollect`), while the injection path and the
+      // capability resolver close over the handle from `open()`. Left as two
+      // objects, the second handle never advanced: every batch after the first in
+      // a cache-reusing run recorded the run's opening `next_seq` as the
+      // `source_seq` of its media and reply references, so a later GC revoked
+      // them one collection too early, and the resolver kept checking a
+      // `head_seq` that a mid-run GC had already moved.
+      entry.header = header;
     }
     const cached: CachedConversationAgent = entry;
     /**
@@ -890,12 +901,16 @@ export class AgentRuntime {
     if (plan === undefined) {
       return undefined;
     }
+    // Captured before the move: `advanceHead` sets `headSeq` to `targetSeq`, so
+    // reading it afterwards only reported the target twice and lost the one number
+    // that says how much this collection dropped.
+    const previousHeadSeq = header.headSeq;
     this.#contexts.advanceHead(header, plan.targetSeq);
     const retained = loopMessages.slice(plan.retainedIndex);
     entry.transcriptSeqs = entry.transcriptSeqs.slice(plan.retainedIndex);
     entry.agent.state.messages = [...retained];
     onRetained(retained);
-    this.#logContextGc(invocationId, header, plan);
+    this.#logContextGc(invocationId, header, previousHeadSeq, plan);
     return plan;
   }
 
@@ -1012,12 +1027,13 @@ export class AgentRuntime {
     );
   }
 
-  #logContextGc(invocationId: bigint, header: ContextHeader, plan: ContextGcPlan): void {
+  #logContextGc(invocationId: bigint, header: ContextHeader, previousHeadSeq: bigint, plan: ContextGcPlan): void {
     console.log(
       JSON.stringify({
         event: 'context_gc',
         invocation_id: invocationId.toString(),
         conversation_id: header.conversationId.toString(),
+        previous_head_seq: previousHeadSeq.toString(),
         head_seq: header.headSeq.toString(),
         target_seq: plan.targetSeq.toString(),
         before_tokens: plan.beforeTokens,

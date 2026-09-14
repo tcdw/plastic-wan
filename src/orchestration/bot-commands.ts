@@ -17,8 +17,37 @@ export interface ParsedCommand {
   readonly argument?: string;
   /** Telegram message ID of the command message itself; used by cut_topic. */
   readonly messageId?: bigint;
-  /** Forum topic the command was sent in; the Conversation Context to cut. */
+  /**
+   * Forum topic the command was sent in; the Conversation Context to cut. Absent
+   * for every chat that has one Conversation, which is the `message_thread_id = 0`
+   * case — see `conversationThreadId`.
+   */
   readonly threadId?: bigint;
+}
+
+/**
+ * The Conversation a Telegram message belongs to, as a thread id.
+ *
+ * Telegram sets `message_thread_id` on more than forum topics: a private chat
+ * with thread mode enabled carries one on its messages, and so does a reply
+ * inside a plain supergroup (the id of the thread's root message). Ingestion
+ * has always ignored every one of those and filed the message under thread 0,
+ * so this rule is the only one that agrees with `conversations`.
+ *
+ * `parseBotCommand` used the raw field instead. `/cut_topic` carrying any such
+ * id therefore looked for a Conversation with a thread id that ingestion never
+ * wrote, found nothing, and cleared no Context — while still writing the
+ * per-Chat cutoff and replying that the Context was cleared. That is the exact
+ * failure the cut is supposed to prevent: the rendered history is truncated and
+ * the model keeps the whole transcript.
+ */
+export function conversationThreadId(message: Message | undefined): bigint {
+  return message?.chat.type === 'supergroup' &&
+    message.chat.is_forum === true &&
+    message.is_topic_message === true &&
+    message.message_thread_id !== undefined
+    ? BigInt(message.message_thread_id)
+    : 0n;
 }
 
 export interface CommandSender {
@@ -86,10 +115,11 @@ export function parseBotCommand(message: Message, botUsername: string | null): P
           const argument = message.text.slice(entity.offset + entity.length).trim();
           return argument.length === 0 ? { name: 'model' } : { name: 'model', argument };
         })();
+  const threadId = conversationThreadId(message);
   const scoped: ParsedCommand = {
     ...base,
     ...(message.message_id === undefined ? {} : { messageId: BigInt(message.message_id) }),
-    ...(message.message_thread_id === undefined ? {} : { threadId: BigInt(message.message_thread_id) }),
+    ...(threadId === 0n ? {} : { threadId }),
   };
   return scoped;
 }

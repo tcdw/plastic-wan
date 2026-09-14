@@ -237,6 +237,85 @@ describe('cut_topic', () => {
     store.close();
   });
 
+  // Regression: Telegram sets `message_thread_id` on more than forum topics — a
+  // private chat with thread mode enabled carries one, and so does a reply inside a
+  // plain supergroup. Ingestion files both under thread 0, but `parseBotCommand` read
+  // the raw field, so `/cut_topic` looked for a Conversation nobody ever wrote,
+  // cleared nothing, and still wrote the per-Chat cutoff and replied that it had
+  // cleared. That is exactly the failure the cut exists to prevent: rendered history
+  // truncated, transcript intact. Observed in production in a private chat.
+  const threadedShapes: readonly {
+    readonly label: string;
+    readonly shape: (update: Update) => Update;
+  }[] = [
+    {
+      label: 'a private chat in thread mode',
+      shape: (update) =>
+        ({
+          ...update,
+          message: {
+            ...update.message!,
+            chat: { id: update.message!.chat.id, type: 'private', first_name: 'Alice' },
+            message_thread_id: 7,
+          },
+        }) as Update,
+    },
+    {
+      label: 'a reply thread of a plain supergroup',
+      shape: (update) =>
+        ({
+          ...update,
+          message: { ...update.message!, message_thread_id: 10, reply_to_message_id: 10 },
+        }) as Update,
+    },
+  ];
+
+  for (const { label, shape } of threadedShapes) {
+    test(`cut_topic clears the Context when the command carries a thread id from ${label}`, async () => {
+      const { store, ingestion, scheduler, commands } = await setup();
+      const start = new Date('2026-08-15T00:00:00.000Z');
+      ingestion.ingest(shape(groupUpdate(1, 10, 'polluted', FIRST_CHAT)), start);
+      const invocationId = scheduler.processDue(new Date(start.getTime() + BUCKET_WINDOW_MS))[0];
+      if (invocationId === undefined) {
+        throw new Error('Expected an invocation');
+      }
+      const conversationId = store.db
+        .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
+        .get(invocationId)?.conversation_id;
+      if (conversationId === undefined) {
+        throw new Error('Expected a conversation');
+      }
+      // Ingestion put this Conversation on thread 0, because the chat is not a forum.
+      expect(
+        store.db
+          .query<{ message_thread_id: bigint }, [bigint]>('SELECT message_thread_id FROM conversations WHERE id = ?')
+          .get(conversationId)?.message_thread_id,
+      ).toBe(0n);
+      const contexts = new ConversationContextStore(store);
+      const { header } = contexts.open(conversationId, 'hash-a');
+      contexts.append(header, {
+        invocationId: null,
+        isCheckpoint: true,
+        estTokens: 10,
+        json: JSON.stringify({ role: 'user', content: 'old note', timestamp: 1 }),
+        role: 'user',
+      });
+      expect(contexts.retained(header)).toHaveLength(1);
+
+      const command = ingestion.ingest(
+        shape(commandUpdate(3, 12, FIRST_CHAT)),
+        new Date(start.getTime() + 2_000),
+      ).command;
+      expect(command?.threadId).toBeUndefined();
+      expect(commands.run(command!, FIRST_CHAT, ALICE)).toContain('清空');
+
+      const reopened = contexts.header(conversationId);
+      expect(reopened?.headSeq).toBe(reopened?.nextSeq);
+      expect(contexts.retained(reopened!)).toEqual([]);
+      store.close();
+    });
+  }
+
   test('cut_topic interrupts the invocation that still holds the pre-cut transcript', async () => {
     // A run in flight keeps the pre-cut transcript in memory and a header snapshot
     // taken at its start, so leaving it alive let it answer from the history the

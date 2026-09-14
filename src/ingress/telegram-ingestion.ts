@@ -1,6 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { Message, Update } from 'grammy/types';
-import { type ParsedCommand, parseBotCommand } from '../orchestration/bot-commands.ts';
+import { conversationThreadId, type ParsedCommand, parseBotCommand } from '../orchestration/bot-commands.ts';
 import type { RawConfig } from '../platform/config.ts';
 import { asRunResult, isChatPaused, resolveChatConfig, type SqliteStore } from '../store/database.ts';
 import { ParticipationRegistry, evaluateParticipation } from '../store/participation.ts';
@@ -97,13 +97,9 @@ export class TelegramIngestion {
     const membership = update.my_chat_member;
     const chat = message?.chat ?? membership?.chat;
     const chatId = chat === undefined ? undefined : BigInt(chat.id);
-    const threadId =
-      message?.chat.type === 'supergroup' &&
-      message.chat.is_forum === true &&
-      message.is_topic_message === true &&
-      message.message_thread_id !== undefined
-        ? BigInt(message.message_thread_id)
-        : 0n;
+    // One rule, shared with `parseBotCommand`: the two must agree or a command
+    // scoped to a Conversation cannot find the rows ingestion wrote.
+    const threadId = conversationThreadId(message);
     const topics = chatId === undefined ? null : this.#topicsFor(chatId);
     const topicAllowed = topics !== null && (topics === undefined || topics.has(threadId));
     const allowed = chat !== undefined && chat.type !== 'channel' && topicAllowed;

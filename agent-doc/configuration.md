@@ -222,8 +222,8 @@ participation 放行 = 未配置 participation || 处于活跃时段 || 更新�
 - `system_prompt_file`: 指向运维侧人格提示的 Markdown 文件，路径相对配置文件目录，内容必须非空（剔除 HTML 注释后仍需有正文）。消息分区、安全边界、Tool 选择原则和副作用成功判定由代码内 Core Agent Protocol 固化；具体 Tool 的触发条件、禁用情形、调用顺序与收尾规则由 Tool description 固化，不应重复塞入人格文件。人格提示和 Chat 的 `instructions_file` 支持 `{{ agent.provider }}`、`{{ agent.model }}`、`{{ vision.provider }}`、`{{ vision.model }}`、`{{ timezone }}` 模板变量；模板只执行严格白名单替换，未知或格式错误的表达式会拒绝配置。
 - Prompt 注释：`system_prompt_file` 与 `instructions_file` 中的 `<!-- ... -->` HTML 注释在加载时被剔除，可以写给人看的说明而不占模型上下文；注释可跨行，整行只有注释时该行一并消失。未闭合的 `<!--` 不构成注释，按原文保留；模板校验在剔除之后进行，因此注释里可以出现任意 `{{ ... }}` 文本。提示文件含 NUL 字符时拒绝加载。
 - 模板中的 `agent.provider` 与 `agent.model` 是当前 Invocation 实际使用的模型，因此 Admin Panel 或 `/model` 的运行时切换会反映到下一次会话；`vision.*` 始终来自配置。模板值只注入 Prompt，不会注入记忆；记忆内容按原文保留。
-- `max_concurrency`: 全局并行 running Invocation 上限；`history_messages` 是冷启动批次（该 Conversation Context 尚无历史，例如新建或刚重建）随注入附加的 history 区段条数上限。单次运行不再有 `max_turns`/`max_sends`/`timeout_seconds`（字段已删除，写进配置会被拒绝），运行边界见「Conversation Context」。
-- `context_stop_ratio`: 估算输入 Token 占模型窗口的比例达到该阈值后，进入收尾模式，只保留 `send` 和当时可用的 `zzz`，而不是立即停止 Tool 循环；估算输入加预留输出达到模型窗口时才按上下文限制终止。
+- `max_concurrency`: 全局并行 running Invocation 上限；`history_messages` 是每个新开 Invocation 冻结 history 快照的条数上限（attach 进运行中 Invocation 的批次不带 history）。渲染时会跳过保留 transcript 里已经有的消息，所以真正注入的只是 transcript 从没见过的那部分，例如被参与闸门挡住、从未注入过的消息；并不是只在冷启动时才生效。单次运行不再有 `max_turns`/`max_sends`/`timeout_seconds`（字段已删除，写进配置会被拒绝），运行边界见「Conversation Context」。
+- `context_stop_ratio`: 估算输入 Token 达到 `context_window × context_stop_ratio` 后进入收尾模式：下一次模型调用只带 `send` 和当时可用的 `zzz`，模型用这一轮把话说完；这一轮结束后运行以 `completion_reason = context_limit` 结束。收尾轮只给一次，模型调用使用的是本次运行实际生效的模型（含 `/model` 热切换后的模型），GC 的 token 判据同理。
 - `send_max_text_length`（可选，默认不限制）：`send` 工具文本消息的最大字符数。超出时 Tool Call 记为 `send_text_too_long` 错误，不消耗发送配额、不调用 Telegram；Sticker 不受影响。
 - `send_disallow_blank_lines`（可选，默认 `false`）：开启后，文本包含任何空行（两个换行符之间只有空格/Tab 也算空行）时 Tool Call 记为 `send_blank_lines` 错误，不消耗发送配额、不调用 Telegram；段落只能用单个换行分隔。Sticker 不受影响。
 - `memory_ttl_warning_days`（可选，默认 30）：Agent 记忆剩余寿命超过该天数时，Admin Panel 显示 warning，提示管理员判断保留、删除或提升进 `agents.md`。系统不禁止长 TTL。
@@ -280,7 +280,7 @@ Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用
 
 `agent.rate_limits`：
 
-- `sends_per_window` / `window_seconds`: 按 Telegram Chat 计算的滑动窗口发送上限，统计窗口内 `success`/`pending`/`outcome_unknown` 的 `telegram_sends`。命中时 Tool Call 记为 `send_rate_limited` 错误，不调用 Telegram；长生命周期运行可以发很多次，但循环不能刷屏。
+- `sends_per_window` / `window_seconds`: 按 Telegram Chat 计算的滑动窗口发送上限，统计窗口内所有已发往 Telegram 的 `telegram_sends`（`success`/`pending`/`outcome_unknown`/`error` 都算，失败的尝试同样消耗额度）。命中时 Tool Call 记为 `send_rate_limited` 错误，不调用 Telegram；长生命周期运行可以发很多次，但循环不能刷屏。
 - `turns_per_injection`: 自最近一次消息注入以来允许的最大 turn 数，达到即结束这次运行；注入新批次后计数清零。
 
 `check-config` 另外校验这些关系（Schema 通过不代表组合合法）：
@@ -290,7 +290,7 @@ Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用
 - `idle_grace_seconds` 为 `0`（关闭长生命周期运行）或不小于 `telegram.bucket_window_seconds`；比一个 Bucket 窗口还短的等待会在下一个 Bucket 到期前就结束运行，看似启用实则无效，因此在配置期直接拒绝。
 - `max_wall_clock_seconds > idle_grace_seconds`。
 
-稳定系统提示与重建：系统提示被拆成两部分。**稳定部分**（Core Agent Protocol、Skill 索引、图片与 Sticker 处理说明、人格提示、对话模式、记忆与内部上下文指引、Chat `instructions`，含模板变量渲染结果）不随运行期状态变化，它的 SHA-256 记在 `conversation_contexts.system_prompt_hash`；**每批注入部分**（当前时间、记忆列表、内部上下文、睡眠状态、闹钟任务、启动追赶说明、不可信的 Sticker 目录与本次 Telegram 快照）改由每批注入的消息携带（`ContextBuilder.renderInjection`），不再进入系统提示。稳定部分的内容一变（改 Prompt 文件或 `instructions_file`、模板渲染结果变化等），该 Conversation 的整份 Context 会重建：已保留的 transcript 与能力引用全部丢弃，`head_seq`/`next_seq` 复位为 1。只改运行期状态不会触发重建。
+稳定系统提示与重建：系统提示被拆成两部分。**稳定部分**（Core Agent Protocol、Skill 索引、图片与 Sticker 处理说明、人格提示、对话模式、记忆与内部上下文指引、Chat `instructions`，含模板变量渲染结果）不随运行期状态变化，它的 SHA-256 记在 `conversation_contexts.system_prompt_hash`；**每批注入部分**（当前时间、记忆列表、内部上下文、睡眠状态、闹钟任务、启动追赶说明、不可信的 Sticker 目录与本次 Telegram 快照；Sticker 目录只在与保留 transcript 里最新一份不同时才重新附带，被 GC 淘汰后会重新附带）改由每批注入的消息携带（`ContextBuilder.renderInjection`），不再进入系统提示。稳定部分的内容一变（改 Prompt 文件或 `instructions_file`、模板渲染结果变化等），该 Conversation 的整份 Context 会重建：已保留的 transcript 与能力引用全部丢弃，`head_seq`/`next_seq` 复位为 1。只改运行期状态不会触发重建。
 
 ## MCP
 

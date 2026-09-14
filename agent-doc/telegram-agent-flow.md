@@ -142,7 +142,7 @@ T+94   若期间再没有新 Bucket 到期，空闲等待耗尽，I 结束
 
 system prompt 拆分：
 
-- **稳定段**只包含不随 Invocation 变化的内容：Core Agent Protocol、System Skill 索引、图片/Sticker 说明、人格 Prompt、私聊/群聊模式、Chat instructions、记忆与 internal context 的使用说明。它对一个 Conversation Context 保持逐字节稳定，这样每次请求的前缀能被 provider prefix cache 命中。Sticker 目录（`sticker_id:emoji`）是**不可信数据**，因此随批次注入，不进入稳定段。
+- **稳定段**只包含不随 Invocation 变化的内容：Core Agent Protocol、System Skill 索引、图片/Sticker 说明、人格 Prompt、私聊/群聊模式、Chat instructions、记忆与 internal context 的使用说明。它对一个 Conversation Context 保持逐字节稳定，这样每次请求的前缀能被 provider prefix cache 命中。Sticker 目录（`sticker_id:emoji`）是**不可信数据**，因此随批次注入，不进入稳定段；它只在与保留 transcript 里最新一份不同时才重新附带（被 GC 淘汰后也会重新附带），不是每批都带一份。
 - **注入段**是一条 `user` 消息，先给可信的 `<runtime_state>`（当前时间、睡眠状态、Alarm 任务、Startup catch-up 说明、`<memory_list>`、`<internal_context_history>`），再给不可信的 `<untrusted_new_messages>`（本批 Telegram 快照，格式与既有 `invocation_messages` 快照一致）与可选的 `<untrusted_sticker_catalog>`。信任边界不变：`<untrusted_*>` 内的一切仍是数据。
 - 历史不再被重新渲染成 `<untrusted_telegram_history>`；它由 transcript 本身承载。只有两种情况例外：该 Conversation Context 尚无历史（冷启动），以及历史区段里那些**从未进入 transcript 的消息**（例如被 participation 闸门拦下的消息）——它们仍然必须渲染，否则模型永远看不到。
 - system prompt 变化（`system_prompt_hash` 不同）意味着 Context 重建：丢弃全部 canonical history 重新开始。config 只在 `serve` 启动时加载，所以等价于「改了 Prompt 或 Chat instructions 就重开 Context」。
@@ -205,7 +205,7 @@ participation 放行 = 未配置 participation || 处于活跃时段 || 更新�
 
 私聊策略提示模型积极参与；群聊提示只在有明确价值时发言。它是行为偏好，不绕过 Tool 或预算授权。
 
-Context 受模型窗口限制：为系统提示、完整 Tool 定义（名称、描述与参数 Schema）、历史、新消息和输出保留空间。Tool description 不只是能力清单，还应说明何时使用、何时不用、必要调用顺序和成功判定。估算输入达到 `context_stop_ratio` 后进入收尾模式，只保留 `send` 和当时可用的 `zzz`；估算输入加预留输出达到模型窗口时才按上下文限制终止，不是在比例阈值处立即停止 Tool 循环。
+Context 受模型窗口限制：为系统提示、完整 Tool 定义（名称、描述与参数 Schema）、历史、新消息和输出保留空间。Tool description 不只是能力清单，还应说明何时使用、何时不用、必要调用顺序和成功判定。估算输入达到 `context_window × context_stop_ratio` 后进入收尾模式：下一次模型调用只带 `send` 和当时可用的 `zzz`，模型用这一轮把话说完，这一轮结束后运行以 `context_limit` 结束。Pi 在同一个 turn 边界先调 `prepareNextTurnWithContext` 再调 `shouldStopAfterTurn`，所以「进入收尾」和「停止」必须隔开一轮，否则收尾轮根本不会发生。
 
 ## Agent 循环
 

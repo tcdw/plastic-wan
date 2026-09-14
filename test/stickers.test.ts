@@ -143,6 +143,16 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
   expect(context.userPrompt).toContain(
     `<untrusted_sticker_catalog>\n${stickerRow.id}:😭\n</untrusted_sticker_catalog>`,
   );
+  // A transcript that already carries this exact catalog does not get another copy:
+  // each copy lands in the canonical history, so a long-lived run used to keep one
+  // per injected batch. A different (stale) catalog is rendered again.
+  const catalog = `${stickerRow.id}:😭`;
+  expect(
+    renderInvocationContext(store, loaded.config, invocationId, { carriedStickerCatalog: catalog }).userPrompt,
+  ).not.toContain('<untrusted_sticker_catalog>');
+  expect(
+    renderInvocationContext(store, loaded.config, invocationId, { carriedStickerCatalog: '1:🙂' }).userPrompt,
+  ).toContain(`<untrusted_sticker_catalog>\n${catalog}\n</untrusted_sticker_catalog>`);
   const capabilities = invocationCapabilities(store, loaded.config, context.header);
   const search = stickers.createSearchTool(context, capabilities);
   const semanticResult = await search.execute('search-1', { query: '委屈猫', set: 'cats', limit: 5 });

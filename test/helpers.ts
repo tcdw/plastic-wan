@@ -45,6 +45,8 @@ export interface TestContextOptions {
   readonly bucketId?: bigint;
   /** Telegram message IDs the retained transcript already carries. */
   readonly injectedMessageIds?: ReadonlySet<string>;
+  /** The sticker catalog the retained transcript already carries. */
+  readonly carriedStickerCatalog?: string | null;
   readonly skills?: SystemResources;
 }
 
@@ -103,6 +105,7 @@ export function renderInvocationContext(
     toolDefinitionCharacters: options.toolDefinitionCharacters ?? 0,
     maxOutputTokens: options.maxOutputTokens ?? 32_768,
     transcriptCharacters: 0,
+    carriedStickerCatalog: options.carriedStickerCatalog ?? null,
     agentModel: options.agentModel ?? { provider: config.agent.provider, model: config.agent.model },
   });
   const replyTargets = new Map(

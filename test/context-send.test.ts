@@ -256,6 +256,13 @@ describe('send tool', () => {
     for (let index = 0; index < 6; index += 1) {
       await quotaTool.execute(`quota-${index}`, { kind: 'text', text: `message-${index}` });
     }
+    // Failed attempts still count. Before, the window only counted success, pending
+    // and unknown outcomes, so a loop whose every send Telegram rejected had no brake.
+    store.db
+      .query(
+        "UPDATE telegram_sends SET state = 'error' WHERE id IN (SELECT id FROM telegram_sends ORDER BY id LIMIT 3)",
+      )
+      .run();
     await expect(quotaTool.execute('quota-6', { kind: 'text', text: 'seventh' })).rejects.toThrow('send rate limit');
     expect(successfulCalls).toBe(6);
     // The rejection is audited as an error tool call, not as a silent no-op.

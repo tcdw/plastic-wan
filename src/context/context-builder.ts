@@ -181,6 +181,13 @@ export interface InjectionInput {
   readonly maxOutputTokens: number;
   /** Estimated characters already held by the retained transcript. */
   readonly transcriptCharacters: number;
+  /**
+   * The newest sticker catalog the retained transcript already carries, or `null`.
+   * The catalog is rendered only when it differs: it is the same few hundred
+   * characters on every batch, and each copy lands in the canonical history, so
+   * a long-lived run used to accumulate one copy per injection.
+   */
+  readonly carriedStickerCatalog: string | null;
   readonly agentModel: PromptTemplateModel;
   readonly now?: Date;
 }
@@ -195,6 +202,8 @@ export interface Injection {
   readonly omittedNewMessages: number;
   readonly messageCount: number;
   readonly historyCount: number;
+  /** The current catalog, whether or not this batch had to render it. */
+  readonly stickerCatalog: string;
 }
 
 export class ContextBuilder {
@@ -350,6 +359,7 @@ export class ContextBuilder {
       target: { conversationId: row.conversation_id, threadId: row.message_thread_id },
     }));
     const stickerCatalog = this.#stickerCatalog();
+    const renderStickerCatalog = stickerCatalog.length > 0 && stickerCatalog !== input.carriedStickerCatalog;
     const maximumCharacters = Math.max(
       1_024,
       Math.floor(input.contextWindow * 4 * this.#config.agent.context_stop_ratio) -
@@ -430,9 +440,7 @@ export class ContextBuilder {
       '<runtime_state>',
       runtimeState,
       '</runtime_state>',
-      ...(stickerCatalog.length === 0
-        ? []
-        : ['<untrusted_sticker_catalog>', stickerCatalog, '</untrusted_sticker_catalog>']),
+      ...(!renderStickerCatalog ? [] : ['<untrusted_sticker_catalog>', stickerCatalog, '</untrusted_sticker_catalog>']),
       ...(historyText.length === 0
         ? []
         : ['<untrusted_telegram_history>', historyText, '</untrusted_telegram_history>']),
@@ -471,6 +479,7 @@ export class ContextBuilder {
       omittedNewMessages,
       messageCount: selected.length,
       historyCount: selectedHistory.length,
+      stickerCatalog,
     };
   }
 
@@ -503,6 +512,16 @@ export class ContextBuilder {
       });
     }
     return [...senders.values()];
+  }
+
+  /**
+   * The sticker catalog a transcript batch carries, or `null`. The block is
+   * runtime-written with literal newlines around it; Telegram text only ever
+   * appears JSON-escaped inside snapshot lines, so it cannot forge the block.
+   */
+  static collectStickerCatalog(text: string): string | null {
+    const matches = [...text.matchAll(/<untrusted_sticker_catalog>\n([^\n]*)\n<\/untrusted_sticker_catalog>/g)];
+    return matches.at(-1)?.[1] ?? null;
   }
 
   /**

@@ -129,7 +129,7 @@ bun run admin:dev
 - 配置和外部响应在边界处使用 TypeBox 校验；不要把未经校验的 `unknown` 转成业务类型。
 - SQLite ID 使用 `bigint`；Telegram JSON 中需要字符串化的 ID 不得经过不安全 `number` 转换。
 - 业务查询走 `store.orm`（Drizzle 同步 API；表定义在 `src/store/schema.ts`，新增迁移必须同步更新）；`store.db` 仅限连接层、doctor 探针与测试验证断言。复杂 SQL 与 FTS5 用 `sql` 模板，值一律绑定参数。
-- Conversation Context 的 canonical history 只有一个写者（`context/store.ts` 的 `ConversationContextStore`）；Pi Agent 的 transcript 是可丢弃缓存，任何裁剪都必须同时推进 `head_seq`、loop context、`Agent.state.messages` 与 `context_refs`，否则三份历史会分叉。同一份 Context 在运行期只能有**一个** header 对象：缓存命中时把运行开始时读到的 header 赋给缓存条目，否则注入路径与引用解析用的是一份永不推进的旧快照。
+- Conversation Context 的 canonical history 只有一个写者（`src/context/context-store.ts` 的 `ConversationContextStore`）；Pi Agent 的 transcript 是可丢弃缓存，任何裁剪都必须同时推进 `head_seq`、loop context、`Agent.state.messages` 与 `context_refs`，否则三份历史会分叉。同一份 Context 在运行期只能有**一个** header 对象：缓存命中时把运行开始时读到的 header 赋给缓存条目，否则注入路径与引用解析用的是一份永不推进的旧快照。
 - 不新增第二套 Provider、调度、审计或进程执行约定；复用现有模块。
 - 清理式切换：迁移所有调用方并删除旧路径，不保留兼容别名或隐藏 fallback。
 - Admin Panel 后端复用 `SqliteStore`，审计查询只读；记忆增删改查与 Bot 管理员列表管理是仅有的管理写入例外。

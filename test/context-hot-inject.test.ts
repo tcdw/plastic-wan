@@ -38,7 +38,10 @@ interface Fixture {
   readonly ingestion: TelegramIngestion;
   readonly sendApi: TelegramSendApi;
   /** Builds a runtime over a fresh faux provider, mirroring the composition root. */
-  runtimeWith(faux: ReturnType<typeof fauxProvider>, overrides?: { readonly systemPrompt?: string }): AgentRuntime;
+  runtimeWith(
+    faux: ReturnType<typeof fauxProvider>,
+    overrides?: { readonly systemPrompt?: string; readonly registryModelId?: string },
+  ): AgentRuntime;
 }
 
 async function fixture(transform?: (config: FileConfig) => void): Promise<Fixture> {
@@ -75,7 +78,11 @@ async function fixture(transform?: (config: FileConfig) => void): Promise<Fixtur
     runtimeWith: (faux, overrides = {}) => {
       const models = createModels();
       models.setProvider(faux.provider);
-      const model = faux.getModel();
+      const model =
+        overrides.registryModelId === undefined ? faux.getModel() : faux.getModel(overrides.registryModelId);
+      if (model === undefined) {
+        throw new Error(`Faux model ${overrides.registryModelId} is not registered`);
+      }
       const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
       const config: RawConfig =
         overrides.systemPrompt === undefined
@@ -789,6 +796,64 @@ describe('long-lived invocation', () => {
     }
   });
 
+  test('closing mode grants one send-only turn before the run ends', async () => {
+    // Regression: Pi calls `prepareNextTurnWithContext` and then `shouldStopAfterTurn`
+    // at the same turn boundary. The first set `contextClosing` and the second stopped
+    // on it immediately, so the send-only turn closing mode promises never ran: a run
+    // that crossed `context_stop_ratio` ended without a chance to publish its answer.
+    // The faux provider reports its own prompt-size estimate as usage, so the threshold
+    // is lowered instead: the tool registry alone crosses 2 % of the window, which
+    // puts the very first turn boundary into closing mode.
+    const fixtureSetup = await fixture((config) => {
+      config.agent.context_stop_ratio = 0.02;
+      config.agent.context.hard_token_ratio = 0.02;
+    });
+    const faux = fauxProvider({
+      provider: 'agent',
+      models: [{ id: 'agent-model', input: ['text'], contextWindow: 40_000, maxTokens: 1_000 }],
+    });
+    const closingTools: string[][] = [];
+    faux.setResponses([
+      () => fauxAssistantMessage(fauxToolCall('read', { path: 'system:///missing.md' }), { stopReason: 'toolUse' }),
+      (context) => {
+        closingTools.push(context.tools?.map((tool) => tool.name) ?? []);
+        return fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'last words' }), {
+          stopReason: 'toolUse',
+        });
+      },
+      () => fauxAssistantMessage('should never be requested'),
+    ]);
+    const runtime = fixtureSetup.runtimeWith(faux);
+    try {
+      fixtureSetup.ingestion.ingest(update(1, 10, 'hello'), new Date());
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', {
+        isClosing: () => false,
+        isRoundInProgress: () => false,
+        queueInjection: () => undefined,
+      });
+      const [invocationId] = service.processDue(new Date());
+      if (invocationId === undefined) {
+        throw new Error('Expected an opening invocation');
+      }
+      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
+
+      const outcome = await runtime.run(invocationId, new AbortController().signal);
+      expect(outcome).toEqual({ state: 'completed', reason: 'context_limit' });
+      // Exactly one closing turn, and it only carried the send tool.
+      expect(closingTools).toEqual([['send']]);
+      expect(
+        fixtureSetup.store.db
+          .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM telegram_sends WHERE state = 'success'")
+          .get()?.count,
+      ).toBe(1n);
+      expect(
+        fixtureSetup.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM model_calls').get()?.count,
+      ).toBe(2n);
+    } finally {
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
   test('the input estimate does not grow with the number of model calls', async () => {
     // Regression: every model call added one tool-registry estimate on top of the
     // reported input tokens, which already count the tool schemas the request
@@ -978,6 +1043,52 @@ describe('conversation continuity', () => {
   const withoutIdleWait = (config: FileConfig): void => {
     config.agent.context.idle_grace_seconds = 0;
   };
+
+  test('GC judges token pressure against the model this run uses', async () => {
+    // Regression: `#maybeCollect` sized the window from the constructor-time registry
+    // model while the rest of the run used `modelSwitcher.model()`. After a runtime
+    // `/model` switch GC therefore judged pressure against one window and closing
+    // against another. Here the registry default is tiny and the run's model is large:
+    // the old code saw constant pressure and collected live history on every turn.
+    const fixtureSetup = await fixture(withoutIdleWait);
+    const faux = fauxProvider({
+      provider: 'agent',
+      models: [
+        { id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 1_000 },
+        { id: 'tiny-model', input: ['text'], contextWindow: 40_000, maxTokens: 30_000 },
+      ],
+    });
+    faux.setResponses([() => fauxAssistantMessage('first answer'), () => fauxAssistantMessage('second answer')]);
+    const runtime = fixtureSetup.runtimeWith(faux, { registryModelId: 'tiny-model' });
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.config, 'hash', async () => ({
+      state: 'completed',
+      reason: 'done',
+    }));
+    try {
+      for (const [index, text] of ['first', 'second'].entries()) {
+        fixtureSetup.ingestion.ingest(update(index + 1, 10 + index, text), new Date());
+        const [invocationId] = scheduler.processDue(new Date());
+        if (invocationId === undefined) {
+          throw new Error(`Expected invocation ${index + 1}`);
+        }
+        await runtime.run(invocationId, new AbortController().signal);
+        fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(invocationId);
+        fixtureSetup.store.db
+          .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+          .run(invocationId);
+      }
+      // Nothing was collected: the run's own window is nowhere near full.
+      const context = fixtureSetup.store.db
+        .query<{ head_seq: bigint; last_gc_at: string | null }, []>(
+          'SELECT head_seq, last_gc_at FROM conversation_contexts',
+        )
+        .get();
+      expect(context).toEqual({ head_seq: 1n, last_gc_at: null });
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
 
   test('every batch of a cache-reusing run anchors its references at its own row', async () => {
     // Regression: one Context had two header objects. The writers used the header

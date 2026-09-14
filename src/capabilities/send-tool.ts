@@ -359,9 +359,12 @@ export function createSendTool(
 }
 
 /**
- * Sends already made in this chat inside the rate-limit window. Pending and
- * unknown outcomes count too: during a Telegram hiccup those are exactly the
- * sends a runaway loop would pile up.
+ * Send attempts that reached Telegram in this chat inside the rate-limit window.
+ * Every state counts. Pending and unknown outcomes are exactly what a runaway
+ * loop piles up during a Telegram hiccup, and failed sends are what it piles up
+ * when every attempt is rejected (a MarkdownV2 escape the model keeps getting
+ * wrong, for example). The per-invocation `max_sends` this window replaced
+ * counted attempts, so leaving `error` out removed the only brake on that loop.
  */
 function recentSendCount(environment: SendToolEnvironment, now: Date): number {
   const since = new Date(now.getTime() - environment.sendRateLimit.windowSeconds * 1_000).toISOString();
@@ -372,7 +375,6 @@ function recentSendCount(environment: SendToolEnvironment, now: Date): number {
        JOIN conversations v ON v.id = ts.conversation_id
        JOIN chats c ON c.id = v.chat_id
        WHERE c.telegram_chat_id = ?
-         AND ts.state IN ('success', 'pending', 'outcome_unknown')
          AND ts.created_at >= ?`,
     )
     .get(environment.context.chatId, since);

@@ -113,6 +113,8 @@ interface RunState {
   sleepRequested: boolean;
   modelBudgetBlocked: boolean;
   contextClosing: boolean;
+  /** The one send-only turn closing mode promises has been handed out. */
+  closingTurnGranted: boolean;
   stopReason: StopReason;
 }
 
@@ -245,6 +247,7 @@ export class AgentRuntime {
       sleepRequested: false,
       modelBudgetBlocked: false,
       contextClosing: false,
+      closingTurnGranted: false,
       stopReason: 'completed',
     };
     const zzz = createZzzTool({
@@ -309,6 +312,7 @@ export class AgentRuntime {
       entry.header = header;
     }
     const cached: CachedConversationAgent = entry;
+    let carriedStickerCatalog: string | null = null;
     /**
      * The visible sender set follows the retained transcript: senders from
      * batches that were collected away must not stay alarm targets.
@@ -339,6 +343,9 @@ export class AgentRuntime {
       if (callerUserId !== null) {
         contextState.setCallerUserId(callerUserId);
       }
+      // A GC can evict the batch that carried the catalog; the next batch must then
+      // render it again.
+      carriedStickerCatalog = lastStickerCatalog(retained);
     };
     rebuildVisibleState(cached.agent.state.messages);
     const agent = cached.agent;
@@ -366,8 +373,12 @@ export class AgentRuntime {
         maxOutputTokens: model.maxTokens,
         transcriptCharacters: estimateTranscriptCharacters(cached),
         agentModel: { provider: model.provider, model: model.id },
+        carriedStickerCatalog,
       });
       contextState.applyInjection(injection);
+      if (injection.stickerCatalog.length > 0) {
+        carriedStickerCatalog = injection.stickerCatalog;
+      }
       runtime.beginRound(conversationId);
       const images = supportsImages ? ((await this.#directImageLoader?.(contextState, signal)) ?? []) : [];
       pendingUserTags.push('checkpoint');
@@ -519,6 +530,7 @@ export class AgentRuntime {
       // next model call. Never during streaming.
       const collected = this.#maybeCollect(
         cached,
+        model,
         turn.context.messages,
         invocationId,
         state.estimatedInputTokens,
@@ -560,7 +572,17 @@ export class AgentRuntime {
         return stop('budget');
       }
       if (state.contextClosing) {
-        return stop(state.stopReason);
+        // Pi runs `prepareNextTurnWithContext` and then this hook at the same turn
+        // boundary. Stopping on the flag the first time it is seen ended the run at
+        // the very boundary that entered closing mode, so the send-only turn the
+        // mode exists for never ran and a run near its window could not finish its
+        // answer. Grant exactly one closing turn, then stop.
+        if (state.closingTurnGranted) {
+          return stop(state.stopReason);
+        }
+        state.closingTurnGranted = true;
+        runtime.beginClosing(conversationId);
+        return false;
       }
       if (state.turnsSinceInjection >= this.#config.agent.rate_limits.turns_per_injection) {
         return stop('turn_budget');
@@ -880,6 +902,11 @@ export class AgentRuntime {
    */
   #maybeCollect(
     entry: CachedConversationAgent,
+    // The model this run actually talks to. The constructor-time default is wrong
+    // after a runtime `/model` switch: GC then judged token pressure against one
+    // window while the closing threshold used another, so a switch to a smaller
+    // model overran its window and a switch to a larger one collected live history.
+    model: Model<Api>,
     loopMessages: readonly AgentMessage[],
     invocationId: bigint,
     estimatedInputTokens: number,
@@ -890,8 +917,8 @@ export class AgentRuntime {
       retainedSendsTarget: this.#config.agent.context.retained_sends_target,
       retainedSendsMax: this.#config.agent.context.retained_sends_max,
       hardTokenRatio: this.#config.agent.context.hard_token_ratio,
-      contextWindow: this.#model.contextWindow,
-      maxOutputTokens: this.#model.maxTokens,
+      contextWindow: model.contextWindow,
+      maxOutputTokens: model.maxTokens,
       estimatedInputTokens,
       headSeq: header.headSeq,
       transcriptSeqs: entry.transcriptSeqs,
@@ -1190,6 +1217,27 @@ function estimateTranscriptCharacters(entry: CachedConversationAgent): number {
 
 function estimateMessagesTokens(messages: readonly AgentMessage[]): number {
   return messages.reduce((total, message) => total + estimateMessageTokens(message), 0);
+}
+
+/** The newest sticker catalog a retained transcript batch carries, or `null`. */
+function lastStickerCatalog(messages: readonly AgentMessage[]): string | null {
+  for (const message of messages.toReversed()) {
+    if (message.role !== 'user') {
+      continue;
+    }
+    const text =
+      typeof message.content === 'string'
+        ? message.content
+        : message.content
+            .filter((block) => block.type === 'text')
+            .map((block) => block.text)
+            .join('\n');
+    const catalog = ContextBuilder.collectStickerCatalog(text);
+    if (catalog !== null) {
+      return catalog;
+    }
+  }
+  return null;
 }
 
 /**

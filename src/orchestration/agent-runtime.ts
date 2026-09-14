@@ -15,9 +15,9 @@ import { KeyedSemaphore } from '../platform/concurrency.ts';
 import type { RawConfig } from '../platform/config.ts';
 import { type ContextIdentity, ContextBuilder, type Injection, type StablePrompt } from '../context/context-builder.ts';
 import { encodeContextMessage, estimateMessageTokens } from '../context/context-codec.ts';
-import { planContextGc, type ContextGcPlan } from '../context/context-gc.ts';
+import { isRenderable, planContextGc, type ContextGcPlan } from '../context/context-gc.ts';
 import { ContextRefStore, createCapabilityResolver } from '../context/context-refs.ts';
-import { ConversationContextStore, type ContextHeader } from '../context/context-store.ts';
+import { ConversationContextStore, type ContextHeader, type RetainedContextMessage } from '../context/context-store.ts';
 import type { SqliteStore } from '../store/database.ts';
 import {
   type CapabilityRefResolver,
@@ -744,6 +744,40 @@ export class AgentRuntime {
   }
 
   /**
+   * The retained window to seed from, repaired if it does not start on a turn
+   * boundary.
+   *
+   * GC only ever cuts to a checkpoint, so the window is normally valid. An
+   * eviction that lands while a run is still writing is not: `/cut_topic` moves
+   * `head_seq` to the end of the history, and a tool result the aborting run
+   * still had in flight then lands above the new head with its assistant tool
+   * call already dropped. `pi-ai` repairs a missing tool result but forwards an
+   * orphaned one verbatim, so the provider rejects every request and the whole
+   * Conversation fails until someone cuts the topic again. Cutting forward to the
+   * first turn boundary costs at most the tail of one interrupted turn.
+   */
+  #alignedRetained(identity: ContextIdentity, header: ContextHeader): RetainedContextMessage[] {
+    const retained = this.#contexts.retained(header);
+    if (retained.length === 0 || isRenderable(retained.map((row) => row.message))) {
+      return retained;
+    }
+    const boundary = retained.find((row) => row.message.role === 'user');
+    if (boundary !== undefined && boundary.seq > header.headSeq) {
+      this.#contexts.advanceHead(header, boundary.seq);
+      const realigned = this.#contexts.retained(header);
+      if (isRenderable(realigned.map((row) => row.message))) {
+        this.#logContextRealigned(identity, header, boundary.seq);
+        return realigned;
+      }
+    }
+    // No usable boundary at all: the window cannot be made renderable, so it goes
+    // rather than poisoning every later invocation.
+    this.#contexts.clear(header);
+    this.#logContextRealigned(identity, header, null);
+    return [];
+  }
+
+  /**
    * Seeds a Pi agent from the canonical history. Everything the agent knows at
    * this point comes from `context_messages`; the transcript cache is rebuilt
    * identically after an eviction or a process restart.
@@ -755,7 +789,7 @@ export class AgentRuntime {
     model: Model<Api>,
     tools: readonly AgentTool[],
   ): CachedConversationAgent {
-    const retained = this.#contexts.retained(header);
+    const retained = this.#alignedRetained(identity, header);
     const agent = new Agent({
       initialState: {
         systemPrompt: stable.systemPrompt,
@@ -934,6 +968,20 @@ export class AgentRuntime {
         chat_id: identity.chatId.toString(),
         thread_id: identity.threadId.toString(),
         system_prompt_hash: systemPromptHash,
+        at: new Date().toISOString(),
+      }),
+    );
+  }
+
+  #logContextRealigned(identity: ContextIdentity, header: ContextHeader, boundarySeq: bigint | null): void {
+    console.log(
+      JSON.stringify({
+        event: 'context_realigned',
+        conversation_id: identity.conversationId.toString(),
+        chat_id: identity.chatId.toString(),
+        head_seq: header.headSeq.toString(),
+        boundary_seq: boundarySeq === null ? null : boundarySeq.toString(),
+        cleared: boundarySeq === null,
         at: new Date().toISOString(),
       }),
     );

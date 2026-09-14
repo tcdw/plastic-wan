@@ -125,7 +125,12 @@ T+94   若期间再没有新 Bucket 到期，空闲等待耗尽，I 结束
 
 ## Context 生命周期
 
-每个 Conversation 持有一份 **Conversation Context**：canonical history 是 `context_messages` 的 `[head_seq, next_seq)` 区间，按 `seq` 严格有序，跨 Invocation 与进程重启存活。运行中的 Pi Agent 从这份历史播种，写回也以它为准；`ConversationRuntime` 里的 Agent 实例只是 LRU 缓存（`agent.context.agent_cache_size`），驱逐后能从数据库重建等价 transcript。
+每个 Conversation 持有一份 **Conversation Context**：canonical history 是 `context_messages` 的 `[head_seq, next_seq)` 区间**且 `evicted_at IS NULL`**，按 `seq` 严格有序，跨 Invocation 与进程重启存活。运行中的 Pi Agent 从这份历史播种，写回也以它为准；`ConversationRuntime` 里的 Agent 实例只是 LRU 缓存（`agent.context.agent_cache_size`），驱逐后能从数据库重建等价 transcript。
+
+保留窗口有两道守卫，都是为了「淘汰过的行不会以任何方式回到模型面前」：
+
+- **淘汰本身就是权威，不只靠 `head_seq`。** 读取保留窗口一律附带 `evicted_at IS NULL`。因为运行中的 Invocation 持有一份运行开始时的 header 快照，`/cut_topic` 之后它的 `head_seq` 比数据库更旧；纯区间读会把切掉的历史读回来，甚至把这个更旧的值写回去。
+- **播种只从 turn 边界开始。** 保留窗口首行不是 `user` 时（例如切点正好落在某一轮中途，被中断的运行还落了一条 `toolResult`），播种前先往前推到第一个 `user` 行；找不到就整段丢弃。两种情况都记 `context_realigned` 日志。这道守卫是必需的：`pi-ai` 只补缺失的 tool result，孤儿 `toolResult` 会原样发给 provider 并被拒绝，该 Conversation 会一直失败到有人再切一次。
 
 写入规则：
 
@@ -358,8 +363,8 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 1. 把命令消息自身的 Telegram message ID 写入 `chat_context_cutoffs`（每 Chat 一行，重复执行即前移切点）。
 2. 之后新建的 Invocation 在冻结 history 快照时排除 `telegram_message_id <= 切点` 的消息，命令消息本身也在切点上，因此不会进入下一个会话的上下文。
-3. 同时清空该 Conversation Context 的 canonical history（`head_seq` 推进到 `next_seq`、`context_refs` 全删），并驱逐进程内的 Agent 缓存。否则命令只是名义上切了历史，模型仍能从自己的 transcript 看得见。
-4. 不删除任何消息、Revision 或已淘汰的 Context 行（只软标记）；已排队/运行中的 Invocation 不受影响，启动追赶的 `new` 消息也不受影响。
+3. 先中断该 Conversation 正在运行的 Invocation（`BucketScheduler.abortConversation`，abort reason `context_cut`），再清空 canonical history（`head_seq` 推进到 `next_seq`、`context_refs` 全删），并驱逐进程内的 Agent 缓存。三步都必要：运行中的那次调用把切点前的 transcript 和一份运行开始时的 `head_seq` 快照都留在内存里，不中断它就会继续按被切掉的历史回答，还可能把这份更旧的 `head_seq` 写回去覆盖切点。
+4. 不删除任何消息、Revision 或已淘汰的 Context 行（只软标记）；被切 Conversation 之外的已排队/运行中 Invocation 不受影响，启动追赶的 `new` 消息也不受影响。
 
 ## Bot 管理员列表
 

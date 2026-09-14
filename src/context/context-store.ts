@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, gte, lt, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { SqliteStore } from '../store/database.ts';
 import { conversationContexts, contextMessages, contextRefs, invocations } from '../store/schema.ts';
@@ -163,12 +163,20 @@ export class ConversationContextStore {
     return seq;
   }
 
-  /** Retained rows in transcript order, decoded for seeding a Pi agent. */
+  /**
+   * Retained rows in transcript order, decoded for seeding a Pi agent.
+   *
+   * Eviction is authoritative on its own, not only through `head_seq`: a caller
+   * holding a header from before a concurrent `/cut_topic` has a stale, lower
+   * `headSeq`, and a range read would resurrect exactly the history the cut
+   * dropped. Filtering on `evicted_at` makes a dropped row stay dropped whatever
+   * `head_seq` any live handle believes in.
+   */
   retained(header: ContextHeader): RetainedContextMessage[] {
     return this.#store.orm
       .select({ seq: contextMessages.seq, payloadJson: contextMessages.payloadJson })
       .from(contextMessages)
-      .where(and(eq(contextMessages.contextId, header.id), gte(contextMessages.seq, header.headSeq)))
+      .where(this.#retainedRange(header))
       .orderBy(contextMessages.seq)
       .all()
       .map((row) => ({ seq: row.seq, message: decodeContextMessage(row.payloadJson) }));
@@ -184,9 +192,17 @@ export class ConversationContextStore {
         sendSeq: contextMessages.sendSeq,
       })
       .from(contextMessages)
-      .where(and(eq(contextMessages.contextId, header.id), gte(contextMessages.seq, header.headSeq)))
+      .where(this.#retainedRange(header))
       .orderBy(contextMessages.seq)
       .all();
+  }
+
+  #retainedRange(header: ContextHeader): SQL | undefined {
+    return and(
+      eq(contextMessages.contextId, header.id),
+      gte(contextMessages.seq, header.headSeq),
+      isNull(contextMessages.evictedAt),
+    );
   }
 
   /**
@@ -260,7 +276,7 @@ export class ConversationContextStore {
         `SELECT COUNT(*) AS count,
                 COALESCE(SUM(CASE WHEN send_seq IS NOT NULL THEN 1 ELSE 0 END), 0) AS sends,
                 SUM(est_tokens) AS tokens
-         FROM context_messages WHERE context_id = ? AND seq >= ?`,
+         FROM context_messages WHERE context_id = ? AND seq >= ? AND evicted_at IS NULL`,
       )
       .get(header.id, header.headSeq);
     return {

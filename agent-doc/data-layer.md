@@ -120,7 +120,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 MCP 只有 `mcp_server_state` 一张自己的表（Server 状态、Tool registry hash、重连次数、错误码）；Tool 调用复用 `tool_calls`，没有自己的调用配额。
 
-Admin 侧的 `admin_users`/`admin_sessions`/`bot_admins` 语义见 [admin-panel.md](admin-panel.md#数据表)。密码明文和 Session Token 原文都不入库；`admin_users` 与 `admin_sessions` 不参与在线保留清理（管理员账号不是会话数据），过期 Session 由 `AdminAuth` 在认证、新建 Session 和服务启动时删除。`chat_pause` 记录 `/pause` 暂停的 Chat，`chat_context_cutoffs` 记录 `/cut_topic` 的每 Chat 上下文切点（Telegram message ID）：切点同时决定新批次 history 的下界，并在同一步清空被切 Topic 的 Conversation Context（保留行打上 `evicted_at`、删除其 `context_refs`、`head_seq` 推到 `next_seq`），否则切点只会裁掉渲染用的 history，模型仍然能从 transcript 里看到全部旧消息。
+Admin 侧的 `admin_users`/`admin_sessions`/`bot_admins` 语义见 [admin-panel.md](admin-panel.md#数据表)。密码明文和 Session Token 原文都不入库；`admin_users` 与 `admin_sessions` 不参与在线保留清理（管理员账号不是会话数据），过期 Session 由 `AdminAuth` 在认证、新建 Session 和服务启动时删除。`chat_pause` 记录 `/pause` 暂停的 Chat，`chat_context_cutoffs` 记录 `/cut_topic` 的每 Chat 上下文切点（Telegram message ID）：切点同时决定新批次 history 的下界，并在同一步中断该 Conversation 正在运行的 Invocation、清空被切 Topic 的 Conversation Context（保留行打上 `evicted_at`、删除其 `context_refs`、`head_seq` 推到 `next_seq`），否则切点只会裁掉渲染用的 history，模型仍然能从 transcript 里看到全部旧消息。`evicted_at` 是保留窗口的权威条件之一：读取一律附带 `evicted_at IS NULL`，这样运行中的 Invocation 持有的陈旧 `head_seq` 也无法把淘汰行读回来。
 
 ## ID 与 JSON 规则
 

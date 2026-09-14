@@ -395,6 +395,49 @@ describe('conversation context store', () => {
     store.close();
   });
 
+  test('a stale handle cannot resurrect history another handle dropped', async () => {
+    // Regression: the retained window was a pure `seq >= head_seq` range read. A
+    // handle taken before a concurrent `/cut_topic` keeps the old, lower `headSeq`,
+    // so it both read the cut history back and could write that lower head over the
+    // cut — the model kept quoting a topic the admin had just cut.
+    const { store } = await fixture();
+    const contexts = new ConversationContextStore(store);
+    const conversation = conversationId(store);
+    const { header } = contexts.open(conversation, 'hash-a');
+    for (let index = 0; index < 4; index += 1) {
+      contexts.append(header, {
+        invocationId: null,
+        isCheckpoint: true,
+        estTokens: 10,
+        json: JSON.stringify({ role: 'user', content: `message ${index}`, timestamp: index }),
+        role: 'user',
+      });
+    }
+    // The handle a running invocation is holding, taken before the cut.
+    const stale = { ...header };
+    const cutting = contexts.header(conversation);
+    if (cutting === undefined) {
+      throw new Error('Expected a context header');
+    }
+    contexts.clear(cutting);
+
+    expect(stale.headSeq).toBe(1n);
+    expect(contexts.retained(stale)).toEqual([]);
+    expect(contexts.window(stale)).toEqual([]);
+    expect(contexts.stats(stale).messageCount).toBe(0);
+    // A row appended after the cut is still retained by both handles: eviction, not
+    // the sequence number, is what decides.
+    contexts.append(stale, {
+      invocationId: null,
+      isCheckpoint: true,
+      estTokens: 10,
+      json: JSON.stringify({ role: 'user', content: 'after the cut', timestamp: 9 }),
+      role: 'user',
+    });
+    expect(contexts.retained(stale).map((row) => row.seq)).toEqual([5n]);
+    store.close();
+  });
+
   test('lists the retained contexts for the admin projections', async () => {
     const { store } = await fixture();
     const contexts = new ConversationContextStore(store);

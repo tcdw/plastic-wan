@@ -92,6 +92,21 @@ export class BucketScheduler {
     }
   }
 
+  // Aborts the invocation running for one Conversation (used by /cut_topic). The
+  // run holds the pre-cut transcript in memory and its own view of `head_seq`, so
+  // leaving it alive would both keep answering from history the admin just cut and
+  // let it write on top of the cut.
+  abortConversation(conversationId: bigint): void {
+    for (const [id, entry] of this.#active) {
+      const row = this.#store.orm
+        .all<{ conversation_id: bigint }>(sql`SELECT conversation_id FROM invocations WHERE id = ${BigInt(id)}`)
+        .at(0);
+      if (row !== undefined && row.conversation_id === conversationId) {
+        entry.controller.abort(new Error('context_cut'));
+      }
+    }
+  }
+
   async stop(graceMilliseconds = 30_000): Promise<void> {
     this.#running = false;
     this.wake();

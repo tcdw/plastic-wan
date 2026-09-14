@@ -9,6 +9,7 @@ import { SqliteStore } from '../src/store/database.ts';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { ConversationRuntime } from '../src/orchestration/conversation-runtime.ts';
+import { ConversationContextStore } from '../src/context/context-store.ts';
 import { InvocationQueueService } from '../src/orchestration/invocation-queue.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import type { ModelRegistry } from '../src/platform/providers.ts';
@@ -1146,6 +1147,172 @@ describe('conversation continuity', () => {
           .join('\n') ?? '';
       expect(latestText).toContain('"message_id":"11"');
       expect(latestText).not.toContain('"message_id":"10"');
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
+  test('seeds from a turn boundary when the retained window starts mid-turn', async () => {
+    // Regression: `/cut_topic` moves `head_seq` to the end of the history, so a tool
+    // result an aborting run still had in flight lands above the new head with its
+    // assistant tool call already dropped. `pi-ai` repairs a missing tool result but
+    // forwards an orphaned one verbatim, so the provider rejected every request and
+    // the whole Conversation stayed broken until someone cut the topic again.
+    const fixtureSetup = await fixture(withoutIdleWait);
+    const faux = fauxAgent();
+    const requests: string[] = [];
+    faux.setResponses([
+      () =>
+        fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'first answer' }), {
+          stopReason: 'toolUse',
+        }),
+      () => fauxAssistantMessage(''),
+      (context) => {
+        requests.push(JSON.stringify(context.messages));
+        return fauxAssistantMessage('second answer');
+      },
+    ]);
+    const runtime = fixtureSetup.runtimeWith(faux);
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.config, 'hash', async () => ({
+      state: 'completed',
+      reason: 'done',
+    }));
+    try {
+      fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
+      const [first] = scheduler.processDue(new Date());
+      if (first === undefined) {
+        throw new Error('Expected the first invocation');
+      }
+      await runtime.run(first, new AbortController().signal);
+      fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
+      fixtureSetup.store.db
+        .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .run(first);
+      const conversationId = fixtureSetup.store.db
+        .query<{ id: bigint }, []>('SELECT id FROM conversations LIMIT 1')
+        .get()?.id;
+      if (conversationId === undefined) {
+        throw new Error('Expected a conversation');
+      }
+      // The state a cut racing a run leaves behind: everything up to and including
+      // the assistant turn that made the call is evicted, and the `send` tool result
+      // is the first row of the retained window.
+      const sendResult = fixtureSetup.store.db
+        .query<{ seq: bigint }, []>("SELECT seq FROM context_messages WHERE role = 'toolResult' ORDER BY seq LIMIT 1")
+        .get();
+      if (sendResult === null) {
+        throw new Error('Expected a stored send result');
+      }
+      fixtureSetup.store.db
+        .query('UPDATE context_messages SET evicted_at = ? WHERE seq < ?')
+        .run(new Date().toISOString(), sendResult.seq);
+      fixtureSetup.store.db.query('UPDATE conversation_contexts SET head_seq = ?').run(sendResult.seq);
+      fixtureSetup.conversationRuntime.forget(conversationId);
+
+      fixtureSetup.ingestion.ingest(update(2, 11, 'second'), new Date());
+      const [second] = scheduler.processDue(new Date());
+      if (second === undefined) {
+        throw new Error('Expected the second invocation');
+      }
+      const outcome = await runtime.run(second, new AbortController().signal);
+      expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+      // The window had no turn boundary to cut forward to, so it was dropped: the
+      // request carries the new batch alone and no orphaned tool result.
+      const carried = JSON.parse(requests[0] ?? '[]') as { role: string }[];
+      expect(carried.map((message) => message.role)).toEqual(['user']);
+      const head = fixtureSetup.store.db
+        .query<{ head_seq: bigint; next_seq: bigint }, []>('SELECT head_seq, next_seq FROM conversation_contexts')
+        .get();
+      expect(head?.head_seq).toBeGreaterThan(sendResult.seq);
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
+  test('keeps the history after a mid-turn head when a later turn boundary exists', async () => {
+    // The other half of the repair: when the broken window does contain a turn
+    // boundary, only the tail of the interrupted turn is dropped and the rest of the
+    // conversation survives.
+    const fixtureSetup = await fixture(withoutIdleWait);
+    const faux = fauxAgent();
+    const requests: string[] = [];
+    faux.setResponses([
+      () =>
+        fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'first answer' }), {
+          stopReason: 'toolUse',
+        }),
+      () => fauxAssistantMessage(''),
+      (context) => {
+        requests.push(JSON.stringify(context.messages));
+        return fauxAssistantMessage('second answer');
+      },
+    ]);
+    const runtime = fixtureSetup.runtimeWith(faux);
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.config, 'hash', async () => ({
+      state: 'completed',
+      reason: 'done',
+    }));
+    try {
+      fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
+      const [first] = scheduler.processDue(new Date());
+      if (first === undefined) {
+        throw new Error('Expected the first invocation');
+      }
+      await runtime.run(first, new AbortController().signal);
+      fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
+      fixtureSetup.store.db
+        .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .run(first);
+      const conversationId = fixtureSetup.store.db
+        .query<{ id: bigint }, []>('SELECT id FROM conversations LIMIT 1')
+        .get()?.id;
+      if (conversationId === undefined) {
+        throw new Error('Expected a conversation');
+      }
+      // A checkpoint after the interrupted turn, written through the real store so
+      // `next_seq` stays consistent.
+      const contexts = new ConversationContextStore(fixtureSetup.store);
+      const header = contexts.header(conversationId);
+      if (header === undefined) {
+        throw new Error('Expected a context header');
+      }
+      const boundarySeq = contexts.append(header, {
+        invocationId: null,
+        isCheckpoint: true,
+        estTokens: 10,
+        json: JSON.stringify({ role: 'user', content: 'a later batch', timestamp: 1 }),
+        role: 'user',
+      });
+      const sendResult = fixtureSetup.store.db
+        .query<{ seq: bigint }, []>("SELECT seq FROM context_messages WHERE role = 'toolResult' ORDER BY seq LIMIT 1")
+        .get();
+      if (sendResult === null) {
+        throw new Error('Expected a stored send result');
+      }
+      fixtureSetup.store.db
+        .query('UPDATE context_messages SET evicted_at = ? WHERE seq < ?')
+        .run(new Date().toISOString(), sendResult.seq);
+      fixtureSetup.store.db.query('UPDATE conversation_contexts SET head_seq = ?').run(sendResult.seq);
+      fixtureSetup.conversationRuntime.forget(conversationId);
+
+      fixtureSetup.ingestion.ingest(update(2, 11, 'second'), new Date());
+      const [second] = scheduler.processDue(new Date());
+      if (second === undefined) {
+        throw new Error('Expected the second invocation');
+      }
+      const outcome = await runtime.run(second, new AbortController().signal);
+      expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+      // Head moved forward to the boundary, not to the end: the retained batch is
+      // still replayed alongside the new one, and the orphan is gone.
+      expect(
+        fixtureSetup.store.db.query<{ head_seq: bigint }, []>('SELECT head_seq FROM conversation_contexts').get()
+          ?.head_seq,
+      ).toBe(boundarySeq);
+      const carried = JSON.parse(requests[0] ?? '[]') as { role: string }[];
+      expect(carried.map((message) => message.role)).toEqual(['user', 'user']);
+      expect(requests[0]).toContain('a later batch');
     } finally {
       await scheduler.stop();
       fixtureSetup.store.close();

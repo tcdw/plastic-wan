@@ -233,6 +233,10 @@ export class BotCommandService {
       .where(and(eq(conversations.chatId, chatId), eq(conversations.messageThreadId, threadId ?? 0n)))
       .get()?.id;
     if (conversationId !== undefined) {
+      // Interrupt before clearing. A run in flight holds the pre-cut transcript and
+      // a header snapshot taken at its start, so it would keep answering from the
+      // history just cut and could write a lower `head_seq` back over the cut.
+      this.#scheduler.abortConversation(conversationId);
       const header = this.#contexts.header(conversationId);
       if (header !== undefined) {
         this.#contexts.clear(header, now);

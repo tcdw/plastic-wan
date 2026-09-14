@@ -237,6 +237,50 @@ describe('cut_topic', () => {
     store.close();
   });
 
+  test('cut_topic interrupts the invocation that still holds the pre-cut transcript', async () => {
+    // A run in flight keeps the pre-cut transcript in memory and a header snapshot
+    // taken at its start, so leaving it alive let it answer from the history the
+    // admin had just cut and write its stale, lower `head_seq` back over the cut.
+    const { store, loaded, ingestion } = await setup();
+    let abortReason: string | undefined;
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
+    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async (_invocationId, signal) => {
+      signal.addEventListener('abort', () => {
+        abortReason = (signal.reason as Error | undefined)?.message;
+      });
+      await gate;
+      return { state: 'completed', reason: 'done' };
+    });
+    const commands = new BotCommandService(store, loaded.config, scheduler);
+    try {
+      scheduler.start();
+      // Backdated so the bucket is already past its window and launches at once.
+      ingestion.ingest(groupUpdate(1, 10, 'polluted', FIRST_CHAT), new Date(Date.now() - BUCKET_WINDOW_MS - 1_000));
+      scheduler.wake();
+      const deadline = Date.now() + 10_000;
+      while (
+        Date.now() < deadline &&
+        store.db.query<{ id: bigint }, []>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1").get() === null
+      ) {
+        await Bun.sleep(10);
+      }
+      expect(
+        store.db.query<{ id: bigint }, []>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1").get(),
+      ).not.toBeNull();
+
+      const command = ingestion.ingest(commandUpdate(3, 12, FIRST_CHAT), new Date()).command;
+      expect(commands.run(command!, FIRST_CHAT, ALICE)).toContain('清空');
+      expect(abortReason).toBe('context_cut');
+    } finally {
+      release();
+      await scheduler.stop();
+      store.close();
+    }
+  }, 30_000);
+
   test('messages after the cutoff remain and re-running cut_topic moves the cutoff forward', async () => {
     const { store, ingestion, scheduler, commands } = await setup();
     const start = new Date('2026-08-15T00:00:00.000Z');

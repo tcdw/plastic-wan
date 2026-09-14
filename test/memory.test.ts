@@ -211,9 +211,13 @@ test('the injected batch carries active memories in creation order', async () =>
   const { store, loaded, conversationId, invocationId } = await fixture();
   try {
     const memory = new MemoryStore(store.orm);
-    const now = new Date('2026-08-15T12:00:00.000Z');
+    // Relative to the real clock: rendering filters memories against the current
+    // time, so a fixed calendar date made this test fail once that date plus the TTL
+    // passed (it started failing exactly 30 days after 2026-08-15).
+    const now = new Date(Date.now() - 120_000);
     const first = memory.add(conversationId, 'first note', 30 * 86_400, now);
-    const second = memory.add(conversationId, 'second note', 30 * 86_400, new Date('2026-08-15T12:00:05.000Z'));
+    const second = memory.add(conversationId, 'second note', 30 * 86_400, new Date(now.getTime() + 5_000));
+    // Created two minutes ago with a one-minute TTL: already expired.
     memory.add(conversationId, 'short note', 60, now);
     memory.add(secondConversation(store, conversationId), 'other conversation note', 30 * 86_400, now);
 

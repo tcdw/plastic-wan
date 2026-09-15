@@ -110,15 +110,15 @@ Doctor 成功只证明连接与最小能力，不证明真实群聊调度、Repl
 ## Admin Panel 冒烟
 
 ```bash
-bun run admin:build
+bun run admin:build   # 产出 apps/admin-next/dist
 bun run src/cli.ts serve --config dev-data/config.jsonc
 ```
 
 验证：
 
 1. 出现一次 `admin_started`，host 为回环地址。
-2. 首次打开 `http://127.0.0.1:<port>/` 渲染「创建管理员」表单，`GET /api/auth/session` 返回 `setup_required = true`。
-3. 创建账号后 Overview 分别显示 Invocation、消息、媒体分析缓存与已配置 Sticker 索引状态。
+2. 首次打开 `http://127.0.0.1:<port>/` 渲染 “Create the administrator account” 表单（按钮 “Create account”），`GET /api/auth/session` 返回 `setup_required = true`。
+3. 创建账号后 Overview 显示 Invocations / Stored messages / Cached media analyses 统计卡，以及 Invocation states、Configured sticker index states、Top tools 表和 7d/30d Usage 图表。
 4. Tool session 详情六个 Tab（Overview / Tool calls / Model calls / Telegram sends / Agent transcript / Frozen context）各自渲染；默认落在 Overview 时间线。
 5. 消息搜索命中当前 Chat 的文本，详情展示全部 Revision。
 6. Bot sticker sets 页面明确说明只包含 `telegram.sticker_sets` 中配置的 Set，并按 Set 与 `index_state` 过滤后行数变化。
@@ -132,6 +132,55 @@ bun run src/cli.ts serve --config dev-data/config.jsonc
 14. `admin_users.password_hash` 以 `$argon2id$` 开头，`admin_sessions` 只有 64 位十六进制摘要。
 
 未构建 bundle 时静态路由返回 503 `admin_bundle_missing`，API 仍可用；这不是启动失败。
+
+### Admin Panel 浏览器 E2E
+
+```bash
+bun run admin:build        # 前置：E2E 驱动已构建的 dist（真实静态托管）
+bunx playwright install chromium   # 首次运行前安装 Chromium（Linux CI 用 --with-deps）
+bun run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.ts）
+```
+
+- **真实后端夹具**：`globalSetup` 派生一个 Bun 子进程运行 `apps/admin-next/e2e/server.ts`，
+  它创建临时目录 + 临时 SQLite，加载 `test/fixtures/admin-seed.ts`（基础行 +
+  `seedAdminBulkRows` 的批量分页数据），构造 `SqliteStore` / `AgentModelSwitcher` /
+  `AdminServer`，在回环地址随机端口启动，并同端口暴露只读的 `/__e2e/**` 状态钩子；
+  `globalTeardown` 优雅关闭并清理临时目录。**不读 `dev-data/`、不启动 `serve`、
+  不触碰 8787 或任何用户进程。**
+- 每轮运行是全新数据库：认证从真实 `setup_required` 首次创建管理员开始，后续用例
+  复用同一 session（storageState），会话撤销用例直接删除 `admin_sessions` 行后断言
+  401 回落登录页并重新登录。
+- 用例文件名以 `.e2e.ts` 结尾、目录独立，Playwright `testMatch` 单独声明，**不会**被
+  `bun test` 发现；`workers: 1` 串行执行，端口随机，不与固定端口冲突。
+- 覆盖契约（全部断言真实 UI 状态，非仅文案）：
+  1. 认证：setup → shell；错误密码表单内显示 `invalid_credentials` 且 URL 不变；
+     登出回登录页；会话撤销后受保护请求 401 → 登录页且无错误屏。
+  2. 13 条路由与深链接（`/`、`/invocations[/:id]`、`/contexts[/:conversationId]`、
+     `/messages[/:id]`、`/alarms`、`/memories`、`/admins`、`/model`、`/stickers`、
+     `/settings`）直接访问渲染真实内容（非错误边界、非空白）。
+  3. 列表过滤与游标分页：Invocations（state/chat）、Messages（search/chat）、
+     Contexts（search/chat/conversation）、Alarms（state/target）、Memories
+     （state/chat）、Stickers（set/state/search）真正改变结果集；六张列表的种子
+     行数（Invocations 30、Messages 30、Contexts 27、Alarms 28、Memories 30、
+     Stickers 30）都超过每页 25 行，因此都会出现 `Load more` 并加载下一页
+     （E2E 实测 Invocations/Messages/Memories/Stickers 25→30、Contexts 25→27）；
+     无跳页/总页数控件。
+  4. Invocation 详情六个 Tab（Overview / Tool calls / Model calls / Telegram sends /
+     Agent transcript / Frozen context）切换并渲染期望字段；失败调用显示稳定错误码
+     （`provider_timeout`）且可展开脱敏详情（`sk-***`，无活密钥模式）；assistant 文本
+     带 `Private reasoning` 标记。
+  5. 写操作（请求真实发出 + UI/数据变化）：记忆新建与删除（含 API 复核）、Bot admin
+     添加与移除、模型切换与恢复默认、Alarm 取消成功与 409 冲突路径
+     （`alarm_not_pending` + 列表刷新到新状态）、Overview 的 Cancel pending 与睡眠态
+     Wake now。
+  6. 只读保证：浏览全部审计页面时记录网络请求，断言没有任何 POST/PUT/DELETE 打到
+     `/api/**`。
+  7. 安全：生产静态托管（非 dev server）下断言 CSP 头（`default-src 'none'` /
+     `script-src 'self'` / `connect-src 'self'`）、无 console error / pageerror /
+     CSP violation，且全部请求同源（有外部请求即失败）。
+
+- 首次运行 E2E 前需要 `bunx playwright install chromium`；浏览器安装失败时套件无法
+  执行，属于环境前置问题而非代码缺陷。
 
 ## 真实 Telegram 验收
 

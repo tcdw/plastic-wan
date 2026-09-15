@@ -38,7 +38,7 @@ plasticwan/
 │   └── system-resources/   # 随 runtime 发布的 system:/// 只读资源树（System Skills）
 ├── test/                   # Bun 行为测试与 MCP fixture
 ├── scripts/                # 一次性维护脚本（直连 bun:sqlite，不属于业务层）
-├── apps/admin/             # Rsbuild + React + Ant Design Admin Panel 前端
+├── apps/admin-next/        # Vite + React + Tailwind + shadcn Admin Panel 前端（纯静态 SPA）
 ├── deploy/                 # systemd service 与 backup timer
 ├── Dockerfile              # 两阶段镜像；媒体依赖打包在内
 ├── docker-compose.yml      # Docker 部署模板（/config 与 /data 两个卷）
@@ -109,8 +109,8 @@ bun run admin:dev
 - `serve`：启动 Telegram long polling；配置只在启动时加载，不支持热重载。
 - `backup`：执行保留清理、SQLite `VACUUM INTO` 备份与轮换；完整性检查属于独立恢复验证。
 - `configure`：`src/tui/` 的交互式配置向导，编辑既有配置的 Provider 与 thinking level，可从 Provider `/models` 拉取可路由模型 ID 后写回原文件。要求已存在可加载的配置且 stdin 是 TTY，非交互环境直接报错退出——agent 不要调用它。
-- `admin:build`：构建 `apps/admin` 生产 bundle，供 `serve` 静态托管。
-- `admin:dev`：启动 Rsbuild dev server，`/api` 代理到运行中的 Admin Panel。
+- `admin:build`：构建 `apps/admin-next` 生产 bundle（`apps/admin-next/dist`），供 `serve` 静态托管。
+- `admin:dev`：启动 Vite dev server（监听 127.0.0.1:5273），`/api` 代理到运行中的 Admin Panel。
 
 ## Long-Running Process Rules
 

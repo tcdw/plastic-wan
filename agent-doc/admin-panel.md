@@ -1,6 +1,6 @@
 # Admin Panel
 
-Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析、已配置 Sticker Set 的可搜索索引、Agent 短期记忆（`memories`）以及 Alarm（闹钟 / 延迟调用）。后端在 `src/ingress/admin/`，前端在 `apps/admin/`（Rsbuild + React + Ant Design + TanStack Query + TanStack Router）。
+Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析、已配置 Sticker Set 的可搜索索引、Agent 短期记忆（`memories`）以及 Alarm（闹钟 / 延迟调用）。后端在 `src/ingress/admin/`，前端在 `apps/admin-next/`（Vite + React + Tailwind 4 + shadcn/Base UI + TanStack Query + TanStack Router），构建产物是**纯静态 SPA**，由 `AdminServer` 同源托管，不依赖任何 Node/Nitro 运行时。
 
 审计数据只读；记忆管理、Bot 管理员列表管理、模型热切换、解除睡眠、取消挂起会话与取消 pending Alarm 是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume`、`/cut_topic` 等 Bot 管理员命令的 Telegram 用户，热切换 agent 模型，唤醒/取消挂起会话，或取消尚未触发的 Alarm。面板不能改写配置文件、不能重跑 Invocation 或删除审计记录。
 
@@ -78,23 +78,41 @@ SQLite `bigint` ID 在 JSON 中字符串化，Token/计数等小整数转 `numbe
 ## 前端
 
 ```bash
-bun run admin:build   # 生成 apps/admin/dist，供 serve 托管
-bun run admin:dev     # Rsbuild dev server，/api 代理到 ADMIN_API_TARGET
+bun run admin:build   # 生成 apps/admin-next/dist，供 serve 托管
+bun run admin:dev     # Vite dev server，监听 127.0.0.1:5273，/api 代理到 ADMIN_API_TARGET
+bun run admin:test:e2e  # Playwright 浏览器 E2E（真实 AdminServer + 临时 SQLite + 合成数据）
 ```
 
-`ADMIN_API_TARGET` 默认 `http://127.0.0.1:8787`。
+`ADMIN_API_TARGET` 默认 `http://127.0.0.1:8787`。开发代理只把 Origin 精确等于
+`http://localhost:5273` / `http://127.0.0.1:5273` 的请求改写为目标的 origin，
+其它 Origin 原样转发、由后端跨站校验拒绝（人工验证脚本见
+`scripts/admin-dev-proxy-probe.ts`）。生产环境不需要该变量：`serve` 同源托管静态文件与 `/api`。
 
 结构：
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/api.ts` | 类型化 fetch 封装与 `ApiError` |
-| `src/queries.ts` | TanStack Query option 工厂（列表用 infinite query） |
-| `src/routes.tsx` | 认证门、登录/初始化卡片、Layout 与路由树 |
-| `src/components.tsx` | `queryState()` 占位渲染、JSON 块、状态 Tag |
-| `src/pages/*.tsx` | Overview、Tool sessions、Contexts、Alarms、Messages、Memories、Bot admins、Sticker Set 索引、Model 切换、Usage chart |
+| `src/routes.tsx` | 认证门（setup/login gate）、Layout 与 13 条显式路由（10 个一级页面 + 3 个详情页） |
+| `src/lib/api.ts` | 类型化 fetch 封装与 `ApiError` |
+| `src/lib/queries.ts` | TanStack Query option 工厂（列表用 infinite query，keyset cursor 透传） |
+| `src/lib/format.ts` | 格式化与状态色映射 |
+| `src/lib/errors.ts` | `errorMessage()`：统一错误文本（`ApiError.code: message`） |
+| `src/lib/memory-ttl.ts` | 记忆 TTL 边界纯函数 |
+| `src/lib/timeline.ts` | Invocation 时间线纯模型（同时间排序、send 参数解析） |
+| `src/components/business/**` | 共享业务组件（CursorList / FilterToolbar / StateBadge / TableShell / JsonViewer / KvList / ConfirmDialog / ChartCard / PrivateReasoning / DetailState 等），契约见 `apps/admin-next/README.md` |
+| `src/pages/*.tsx` | Overview、Tool sessions、Contexts、Alarms、Messages、Memories、Bot admins、Sticker Set 索引、Model、Settings |
 
-`queryState()` 是普通函数而非组件：调用方依赖 `null` 判断是否渲染真实数据，JSX 元素永远不为 `null`。
+前端约定：
+
+- 业务页面一律 `useQuery` / `useInfiniteQuery` 并显式渲染 loading / error / data
+  三态，**禁止 `useSuspenseQuery`**（401 会在渲染期抛出并落进路由错误边界，
+  产生无法恢复的死屏；显式状态分支把错误留在页面内展示）。
+- 受保护请求的 401（`unauthenticated`）由 `src/lib/query-client.ts` 的全局
+  cache `onError` 统一处理：失效 session query，让认证 gate 回登录页；登录 /
+  setup / 改凭据的 `invalid_credentials` 等 401 属于表单错误，必须留在表单内，
+  判定按错误 code 而不是 status。
+- 详情页 loading/error 复用 `components/business/detail-state.tsx` 的
+  `DetailSkeleton` / `DetailError`，错误行显示 `ApiError.code: message`。
 
 Overview 的 Bot status 卡片显示当前 `sleeping`/`awake`、`sleep_until`，睡眠时提供带确认的 `Wake now` 操作，并显示所有 `chat_pause` Chat 的名称或 Telegram ID 与暂停时间。
 
@@ -121,4 +139,4 @@ Bot 管理员列表（迁移 `src/store/migrations/008_bot_admins.sql`）：
 
 ## 验证
 
-测试命令、覆盖契约与浏览器冒烟清单见 [verification.md](verification.md) 的「静态与单元验证」与「Admin Panel 冒烟」两节。
+测试命令、覆盖契约与浏览器冒烟清单见 [verification.md](verification.md) 的「静态与单元验证」「Admin Panel 冒烟」与「Admin Panel 浏览器 E2E」三节。

@@ -42,11 +42,15 @@ function composeRefs<T>(...refs: PossibleRef<T>[]): React.RefCallback<T> {
           if (typeof cleanup === 'function') {
             cleanup();
           } else {
-            setRef(refs[i], null);
+            const ref = refs[i];
+            if (ref !== undefined) {
+              setRef(ref, null);
+            }
           }
         }
       };
     }
+    return;
   };
 }
 
@@ -55,8 +59,8 @@ function composeRefs<T>(...refs: PossibleRef<T>[]): React.RefCallback<T> {
  * Accepts callback refs and RefObject(s)
  */
 function useComposedRefs<T>(...refs: PossibleRef<T>[]): React.RefCallback<T> {
-  // biome-ignore lint/correctness/useExhaustiveDependencies: we want to memoize by all values
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: memoize by all ref values
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — memoize by all ref values (Radix utility)
   return React.useCallback(composeRefs(...refs), refs);
 }
 

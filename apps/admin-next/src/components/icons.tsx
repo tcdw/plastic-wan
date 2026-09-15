@@ -15,10 +15,10 @@ import {
   IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
-  IconChevronUp,
   IconChevronsDown,
   IconChevronsLeft,
   IconChevronsRight,
+  IconChevronUp,
   IconCircle,
   IconCircleCheck,
   IconCirclePlus,
@@ -28,6 +28,7 @@ import {
   IconCode,
   IconCommand,
   IconCreditCard,
+  IconCrown,
   IconDeviceLaptop,
   IconDots,
   IconDotsVertical,
@@ -36,8 +37,8 @@ import {
   IconEyeOff,
   IconFile,
   IconFileText,
-  IconFileTypePdf,
   IconFileTypeDoc,
+  IconFileTypePdf,
   IconFileTypeXls,
   IconFileZip,
   IconFolder,
@@ -62,7 +63,7 @@ import {
   IconPhoto,
   IconPizza,
   IconPlus,
-  IconProps,
+  type IconProps,
   IconRosetteDiscountCheck,
   IconSearch,
   IconSelector,
@@ -83,11 +84,10 @@ import {
   IconUser,
   IconUserCircle,
   IconUserEdit,
-  IconUserX,
   IconUsers,
+  IconUserX,
   IconVideo,
-  IconCrown,
-  IconX
+  IconX,
 } from '@tabler/icons-react';
 
 export type Icon = React.ComponentType<IconProps>;
@@ -219,5 +219,5 @@ export const Icons = {
   slash: IconSlash,
   calendar: IconCalendar,
   galleryVerticalEnd: IconStack2,
-  moreHorizontal: IconDots
+  moreHorizontal: IconDots,
 };

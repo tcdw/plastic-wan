@@ -93,7 +93,9 @@ export class AdminServer {
     this.#auth = new AdminAuth(options.store.orm, admin.session_ttl_hours);
     this.#scheduler = options.scheduler;
     this.#modelSwitcher = options.modelSwitcher;
-    this.#staticDir = resolve(admin.static_dir ?? join(import.meta.dir, '..', '..', '..', 'apps', 'admin', 'dist'));
+    this.#staticDir = resolve(
+      admin.static_dir ?? join(import.meta.dir, '..', '..', '..', 'apps', 'admin-next', 'dist'),
+    );
     this.#memoryWarningDays = options.config.agent.memory_ttl_warning_days ?? DEFAULT_MEMORY_TTL_WARNING_DAYS;
   }
 

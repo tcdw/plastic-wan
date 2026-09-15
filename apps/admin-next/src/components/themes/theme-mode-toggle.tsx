@@ -1,53 +1,44 @@
-import { Icons } from '@/components/icons';
-import { useTheme } from 'next-themes';
-import * as React from 'react';
-
+import { Moon, Sun } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Kbd } from '@/components/ui/kbd';
+import { useTheme } from './theme-provider';
+
+const NEXT: Record<string, 'light' | 'dark' | 'system'> = {
+  light: 'dark',
+  dark: 'system',
+  system: 'light',
+};
+
+const LABEL: Record<string, string> = {
+  light: 'Light',
+  dark: 'Dark',
+  system: 'System',
+};
+
+const ICON: Record<string, typeof Sun> = {
+  light: Sun,
+  dark: Moon,
+  system: Sun,
+};
 
 export function ThemeModeToggle() {
-  const { setTheme, resolvedTheme } = useTheme();
-
-  const handleThemeToggle = React.useCallback(
-    (e?: React.MouseEvent) => {
-      const newMode = resolvedTheme === 'dark' ? 'light' : 'dark';
-      const root = document.documentElement;
-
-      if (!document.startViewTransition) {
-        setTheme(newMode);
-        return;
-      }
-
-      // Set coordinates from the click event
-      if (e) {
-        root.style.setProperty('--x', `${e.clientX}px`);
-        root.style.setProperty('--y', `${e.clientY}px`);
-      }
-
-      document.startViewTransition(() => {
-        setTheme(newMode);
-      });
-    },
-    [resolvedTheme, setTheme]
-  );
+  const { mode, setMode } = useTheme();
+  const Icon = ICON[mode] ?? Sun;
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
-          variant='secondary'
-          size='icon'
-          className='group/toggle size-8'
-          onClick={handleThemeToggle}
+          variant="secondary"
+          size="icon"
+          className="group/toggle size-8"
+          onClick={() => setMode(NEXT[mode] ?? 'system')}
         >
-          <Icons.brightness />
-          <span className='sr-only'>Toggle theme</span>
+          <Icon className="size-4" />
+          <span className="sr-only">Toggle theme: {LABEL[mode]}</span>
         </Button>
       </TooltipTrigger>
-      <TooltipContent>
-        Toggle theme <Kbd>D D</Kbd>
-      </TooltipContent>
+      <TooltipContent>Theme: {LABEL[mode]}</TooltipContent>
     </Tooltip>
   );
 }

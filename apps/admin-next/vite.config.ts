@@ -1,21 +1,35 @@
 import tailwindcss from '@tailwindcss/vite';
-import { tanstackStart } from '@tanstack/react-start/plugin/vite';
 import viteReact from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import tsconfigPaths from 'vite-tsconfig-paths';
-import { nitro } from 'nitro/vite';
+
+const ADMIN_API_TARGET = process.env.ADMIN_API_TARGET ?? 'http://127.0.0.1:8787';
+const API_TARGET_ORIGIN = new URL(ADMIN_API_TARGET).origin;
+
+// Only the two local dev origins may have their Origin rewritten to the API
+// target. Anything else is left untouched so the backend origin check rejects
+// it (server.ts compares origin host vs forwarded Host host).
+const ALLOWED_ORIGINS = ['http://localhost:5273', 'http://127.0.0.1:5273'];
 
 export default defineConfig({
-  server: { port: 3000 },
-  plugins: [
-    tsconfigPaths(),
-    tailwindcss(),
-    tanstackStart(),
-    // Nitro auto-detects the deploy target: Vercel/Cloudflare/Netlify in their
-    // CI (zero-config), and the Node.js server preset locally (.output/server,
-    // matching the `start` script). Override with SERVER_PRESET to force one,
-    // e.g. SERVER_PRESET=node-server / cloudflare-module / bun.
-    nitro({ preset: process.env.SERVER_PRESET }),
-    viteReact()
-  ]
+  server: {
+    port: 5273,
+    host: '127.0.0.1',
+    proxy: {
+      '/api': {
+        target: ADMIN_API_TARGET,
+        // Forward the request with the target's host so Host and Origin agree.
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            const origin = req.headers.origin;
+            if (origin !== undefined && ALLOWED_ORIGINS.includes(origin)) {
+              proxyReq.setHeader('origin', API_TARGET_ORIGIN);
+            }
+          });
+        },
+      },
+    },
+  },
+  plugins: [tsconfigPaths(), tailwindcss(), viteReact()],
 });

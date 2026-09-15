@@ -10,11 +10,12 @@
     "apps/*"
   ],
   "scripts": {
-    "check": "tsc --noEmit && bun run --filter plasticwan-admin check",
+    "check": "tsc --noEmit && bun run --filter plasticwan-admin-next check",
     "test": "bun test",
     "start": "bun run src/cli.ts serve",
-    "admin:dev": "bun run --filter plasticwan-admin dev",
-    "admin:build": "bun run --filter plasticwan-admin build",
+    "admin:dev": "bun run --filter plasticwan-admin-next dev",
+    "admin:build": "bun run --filter plasticwan-admin-next build",
+    "admin:test:e2e": "bun run --filter plasticwan-admin-next test:e2e",
     "lint": "biome lint . && biome format .",
     "lint:fix": "biome lint --write --unsafe . && biome format --write ."
   },

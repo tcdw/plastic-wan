@@ -10,15 +10,15 @@ interface HeadingProps {
 export function Heading({ title, description, infoContent }: HeadingProps) {
   return (
     <div>
-      <div className='flex items-center gap-2'>
-        <h1 className='text-3xl font-bold tracking-tight'>{title}</h1>
+      <div className="flex items-center gap-2">
+        <h1 className="text-3xl font-bold tracking-tight">{title}</h1>
         {infoContent && (
-          <div className='pt-1'>
+          <div className="pt-1">
             <InfoButton content={infoContent} />
           </div>
         )}
       </div>
-      <p className='text-muted-foreground text-sm'>{description}</p>
+      <p className="text-muted-foreground text-sm">{description}</p>
     </div>
   );
 }

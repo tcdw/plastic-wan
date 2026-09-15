@@ -2,15 +2,7 @@
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "files": {
     "ignoreUnknown": true,
-    "includes": [
-      "**",
-      "!!**/node_modules",
-      "!!**/dist",
-      "!!**/*.tsbuildinfo",
-      "!!dev-data",
-      "!!apps",
-      "!!skills/**/examples"
-    ]
+    "includes": ["**", "!!**/node_modules", "!!**/dist", "!!**/*.tsbuildinfo", "!!dev-data", "!!skills/**/examples"]
   },
   "formatter": {
     "enabled": true,
@@ -38,19 +30,40 @@
       "trailingCommas": "all"
     }
   },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
   "overrides": [
     {
-      "includes": ["apps/admin/**"],
+      "includes": ["apps/admin-next/**"],
       "linter": {
         "domains": {
           "react": "recommended"
-        },
+        }
+      }
+    },
+    {
+      "includes": ["apps/admin-next/src/components/ui/**"],
+      "linter": {
         "rules": {
           "a11y": {
-            "noLabelWithoutControl": "warn"
+            "noLabelWithoutControl": "warn",
+            "useSemanticElements": "off",
+            "useFocusableInteractive": "off",
+            "useAriaPropsForRole": "off",
+            "useKeyWithClickEvents": "off"
           },
           "correctness": {
             "useExhaustiveDependencies": "warn"
+          },
+          "suspicious": {
+            "noArrayIndexKey": "off",
+            "noDocumentCookie": "off"
+          },
+          "security": {
+            "noDangerouslySetInnerHtml": "off"
           }
         }
       }

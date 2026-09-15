@@ -1,23 +1,17 @@
+import { mergeProps } from '@base-ui/react/merge-props';
+import { useRender } from '@base-ui/react/use-render';
+import { useLocation } from '@tanstack/react-router';
+import { cva, type VariantProps } from 'class-variance-authority';
+import * as React from 'react';
+import { Icons } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle
-} from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
-import { mergeProps } from '@base-ui/react/merge-props';
-import { useRender } from '@base-ui/react/use-render';
-import { VariantProps, cva } from 'class-variance-authority';
-import { Icons } from '@/components/icons';
-import { useLocation } from '@tanstack/react-router';
-import * as React from 'react';
 
 const INFOBAR_WIDTH = '22rem';
 const INFOBAR_WIDTH_MOBILE = '22rem';
@@ -104,7 +98,7 @@ function InfobarProvider({
         _setOpen(openState);
       }
     },
-    [setOpenProp, open, isMobile]
+    [setOpenProp, open, isMobile],
   );
 
   // Helper to toggle the infobar.
@@ -120,7 +114,7 @@ function InfobarProvider({
       setOpen(openMobile);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only reconcile when the breakpoint changes
-  }, [isMobile]);
+  }, [isMobile, open, setOpen, openMobile]);
 
   // Adds a keyboard shortcut to toggle the infobar.
   React.useEffect(() => {
@@ -149,8 +143,9 @@ function InfobarProvider({
 
       return () => clearTimeout(timer);
     }
+    return;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setOpen is a stable React state setter
-  }, [pathname, contentPathname]);
+  }, [pathname, contentPathname, setOpen]);
 
   // Update setContent to also track pathname
   const handleSetContent = React.useCallback(
@@ -158,7 +153,7 @@ function InfobarProvider({
       setContent(newContent);
       setContentPathname(newContent ? pathname : null);
     },
-    [pathname]
+    [pathname],
   );
 
   // We add a state so that we can do data-state="expanded" or "collapsed".
@@ -177,32 +172,21 @@ function InfobarProvider({
       toggleInfobar,
       content,
       setContent: handleSetContent,
-      isPathnameChanging
+      isPathnameChanging,
     }),
-    [
-      state,
-      open,
-      setOpen,
-      isMobile,
-      openMobile,
-      setOpenMobile,
-      toggleInfobar,
-      content,
-      handleSetContent,
-      isPathnameChanging
-    ]
+    [state, open, setOpen, isMobile, openMobile, toggleInfobar, content, handleSetContent, isPathnameChanging],
   );
 
   return (
     <InfobarContext.Provider value={contextValue}>
       <TooltipProvider delayDuration={0}>
         <div
-          data-slot='infobar-wrapper'
+          data-slot="infobar-wrapper"
           style={
             {
               '--infobar-width': INFOBAR_WIDTH,
               '--infobar-width-icon': INFOBAR_WIDTH_ICON,
-              ...style
+              ...style,
             } as React.CSSProperties
           }
           className={cn('group/infobar-wrapper flex flex-1 w-full', className)}
@@ -232,11 +216,8 @@ function Infobar({
   if (collapsible === 'none') {
     return (
       <div
-        data-slot='infobar'
-        className={cn(
-          'bg-sidebar text-sidebar-foreground flex h-full w-(--infobar-width) flex-col',
-          className
-        )}
+        data-slot="infobar"
+        className={cn('bg-sidebar text-sidebar-foreground flex h-full w-(--infobar-width) flex-col', className)}
         {...props}
       >
         {children}
@@ -255,22 +236,22 @@ function Infobar({
         {...props}
       >
         <SheetContent
-          data-infobar='infobar'
-          data-slot='infobar'
-          data-mobile='true'
-          className='bg-sidebar text-sidebar-foreground w-(--infobar-width) p-0 [&>button]:hidden'
+          data-infobar="infobar"
+          data-slot="infobar"
+          data-mobile="true"
+          className="bg-sidebar text-sidebar-foreground w-(--infobar-width) p-0 [&>button]:hidden"
           style={
             {
-              '--infobar-width': INFOBAR_WIDTH_MOBILE
+              '--infobar-width': INFOBAR_WIDTH_MOBILE,
             } as React.CSSProperties
           }
           side={side}
         >
-          <SheetHeader className='sr-only'>
+          <SheetHeader className="sr-only">
             <SheetTitle>Infobar</SheetTitle>
             <SheetDescription>Displays the mobile infobar.</SheetDescription>
           </SheetHeader>
-          <div className='flex h-full w-full flex-col'>{children}</div>
+          <div className="flex h-full w-full flex-col">{children}</div>
         </SheetContent>
       </Sheet>
     );
@@ -278,31 +259,31 @@ function Infobar({
 
   return (
     <div
-      className='group peer text-sidebar-foreground relative hidden md:block'
+      className="group peer text-sidebar-foreground relative hidden md:block"
       data-state={state}
       data-collapsible={state === 'collapsed' ? collapsible : ''}
       data-variant={variant}
       data-side={side}
-      data-slot='infobar'
+      data-slot="infobar"
       style={
         {
-          '--infobar-transition-duration': isPathnameChanging ? '0ms' : '300ms'
+          '--infobar-transition-duration': isPathnameChanging ? '0ms' : '300ms',
         } as React.CSSProperties
       }
     >
       <div
-        data-slot='infobar-container'
+        data-slot="infobar-container"
         className={cn(
           'sticky top-0 z-30 hidden h-[calc(100dvh-3.5rem)] w-(--infobar-width) shrink-0 overflow-hidden rounded-tl-xl border-l border-t transition-[width,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] md:flex',
           'group-data-[collapsible=offcanvas]:w-0 group-data-[collapsible=offcanvas]:overflow-hidden group-data-[collapsible=offcanvas]:border-0 group-data-[collapsible=offcanvas]:opacity-0',
-          className
+          className,
         )}
         {...props}
       >
         <div
-          data-infobar='infobar'
-          data-slot='infobar-inner'
-          className='bg-sidebar text-sidebar-foreground flex h-full w-full flex-col overflow-y-auto'
+          data-infobar="infobar"
+          data-slot="infobar-inner"
+          className="bg-sidebar text-sidebar-foreground flex h-full w-full flex-col overflow-y-auto"
         >
           {children}
         </div>
@@ -316,19 +297,19 @@ function InfobarTrigger({ className, onClick, ...props }: React.ComponentProps<t
 
   return (
     <Button
-      data-infobar='trigger'
-      data-slot='infobar-trigger'
-      variant='ghost'
-      size='icon'
+      data-infobar="trigger"
+      data-slot="infobar-trigger"
+      variant="ghost"
+      size="icon"
       className={cn('size-7', className)}
-      aria-label='Close info panel'
+      aria-label="Close info panel"
       onClick={(event) => {
         onClick?.(event);
         toggleInfobar();
       }}
       {...props}
     >
-      <Icons.chevronsRight className='size-4' />
+      <Icons.chevronsRight className="size-4" />
     </Button>
   );
 }
@@ -338,12 +319,12 @@ function InfobarRail({ className, ...props }: React.ComponentProps<'button'>) {
 
   return (
     <button
-      data-infobar='rail'
-      data-slot='infobar-rail'
-      aria-label='Toggle Infobar'
+      data-infobar="rail"
+      data-slot="infobar-rail"
+      aria-label="Toggle Infobar"
       tabIndex={-1}
       onClick={toggleInfobar}
-      title='Toggle Infobar'
+      title="Toggle Infobar"
       className={cn(
         'hover:after:bg-sidebar-border absolute inset-y-0 z-20 hidden w-4 -translate-x-1/2 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] sm:flex',
         'in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize',
@@ -351,7 +332,7 @@ function InfobarRail({ className, ...props }: React.ComponentProps<'button'>) {
         'hover:group-data-[collapsible=offcanvas]:bg-sidebar group-data-[collapsible=offcanvas]:translate-x-0 group-data-[collapsible=offcanvas]:after:left-full',
         '[[data-side=left][data-collapsible=offcanvas]_&]:-right-2',
         '[[data-side=right][data-collapsible=offcanvas]_&]:-left-2',
-        className
+        className,
       )}
       {...props}
     />
@@ -361,11 +342,11 @@ function InfobarRail({ className, ...props }: React.ComponentProps<'button'>) {
 function InfobarInset({ className, ...props }: React.ComponentProps<'main'>) {
   return (
     <main
-      data-slot='infobar-inset'
+      data-slot="infobar-inset"
       className={cn(
         'bg-background relative flex w-full flex-1 flex-col',
         'md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2',
-        className
+        className,
       )}
       {...props}
     />
@@ -375,8 +356,8 @@ function InfobarInset({ className, ...props }: React.ComponentProps<'main'>) {
 function InfobarInput({ className, ...props }: React.ComponentProps<typeof Input>) {
   return (
     <Input
-      data-slot='infobar-input'
-      data-infobar='input'
+      data-slot="infobar-input"
+      data-infobar="input"
       className={cn('bg-background h-8 w-full shadow-none', className)}
       {...props}
     />
@@ -386,8 +367,8 @@ function InfobarInput({ className, ...props }: React.ComponentProps<typeof Input
 function InfobarHeader({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
-      data-slot='infobar-header'
-      data-infobar='header'
+      data-slot="infobar-header"
+      data-infobar="header"
       className={cn('flex flex-col gap-2 p-2', className)}
       {...props}
     />
@@ -397,8 +378,8 @@ function InfobarHeader({ className, ...props }: React.ComponentProps<'div'>) {
 function InfobarFooter({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
-      data-slot='infobar-footer'
-      data-infobar='footer'
+      data-slot="infobar-footer"
+      data-infobar="footer"
       className={cn('flex flex-col gap-2 p-2', className)}
       {...props}
     />
@@ -408,8 +389,8 @@ function InfobarFooter({ className, ...props }: React.ComponentProps<'div'>) {
 function InfobarSeparator({ className, ...props }: React.ComponentProps<typeof Separator>) {
   return (
     <Separator
-      data-slot='infobar-separator'
-      data-infobar='separator'
+      data-slot="infobar-separator"
+      data-infobar="separator"
       className={cn('bg-sidebar-border mx-2 w-auto', className)}
       {...props}
     />
@@ -419,11 +400,11 @@ function InfobarSeparator({ className, ...props }: React.ComponentProps<typeof S
 function InfobarContent({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
-      data-slot='infobar-content'
-      data-infobar='content'
+      data-slot="infobar-content"
+      data-infobar="content"
       className={cn(
         'flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden',
-        className
+        className,
       )}
       {...props}
     />
@@ -433,8 +414,8 @@ function InfobarContent({ className, ...props }: React.ComponentProps<'div'>) {
 function InfobarGroup({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
-      data-slot='infobar-group'
-      data-infobar='group'
+      data-slot="infobar-group"
+      data-infobar="group"
       className={cn('relative flex w-full min-w-0 flex-col p-2', className)}
       {...props}
     />
@@ -452,11 +433,11 @@ function InfobarGroupLabel({ className, render, ...props }: useRender.ComponentP
         className: cn(
           'text-sidebar-foreground/70 ring-sidebar-ring flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium outline-hidden transition-[margin,opacity] duration-200 ease-linear focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0',
           'group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0',
-          className
-        )
+          className,
+        ),
       } as React.ComponentProps<'div'>,
-      props
-    )
+      props,
+    ),
   });
 }
 
@@ -473,19 +454,19 @@ function InfobarGroupAction({ className, render, ...props }: useRender.Component
           // Increases the hit area of the button on mobile.
           'after:absolute after:-inset-2 md:after:hidden',
           'group-data-[collapsible=icon]:hidden',
-          className
-        )
+          className,
+        ),
       } as React.ComponentProps<'button'>,
-      props
-    )
+      props,
+    ),
   });
 }
 
 function InfobarGroupContent({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
-      data-slot='infobar-group-content'
-      data-infobar='group-content'
+      data-slot="infobar-group-content"
+      data-infobar="group-content"
       className={cn('w-full text-sm', className)}
       {...props}
     />
@@ -495,8 +476,8 @@ function InfobarGroupContent({ className, ...props }: React.ComponentProps<'div'
 function InfobarMenu({ className, ...props }: React.ComponentProps<'ul'>) {
   return (
     <ul
-      data-slot='infobar-menu'
-      data-infobar='menu'
+      data-slot="infobar-menu"
+      data-infobar="menu"
       className={cn('flex w-full min-w-0 flex-col gap-1', className)}
       {...props}
     />
@@ -506,8 +487,8 @@ function InfobarMenu({ className, ...props }: React.ComponentProps<'ul'>) {
 function InfobarMenuItem({ className, ...props }: React.ComponentProps<'li'>) {
   return (
     <li
-      data-slot='infobar-menu-item'
-      data-infobar='menu-item'
+      data-slot="infobar-menu-item"
+      data-infobar="menu-item"
       className={cn('group/menu-item relative', className)}
       {...props}
     />
@@ -521,19 +502,19 @@ const infobarMenuButtonVariants = cva(
       variant: {
         default: 'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
         outline:
-          'bg-background shadow-[0_0_0_1px_var(--sidebar-border)] hover:bg-sidebar-accent hover:text-sidebar-accent-foreground hover:shadow-[0_0_0_1px_var(--sidebar-accent)]'
+          'bg-background shadow-[0_0_0_1px_var(--sidebar-border)] hover:bg-sidebar-accent hover:text-sidebar-accent-foreground hover:shadow-[0_0_0_1px_var(--sidebar-accent)]',
       },
       size: {
         default: 'h-8 text-sm',
         sm: 'h-7 text-xs',
-        lg: 'h-12 text-sm group-data-[collapsible=icon]:p-0!'
-      }
+        lg: 'h-12 text-sm group-data-[collapsible=icon]:p-0!',
+      },
     },
     defaultVariants: {
       variant: 'default',
-      size: 'default'
-    }
-  }
+      size: 'default',
+    },
+  },
 );
 
 function InfobarMenuButton({
@@ -559,10 +540,10 @@ function InfobarMenuButton({
         'data-infobar': 'menu-button',
         'data-size': size,
         'data-active': isActive,
-        className: cn(infobarMenuButtonVariants({ variant, size }), className)
+        className: cn(infobarMenuButtonVariants({ variant, size }), className),
       } as React.ComponentProps<'button'>,
-      props
-    )
+      props,
+    ),
   });
 
   if (!tooltip) {
@@ -571,19 +552,14 @@ function InfobarMenuButton({
 
   if (typeof tooltip === 'string') {
     tooltip = {
-      children: tooltip
+      children: tooltip,
     };
   }
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>{button}</TooltipTrigger>
-      <TooltipContent
-        side='right'
-        align='center'
-        hidden={state !== 'collapsed' || isMobile}
-        {...tooltip}
-      />
+      <TooltipContent side="right" align="center" hidden={state !== 'collapsed' || isMobile} {...tooltip} />
     </Tooltip>
   );
 }
@@ -613,19 +589,19 @@ function InfobarMenuAction({
           'group-data-[collapsible=icon]:hidden',
           showOnHover &&
             'peer-data-[active=true]/menu-button:text-sidebar-accent-foreground group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 data-popup-open:opacity-100 aria-expanded:opacity-100 md:opacity-0',
-          className
-        )
+          className,
+        ),
       } as React.ComponentProps<'button'>,
-      props
-    )
+      props,
+    ),
   });
 }
 
 function InfobarMenuBadge({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
-      data-slot='infobar-menu-badge'
-      data-infobar='menu-badge'
+      data-slot="infobar-menu-badge"
+      data-infobar="menu-badge"
       className={cn(
         'text-sidebar-foreground pointer-events-none absolute right-1 flex h-5 min-w-5 items-center justify-center rounded-md px-1 text-xs font-medium tabular-nums select-none',
         'peer-hover/menu-button:text-sidebar-accent-foreground peer-data-[active=true]/menu-button:text-sidebar-accent-foreground',
@@ -633,7 +609,7 @@ function InfobarMenuBadge({ className, ...props }: React.ComponentProps<'div'>) 
         'peer-data-[size=default]/menu-button:top-1.5',
         'peer-data-[size=lg]/menu-button:top-2.5',
         'group-data-[collapsible=icon]:hidden',
-        className
+        className,
       )}
       {...props}
     />
@@ -654,18 +630,18 @@ function InfobarMenuSkeleton({
 
   return (
     <div
-      data-slot='infobar-menu-skeleton'
-      data-infobar='menu-skeleton'
+      data-slot="infobar-menu-skeleton"
+      data-infobar="menu-skeleton"
       className={cn('flex h-8 items-center gap-2 rounded-md px-2', className)}
       {...props}
     >
-      {showIcon && <Skeleton className='size-4 rounded-md' data-infobar='menu-skeleton-icon' />}
+      {showIcon && <Skeleton className="size-4 rounded-md" data-infobar="menu-skeleton-icon" />}
       <Skeleton
-        className='h-4 max-w-(--skeleton-width) flex-1'
-        data-infobar='menu-skeleton-text'
+        className="h-4 max-w-(--skeleton-width) flex-1"
+        data-infobar="menu-skeleton-text"
         style={
           {
-            '--skeleton-width': width
+            '--skeleton-width': width,
           } as React.CSSProperties
         }
       />
@@ -676,12 +652,12 @@ function InfobarMenuSkeleton({
 function InfobarMenuSub({ className, ...props }: React.ComponentProps<'ul'>) {
   return (
     <ul
-      data-slot='infobar-menu-sub'
-      data-infobar='menu-sub'
+      data-slot="infobar-menu-sub"
+      data-infobar="menu-sub"
       className={cn(
         'border-sidebar-border mx-3.5 flex min-w-0 translate-x-px flex-col gap-1 border-l px-2.5 py-0.5',
         'group-data-[collapsible=icon]:hidden',
-        className
+        className,
       )}
       {...props}
     />
@@ -691,8 +667,8 @@ function InfobarMenuSub({ className, ...props }: React.ComponentProps<'ul'>) {
 function InfobarMenuSubItem({ className, ...props }: React.ComponentProps<'li'>) {
   return (
     <li
-      data-slot='infobar-menu-sub-item'
-      data-infobar='menu-sub-item'
+      data-slot="infobar-menu-sub-item"
+      data-infobar="menu-sub-item"
       className={cn('group/menu-sub-item relative', className)}
       {...props}
     />
@@ -724,11 +700,11 @@ function InfobarMenuSubButton({
           size === 'sm' && 'text-xs',
           size === 'md' && 'text-sm',
           'group-data-[collapsible=icon]:hidden',
-          className
-        )
+          className,
+        ),
       } as React.ComponentProps<'a'>,
-      props
-    )
+      props,
+    ),
   });
 }
 
@@ -756,5 +732,5 @@ export {
   InfobarRail,
   InfobarSeparator,
   InfobarTrigger,
-  useInfobar
+  useInfobar,
 };

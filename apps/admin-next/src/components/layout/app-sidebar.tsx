@@ -1,19 +1,17 @@
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Link, useLocation } from '@tanstack/react-router';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu';
-import { navGroups } from '@/config/nav-config';
-import { useMediaQuery } from '@/hooks/use-media-query';
-import { useFilteredNavGroups } from '@/hooks/use-nav';
-import { Link } from '@tanstack/react-router';
-import { useLocation, useRouter } from '@tanstack/react-router';
-import * as React from 'react';
-import { Icons } from '../icons';
+  Bell,
+  Brain,
+  Cpu,
+  FileText,
+  LayoutDashboard,
+  LogOut,
+  MessageSquare,
+  Settings,
+  Shield,
+  Sticker,
+  Zap,
+} from 'lucide-react';
 import {
   Sidebar,
   SidebarContent,
@@ -24,86 +22,87 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
-  SidebarRail
+  SidebarRail,
 } from '@/components/ui/sidebar';
 
-export default function AppSidebar() {
-  const { pathname } = useLocation();
-  const { isOpen } = useMediaQuery();
-  const router = useRouter();
-  const filteredGroups = useFilteredNavGroups(navGroups);
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
 
-  React.useEffect(() => {
-    // Side effects based on sidebar state changes
-  }, [isOpen]);
+interface NavItem {
+  title: string;
+  url: string;
+  icon: typeof LayoutDashboard;
+}
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    label: 'Observe',
+    items: [
+      { title: 'Overview', url: '/', icon: LayoutDashboard },
+      { title: 'Tool sessions', url: '/invocations', icon: Zap },
+      { title: 'Contexts', url: '/contexts', icon: MessageSquare },
+      { title: 'Messages', url: '/messages', icon: FileText },
+      { title: 'Bot sticker sets', url: '/stickers', icon: Sticker },
+    ],
+  },
+  {
+    label: 'Manage',
+    items: [
+      { title: 'Alarms', url: '/alarms', icon: Bell },
+      { title: 'Memories', url: '/memories', icon: Brain },
+      { title: 'Bot admins', url: '/admins', icon: Shield },
+      { title: 'Model', url: '/model', icon: Cpu },
+    ],
+  },
+  {
+    label: 'Account',
+    items: [{ title: 'Settings', url: '/settings', icon: Settings }],
+  },
+];
+
+export default function AppSidebar({
+  username,
+  onSignOut,
+}: {
+  readonly username: string;
+  readonly onSignOut: () => void;
+}) {
+  const { pathname } = useLocation();
 
   return (
-    <Sidebar variant='inset' collapsible='icon'>
+    <Sidebar variant="inset" collapsible="icon">
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size='lg' asChild>
-              <Link to='/dashboard/overview' aria-label='Dashboard'>
-                <div className='bg-primary text-primary-foreground flex aspect-square size-8 shrink-0 items-center justify-center rounded-md'>
-                  <Icons.logo className='size-4' />
+            <SidebarMenuButton size="lg" asChild>
+              <Link to="/" aria-label="Plastic Wan Admin">
+                <div className="bg-primary text-primary-foreground flex aspect-square size-8 shrink-0 items-center justify-center rounded-md">
+                  <Zap className="size-4" />
                 </div>
-                <div className='grid flex-1 text-left text-sm leading-tight'>
-                  <span className='truncate font-semibold'>TanStack Start</span>
-                  <span className='text-muted-foreground truncate text-xs'>Dashboard</span>
+                <div className="grid flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-semibold">Plastic Wan</span>
+                  <span className="text-muted-foreground truncate text-xs">Admin</span>
                 </div>
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
-      <SidebarContent className='overflow-x-hidden'>
-        {filteredGroups.map((group) => (
-          <SidebarGroup key={group.label || 'ungrouped'} className='py-0'>
-            {group.label && <SidebarGroupLabel>{group.label}</SidebarGroupLabel>}
+      <SidebarContent className="overflow-x-hidden">
+        {NAV_GROUPS.map((group) => (
+          <SidebarGroup key={group.label} className="py-0">
+            <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
             <SidebarMenu>
               {group.items.map((item) => {
-                const Icon = item.icon ? Icons[item.icon] : Icons.logo;
-                return item?.items && item?.items?.length > 0 ? (
-                  <Collapsible key={item.title} defaultOpen={item.isActive} asChild>
-                    <SidebarMenuItem>
-                      <CollapsibleTrigger asChild>
-                        <SidebarMenuButton
-                          tooltip={item.title}
-                          isActive={pathname === item.url}
-                          className='group/collapsible'
-                        >
-                          {item.icon && <Icon />}
-                          <span>{item.title}</span>
-                          <Icons.chevronRight className='ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90' />
-                        </SidebarMenuButton>
-                      </CollapsibleTrigger>
-                      <CollapsibleContent>
-                        <SidebarMenuSub>
-                          {item.items?.map((subItem) => (
-                            <SidebarMenuSubItem key={subItem.title}>
-                              <SidebarMenuSubButton asChild isActive={pathname === subItem.url}>
-                                <Link to={subItem.url} aria-label={subItem.title}>
-                                  <span>{subItem.title}</span>
-                                </Link>
-                              </SidebarMenuSubButton>
-                            </SidebarMenuSubItem>
-                          ))}
-                        </SidebarMenuSub>
-                      </CollapsibleContent>
-                    </SidebarMenuItem>
-                  </Collapsible>
-                ) : (
-                  <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton
-                      asChild
-                      tooltip={item.title}
-                      isActive={pathname === item.url}
-                    >
+                const Icon = item.icon;
+                const isActive = item.url === '/' ? pathname === '/' : pathname.startsWith(item.url);
+                return (
+                  <SidebarMenuItem key={item.url}>
+                    <SidebarMenuButton asChild tooltip={item.title} isActive={isActive}>
                       <Link to={item.url} aria-label={item.title}>
-                        <Icon />
+                        <Icon className="size-4" />
                         <span>{item.title}</span>
                       </Link>
                     </SidebarMenuButton>
@@ -117,43 +116,17 @@ export default function AppSidebar() {
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <SidebarMenuButton
-                  size='lg'
-                  className='data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground'
-                >
-                  <div className='bg-muted flex aspect-square size-8 shrink-0 items-center justify-center rounded-full'>
-                    <Icons.account className='size-4' />
-                  </div>
-                  <div className='grid flex-1 text-left text-sm leading-tight'>
-                    <span className='truncate font-medium'>User</span>
-                    <span className='text-muted-foreground truncate text-xs'>user@example.com</span>
-                  </div>
-                  <Icons.chevronsDown className='ml-auto size-4' />
-                </SidebarMenuButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                className='w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg'
-                side='bottom'
-                align='end'
-                sideOffset={4}
-              >
-                <DropdownMenuGroup>
-                  <DropdownMenuItem
-                    onClick={() => router.navigate({ to: '/dashboard/notifications' })}
-                  >
-                    <Icons.notification className='mr-2 h-4 w-4' />
-                    Notifications
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem>
-                  <Icons.logout className='mr-2 h-4 w-4' />
-                  Sign out
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <SidebarMenuButton size="lg" asChild>
+              <button type="button" onClick={onSignOut} className="flex w-full items-center gap-2">
+                <div className="bg-muted flex aspect-square size-8 shrink-0 items-center justify-center rounded-full">
+                  <LogOut className="size-4" />
+                </div>
+                <div className="grid flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-medium">{username}</span>
+                  <span className="text-muted-foreground truncate text-xs">Sign out</span>
+                </div>
+              </button>
+            </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

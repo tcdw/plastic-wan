@@ -1,0 +1,13 @@
+Plastic Wan Admin (Next) — Third-Party Notices
+================================================
+
+This directory (apps/admin-next) is derived from the open-source "dashboard"
+template by Kiranism, distributed under the MIT License. The full template
+license text is preserved in ./LICENSE (MIT, Copyright (c) 2025 Kiranism).
+
+Bundled web fonts are self-hosted via @fontsource packages and are licensed
+under the SIL Open Font License 1.1:
+
+- @fontsource-variable/inter — Inter, Copyright 2016 The Inter Project Authors
+
+SIL OFL 1.1 license text: https://openfontlicense.org

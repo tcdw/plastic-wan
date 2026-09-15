@@ -5,7 +5,7 @@ WORKDIR /app
 
 # Cache layer: install deps before copying source
 COPY package.json bun.lock ./
-COPY apps/admin/package.json ./apps/admin/
+COPY apps/admin-next/package.json ./apps/admin-next/
 RUN bun install --frozen-lockfile
 
 # Copy source and build admin panel
@@ -39,7 +39,9 @@ WORKDIR /app
 # Copy built application from builder
 COPY --from=builder --chown=plasticwan:plasticwan /app/src ./src
 COPY --from=builder --chown=plasticwan:plasticwan /app/node_modules ./node_modules
-COPY --from=builder --chown=plasticwan:plasticwan /app/apps/admin/dist ./apps/admin/dist
+COPY --from=builder --chown=plasticwan:plasticwan /app/apps/admin-next/dist ./apps/admin-next/dist
+COPY --from=builder --chown=plasticwan:plasticwan /app/apps/admin-next/LICENSE ./apps/admin-next/LICENSE
+COPY --from=builder --chown=plasticwan:plasticwan /app/apps/admin-next/NOTICE ./apps/admin-next/NOTICE
 COPY --from=builder --chown=plasticwan:plasticwan /app/package.json ./package.json
 
 # Entrypoint

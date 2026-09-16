@@ -6,6 +6,7 @@ import {
   DetailSkeleton,
   JsonViewer,
   KvList,
+  LazyDetails,
   MonoValue,
   PrivateReasoningNote,
   PrivateReasoningTag,
@@ -134,15 +135,18 @@ function ToolRegistryTable({ registry }: { readonly registry: readonly ToolRegis
     },
   ];
   return (
-    <details className="group">
-      <summary className="text-muted-foreground flex cursor-pointer items-center gap-2 text-sm">
-        Tool registry
-        <span className="text-xs">Snapshot of the tools presented to the model</span>
-      </summary>
-      <div className="mt-2">
-        <TableShell columns={columns} data={registry} rowKey={(row) => row.name} />
-      </div>
-    </details>
+    <LazyDetails
+      summaryClassName="text-muted-foreground flex cursor-pointer items-center gap-2 text-sm"
+      contentClassName="mt-2"
+      summary={
+        <>
+          Tool registry
+          <span className="text-xs">Snapshot of the tools presented to the model</span>
+        </>
+      }
+    >
+      <TableShell columns={columns} data={registry} rowKey={(row) => row.name} />
+    </LazyDetails>
   );
 }
 
@@ -274,13 +278,14 @@ function ToolCallCard({
         <span>Duration {formatDuration(tool.duration_ms)}</span>
         {tool.error_code !== null ? <span className="text-destructive">Error {tool.error_code}</span> : null}
       </div>
-      <details className="group">
-        <summary className="text-muted-foreground cursor-pointer text-xs">Arguments and result</summary>
-        <div className="mt-2 space-y-2">
-          <JsonViewer value={tool.arguments_json} title="Arguments" />
-          <JsonViewer value={tool.result_text} title="Result" />
-        </div>
-      </details>
+      <LazyDetails
+        summary="Arguments and result"
+        summaryClassName="text-muted-foreground cursor-pointer text-xs"
+        contentClassName="mt-2 space-y-2"
+      >
+        <JsonViewer value={tool.arguments_json} title="Arguments" />
+        <JsonViewer value={tool.result_text} title="Result" />
+      </LazyDetails>
     </TimelineCard>
   );
 }
@@ -355,12 +360,13 @@ function AgentMessageCard({ message }: { readonly message: AgentMessageEntry }):
       {message.text.length === 0 ? (
         <p className="text-muted-foreground text-sm">No text content</p>
       ) : message.role === 'tool_result' ? (
-        <details className="group">
-          <summary className="text-muted-foreground cursor-pointer text-xs">
-            View tool result passed to the agent
-          </summary>
-          <p className="mt-1 text-sm break-words whitespace-pre-wrap">{message.text}</p>
-        </details>
+        <LazyDetails
+          summary="View tool result passed to the agent"
+          summaryClassName="text-muted-foreground cursor-pointer text-xs"
+          contentClassName="mt-1 text-sm break-words whitespace-pre-wrap"
+        >
+          {message.text}
+        </LazyDetails>
       ) : (
         <p className="text-sm break-words whitespace-pre-wrap">{message.text}</p>
       )}
@@ -393,25 +399,26 @@ function ModelCallCard({ model }: { readonly model: ModelCallEntry }): React.Rea
         {model.error_code !== null ? <span className="text-destructive">Error {model.error_code}</span> : null}
       </div>
       {hasDetails ? (
-        <details className="group">
-          <summary className="text-muted-foreground cursor-pointer text-xs">View details</summary>
-          <div className="mt-2 space-y-2">
-            {model.error_detail !== null ? (
-              <div>
-                <p className="text-muted-foreground text-xs">Full model error details</p>
-                <pre className="text-destructive mt-1 max-h-60 overflow-auto rounded border bg-muted/20 p-2 text-xs break-words whitespace-pre-wrap">
-                  {model.error_detail}
-                </pre>
-              </div>
-            ) : null}
-            {model.request_json !== null ? (
-              <JsonViewer value={model.request_json} title="Last API request payload" />
-            ) : null}
-            {model.response_json !== null ? (
-              <JsonViewer value={model.response_json} title="Last API response status" />
-            ) : null}
-          </div>
-        </details>
+        <LazyDetails
+          summary="View details"
+          summaryClassName="text-muted-foreground cursor-pointer text-xs"
+          contentClassName="mt-2 space-y-2"
+        >
+          {model.error_detail !== null ? (
+            <div>
+              <p className="text-muted-foreground text-xs">Full model error details</p>
+              <pre className="text-destructive mt-1 max-h-60 overflow-auto rounded border bg-muted/20 p-2 text-xs break-words whitespace-pre-wrap">
+                {model.error_detail}
+              </pre>
+            </div>
+          ) : null}
+          {model.request_json !== null ? (
+            <JsonViewer value={model.request_json} title="Last API request payload" />
+          ) : null}
+          {model.response_json !== null ? (
+            <JsonViewer value={model.response_json} title="Last API response status" />
+          ) : null}
+        </LazyDetails>
       ) : null}
     </TimelineCard>
   );

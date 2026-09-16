@@ -3,6 +3,7 @@ import type React from 'react';
 import { Button } from '@/components/ui/button';
 import { prettyJson } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { LazyDetails } from './lazy-details';
 
 /**
  * JSON viewer with a Tree / Text toggle. Stored JSON is untrusted content:
@@ -151,14 +152,13 @@ export function JsonViewer({
       </div>
       {mode === 'tree' && canTree ? (
         collapsed ? (
-          <details>
-            <summary className="text-muted-foreground cursor-pointer rounded px-1 py-0.5 text-xs hover:bg-muted">
-              Payload ({text.length} chars) — click to expand
-            </summary>
-            <div className="mt-1 overflow-x-auto rounded border bg-muted/20 p-2">
-              <JsonTreeNode value={parsed} />
-            </div>
-          </details>
+          <LazyDetails
+            summary={`Payload (${text.length} chars) — click to expand`}
+            summaryClassName="text-muted-foreground cursor-pointer rounded px-1 py-0.5 text-xs hover:bg-muted"
+            contentClassName="mt-1 overflow-x-auto rounded border bg-muted/20 p-2"
+          >
+            <JsonTreeNode value={parsed} />
+          </LazyDetails>
         ) : (
           <div className="overflow-x-auto rounded border bg-muted/20 p-2">
             <JsonTreeNode value={parsed} />

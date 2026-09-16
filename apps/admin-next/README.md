@@ -73,8 +73,8 @@ M3/M4 页面必须复用 `src/components/business/` 下的公共层，不要复�
 ```ts
 import {
   ChartCard, ConfirmDialog, CursorList, FilterToolbar, JsonViewer, KvList,
-  MonoValue, PrivateReasoningNote, PrivateReasoningTag, SelectFilter, StateBadge,
-  TableShell, TextValue, TimeSeriesChart, flatPages,
+  LazyDetails, MonoValue, PrivateReasoningNote, PrivateReasoningTag,
+  SelectFilter, StateBadge, TableShell, TextValue, TimeSeriesChart, flatPages,
   type ColumnSpec, type CursorQueryFactory, type CursorQueryOptions,
 } from '@/components/business';
 ```
@@ -118,6 +118,16 @@ import {
   `collapseThresholdChars`（默认 2000）默认折叠并显示字符数；**只渲染文本，
   永不执行 HTML**；`value` 为 `null`/空串时显示 `—`。
 - 文本内容不一定合法 JSON（如 `result_text`），直接传字符串即可。
+- 折叠的大 payload 走 `LazyDetails`，展开前不构建 JSON 树。
+
+### 懒挂载折叠区 `lazy-details.tsx`
+
+- `LazyDetails({ summary, children, className?, summaryClassName?,
+  contentClassName? })`：原生 `<details>` 语义 + **展开前不挂载 children**。
+  原生 `<details>` 只是把子树隐藏起来，仍然会渲染 DOM——重内容（`JsonViewer`
+  树、tool registry 表格、长文本）必须用它包一层。
+- 首次展开后 children 常驻，折叠不清空查看器内部状态（树/文本模式、节点展开）。
+- 需要多段内容的折叠区用 `contentClassName` 承担原先内层 `<div>` 的间距类。
 
 ### 键值明细与文本 `kv-list.tsx`
 

@@ -16,6 +16,7 @@ export {
 export { FilterToolbar, SelectFilter, TextFilter, type FilterOption } from './filter-toolbar';
 export { StateBadge, stateBadgeSemantic, type BadgeSemantic } from './state-badge';
 export { JsonViewer, type JsonViewerProps } from './json-viewer';
+export { LazyDetails, type LazyDetailsProps } from './lazy-details';
 export { KvList, MonoValue, TextValue, type KvItem } from './kv-list';
 export { ConfirmDialog, type ConfirmDialogProps } from './confirm-dialog';
 export { DetailError, DetailSkeleton, type DetailErrorProps } from './detail-state';

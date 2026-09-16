@@ -40,6 +40,21 @@ test.describe('completed invocation (4001)', () => {
     await expect(page.getByText('Last API request payload')).toBeVisible();
   });
 
+  test('model call payloads mount only when their disclosure is expanded', async ({ page }) => {
+    const overview = page.getByRole('tabpanel', { name: /Overview/ });
+    // A native <details> renders its subtree while collapsed; the payloads must
+    // not exist in the DOM until the user expands "View details".
+    await expect(overview.getByText('Last API request payload')).toHaveCount(0);
+    await expect(overview.getByText('context_messages')).toHaveCount(0);
+    await overview.getByText('View details').first().click();
+    await expect(overview.getByText('Last API request payload')).toBeVisible();
+    await expect(overview.getByText('Last API response status')).toBeVisible();
+    // Oversized payloads keep their JSON tree behind a second lazy disclosure.
+    await expect(overview.getByText('context_messages')).toHaveCount(0);
+    await overview.getByText(/Payload \(\d+ chars\) — click to expand/).click();
+    await expect(overview.getByText('context_messages')).toBeVisible();
+  });
+
   test('telegram sends tab shows the delivery record', async ({ page }) => {
     await page.getByRole('tab', { name: /Telegram sends/ }).click();
     await expect(page.getByText('902')).toBeVisible();

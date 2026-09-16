@@ -1,14 +1,20 @@
+import JsonView from '@uiw/react-json-view';
+import { darkTheme } from '@uiw/react-json-view/dark';
+import { lightTheme } from '@uiw/react-json-view/light';
 import { useState } from 'react';
 import type React from 'react';
+import { useTheme } from '@/components/themes/theme-provider';
 import { Button } from '@/components/ui/button';
 import { prettyJson } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { LazyDetails } from './lazy-details';
 
 /**
- * JSON viewer with a Tree / Text toggle. Stored JSON is untrusted content:
- * everything renders as text nodes (no HTML execution), malformed JSON falls
- * back to the raw text, and payloads above a threshold start collapsed.
+ * JSON viewer with a Tree / Text toggle. The tree is `@uiw/react-json-view`
+ * (one level expanded, long strings shortened, copy on hover). Stored JSON is
+ * untrusted content: everything renders as text nodes (no HTML execution),
+ * malformed JSON falls back to the raw text, and payloads above a threshold
+ * start collapsed and mount only when expanded.
  */
 
 const DEFAULT_COLLAPSE_THRESHOLD_CHARS = 2_000;
@@ -25,83 +31,31 @@ function parseJsonValue(value: string | null): unknown {
   }
 }
 
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+function isTree(value: unknown): value is object {
+  return typeof value === 'object' && value !== null;
 }
 
-function isArray(value: unknown): value is readonly unknown[] {
-  return Array.isArray(value);
-}
+const BOX = 'bg-muted/50 max-h-96 overflow-auto rounded-md px-3 py-2 font-mono text-xs leading-normal';
 
-function describePrimitive(value: string | number | boolean | null): string {
-  if (value === null) {
-    return 'null';
-  }
-  if (typeof value === 'string') {
-    const shown = value.length > MAX_INLINE_STRING_CHARS ? `${value.slice(0, MAX_INLINE_STRING_CHARS)}…` : value;
-    return JSON.stringify(shown);
-  }
-  return String(value);
-}
-
-function primitiveClass(value: string | number | boolean | null): string {
-  if (value === null) {
-    return 'text-muted-foreground';
-  }
-  if (typeof value === 'string') {
-    return 'text-success';
-  }
-  if (typeof value === 'number') {
-    return 'text-warning';
-  }
-  return 'text-info';
-}
-
-function JsonTreeNode({ name, value }: { readonly name?: string; readonly value: unknown }): React.ReactElement {
-  if (isRecord(value)) {
-    const entries = Object.entries(value);
-    return (
-      <details className="group/json-node" open>
-        <summary className="flex cursor-pointer items-baseline gap-1 rounded px-1 py-0.5 hover:bg-muted">
-          {name !== undefined ? <span className="text-muted-foreground">{name}:</span> : null}
-          <span className="text-muted-foreground">{entries.length === 0 ? '{}' : '{…}'}</span>
-        </summary>
-        <div className="ml-3 border-l pl-2">
-          {entries.map(([key, child]) => (
-            <JsonTreeNode key={key} name={key} value={child} />
-          ))}
-        </div>
-      </details>
-    );
-  }
-  if (isArray(value)) {
-    return (
-      <details className="group/json-node" open>
-        <summary className="flex cursor-pointer items-baseline gap-1 rounded px-1 py-0.5 hover:bg-muted">
-          {name !== undefined ? <span className="text-muted-foreground">{name}:</span> : null}
-          <span className="text-muted-foreground">{value.length === 0 ? '[]' : `[${value.length}]`}</span>
-        </summary>
-        <div className="ml-3 border-l pl-2">
-          {Object.entries(value).map(([key, child]) => (
-            <JsonTreeNode key={key} name={key} value={child} />
-          ))}
-        </div>
-      </details>
-    );
-  }
-  const primitive: string | number | boolean | null = isPrimitive(value) ? value : null;
+function JsonTree({ value }: { readonly value: object }): React.ReactElement {
+  const { resolved } = useTheme();
   return (
-    <div className="flex items-baseline gap-1 rounded px-1 py-0.5">
-      {name !== undefined ? <span className="text-muted-foreground">{name}:</span> : null}
-      <span className={cn('font-mono text-xs break-all', primitiveClass(primitive))}>
-        {describePrimitive(primitive)}
-      </span>
-    </div>
+    <JsonView
+      value={value}
+      collapsed={1}
+      displayObjectSize={false}
+      displayDataTypes={false}
+      shortenTextAfterLength={MAX_INLINE_STRING_CHARS}
+      enableClipboard
+      style={
+        {
+          ...(resolved === 'dark' ? darkTheme : lightTheme),
+          '--w-rjv-background-color': 'transparent',
+          '--w-rjv-font-family': 'var(--font-mono)',
+        } as React.CSSProperties
+      }
+    />
   );
-}
-
-function isPrimitive(value: unknown): value is string | number | boolean | null {
-  return value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 }
 
 export interface JsonViewerProps {
@@ -129,7 +83,7 @@ export function JsonViewer({
     return <span className="text-muted-foreground">—</span>;
   }
   const parsed = parseJsonValue(value);
-  const canTree = parsed !== null && (isRecord(parsed) || isArray(parsed));
+  const canTree = isTree(parsed);
   const large = text.length > collapseThresholdChars;
   const collapsed = initiallyCollapsed || large;
 
@@ -154,20 +108,18 @@ export function JsonViewer({
         collapsed ? (
           <LazyDetails
             summary={`Payload (${text.length} chars) — click to expand`}
-            summaryClassName="text-muted-foreground cursor-pointer rounded px-1 py-0.5 text-xs hover:bg-muted"
-            contentClassName="mt-1 overflow-x-auto rounded border bg-muted/20 p-2"
+            summaryClassName="text-muted-foreground hover:bg-muted cursor-pointer rounded px-1 py-0.5 text-xs transition-colors"
+            contentClassName={cn('mt-1', BOX)}
           >
-            <JsonTreeNode value={parsed} />
+            <JsonTree value={parsed} />
           </LazyDetails>
         ) : (
-          <div className="overflow-x-auto rounded border bg-muted/20 p-2">
-            <JsonTreeNode value={parsed} />
+          <div className={BOX}>
+            <JsonTree value={parsed} />
           </div>
         )
       ) : (
-        <pre className="max-h-96 overflow-auto rounded border bg-muted/20 p-2 font-mono text-xs whitespace-pre-wrap break-all">
-          {text}
-        </pre>
+        <pre className={cn(BOX, 'break-all whitespace-pre-wrap')}>{text}</pre>
       )}
     </div>
   );

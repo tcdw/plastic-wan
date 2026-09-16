@@ -26,16 +26,39 @@ const LEGACY_COLOR_TO_SEMANTIC: Record<string, BadgeSemantic> = {
 };
 
 const SEMANTIC_CLASSES: Record<BadgeSemantic, string> = {
-  success: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-  info: 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300',
-  warning: 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300',
-  danger: 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300',
+  success: 'border-success/40 bg-success/10 text-success',
+  info: 'border-info/40 bg-info/10 text-info',
+  warning: 'border-warning/40 bg-warning/10 text-warning',
+  danger: 'border-danger/40 bg-danger/10 text-danger',
   neutral: 'border-border bg-muted text-muted-foreground',
 };
 
 /** Semantic variant for a state string (unknown state → 'default' color → neutral). */
 export function stateBadgeSemantic(state: string): BadgeSemantic {
   return LEGACY_COLOR_TO_SEMANTIC[stateColor(state)] ?? 'neutral';
+}
+
+/** Pill badge in one of the semantic tones; colors come from theme tokens only. */
+export function ToneBadge({
+  tone,
+  children,
+  className,
+}: {
+  readonly tone: BadgeSemantic;
+  readonly children: React.ReactNode;
+  readonly className?: string;
+}): React.ReactElement {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap',
+        SEMANTIC_CLASSES[tone],
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
 }
 
 export function StateBadge({
@@ -48,16 +71,9 @@ export function StateBadge({
   if (state === null || state.length === 0) {
     return <span className="text-muted-foreground">—</span>;
   }
-  const semantic = stateBadgeSemantic(state);
   return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap',
-        SEMANTIC_CLASSES[semantic],
-        className,
-      )}
-    >
+    <ToneBadge tone={stateBadgeSemantic(state)} {...(className !== undefined ? { className } : {})}>
       {state}
-    </span>
+    </ToneBadge>
   );
 }

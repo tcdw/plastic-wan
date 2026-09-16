@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import {
+  ChatFilter,
   CursorList,
   FilterToolbar,
   SelectFilter,
   StateBadge,
   TableShell,
-  TextFilter,
   type ColumnSpec,
 } from '@/components/business';
 import type { InvocationListItem } from '@/lib/api';
@@ -23,28 +23,18 @@ const INVOCATION_STATES = [
   'skipped_budget',
 ] as const;
 
-function SideEffectBadge({ started }: { readonly started: boolean }): React.ReactElement {
-  return started ? (
-    <span className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-amber-700 dark:text-amber-300">
-      started
-    </span>
-  ) : (
-    <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium whitespace-nowrap text-muted-foreground">
-      none
-    </span>
-  );
-}
+const LIST_TABLE =
+  'bg-card rounded-xl shadow-xs [&_td:first-child]:ps-4 [&_td:last-child]:pe-4 [&_th]:text-muted-foreground [&_th:first-child]:ps-4 [&_th:last-child]:pe-4';
 
 const COLUMNS: readonly ColumnSpec<InvocationListItem>[] = [
   {
     key: 'id',
     title: 'ID',
-    width: 220,
     render: (row) => (
       <Link
         to="/invocations/$invocationId"
         params={{ invocationId: row.id }}
-        className="font-mono text-xs break-all underline-offset-4 hover:underline"
+        className="decoration-border hover:decoration-foreground font-medium tabular-nums underline underline-offset-4 transition-colors"
       >
         {row.id}
       </Link>
@@ -72,40 +62,47 @@ const COLUMNS: readonly ColumnSpec<InvocationListItem>[] = [
     key: 'turns',
     title: 'Turns',
     align: 'right',
+    className: 'tabular-nums',
     render: (row) => String(row.turns_used),
   },
   {
     key: 'tools',
     title: 'Tools',
     align: 'right',
+    className: 'tabular-nums',
     render: (row) => String(row.tool_call_count),
   },
   {
     key: 'sends',
     title: 'Sends',
     align: 'right',
+    className: 'tabular-nums',
     render: (row) => String(row.sends_used),
   },
   {
     key: 'tokens',
     title: 'Tokens',
     align: 'right',
+    className: 'tabular-nums',
     render: (row) => formatNumber(row.total_tokens),
   },
   {
     key: 'cost',
     title: 'Cost',
     align: 'right',
+    className: 'tabular-nums',
     render: (row) => formatCost(row.total_cost),
   },
   {
     key: 'side-effect',
     title: 'Side effect',
-    render: (row) => <SideEffectBadge started={row.side_effect_started} />,
+    className: 'ps-6',
+    render: (row) => (row.side_effect_started ? 'started' : <span className="text-muted-foreground">none</span>),
   },
   {
     key: 'created',
     title: 'Created',
+    className: 'text-muted-foreground',
     render: (row) => formatTime(row.created_at),
   },
 ];
@@ -124,13 +121,13 @@ export default function InvocationsPage(): React.ReactElement {
           onChange={setState}
           options={INVOCATION_STATES.map((value) => ({ value, label: value }))}
         />
-        <TextFilter placeholder="Telegram chat ID" value={chat} onCommit={setChat} onClear={() => setChat(undefined)} />
+        <ChatFilter value={chat} onChange={setChat} />
       </FilterToolbar>
       <CursorList
         factory={invocationsQuery}
         filters={filters}
         renderItems={(items) => (
-          <TableShell columns={COLUMNS} data={items} rowKey={(row) => row.id} className="max-w-full overflow-x-auto" />
+          <TableShell columns={COLUMNS} data={items} rowKey={(row) => row.id} className={LIST_TABLE} />
         )}
       />
     </div>

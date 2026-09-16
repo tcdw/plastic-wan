@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
-import { type ColumnSpec, CursorList, FilterToolbar, TableShell, TextFilter } from '@/components/business';
+import { ChatFilter, type ColumnSpec, CursorList, FilterToolbar, TableShell, TextFilter } from '@/components/business';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import type { ConversationContextListItem } from '@/lib/api';
 import { formatNumber, formatTime } from '@/lib/format';
@@ -95,12 +95,7 @@ export default function ContextsPage(): React.ReactElement {
           onCommit={(value) => setSearch(nonEmpty(value))}
           onClear={() => setSearch(undefined)}
         />
-        <TextFilter
-          placeholder="Telegram chat ID"
-          value={chat}
-          onCommit={(value) => setChat(nonEmpty(value))}
-          onClear={() => setChat(undefined)}
-        />
+        <ChatFilter value={chat} onChange={setChat} />
         <TextFilter
           placeholder="Conversation ID"
           value={conversation}

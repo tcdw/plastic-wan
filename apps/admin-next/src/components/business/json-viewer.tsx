@@ -49,12 +49,12 @@ function primitiveClass(value: string | number | boolean | null): string {
     return 'text-muted-foreground';
   }
   if (typeof value === 'string') {
-    return 'text-emerald-700 dark:text-emerald-300';
+    return 'text-success';
   }
   if (typeof value === 'number') {
-    return 'text-amber-700 dark:text-amber-300';
+    return 'text-warning';
   }
-  return 'text-violet-700 dark:text-violet-300';
+  return 'text-info';
 }
 
 function JsonTreeNode({ name, value }: { readonly name?: string; readonly value: unknown }): React.ReactElement {
@@ -63,7 +63,7 @@ function JsonTreeNode({ name, value }: { readonly name?: string; readonly value:
     return (
       <details className="group/json-node" open>
         <summary className="flex cursor-pointer items-baseline gap-1 rounded px-1 py-0.5 hover:bg-muted">
-          {name !== undefined ? <span className="text-sky-700 dark:text-sky-300">{name}:</span> : null}
+          {name !== undefined ? <span className="text-muted-foreground">{name}:</span> : null}
           <span className="text-muted-foreground">{entries.length === 0 ? '{}' : '{…}'}</span>
         </summary>
         <div className="ml-3 border-l pl-2">
@@ -78,7 +78,7 @@ function JsonTreeNode({ name, value }: { readonly name?: string; readonly value:
     return (
       <details className="group/json-node" open>
         <summary className="flex cursor-pointer items-baseline gap-1 rounded px-1 py-0.5 hover:bg-muted">
-          {name !== undefined ? <span className="text-sky-700 dark:text-sky-300">{name}:</span> : null}
+          {name !== undefined ? <span className="text-muted-foreground">{name}:</span> : null}
           <span className="text-muted-foreground">{value.length === 0 ? '[]' : `[${value.length}]`}</span>
         </summary>
         <div className="ml-3 border-l pl-2">
@@ -92,7 +92,7 @@ function JsonTreeNode({ name, value }: { readonly name?: string; readonly value:
   const primitive: string | number | boolean | null = isPrimitive(value) ? value : null;
   return (
     <div className="flex items-baseline gap-1 rounded px-1 py-0.5">
-      {name !== undefined ? <span className="text-sky-700 dark:text-sky-300">{name}:</span> : null}
+      {name !== undefined ? <span className="text-muted-foreground">{name}:</span> : null}
       <span className={cn('font-mono text-xs break-all', primitiveClass(primitive))}>
         {describePrimitive(primitive)}
       </span>

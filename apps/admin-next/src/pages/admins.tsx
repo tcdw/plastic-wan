@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Info } from 'lucide-react';
 import { toast } from 'sonner';
-import { ConfirmDialog, MonoValue, TableShell, type ColumnSpec } from '@/components/business';
+import { ConfirmDialog, MonoValue, TableShell, type ColumnSpec, ToneBadge } from '@/components/business';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -24,17 +24,9 @@ const ADMIN_ID_PATTERN = /^\d{1,19}$/;
 
 function SourceBadge({ source }: { readonly source: string }): React.ReactElement {
   if (source === 'config') {
-    return (
-      <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-        {source}
-      </span>
-    );
+    return <ToneBadge tone="neutral">{source}</ToneBadge>;
   }
-  return (
-    <span className="inline-flex items-center rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-xs font-medium text-sky-700 dark:text-sky-300">
-      {source}
-    </span>
-  );
+  return <ToneBadge tone="info">{source}</ToneBadge>;
 }
 
 export default function AdminsPage(): React.ReactElement {

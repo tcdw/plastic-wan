@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import {
+  ChatFilter,
   ConfirmDialog,
   CursorList,
   FilterToolbar,
@@ -153,7 +154,7 @@ export default function AlarmsPage(): React.ReactElement {
           onChange={setState}
           options={ALARM_STATES.map((value) => ({ value, label: value }))}
         />
-        <TextFilter placeholder="Telegram chat ID" value={chat} onCommit={setChat} onClear={() => setChat(undefined)} />
+        <ChatFilter value={chat} onChange={setChat} />
         <TextFilter
           placeholder="Target user ID"
           value={target}

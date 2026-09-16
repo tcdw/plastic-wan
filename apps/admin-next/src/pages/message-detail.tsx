@@ -9,6 +9,7 @@ import {
   MonoValue,
   TableShell,
   TextValue,
+  ToneBadge,
 } from '@/components/business';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import type { MediaEntry, MessageDetail, RevisionEntry } from '@/lib/api';
@@ -16,15 +17,7 @@ import { formatNumber, formatTime } from '@/lib/format';
 import { messageQuery } from '@/lib/queries';
 
 function YesNoBadge({ value }: { readonly value: boolean }): React.ReactElement {
-  return value ? (
-    <span className="inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-emerald-700 dark:text-emerald-300">
-      yes
-    </span>
-  ) : (
-    <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium whitespace-nowrap text-muted-foreground">
-      no
-    </span>
-  );
+  return value ? <ToneBadge tone="success">yes</ToneBadge> : <ToneBadge tone="neutral">no</ToneBadge>;
 }
 
 function DetailHeader({ message }: { readonly message: MessageDetail }): React.ReactElement {

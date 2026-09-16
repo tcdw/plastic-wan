@@ -14,6 +14,8 @@ import {
   TableShell,
   TextValue,
   type ColumnSpec,
+  ToneBadge,
+  type BadgeSemantic,
 } from '@/components/business';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
@@ -70,51 +72,22 @@ function TabContent({
 
 // --- Small shared renderers -------------------------------------------------
 
-const ROLE_BADGE_CLASSES: Record<string, string> = {
-  assistant: 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300',
-  tool_result: 'border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300',
-  harness_nudge: 'border-cyan-500/40 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300',
+const ROLE_BADGE_TONES: Record<string, BadgeSemantic> = {
+  assistant: 'warning',
+  tool_result: 'info',
 };
 
 function RoleBadge({ role }: { readonly role: string }): React.ReactElement {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap',
-        ROLE_BADGE_CLASSES[role] ?? 'border-border bg-muted text-muted-foreground',
-      )}
-    >
-      {role}
-    </span>
-  );
+  return <ToneBadge tone={ROLE_BADGE_TONES[role] ?? 'neutral'}>{role}</ToneBadge>;
 }
 
 function SectionBadge({ section }: { readonly section: string }): React.ReactElement {
   const isNew = isNewContextSection(section);
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap',
-        isNew
-          ? 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300'
-          : 'border-border bg-muted text-muted-foreground',
-      )}
-    >
-      {isNew ? 'Incoming message' : 'Context history'}
-    </span>
-  );
+  return <ToneBadge tone={isNew ? 'info' : 'neutral'}>{isNew ? 'Incoming message' : 'Context history'}</ToneBadge>;
 }
 
 function YesNoBadge({ value }: { readonly value: boolean }): React.ReactElement {
-  return value ? (
-    <span className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-amber-700 dark:text-amber-300">
-      yes
-    </span>
-  ) : (
-    <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium whitespace-nowrap text-muted-foreground">
-      no
-    </span>
-  );
+  return value ? <ToneBadge tone="warning">yes</ToneBadge> : <ToneBadge tone="neutral">no</ToneBadge>;
 }
 
 // --- Header card + tool registry --------------------------------------------
@@ -257,16 +230,7 @@ function ToolCallCard({
     <TimelineCard
       header={
         <>
-          <span
-            className={cn(
-              'inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap',
-              tool.tool_name === 'send'
-                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300',
-            )}
-          >
-            {tool.tool_name}
-          </span>
+          <ToneBadge tone={tool.tool_name === 'send' ? 'success' : 'neutral'}>{tool.tool_name}</ToneBadge>
           <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">{tool.tool_call_id}</code>
           <StateBadge state={tool.state} />
         </>
@@ -380,9 +344,7 @@ function ModelCallCard({ model }: { readonly model: ModelCallEntry }): React.Rea
     <TimelineCard
       header={
         <>
-          <span className="inline-flex items-center rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-sky-700 dark:text-sky-300">
-            Model call
-          </span>
+          <ToneBadge tone="info">Model call</ToneBadge>
           <span className="text-sm font-medium">
             {model.provider}/{model.model}
           </span>

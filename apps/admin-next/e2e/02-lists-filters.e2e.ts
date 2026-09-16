@@ -29,8 +29,8 @@ test.describe('invocations list', () => {
 
   test('chat filter empties the list for an unknown chat', async ({ page }) => {
     await page.goto(await adminUrl('/invocations'));
-    await page.getByRole('textbox', { name: 'Telegram chat ID' }).fill('999999999');
-    await page.getByRole('textbox', { name: 'Telegram chat ID' }).press('Enter');
+    await page.getByRole('combobox', { name: 'Chat', exact: true }).fill('999999999');
+    await page.getByRole('combobox', { name: 'Chat', exact: true }).press('Enter');
     await expect(page.getByText('No records match the current filters.')).toBeVisible();
   });
 });
@@ -54,8 +54,8 @@ test.describe('messages list', () => {
 
   test('chat filter empties the list for an unknown chat', async ({ page }) => {
     await page.goto(await adminUrl('/messages'));
-    await page.getByRole('textbox', { name: 'Telegram chat ID' }).fill('999999999');
-    await page.getByRole('textbox', { name: 'Telegram chat ID' }).press('Enter');
+    await page.getByRole('combobox', { name: 'Chat', exact: true }).fill('999999999');
+    await page.getByRole('combobox', { name: 'Chat', exact: true }).press('Enter');
     await expect(page.getByText('No messages match the current filters.')).toBeVisible();
   });
 });
@@ -124,8 +124,8 @@ test.describe('memories list', () => {
 
   test('chat filter empties the list for an unknown chat', async ({ page }) => {
     await page.goto(await adminUrl('/memories'));
-    await page.getByRole('textbox', { name: 'Telegram chat ID' }).fill('999999999');
-    await page.getByRole('textbox', { name: 'Telegram chat ID' }).press('Enter');
+    await page.getByRole('combobox', { name: 'Chat', exact: true }).fill('999999999');
+    await page.getByRole('combobox', { name: 'Chat', exact: true }).press('Enter');
     await expect(page.getByText('No memories match these filters.')).toBeVisible();
   });
 });

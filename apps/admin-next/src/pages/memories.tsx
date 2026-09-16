@@ -3,14 +3,15 @@ import { useMemo, useState } from 'react';
 import { Info } from 'lucide-react';
 import { toast } from 'sonner';
 import {
+  ChatFilter,
   ConfirmDialog,
   CursorList,
   FilterToolbar,
   MonoValue,
   SelectFilter,
   TableShell,
-  TextFilter,
   type ColumnSpec,
+  ToneBadge,
 } from '@/components/business';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -99,20 +100,8 @@ function validateMemoryForm(values: MemoryFormValues, editing: boolean): MemoryF
 function MemoryStatus({ row }: { readonly row: MemoryEntry }): React.ReactElement {
   return (
     <span className="inline-flex flex-wrap items-center gap-1">
-      {row.long_ttl ? (
-        <span className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
-          long TTL
-        </span>
-      ) : null}
-      {row.expired ? (
-        <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-          expired
-        </span>
-      ) : (
-        <span className="inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-          active
-        </span>
-      )}
+      {row.long_ttl ? <ToneBadge tone="warning">long TTL</ToneBadge> : null}
+      {row.expired ? <ToneBadge tone="neutral">expired</ToneBadge> : <ToneBadge tone="success">active</ToneBadge>}
     </span>
   );
 }
@@ -266,7 +255,7 @@ export default function MemoriesPage(): React.ReactElement {
         <Button type="button" onClick={() => setCreateOpen(true)}>
           New memory
         </Button>
-        <TextFilter placeholder="Telegram chat ID" value={chat} onCommit={setChat} onClear={() => setChat(undefined)} />
+        <ChatFilter value={chat} onChange={setChat} />
         <SelectFilter
           placeholder="State"
           value={state}

@@ -1,6 +1,7 @@
 import { EyeOff } from 'lucide-react';
 import type React from 'react';
 import { cn } from '@/lib/utils';
+import { ToneBadge } from './state-badge';
 
 /**
  * Marks assistant ordinary text as private reasoning. Assistant messages are
@@ -10,15 +11,10 @@ import { cn } from '@/lib/utils';
 
 export function PrivateReasoningTag({ className }: { readonly className?: string }): React.ReactElement {
   return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-amber-700 dark:text-amber-300',
-        className,
-      )}
-    >
+    <ToneBadge tone="warning" {...(className !== undefined ? { className } : {})}>
       <EyeOff className="size-3" />
       Private reasoning
-    </span>
+    </ToneBadge>
   );
 }
 

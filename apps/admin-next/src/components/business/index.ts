@@ -14,7 +14,8 @@ export {
   type CursorQueryOptions,
 } from './cursor-list';
 export { FilterToolbar, SelectFilter, TextFilter, type FilterOption } from './filter-toolbar';
-export { StateBadge, stateBadgeSemantic, type BadgeSemantic } from './state-badge';
+export { ChatFilter } from './chat-filter';
+export { StateBadge, stateBadgeSemantic, ToneBadge, type BadgeSemantic } from './state-badge';
 export { JsonViewer, type JsonViewerProps } from './json-viewer';
 export { LazyDetails, type LazyDetailsProps } from './lazy-details';
 export { KvList, MonoValue, TextValue, type KvItem } from './kv-list';

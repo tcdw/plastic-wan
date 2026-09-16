@@ -9,6 +9,7 @@ import {
   MonoValue,
   TableShell,
   TextValue,
+  ToneBadge,
 } from '@/components/business';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
@@ -21,22 +22,14 @@ import { formatNumber, formatTime } from '@/lib/format';
 import { conversationContextQuery } from '@/lib/queries';
 
 function RoleBadge({ role }: { readonly role: string }): React.ReactElement {
-  return (
-    <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium whitespace-nowrap text-muted-foreground">
-      {role}
-    </span>
-  );
+  return <ToneBadge tone="neutral">{role}</ToneBadge>;
 }
 
 function CheckpointBadge({ isCheckpoint }: { readonly isCheckpoint: boolean }): React.ReactElement {
   if (!isCheckpoint) {
     return <span className="text-muted-foreground">—</span>;
   }
-  return (
-    <span className="inline-flex items-center rounded-full border border-violet-500/40 bg-violet-500/10 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-violet-700 dark:text-violet-300">
-      checkpoint
-    </span>
-  );
+  return <ToneBadge tone="info">checkpoint</ToneBadge>;
 }
 
 function InvocationLink({ id }: { readonly id: string | null }): React.ReactElement {

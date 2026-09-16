@@ -74,11 +74,7 @@ export default function SettingsPage(): React.ReactElement {
             />
             {errors.password && <p className="text-destructive text-sm">{errors.password.message}</p>}
           </div>
-          {success && (
-            <p className="text-sm text-green-600 dark:text-green-400">
-              Credentials updated; all other sessions were signed out.
-            </p>
-          )}
+          {success && <p className="text-success text-sm">Credentials updated; all other sessions were signed out.</p>}
           {failure && <p className="text-destructive text-sm">{failure}</p>}
           <Button type="submit" disabled={isSubmitting}>
             {isSubmitting ? 'Updating…' : 'Update credentials'}

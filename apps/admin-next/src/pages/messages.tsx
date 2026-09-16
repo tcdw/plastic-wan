@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import {
+  ChatFilter,
   type ColumnSpec,
   CursorList,
   FilterToolbar,
@@ -100,12 +101,7 @@ export default function MessagesPage(): React.ReactElement {
           onClear={() => setSearch(undefined)}
           widthClassName="w-72"
         />
-        <TextFilter
-          placeholder="Telegram chat ID"
-          value={chat}
-          onCommit={(value) => setChat(nonEmpty(value))}
-          onClear={() => setChat(undefined)}
-        />
+        <ChatFilter value={chat} onChange={setChat} />
       </FilterToolbar>
       <CursorList
         factory={messagesQuery}

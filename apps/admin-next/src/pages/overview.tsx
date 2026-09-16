@@ -9,6 +9,7 @@ import {
   TimeSeriesChart,
   type ChartSeries,
   type ColumnSpec,
+  ToneBadge,
 } from '@/components/business';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -21,13 +22,13 @@ import { formatNumber, formatTime } from '@/lib/format';
 import { overviewQuery, usageQuery } from '@/lib/queries';
 
 const TOKEN_SERIES: readonly ChartSeries[] = [
-  { dataKey: 'model_tokens', label: 'Model tokens', color: '#3b82f6' },
-  { dataKey: 'vision_tokens', label: 'Vision tokens', color: '#22c55e' },
+  { dataKey: 'model_tokens', label: 'Model tokens', color: 'var(--chart-1)' },
+  { dataKey: 'vision_tokens', label: 'Vision tokens', color: 'var(--chart-2)' },
 ];
 const INVOCATION_SERIES: readonly ChartSeries[] = [
-  { dataKey: 'agent_invocations', label: 'Invocations', color: '#a855f7' },
+  { dataKey: 'agent_invocations', label: 'Invocations', color: 'var(--chart-3)' },
 ];
-const TOOL_SERIES: readonly ChartSeries[] = [{ dataKey: 'tool_calls', label: 'Tool calls', color: '#f59e0b' }];
+const TOOL_SERIES: readonly ChartSeries[] = [{ dataKey: 'tool_calls', label: 'Tool calls', color: 'var(--chart-4)' }];
 
 const COUNT_COLUMNS: readonly ColumnSpec<LabelCount>[] = [
   { key: 'label', title: 'State', render: (row) => <StateBadge state={row.label} /> },
@@ -88,15 +89,7 @@ function StatsSkeleton(): React.ReactElement {
 }
 
 function SleepBadge({ sleeping }: { readonly sleeping: boolean }): React.ReactElement {
-  return sleeping ? (
-    <span className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
-      sleeping
-    </span>
-  ) : (
-    <span className="inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-      awake
-    </span>
-  );
+  return sleeping ? <ToneBadge tone="warning">sleeping</ToneBadge> : <ToneBadge tone="success">awake</ToneBadge>;
 }
 
 export default function OverviewPage(): React.ReactElement {

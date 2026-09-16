@@ -10,6 +10,7 @@ import {
   TableShell,
   TextFilter,
   TextValue,
+  ToneBadge,
 } from '@/components/business';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -25,15 +26,7 @@ function nonEmpty(value: string): string | undefined {
 }
 
 function ConfiguredBadge({ configured }: { readonly configured: boolean }): React.ReactElement {
-  return configured ? (
-    <span className="inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-emerald-700 dark:text-emerald-300">
-      yes
-    </span>
-  ) : (
-    <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium whitespace-nowrap text-muted-foreground">
-      disabled
-    </span>
-  );
+  return configured ? <ToneBadge tone="success">yes</ToneBadge> : <ToneBadge tone="neutral">disabled</ToneBadge>;
 }
 
 const SET_COLUMNS: readonly ColumnSpec<StickerSetEntry>[] = [

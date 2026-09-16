@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Info } from 'lucide-react';
 import { toast } from 'sonner';
-import { KvList, MonoValue } from '@/components/business';
+import { KvList, MonoValue, ToneBadge } from '@/components/business';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -98,13 +98,9 @@ export default function ModelPage(): React.ReactElement {
               {
                 label: 'Source',
                 value: switched ? (
-                  <span className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
-                    runtime switch
-                  </span>
+                  <ToneBadge tone="warning">runtime switch</ToneBadge>
                 ) : (
-                  <span className="inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-                    config default
-                  </span>
+                  <ToneBadge tone="success">config default</ToneBadge>
                 ),
               },
             ]}

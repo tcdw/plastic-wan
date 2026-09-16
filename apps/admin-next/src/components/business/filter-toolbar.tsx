@@ -111,8 +111,11 @@ export function SelectFilter<T extends string>({
       value={value ?? ALL_OPTION_VALUE}
       onValueChange={(next) => onChange(next === ALL_OPTION_VALUE ? undefined : (next as T))}
     >
-      <SelectTrigger className={cn('h-8 w-44', className)} aria-label={placeholder}>
-        <SelectValue placeholder={placeholder} />
+      <SelectTrigger size="sm" className={cn('w-44', className)} aria-label={placeholder}>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="text-muted-foreground">{placeholder}</span>
+          <SelectValue />
+        </span>
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={ALL_OPTION_VALUE}>All</SelectItem>

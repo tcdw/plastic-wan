@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import {
-  ChartCard,
+  ChartPanel,
   ConfirmDialog,
   StateBadge,
   TableShell,
@@ -11,7 +11,8 @@ import {
   type ColumnSpec,
 } from '@/components/business';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
+import { Panel } from '@/components/layout/panel';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cancelPendingSessions, type LabelCount, type UsageEntry, wakeBot } from '@/lib/api';
@@ -45,28 +46,43 @@ const USAGE_COLUMNS: readonly ColumnSpec<UsageEntry>[] = [
   { key: 'amount', title: 'Amount', align: 'right', render: (row) => formatNumber(row.amount) },
 ];
 
-function StatCard({ title, value }: { readonly title: string; readonly value: string }): React.ReactElement {
+/** Tables inside a flush panel keep only the top rule under the panel header. */
+const FLUSH_TABLE =
+  'rounded-none border-x-0 border-b-0 [&_td:first-child]:ps-6 [&_td:last-child]:pe-6 [&_th:first-child]:ps-6 [&_th:last-child]:pe-6';
+
+function Stat({ title, value }: { readonly title: string; readonly value: React.ReactNode }): React.ReactElement {
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-muted-foreground text-sm font-medium">{title}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="text-2xl font-bold">{value}</p>
-      </CardContent>
-    </Card>
+    <div className="space-y-1">
+      <dt className="text-muted-foreground text-sm">{title}</dt>
+      <dd className="text-3xl font-semibold tabular-nums">{value}</dd>
+    </div>
   );
 }
 
-function StatCardSkeleton(): React.ReactElement {
+function Field({
+  label,
+  children,
+}: {
+  readonly label: string;
+  readonly children: React.ReactNode;
+}): React.ReactElement {
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <Skeleton className="h-4 w-24" />
-      </CardHeader>
-      <CardContent>
-        <Skeleton className="h-8 w-16" />
-      </CardContent>
+    <div className="space-y-2">
+      <dt className="text-muted-foreground text-sm">{label}</dt>
+      <dd className="flex min-h-6 flex-col justify-center">{children}</dd>
+    </div>
+  );
+}
+
+function StatsSkeleton(): React.ReactElement {
+  return (
+    <Card className="grid gap-6 px-6 sm:grid-cols-3">
+      {[0, 1, 2].map((index) => (
+        <div key={index} className="space-y-2">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-9 w-16" />
+        </div>
+      ))}
     </Card>
   );
 }
@@ -127,13 +143,7 @@ export default function OverviewPage(): React.ReactElement {
   });
 
   if (isPending || data === undefined) {
-    return (
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <StatCardSkeleton />
-        <StatCardSkeleton />
-        <StatCardSkeleton />
-      </div>
-    );
+    return <StatsSkeleton />;
   }
 
   if (isError) {
@@ -151,19 +161,27 @@ export default function OverviewPage(): React.ReactElement {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <StatCard title="Invocations" value={formatNumber(totalInvocations)} />
-        <StatCard title="Stored messages" value={formatNumber(data.message_count)} />
-        <StatCard title="Cached media analyses" value={formatNumber(data.cached_analysis_count)} />
-      </div>
+      <Card className="px-6">
+        <dl className="grid gap-6 sm:grid-cols-3">
+          <Stat title="Invocations" value={formatNumber(totalInvocations)} />
+          <Stat title="Stored messages" value={formatNumber(data.message_count)} />
+          <Stat title="Cached media analyses" value={formatNumber(data.cached_analysis_count)} />
+        </dl>
+      </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Bot status</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Panel
+          title="Bot status"
+          action={
+            data.runtime_status.sleeping ? (
+              <Button type="button" size="sm" disabled={wake.isPending} onClick={() => setWakeOpen(true)}>
+                Wake now
+              </Button>
+            ) : null
+          }
+        >
+          <dl className="space-y-4">
+            <Field label="State">
               <div className="flex flex-wrap items-center gap-2">
                 <SleepBadge sleeping={data.runtime_status.sleeping} />
                 {data.runtime_status.sleep_until !== null ? (
@@ -172,18 +190,12 @@ export default function OverviewPage(): React.ReactElement {
                   </span>
                 ) : null}
               </div>
-              {data.runtime_status.sleeping ? (
-                <Button type="button" size="sm" disabled={wake.isPending} onClick={() => setWakeOpen(true)}>
-                  Wake now
-                </Button>
-              ) : null}
-            </div>
-            <div>
-              <p className="text-muted-foreground mb-1 text-xs">Administrator pauses</p>
+            </Field>
+            <Field label="Administrator pauses">
               {data.runtime_status.paused_chats.length === 0 ? (
-                <p className="text-muted-foreground text-sm">None</p>
+                <p className="text-sm opacity-60">None</p>
               ) : (
-                <ul className="space-y-1">
+                <ul className="space-y-2">
                   {data.runtime_status.paused_chats.map((chat) => (
                     <li key={chat.telegram_chat_id} className="flex flex-wrap items-baseline gap-x-2 text-sm">
                       <span className="font-medium">
@@ -194,108 +206,102 @@ export default function OverviewPage(): React.ReactElement {
                   ))}
                 </ul>
               )}
-            </div>
-          </CardContent>
-        </Card>
+            </Field>
+          </dl>
+        </Panel>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Operations</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-muted-foreground text-xs">Queued invocations</p>
-                <p className="text-xl font-semibold">{formatNumber(queuedInvocations)}</p>
-              </div>
-              <Button
-                type="button"
-                variant="destructive"
-                disabled={cancel.isPending}
-                onClick={() => setCancelOpen(true)}
-              >
-                Cancel pending
-              </Button>
-            </div>
-            <p className="text-muted-foreground text-xs">
-              Expires collecting/queued buckets and aborts queued invocations.
-            </p>
-          </CardContent>
-        </Card>
+        <Panel
+          title="Operations"
+          action={
+            <Button
+              type="button"
+              size="sm"
+              variant="destructive"
+              disabled={cancel.isPending}
+              onClick={() => setCancelOpen(true)}
+            >
+              Cancel pending
+            </Button>
+          }
+        >
+          <dl className="space-y-4">
+            <Field label="Queued invocations">
+              <p className="text-sm font-medium tabular-nums">{formatNumber(queuedInvocations)}</p>
+            </Field>
+            <Field label="Cancel pending">
+              <p className="text-sm">Expires collecting/queued buckets and aborts queued invocations.</p>
+            </Field>
+          </dl>
+        </Panel>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Invocation states</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <TableShell columns={COUNT_COLUMNS} data={data.invocation_states} rowKey={(row) => row.label} />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Configured sticker index states</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <TableShell columns={COUNT_COLUMNS} data={data.sticker_index_states} rowKey={(row) => row.label} />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Top tools</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <TableShell columns={TOOL_COLUMNS} data={data.top_tools} rowKey={(row) => row.label} />
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 px-4 pt-4 pb-1">
-          <CardTitle className="text-sm">Daily usage</CardTitle>
+      <Panel
+        title="Daily usage"
+        action={
           <Tabs value={String(days)} onValueChange={(value) => setDays(Number(value))}>
             <TabsList>
               <TabsTrigger value="7">7d</TabsTrigger>
               <TabsTrigger value="30">30d</TabsTrigger>
             </TabsList>
           </Tabs>
-        </CardHeader>
-        <CardContent className="px-2 pb-4">
-          {usagePending ? (
-            <Skeleton className="h-56 w-full" />
-          ) : usageError ? (
-            <p className="text-destructive px-4 text-sm break-words">{errorMessage(usageErrorValue)}</p>
-          ) : usage === undefined || chartData.length === 0 ? (
-            <p className="text-muted-foreground px-4 py-20 text-center text-sm">No usage data</p>
-          ) : (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <ChartCard title="Tokens">
-                <TimeSeriesChart data={chartData} series={TOKEN_SERIES} height={200} />
-              </ChartCard>
-              <ChartCard title="Invocations">
-                <TimeSeriesChart data={chartData} series={INVOCATION_SERIES} height={200} />
-              </ChartCard>
-              <ChartCard title="Tool calls">
-                <TimeSeriesChart data={chartData} series={TOOL_SERIES} height={200} />
-              </ChartCard>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        }
+      >
+        {usagePending ? (
+          <Skeleton className="h-56 w-full" />
+        ) : usageError ? (
+          <p className="text-destructive text-sm break-words">{errorMessage(usageErrorValue)}</p>
+        ) : usage === undefined || chartData.length === 0 ? (
+          <p className="text-muted-foreground py-20 text-center text-sm">No usage data</p>
+        ) : (
+          <div className="grid gap-8 md:grid-cols-2 xl:grid-cols-3">
+            <ChartPanel title="Tokens">
+              <TimeSeriesChart data={chartData} series={TOKEN_SERIES} height={200} />
+            </ChartPanel>
+            <ChartPanel title="Invocations">
+              <TimeSeriesChart data={chartData} series={INVOCATION_SERIES} height={200} />
+            </ChartPanel>
+            <ChartPanel title="Tool calls">
+              <TimeSeriesChart data={chartData} series={TOOL_SERIES} height={200} />
+            </ChartPanel>
+          </div>
+        )}
+      </Panel>
 
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Today&apos;s usage (UTC)</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Panel title="Invocation states" flush>
           <TableShell
-            columns={USAGE_COLUMNS}
-            data={data.daily_usage}
-            rowKey={(row) => `${row.resource}|${row.metric}|${row.scope}`}
+            columns={COUNT_COLUMNS}
+            data={data.invocation_states}
+            rowKey={(row) => row.label}
+            className={FLUSH_TABLE}
           />
-        </CardContent>
-      </Card>
+        </Panel>
+        <Panel title="Configured sticker index states" flush>
+          <TableShell
+            columns={COUNT_COLUMNS}
+            data={data.sticker_index_states}
+            rowKey={(row) => row.label}
+            className={FLUSH_TABLE}
+          />
+        </Panel>
+        <Panel title="Top tools" flush>
+          <TableShell
+            columns={TOOL_COLUMNS}
+            data={data.top_tools}
+            rowKey={(row) => row.label}
+            className={FLUSH_TABLE}
+          />
+        </Panel>
+      </div>
+
+      <Panel title="Today's usage (UTC)" flush>
+        <TableShell
+          columns={USAGE_COLUMNS}
+          data={data.daily_usage}
+          rowKey={(row) => `${row.resource}|${row.metric}|${row.scope}`}
+          className={FLUSH_TABLE}
+        />
+      </Panel>
 
       <p className="text-muted-foreground text-sm">Generated at {formatTime(data.generated_at)}</p>
 

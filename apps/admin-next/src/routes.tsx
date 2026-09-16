@@ -131,7 +131,7 @@ function AdminShell({ username }: { readonly username: string }): React.ReactEle
       <AppSidebar username={username} onSignOut={() => signOut.mutate()} />
       <SidebarInset>
         <Header />
-        <main className="flex flex-1 flex-col p-4 md:px-6">
+        <main className="flex flex-1 flex-col p-4 md:p-6">
           <Outlet />
         </main>
       </SidebarInset>

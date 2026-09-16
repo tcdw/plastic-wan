@@ -21,5 +21,5 @@ export { KvList, MonoValue, TextValue, type KvItem } from './kv-list';
 export { ConfirmDialog, type ConfirmDialogProps } from './confirm-dialog';
 export { DetailError, DetailSkeleton, type DetailErrorProps } from './detail-state';
 export { TableShell, type ColumnSpec, type TableShellProps } from './table-shell';
-export { ChartCard, TimeSeriesChart, type ChartDatum, type ChartSeries } from './chart-card';
+export { ChartPanel, TimeSeriesChart, type ChartDatum, type ChartSeries } from './chart-card';
 export { PrivateReasoningNote, PrivateReasoningTag } from './private-reasoning';

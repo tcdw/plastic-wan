@@ -1,21 +1,24 @@
 # ── Stage 1: Build admin panel + install production deps ────────
-FROM oven/bun:1.4-debian AS builder
+FROM node:24-bookworm-slim AS builder
 
 WORKDIR /app
 
+# pnpm 是包管理器；bun 仍是运行时（切换见 agent-doc/design/20260901 Bun 到 Node 迁移 Epic.md，Phase 5）
+RUN npm install --global pnpm@12.4.2
+
 # Cache layer: install deps before copying source
-COPY package.json bun.lock ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/admin-next/package.json ./apps/admin-next/
-RUN bun install --frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
 # Copy source and build admin panel
 COPY . .
-RUN bun run admin:build
+RUN pnpm run admin:build
 
 # Prune devDependencies — runtime only needs production deps
-RUN bun install --frozen-lockfile --production
+RUN pnpm install --prod --frozen-lockfile
 
-# ── Stage 2: Runtime ────────────────────────────────────────────
+# ── Stage 2: Runtime (Bun，Phase 5 切换 Node) ────────────────────
 FROM oven/bun:1.4-debian
 
 # Runtime system dependencies:

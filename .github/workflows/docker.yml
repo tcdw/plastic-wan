@@ -17,29 +17,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: bun run lint
+        run: pnpm run lint
 
       - name: TypeScript check
-        run: bun run check
+        run: pnpm run check
 
       - name: Tests
-        run: bun test
+        run: pnpm test
 
       - name: Build admin panel
-        run: bun run admin:build
+        run: pnpm run admin:build
 
       - name: Install Playwright chromium
-        run: bunx playwright install --with-deps chromium
+        run: pnpm --filter plasticwan-admin-next exec playwright install --with-deps chromium
 
       - name: Admin panel E2E
-        run: bun run admin:test:e2e
+        run: pnpm run admin:test:e2e
 
   build:
     runs-on: ubuntu-latest

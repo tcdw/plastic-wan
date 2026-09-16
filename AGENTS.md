@@ -90,20 +90,21 @@ Invocation 是运行窗口而不是一次问答：`agent.context.idle_grace_seco
 ## Build, Test, and Development Commands
 
 ```bash
-bun install
-bun run check
-bun test
+pnpm install
+pnpm run check
+pnpm test
 bun run src/cli.ts check-config --config dev-data/config.jsonc
 bun run src/cli.ts doctor --config dev-data/config.jsonc
 bun run src/cli.ts serve --config dev-data/config.jsonc
 bun run src/cli.ts backup --config dev-data/config.jsonc
 bun run src/cli.ts configure --config dev-data/config.jsonc
-bun run admin:build
-bun run admin:dev
+pnpm run admin:build
+pnpm run admin:dev
 ```
 
-- `bun run check`：严格 TypeScript 检查，不生成文件。
-- `bun test`：运行全部行为测试。
+- 包管理器为 pnpm（`pnpm-lock.yaml`）；测试运行器与 CLI 入口在迁移完成前仍由 Bun 执行（`bun test`、`bun run src/cli.ts …`），见 [agent-doc/design/20260901 Bun 到 Node 迁移 Epic.md](agent-doc/design/20260901%20Bun%20到%20Node%20迁移%20Epic.md)。
+- `pnpm run check`：严格 TypeScript 检查，不生成文件。
+- `pnpm test`：运行全部行为测试。
 - `check-config`：只验证 JSONC Schema、语义与引用，输出配置哈希。
 - `doctor`：执行 SQLite/Sharp/FFmpeg/Lottie、Provider、Vision、Telegram 与 required MCP 的真实探针。
 - `serve`：启动 Telegram long polling；配置只在启动时加载，不支持热重载。
@@ -125,7 +126,7 @@ bun run admin:dev
 - TypeScript ESM，运行时为 Bun；本地源码导入保留 `.ts` 后缀。
 - 2 空格缩进、分号、双引号、尾随逗号；沿用现有文件格式。
 - `strict`、`noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`、`noImplicitReturns` 必须保持通过。
-- `bun run lint` 需要保持通过，如果存在问题需要先使用 `bun run lint:fix` 进行自动修复，如果无法自动修复需要尝试进行手动修改。
+- `pnpm run lint` 需要保持通过，如果存在问题需要先使用 `pnpm run lint:fix` 进行自动修复，如果无法自动修复需要尝试进行手动修改。
 - 配置和外部响应在边界处使用 TypeBox 校验；不要把未经校验的 `unknown` 转成业务类型。
 - SQLite ID 使用 `bigint`；Telegram JSON 中需要字符串化的 ID 不得经过不安全 `number` 转换。
 - 业务查询走 `store.orm`（Drizzle 同步 API；表定义在 `src/store/schema.ts`，新增迁移必须同步更新）；`store.db` 仅限连接层、doctor 探针与测试验证断言。复杂 SQL 与 FTS5 用 `sql` 模板，值一律绑定参数。
@@ -141,7 +142,7 @@ bun run admin:dev
 - Provider/Telegram 单元测试使用现有 Faux 或 fixture；真实外部连接由 `doctor` 和人工 Telegram 验收覆盖。
 - 媒体改动至少覆盖静态图片、Sticker 结构化输出或外部转换链路中受影响的一项。
 - Context 改动至少断言 canonical history 的落盘状态（`context_messages` / `head_seq` / `context_refs`）与审计事件，不能只断言返回文本。
-- 最终验证至少运行受影响测试与 `bun run check`；跨模块改动运行完整 `bun test`。
+- 最终验证至少运行受影响测试与 `pnpm run check`；跨模块改动运行完整 `pnpm test`。
 
 ## Commit & Pull Request Guidelines
 

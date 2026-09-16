@@ -1,34 +1,34 @@
 # 验证
 
-本页记录 Plastic Wan 的验证层级。不要用单一 `bun test` 代替真实 Provider、Telegram 或媒体工具链验证，也不要把自然语言回复当作内部 Tool 成功证据。
+本页记录 Plastic Wan 的验证层级。不要用单一 `pnpm test` 代替真实 Provider、Telegram 或媒体工具链验证，也不要把自然语言回复当作内部 Tool 成功证据。
 
 ## 静态与单元验证
 
 ```bash
-bun run check
-bun test
+pnpm run check
+pnpm test
 ```
 
 按改动范围可先运行目标测试：
 
 ```bash
-bun test test/telegram-ingestion.test.ts test/startup-catch-up.test.ts test/participation.test.ts
-bun test test/scheduler.test.ts test/sleep.test.ts
-bun test test/context-store.test.ts test/context-gc.test.ts test/context-hot-inject.test.ts
-bun test test/context-send.test.ts test/cut-topic.test.ts
-bun test test/agent-runtime.test.ts test/model-request-audit.test.ts
-bun test test/skills.test.ts test/system-resources.test.ts
-bun test test/media.test.ts test/stickers.test.ts
-bun test test/mcp.test.ts test/web-fetch.test.ts
-bun test test/operations.test.ts test/foundation.test.ts test/schema.test.ts
-bun test test/admin.test.ts test/model-switch.test.ts
-bun test test/bot-commands.test.ts
-bun test test/memory.test.ts
-bun test test/alarm.test.ts test/alarm-internal-context.test.ts
-bun test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-configure.test.ts
+pnpm test test/telegram-ingestion.test.ts test/startup-catch-up.test.ts test/participation.test.ts
+pnpm test test/scheduler.test.ts test/sleep.test.ts
+pnpm test test/context-store.test.ts test/context-gc.test.ts test/context-hot-inject.test.ts
+pnpm test test/context-send.test.ts test/cut-topic.test.ts
+pnpm test test/agent-runtime.test.ts test/model-request-audit.test.ts
+pnpm test test/skills.test.ts test/system-resources.test.ts
+pnpm test test/media.test.ts test/stickers.test.ts
+pnpm test test/mcp.test.ts test/web-fetch.test.ts
+pnpm test test/operations.test.ts test/foundation.test.ts test/schema.test.ts
+pnpm test test/admin.test.ts test/model-switch.test.ts
+pnpm test test/bot-commands.test.ts
+pnpm test test/memory.test.ts
+pnpm test test/alarm.test.ts test/alarm-internal-context.test.ts
+pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-configure.test.ts
 ```
 
-上面的命令按改动范围组织；新增测试文件时同步补充对应命令与下表契约。完整测试集以 `test/*.test.ts` 为准，`bun test` 运行全部测试。
+上面的命令按改动范围组织；新增测试文件时同步补充对应命令与下表契约。完整测试集以 `test/*.test.ts` 为准，`pnpm test` 运行全部测试（测试运行器在迁移完成前仍为 bun）。
 
 | 测试 | 主要契约 |
 | --- | --- |
@@ -110,7 +110,7 @@ Doctor 成功只证明连接与最小能力，不证明真实群聊调度、Repl
 ## Admin Panel 冒烟
 
 ```bash
-bun run admin:build   # 产出 apps/admin-next/dist
+pnpm run admin:build   # 产出 apps/admin-next/dist
 bun run src/cli.ts serve --config dev-data/config.jsonc
 ```
 
@@ -136,9 +136,9 @@ bun run src/cli.ts serve --config dev-data/config.jsonc
 ### Admin Panel 浏览器 E2E
 
 ```bash
-bun run admin:build        # 前置：E2E 驱动已构建的 dist（真实静态托管）
-bunx playwright install chromium   # 首次运行前安装 Chromium（Linux CI 用 --with-deps）
-bun run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.ts）
+pnpm run admin:build        # 前置：E2E 驱动已构建的 dist（真实静态托管）
+pnpm --filter plasticwan-admin-next exec playwright install chromium   # 首次运行前安装 Chromium（Linux CI 用 --with-deps）
+pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.ts）
 ```
 
 - **真实后端夹具**：`globalSetup` 派生一个 Bun 子进程运行 `apps/admin-next/e2e/server.ts`，
@@ -179,7 +179,7 @@ bun run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.ts
      `script-src 'self'` / `connect-src 'self'`）、无 console error / pageerror /
      CSP violation，且全部请求同源（有外部请求即失败）。
 
-- 首次运行 E2E 前需要 `bunx playwright install chromium`；浏览器安装失败时套件无法
+- 首次运行 E2E 前需要 `pnpm --filter plasticwan-admin-next exec playwright install chromium`；浏览器安装失败时套件无法
   执行，属于环境前置问题而非代码缺陷。
 
 ## 真实 Telegram 验收
@@ -305,8 +305,8 @@ telegram_updates
 
 ```bash
 git diff --check
-bun run check
-bun test
+pnpm run check
+pnpm test
 ```
 
 最终报告应精确写明：

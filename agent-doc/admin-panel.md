@@ -78,9 +78,9 @@ SQLite `bigint` ID 在 JSON 中字符串化，Token/计数等小整数转 `numbe
 ## 前端
 
 ```bash
-bun run admin:build   # 生成 apps/admin-next/dist，供 serve 托管
-bun run admin:dev     # Vite dev server，监听 127.0.0.1:5273，/api 代理到 ADMIN_API_TARGET
-bun run admin:test:e2e  # Playwright 浏览器 E2E（真实 AdminServer + 临时 SQLite + 合成数据）
+pnpm run admin:build   # 生成 apps/admin-next/dist，供 serve 托管
+pnpm run admin:dev     # Vite dev server，监听 127.0.0.1:5273，/api 代理到 ADMIN_API_TARGET
+pnpm run admin:test:e2e  # Playwright 浏览器 E2E（真实 AdminServer + 临时 SQLite + 合成数据）
 ```
 
 `ADMIN_API_TARGET` 默认 `http://127.0.0.1:8787`。开发代理只把 Origin 精确等于

@@ -33,7 +33,7 @@ Linux/macOS 要求 `lottie_convert.py` 本身在服务 PATH 中（`pip --user` �
 
 ```bash
 cd ~/Projects/plasticwan
-bun install
+pnpm install
 
 export GOOGLE_API_KEY="<rotated-key>"
 bun run src/cli.ts check-config --config dev-data/config.jsonc
@@ -145,7 +145,7 @@ bun run src/cli.ts doctor --config dev-data/config.jsonc --output-agent-prompt
 
 1. 确认 `admin.enabled = true` 且已重启 `serve`。
 2. 启动日志中应有一条 `admin_started`，`host`/`port` 与配置一致。
-3. 页面返回 503 `admin_bundle_missing`：先 `bun run admin:build`（产出 `apps/admin-next/dist`），或修正 `static_dir`；容器/本地排障对照启动日志里的默认目录路径。
+3. 页面返回 503 `admin_bundle_missing`：先 `pnpm run admin:build`（产出 `apps/admin-next/dist`），或修正 `static_dir`；容器/本地排障对照启动日志里的默认目录路径。
 4. 忘记密码时没有恢复入口：删除 `admin_users` 行会重新进入首次初始化流程；这是写操作，只能在停止 `serve` 后手动执行。
 5. 登录返回 429 `too_many_attempts`：同一用户名连续 10 次失败后锁定 15 分钟，重启 `serve` 会清空内存计数。
 
@@ -170,13 +170,13 @@ bun run src/cli.ts backup --config dev-data/config.jsonc
 
 `.github/workflows/docker.yml` 在推送 `develop` 分支和 `v*` tag 时构建 `linux/amd64` 与 `linux/arm64` 镜像并推送到 `ghcr.io/tcdw/plasticwan`：`develop` 产出 `nightly` 与 `develop` tag，`v*` 产出 `latest` 与 semver tag。
 
-镜像结构（`Dockerfile`，基于 `oven/bun:1.4-debian` 两阶段）：
+镜像结构（`Dockerfile`，builder 基于 `node:24-bookworm-slim` + pnpm，runtime 基于 `oven/bun:1.4-debian` 两阶段；Bun 作为运行时保留到迁移 Phase 5）：
 
-- builder 阶段 `bun install --frozen-lockfile` → `bun run admin:build` → 再以 `--production` 剪掉 devDependencies。
+- builder 阶段 `pnpm install --frozen-lockfile` → `pnpm run admin:build` → 再以 `pnpm install --prod --frozen-lockfile` 剪掉 devDependencies。
 - runtime 阶段用 apt 装 `ffmpeg`（含 `ffprobe`）、`python3` 与 `gosu`，再 pip 装 `lottie`；因此**不需要**在宿主机准备任何媒体依赖。
 - 只复制 `src/`、`node_modules/`、`apps/admin-next/dist/`、`apps/admin-next/LICENSE`、`apps/admin-next/NOTICE` 和 `package.json`。`deploy/`、`test/`、`agent-doc/`、`dev-data/` 被 `.dockerignore` 排除，镜像里没有这些目录。
 - Admin 前端已经构建进 `/app/apps/admin-next/dist`，与 `static_dir` 默认值一致，无需额外配置。前端模板许可（MIT，© Kiranism）随 `LICENSE` 保留，字体（@fontsource，SIL OFL 1.1）说明在 `NOTICE`。
-- CI（`.github/workflows/docker.yml`）在构建镜像前先跑 `verify` job：`bun install --frozen-lockfile` → `bun run lint` → `bun run check` → `bun test` → `bun run admin:build` → `bunx playwright install --with-deps chromium` → `bun run admin:test:e2e`，通过后 `build` job 才推送 `linux/amd64` 与 `linux/arm64`。
+- CI（`.github/workflows/docker.yml`）在构建镜像前先跑 `verify` job：`pnpm install --frozen-lockfile` → `pnpm run lint` → `pnpm run check` → `pnpm test` → `pnpm run admin:build` → `pnpm --filter plasticwan-admin-next exec playwright install --with-deps chromium` → `pnpm run admin:test:e2e`，通过后 `build` job 才推送 `linux/amd64` 与 `linux/arm64`。
 
 运行约定：
 

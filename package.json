@@ -3,19 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@12.4.2",
   "bin": {
     "plasticwan": "./src/cli.ts"
   },
-  "workspaces": [
-    "apps/*"
-  ],
   "scripts": {
-    "check": "tsc --noEmit && bun run --filter plasticwan-admin-next check",
+    "check": "tsc --noEmit && pnpm --filter plasticwan-admin-next run check",
     "test": "bun test",
     "start": "bun run src/cli.ts serve",
-    "admin:dev": "bun run --filter plasticwan-admin-next dev",
-    "admin:build": "bun run --filter plasticwan-admin-next build",
-    "admin:test:e2e": "bun run --filter plasticwan-admin-next test:e2e",
+    "admin:dev": "pnpm --filter plasticwan-admin-next run dev",
+    "admin:build": "pnpm --filter plasticwan-admin-next run build",
+    "admin:test:e2e": "pnpm --filter plasticwan-admin-next run test:e2e",
     "lint": "biome lint . && biome format .",
     "lint:fix": "biome lint --write --unsafe . && biome format --write ."
   },

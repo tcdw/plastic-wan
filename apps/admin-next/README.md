@@ -8,18 +8,18 @@ Router/Query + Tailwind 4 + shadcn/Base UI），由后端 `AdminServer`（`serve
 ## 命令
 
 ```bash
-bun run check                 # TypeScript 严格检查（tsc --noEmit）
-bun run build                 # 产出 dist/（静态 SPA）
-bun run dev                   # Vite dev server，监听 127.0.0.1:5273
-bun run test:e2e              # Playwright 浏览器 E2E（见下文）
+pnpm --filter plasticwan-admin-next run check   # TypeScript 严格检查（tsc --noEmit）
+pnpm --filter plasticwan-admin-next run build   # 产出 dist/（静态 SPA）
+pnpm --filter plasticwan-admin-next run dev     # Vite dev server，监听 127.0.0.1:5273
+pnpm --filter plasticwan-admin-next run test:e2e # Playwright 浏览器 E2E（见下文）
 ```
 
-- `bun run dev` 会把 `/api` 代理到 `ADMIN_API_TARGET`（默认
+- `pnpm --filter plasticwan-admin-next run dev` 会把 `/api` 代理到 `ADMIN_API_TARGET`（默认
   `http://127.0.0.1:8787`），仅当浏览器 Origin 精确等于
   `http://localhost:5273` / `http://127.0.0.1:5273` 时才重写 Origin 为目标的
   origin；其它 Origin 原样转发，由后端拒绝。
 - 生产环境不需要 `ADMIN_API_TARGET`：`serve` 在同源托管静态文件与 `/api`。
-- Lint/格式检查走仓库根目录的 Biome（`bunx biome check apps/admin-next`）。
+- Lint/格式检查走仓库根目录的 Biome（`pnpm exec biome check apps/admin-next`）。
 
 ## 安全约定
 
@@ -38,9 +38,9 @@ bun run test:e2e              # Playwright 浏览器 E2E（见下文）
 ## E2E 测试
 
 ```bash
-bun run admin:build                       # 前置：E2E 驱动已构建的 dist
-bunx playwright install chromium          # 首次运行前安装 Chromium
-bun run admin:test:e2e                    # 或在本目录 bun run test:e2e
+pnpm run admin:build                       # 前置：E2E 驱动已构建的 dist
+pnpm --filter plasticwan-admin-next exec playwright install chromium  # 首次运行前安装 Chromium
+pnpm run admin:test:e2e                    # 或在本目录 pnpm --filter plasticwan-admin-next run test:e2e
 ```
 
 Playwright 套件位于 `e2e/**/*.e2e.ts`（文件名不以 `.test.ts` 结尾，`bun test`

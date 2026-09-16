@@ -20,6 +20,8 @@
 
 > 2026-09-17 复核：Phase 1 与 Phase 3 仍未开始（无 `pnpm-workspace.yaml`；`src/` 仍有 `Bun.file`×12、`Bun.password`×4、`Bun.write`×4、`Bun.spawn`×3、`Bun.serve`×2 等，`bun:test` 30 个测试文件）。下表文件清单未随之重核，执行前以 `grep -rn "Bun\.\|bun:"` 为准。
 >
+> 2026-09-17 更新：**Phase 1 已完成**（pnpm monorepo，见下方状态标记；`src/` 的 Bun 依赖面复核数不变）。下一步进入 Phase 3（运行时无关化，每项独立提交）。
+>
 > 2026-09-04 状态速览：Phase 0 部分完成（drizzle-orm 已锁定）、**Phase 2 已完成**、Phase 1/3–6 未开始。下一步是 Phase 1（pnpm monorepo）或直接进入 Phase 3（运行时无关化，每项独立提交）。
 
 | 类别 | 位置 |
@@ -58,12 +60,13 @@
   - 2026-09-01：`drizzle-orm@^0.45.2` 已安装锁定（随 Phase 2 提前完成）；其余四项待 Phase 3 启动时安装。
 - [ ] 确认目标 Node 版本下限（type stripping 默认开启的版本）写入 `engines`。
 
-### Phase 1 — pnpm monorepo（运行时仍为 Bun）
+### Phase 1 — pnpm monorepo（运行时仍为 Bun）✅（2026-09-17 完成）
 
-- [ ] 新增 `pnpm-workspace.yaml`（`apps/*`），删除根 `package.json` 的 `workspaces`。
-- [ ] 脚本改造：`bun run --filter plasticwan-admin <cmd>` → `pnpm --filter plasticwan-admin run <cmd>`；根脚本改用 pnpm 直接调 `tsc`/`biome`/`vitest`/`node src/cli.ts`（切换前临时仍可用 bun 执行入口）。
-- [ ] 锁文件切换为 `pnpm-lock.yaml`；CI/deploy 文档同步安装命令。
-- 验收：`pnpm install && pnpm build` 通过；`serve` 在 Bun 下照常启动。
+- [x] 新增 `pnpm-workspace.yaml`（`apps/*`），删除根 `package.json` 的 `workspaces`，并新增 `packageManager: "pnpm@12.4.2"`。
+- [x] 脚本改造：`bun run --filter plasticwan-admin-next <cmd>` → `pnpm --filter plasticwan-admin-next run <cmd>`（`admin:dev`/`admin:build`/`admin:test:e2e`）；根 `check` 改为 `tsc --noEmit && pnpm --filter …`；`lint` 直接调 `biome`。`test`/`start` 与 CLI 入口暂保持 bun，随 Phase 3.7/Phase 5 切换。
+- [x] 锁文件切换为 `pnpm-lock.yaml`（删除 `bun.lock`）。pnpm 12 默认拦截依赖 build scripts，`pnpm-workspace.yaml` 用 `allowBuilds` 显式放行 `@google/genai`、`esbuild`、`protobufjs`（与迁移前 bun 时代行为对齐，非新增执行面）。
+- [x] CI/deploy 同步：`Dockerfile` builder 阶段改为 `node:24-bookworm-slim` + `npm i -g pnpm@12.4.2` → `pnpm install --frozen-lockfile` → `pnpm run admin:build` → `pnpm install --prod --frozen-lockfile`；runtime 阶段保持 `oven/bun:1.4-debian`（Phase 5 切 Node）；`.github/workflows/docker.yml` 改用 `pnpm/action-setup@v4` + `actions/setup-node@v4`（cache: pnpm），命令全部 pnpm 化；`AGENTS.md` 与 `agent-doc/`（operations/verification/data-layer/admin-panel）的安装与脚本命令同步。systemd 单元与 `docker-entrypoint.sh` 的 `bun run` 保持不变（运行时切换属于 Phase 5）。
+- 验收：✅ 2026-09-17 本地实测 `pnpm install`、`pnpm run check`（根 + admin 两段 tsc）、`pnpm run lint`（biome 190 文件）、`pnpm test`（304/304，33 文件，Bun 在 pnpm 布局下照常）、`pnpm run admin:build` 全绿；`serve` 在 Bun 下照常启动（`serve_started` 的 `config_hash` 与 `check-config` 一致，冒烟后已停）。Docker 镜像构建未在本地验证（无 Docker 环境），由 CI `verify`/`build` job 覆盖。
 
 ### Phase 2 — 数据访问层：bun:sqlite + Drizzle ✅（2026-09-01 完成）
 

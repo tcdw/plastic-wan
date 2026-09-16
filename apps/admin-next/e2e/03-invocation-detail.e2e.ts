@@ -49,9 +49,13 @@ test.describe('completed invocation (4001)', () => {
     await overview.getByText('View details').first().click();
     await expect(overview.getByText('Last API request payload')).toBeVisible();
     await expect(overview.getByText('Last API response status')).toBeVisible();
-    // Oversized payloads keep their JSON tree behind a second lazy disclosure.
+    // Both payloads keep their JSON tree behind a second lazy disclosure; the
+    // request payload comes first and carries context_messages.
     await expect(overview.getByText('context_messages')).toHaveCount(0);
-    await overview.getByText(/Payload \(\d+ chars\) — click to expand/).click();
+    await overview
+      .getByText(/Payload \(\d+ chars\) — click to expand/)
+      .first()
+      .click();
     await expect(overview.getByText('context_messages')).toBeVisible();
   });
 

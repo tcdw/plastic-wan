@@ -87,6 +87,7 @@ command SecretRef：
 规则：
 
 - `bucket_window_seconds` 是全局 Agent 会话节拍，单位秒，示例值为 15。`0` 表示有新消息时不额外延迟，但不会创建空会话。每个 `collecting` Bucket 的 deadline 是 `max(第一条消息时刻, 该 Conversation 上一轮结束时刻) + 一个节拍`：Agent 空闲时就是消息自身加一个节拍，消息在上一轮运行期间到达时则从该轮结束起算，与 Invocation 的创建/结束时刻无关；同一时刻每个群最多一个 Agent 会话（按 Chat 串行），未到期的批次不会被提前消费，运行中的批次也不会在轮中途被交出。若该 Conversation 已有 running Invocation，到期且已空闲的 Bucket 会挂到这个运行中的 Invocation 上（不再新开会话）并注入其 transcript；运行结束后是否继续等待下一个 Bucket 由 `agent.context.idle_grace_seconds` 决定，见「Conversation Context」。
+- `process_bot_messages` 控制是否处理其他 Bot 的消息。`false` 时其他 Bot 的新消息与编辑只保留 Update 审计，完全不入库。`true` 时它们会入库，但永远不能创建 Bucket、命中 participation 触发或刷新注意力窗口：已有 collecting Bucket 时直接加入；否则暂存，等下一条真人消息创建 Bucket 时，按 Telegram 时间顺序排在该真人消息之前一并收入（仅收未进过任何 Bucket、晚于该 Conversation 上一个 Bucket 起点、且在 `/cut_topic` 截断之后的最新 `agent.history_messages` 条）。这样两个 Bot 无法互相唤醒形成死循环。自己发送的 Update 始终忽略。
 - `sticker_trigger_enabled` 可选，默认 `false`。关闭时，单独收到的人类 Sticker 仍会持久化，但不会创建 Bucket 或触发 Invocation；已有 collecting Bucket 时仍会加入。设为 `true` 后，单独的 Sticker 可以创建 Bucket。
 - 消息收集仍按 Conversation 隔离：Forum Topic 各自收集、Context 互不混入，只是 Agent 会话在群内串行。
 - Chat ID 必须是非零安全整数且不可重复。

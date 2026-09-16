@@ -352,6 +352,67 @@ describe('Telegram ingestion', () => {
     enabled.store.close();
   });
 
+  test('holds other bots messages until a human opens the next bucket', async () => {
+    const botUpdate = (updateId: number, messageId: number): Update => ({
+      update_id: updateId,
+      message: {
+        message_id: messageId,
+        date: 1_700_000_000 + messageId,
+        chat: { id: 123456789, type: 'supergroup', title: 'Group' },
+        from: { id: 77, is_bot: true, first_name: 'OtherBot' },
+        text: `beep ${messageId}`,
+      },
+    });
+    const bucketRows = (store: SqliteStore) =>
+      store.db
+        .query<{ bucket_id: bigint; sequence_no: bigint; telegram_message_id: bigint }, []>(
+          `SELECT bm.bucket_id, bm.sequence_no, m.telegram_message_id
+           FROM bucket_messages bm JOIN messages m ON m.id = bm.message_id
+           ORDER BY bm.bucket_id, bm.sequence_no`,
+        )
+        .all();
+
+    const disabled = await setup();
+    expect(disabled.ingestion.ingest(botUpdate(1, 10))).toEqual({});
+    expect(disabled.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(
+      0n,
+    );
+    disabled.store.close();
+
+    const { store, ingestion } = await setup((config) => {
+      config.telegram.process_bot_messages = true;
+    });
+    const first = ingestion.ingest(botUpdate(1, 10));
+    expect(first.messageId).toBeDefined();
+    expect(first.bucketId).toBeUndefined();
+    expect(ingestion.ingest(botUpdate(2, 11)).bucketId).toBeUndefined();
+    expect(bucketRows(store)).toEqual([]);
+
+    const human = ingestion.ingest(groupTextUpdate(3, 12, 42));
+    expect(human.bucketId).toBeDefined();
+    const bucketId = human.bucketId ?? 0n;
+    // A bot message while the bucket is collecting simply joins it.
+    expect(ingestion.ingest(botUpdate(4, 13)).bucketId).toBe(bucketId);
+    expect(bucketRows(store)).toEqual([
+      { bucket_id: bucketId, sequence_no: 1n, telegram_message_id: 10n },
+      { bucket_id: bucketId, sequence_no: 2n, telegram_message_id: 11n },
+      { bucket_id: bucketId, sequence_no: 3n, telegram_message_id: 12n },
+      { bucket_id: bucketId, sequence_no: 4n, telegram_message_id: 13n },
+    ]);
+
+    // Once that bucket is consumed, later bot messages wait for the next human
+    // and are adopted exactly once.
+    store.db.run("UPDATE buckets SET state = 'running'");
+    expect(ingestion.ingest(botUpdate(5, 14)).bucketId).toBeUndefined();
+    const next = ingestion.ingest(groupTextUpdate(6, 15, 42));
+    expect(next.bucketId).toBeDefined();
+    expect(bucketRows(store).filter((row) => row.bucket_id === next.bucketId)).toEqual([
+      { bucket_id: next.bucketId ?? 0n, sequence_no: 1n, telegram_message_id: 14n },
+      { bucket_id: next.bucketId ?? 0n, sequence_no: 2n, telegram_message_id: 15n },
+    ]);
+    store.close();
+  });
+
   test('keeps ordinary supergroup reply threads in the main conversation', async () => {
     const { store, ingestion } = await setup();
     const chat = { id: 123456789, type: 'supergroup' as const, title: 'Group' };

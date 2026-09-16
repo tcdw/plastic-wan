@@ -506,6 +506,7 @@ export class TelegramIngestion {
         throw new Error('buckets insert returned no row');
       }
       bucketId = created.id;
+      this.#adoptPendingBotMessages(conversation.id, bucketId);
     }
     const sequence = this.#store.orm
       .all<{ next_sequence: bigint }>(
@@ -525,6 +526,39 @@ export class TelegramIngestion {
       })
       .run();
     return bucketId;
+  }
+
+  /**
+   * Other bots' messages never open a bucket, so two bots cannot keep each
+   * other awake. The ones that arrived while nothing was collecting wait here
+   * until a human opens the next bucket, which takes them in ahead of itself
+   * so the model sees them as part of the same new batch.
+   */
+  #adoptPendingBotMessages(conversationId: bigint, bucketId: bigint): void {
+    const pending = this.#store.orm
+      .all<{ id: bigint }>(
+        sql`SELECT m.id
+         FROM messages m
+         JOIN conversations v ON v.id = m.conversation_id
+         JOIN message_revisions r ON r.id = m.current_revision_id
+         JOIN senders s ON s.id = r.sender_id
+         WHERE m.conversation_id = ${conversationId} AND m.visible = 1 AND m.sent_by_bot = 0 AND s.is_bot = 1
+           AND NOT EXISTS (SELECT 1 FROM bucket_messages bm WHERE bm.message_id = m.id)
+           AND m.received_at >= COALESCE(
+             (SELECT MAX(first_received_at) FROM buckets WHERE conversation_id = ${conversationId} AND id <> ${bucketId}),
+             '')
+           AND (v.chat_id NOT IN (SELECT chat_id FROM chat_context_cutoffs)
+                OR m.telegram_message_id > (SELECT telegram_message_id FROM chat_context_cutoffs WHERE chat_id = v.chat_id))
+         ORDER BY m.telegram_date DESC, m.telegram_message_id DESC
+         LIMIT ${BigInt(this.#config.agent.history_messages)}`,
+      )
+      .reverse();
+    for (const [index, row] of pending.entries()) {
+      this.#store.orm
+        .insert(bucketMessages)
+        .values({ bucketId, messageId: row.id, sequenceNo: BigInt(index + 1), sourceBucketId: bucketId })
+        .run();
+    }
   }
 }
 

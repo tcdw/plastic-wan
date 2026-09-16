@@ -16,7 +16,7 @@
 2. Chat ID 是否在 `telegram.chats`。
 3. Forum Topic 是否在可选 `topic_ids`。
 4. 消息的 `message.from.id` 是否命中当前 Chat 的 `ignored_user_ids`。
-5. 消息是否来自 Bot/Service，以及 `process_bot_messages` 是否允许。
+5. 消息是否来自 Bot/Service，以及 `process_bot_messages` 是否允许；允许的其他 Bot 消息只能随真人消息进入 Bucket，见配置文档。
 6. 单独的人类 Sticker 是否允许按 `sticker_trigger_enabled` 创建 Bucket；该开关默认关闭。
 7. Message/Edited Message 结构是否可归一化。
 8. 配置了 `participation` 的 Chat 在活跃时段外是否被这类消息命中触发，见「定时活跃与注意力窗口」。

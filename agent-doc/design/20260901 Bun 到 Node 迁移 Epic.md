@@ -4,12 +4,22 @@
 
 ## 背景与目标
 
+- 动机（2026-09-17 补记）：塑料碗后续要同时支持服务端部署与桌面安装版，桌面壳倾向 Electron（评估过 Electrobun，更信赖 Electron 的成熟度）。Electron main / utilityProcess 均为 Node，本迁移是桌面版的前置条件；因此迁移中的选型除服务端外，还须能在 Electron 自带的 Node 中运行（原生模块 ABI、`node:sqlite` 可用性见风险登记）。
 - 目标运行时：Node.js（≥22.18 或 24 LTS，type stripping 默认开启，直接执行 `.ts`，不引入 tsx）。
 - 策略：先在 Bun 上把所有 Bun 专有面替换为运行时无关实现，让「切换运行时」收敛为一次微小变更；SQLite 采用两段式——先 `bun:sqlite + Drizzle`，切换时刻再换 `node:sqlite + Drizzle`。
 - 不变式：全程保持 `bun run check` / 测试绿色；不出现双轨兼容层或隐藏 fallback；Telegram ID 全程 `bigint`。
+- 迁移期间新代码不再引入 `Bun.*` / `bun:*` API，避免扩大 Phase 3 范围。
+
+### 后续依赖本迁移的工作（暂缓）
+
+- **Admin Panel 图形化配置编辑**：以图形界面修改 `config.jsonc`，写入后重启生效（不做热重载）。依赖 Phase 3.2（`jsonc-parser` 的 `modify`/`applyEdits` 保留注释写回）与 3.5（新配置 API 直接写在 Hono 上），迁移完成后再立项。
+- **Host / Runtime 拆分**：常驻 Host（配置服务 + 生命周期 + Admin Panel）与可重启 Runtime（scheduler/Telegram/MCP），服务端进程内实现、桌面端映射到 Electron main + utilityProcess。需先切断 `AdminServer` 对 `scheduler`/`modelSwitcher` 的直接持有（`src/application.ts`）。
+- **Electron 桌面壳**：打包、签名/公证、FFmpeg/Lottie 按平台分发。
 
 ## 当前 Bun 依赖面（2026-08 盘点；2026-09-04 重新核对全表）
 
+> 2026-09-17 复核：Phase 1 与 Phase 3 仍未开始（无 `pnpm-workspace.yaml`；`src/` 仍有 `Bun.file`×12、`Bun.password`×4、`Bun.write`×4、`Bun.spawn`×3、`Bun.serve`×2 等，`bun:test` 30 个测试文件）。下表文件清单未随之重核，执行前以 `grep -rn "Bun\.\|bun:"` 为准。
+>
 > 2026-09-04 状态速览：Phase 0 部分完成（drizzle-orm 已锁定）、**Phase 2 已完成**、Phase 1/3–6 未开始。下一步是 Phase 1（pnpm monorepo）或直接进入 Phase 3（运行时无关化，每项独立提交）。
 
 | 类别 | 位置 |
@@ -108,6 +118,8 @@
 | Hono 与 Bun.serve 行为差（idleTimeout、请求体上限、错误响应形状） | Admin Panel 可用性 | Phase 3 用现有 admin 测试 + 手动面板冒烟覆盖 |
 | drizzle bun-sqlite 驱动维护节奏 | Phase 2–5 过渡期维护负担 | 过渡期短；驱动仅一处引用，随时可切 |
 | nodenext 解析下依赖子路径类型差异 | `check` 失败 | Phase 4 独立成阶段，失败即回退 Bundler 并排查具体包 |
+| Electron 自带 Node 的 `node:sqlite` 可用性/稳定性未核实 | 桌面版数据层需改驱动 | 桌面壳 spike 时验证；不可用则 better-sqlite3 + 针对 Electron ABI 重建 |
+| 原生模块（`sharp`、`@node-rs/argon2`）在 Electron 打包后加载 | 桌面版媒体/登录不可用 | 优先 N-API 预编译包；asar unpack；spike 时三平台冒烟 |
 
 ## 验证矩阵（Phase 5 验收最低集）
 

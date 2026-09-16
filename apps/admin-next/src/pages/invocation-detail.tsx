@@ -413,10 +413,10 @@ function ModelCallCard({ model }: { readonly model: ModelCallEntry }): React.Rea
             </div>
           ) : null}
           {model.request_json !== null ? (
-            <JsonViewer value={model.request_json} title="Last API request payload" />
+            <JsonViewer value={model.request_json} initiallyCollapsed title="Last API request payload" />
           ) : null}
           {model.response_json !== null ? (
-            <JsonViewer value={model.response_json} title="Last API response status" />
+            <JsonViewer value={model.response_json} initiallyCollapsed title="Last API response status" />
           ) : null}
         </LazyDetails>
       ) : null}

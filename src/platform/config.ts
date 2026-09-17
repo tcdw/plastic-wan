@@ -11,7 +11,6 @@ import { validatePromptTemplate } from './prompt-template.ts';
 const Strict = { additionalProperties: false } as const;
 const PositiveInteger = Type.Integer({ minimum: 1 });
 const NonNegativeNumber = Type.Number({ minimum: 0 });
-const ADMIN_HOSTS = ['127.0.0.1', '::1', 'localhost'];
 const SecretRefSchema = Type.Union([
   Type.String({ minLength: 1 }),
   Type.Object({ env: Type.String({ pattern: '^[A-Za-z_][A-Za-z0-9_]*$' }) }, Strict),
@@ -488,11 +487,6 @@ function validateSemantics(config: FileConfig): void {
         }
       }
     }
-  }
-  if (config.admin !== undefined && !ADMIN_HOSTS.includes(config.admin.host)) {
-    throw new Error(
-      `admin.host must be a loopback address (${ADMIN_HOSTS.join(', ')}); place a reverse proxy in front for remote access`,
-    );
   }
 }
 

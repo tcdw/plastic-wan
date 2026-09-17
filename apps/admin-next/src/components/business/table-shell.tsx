@@ -12,6 +12,10 @@ import { cn } from '@/lib/utils';
  * the API contract is keyset cursors only.
  */
 
+/** Standalone list-page table: a card surface whose cell insets match the card edge. */
+export const LIST_TABLE_CLASS =
+  'bg-card rounded-xl shadow-xs [&_td:first-child]:ps-4 [&_td:last-child]:pe-4 [&_th]:text-muted-foreground [&_th:first-child]:ps-4 [&_th:last-child]:pe-4';
+
 export interface ColumnSpec<T> {
   readonly key: string;
   readonly title: string;

@@ -566,17 +566,11 @@ test('context API exposes conversation contexts read-only', async () => {
     const byChat = await readJson(await server.handle(request('/api/contexts?chat=123456789', { headers })));
     expect(byChat.items).toHaveLength(2);
     expect((await readJson(await server.handle(request('/api/contexts?chat=999', { headers })))).items).toHaveLength(0);
-    const byConversation = await readJson(
-      await server.handle(request(`/api/contexts?conversation=${second.id}`, { headers })),
+    // `search` and `conversation` are not context filters; unknown parameters are ignored.
+    const unfiltered = await readJson(
+      await server.handle(request(`/api/contexts?search=absent-title&conversation=${second.id}`, { headers })),
     );
-    expect(byConversation.items).toHaveLength(1);
-    expect(byConversation.items[0].conversation_id).toBe(second.id.toString());
-    const searched = await readJson(await server.handle(request('/api/contexts?search=absent-title', { headers })));
-    expect(searched.items).toHaveLength(0);
-    store.db.query("UPDATE chats SET title = 'Owner Chat', username = 'owner_chat'").run();
-    const matched = await readJson(await server.handle(request('/api/contexts?search=owner_chat', { headers })));
-    expect(matched.items).toHaveLength(2);
-    expect(matched.items[0]).toMatchObject({ chat_title: 'Owner Chat' });
+    expect(unfiltered.items).toHaveLength(2);
     const badChat = await server.handle(request('/api/contexts?chat=abc', { headers }));
     expect(badChat.status).toBe(400);
     expect(await readJson(badChat)).toMatchObject({ error: 'invalid_chat' });

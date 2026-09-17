@@ -69,18 +69,10 @@ test.describe('contexts list', () => {
     await expect(rows).toHaveCount(27);
   });
 
-  test('conversation filter keeps only the seeded conversation', async ({ page }) => {
+  test('chat filter empties the list for an unknown chat', async ({ page }) => {
     await page.goto(await adminUrl('/contexts'));
-    await page.getByRole('textbox', { name: 'Conversation ID' }).fill('2001');
-    await page.getByRole('textbox', { name: 'Conversation ID' }).press('Enter');
-    await expect(tableBodyRows(page)).toHaveCount(1);
-    await expect(page.locator('table tbody tr', { hasText: '2001' })).toHaveCount(1);
-  });
-
-  test('search empties the list for an absent title', async ({ page }) => {
-    await page.goto(await adminUrl('/contexts'));
-    await page.getByRole('textbox', { name: 'Chat title or username' }).fill('absent-title');
-    await page.getByRole('textbox', { name: 'Chat title or username' }).press('Enter');
+    await page.getByRole('combobox', { name: 'Chat', exact: true }).fill('999999999');
+    await page.getByRole('combobox', { name: 'Chat', exact: true }).press('Enter');
     await expect(page.getByText('No conversation contexts', { exact: true })).toBeVisible();
   });
 });

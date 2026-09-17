@@ -1,20 +1,34 @@
 import { Link } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
-import { ChatFilter, type ColumnSpec, CursorList, FilterToolbar, TableShell, TextFilter } from '@/components/business';
+import {
+  ChatFilter,
+  type ColumnSpec,
+  CursorList,
+  FilterToolbar,
+  LIST_TABLE_CLASS,
+  TableShell,
+} from '@/components/business';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import type { ConversationContextListItem } from '@/lib/api';
 import { formatNumber, formatTime } from '@/lib/format';
 import { conversationContextsQuery } from '@/lib/queries';
 
-/** TextFilter commits a trimmed string; an empty commit means "no filter". */
-function nonEmpty(value: string): string | undefined {
-  return value.length > 0 ? value : undefined;
-}
+const ID_LINK =
+  'decoration-border hover:decoration-foreground font-medium tabular-nums underline underline-offset-4 transition-colors';
 
 const COLUMNS: readonly ColumnSpec<ConversationContextListItem>[] = [
   {
+    key: 'conversation',
+    title: 'ID',
+    render: (row) => (
+      <Link to="/contexts/$conversationId" params={{ conversationId: row.conversation_id }} className={ID_LINK}>
+        {row.conversation_id}
+      </Link>
+    ),
+  },
+  {
     key: 'chat',
-    title: 'Chat/Topic',
+    title: 'Chat',
     className: 'min-w-48',
     render: (row) => (
       <div className="min-w-0 space-y-0.5">
@@ -27,81 +41,60 @@ const COLUMNS: readonly ColumnSpec<ConversationContextListItem>[] = [
     ),
   },
   {
-    key: 'conversation',
-    title: 'Conversation',
-    render: (row) => (
-      <Link
-        to="/contexts/$conversationId"
-        params={{ conversationId: row.conversation_id }}
-        className="font-mono text-xs break-all underline-offset-4 hover:underline"
-      >
-        {row.conversation_id}
-      </Link>
-    ),
-  },
-  {
     key: 'window',
     title: 'Seq window',
-    render: (row) => (
-      <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
-        {row.head_seq}–{row.next_seq}
-      </code>
-    ),
+    className: 'tabular-nums',
+    render: (row) => `${row.head_seq}–${row.next_seq}`,
   },
   {
     key: 'message_count',
     title: 'Messages',
     align: 'right',
+    className: 'tabular-nums',
     render: (row) => formatNumber(row.message_count),
   },
   {
     key: 'send_count_total',
     title: 'Sends',
     align: 'right',
+    className: 'tabular-nums',
     render: (row) => formatNumber(row.send_count_total),
   },
-  { key: 'last_active_at', title: 'Last active', render: (row) => formatTime(row.last_active_at) },
-  { key: 'last_gc_at', title: 'Last GC', render: (row) => formatTime(row.last_gc_at) },
   {
     key: 'active_invocation',
     title: 'Active session',
+    className: 'ps-6',
     render: (row) =>
       row.active_invocation_id === null ? (
         <span className="text-muted-foreground">—</span>
       ) : (
-        <Link
-          to="/invocations/$invocationId"
-          params={{ invocationId: row.active_invocation_id }}
-          className="font-mono text-xs break-all underline-offset-4 hover:underline"
-        >
-          Tool session {row.active_invocation_id}
+        <Link to="/invocations/$invocationId" params={{ invocationId: row.active_invocation_id }} className={ID_LINK}>
+          {row.active_invocation_id}
         </Link>
       ),
+  },
+  {
+    key: 'last_active_at',
+    title: 'Last active',
+    className: 'text-muted-foreground',
+    render: (row) => formatTime(row.last_active_at),
+  },
+  {
+    key: 'last_gc_at',
+    title: 'Last GC',
+    className: 'text-muted-foreground',
+    render: (row) => formatTime(row.last_gc_at),
   },
 ];
 
 export default function ContextsPage(): React.ReactElement {
-  const [search, setSearch] = useState<string | undefined>(undefined);
   const [chat, setChat] = useState<string | undefined>(undefined);
-  const [conversation, setConversation] = useState<string | undefined>(undefined);
-  const filters = useMemo(() => ({ search, chat, conversation }), [search, chat, conversation]);
+  const filters = useMemo(() => ({ chat }), [chat]);
 
   return (
     <div className="space-y-4">
       <FilterToolbar>
-        <TextFilter
-          placeholder="Chat title or username"
-          value={search}
-          onCommit={(value) => setSearch(nonEmpty(value))}
-          onClear={() => setSearch(undefined)}
-        />
         <ChatFilter value={chat} onChange={setChat} />
-        <TextFilter
-          placeholder="Conversation ID"
-          value={conversation}
-          onCommit={(value) => setConversation(nonEmpty(value))}
-          onClear={() => setConversation(undefined)}
-        />
       </FilterToolbar>
       <CursorList
         factory={conversationContextsQuery}
@@ -119,7 +112,7 @@ export default function ContextsPage(): React.ReactElement {
             columns={COLUMNS}
             data={items}
             rowKey={(row) => row.conversation_id}
-            className="max-w-full overflow-x-auto"
+            className={LIST_TABLE_CLASS}
           />
         )}
       />

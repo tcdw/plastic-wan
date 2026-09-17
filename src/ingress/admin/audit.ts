@@ -42,7 +42,6 @@ export interface ListQuery {
   readonly set?: string | null;
   readonly search?: string | null;
   readonly target?: string | null;
-  readonly conversation?: string | null;
 }
 
 export class AdminQueryError extends Error {
@@ -209,20 +208,8 @@ export function listConversationContexts(orm: Orm, query: ListQuery): Page<Recor
   const limit = parseLimit(query.limit);
   const conditions: SQL[] = [];
   const chatId = optionalFilter(query.chat);
-  const conversationId = optionalFilter(query.conversation);
-  const search = optionalFilter(query.search);
   if (chatId !== undefined) {
     conditions.push(eq(chats.telegramChatId, parseId(chatId, 'chat')));
-  }
-  if (conversationId !== undefined) {
-    conditions.push(eq(conversationContexts.conversationId, parseId(conversationId, 'conversation')));
-  }
-  if (search !== undefined) {
-    if (search.length > MAX_SEARCH_LENGTH) {
-      throw new AdminQueryError('invalid_search', 'Search text is too long');
-    }
-    const like = `%${search.replace(/[\\%_]/g, (match) => `\\${match}`)}%`;
-    conditions.push(sql`(${chats.title} LIKE ${like} ESCAPE '\\' OR ${chats.username} LIKE ${like} ESCAPE '\\')`);
   }
   const cursor = optionalFilter(query.cursor);
   if (cursor !== undefined) {

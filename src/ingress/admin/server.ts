@@ -225,7 +225,6 @@ export class AdminServer {
       set: url.searchParams.get('set'),
       search: url.searchParams.get('search'),
       target: url.searchParams.get('target'),
-      conversation: url.searchParams.get('conversation'),
     };
     if (route === 'memories' && request.method === 'GET') {
       return json(listMemories(this.#store.orm, query, this.#memoryWarningDays));

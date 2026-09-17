@@ -446,7 +446,6 @@ export interface ListFilters {
   readonly set?: string | undefined;
   readonly search?: string | undefined;
   readonly target?: string | undefined;
-  readonly conversation?: string | undefined;
 }
 
 export interface Credentials {
@@ -484,7 +483,7 @@ function listPath(path: string, filters: ListFilters): string {
   if (filters.cursor !== undefined && filters.cursor !== null) {
     params.set('cursor', filters.cursor);
   }
-  for (const key of ['state', 'chat', 'set', 'search', 'target', 'conversation'] as const) {
+  for (const key of ['state', 'chat', 'set', 'search', 'target'] as const) {
     const value = filters[key];
     if (value !== undefined && value.length > 0) {
       params.set(key, value);

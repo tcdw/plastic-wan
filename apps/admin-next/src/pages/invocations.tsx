@@ -4,6 +4,7 @@ import {
   ChatFilter,
   CursorList,
   FilterToolbar,
+  LIST_TABLE_CLASS,
   SelectFilter,
   StateBadge,
   TableShell,
@@ -22,9 +23,6 @@ const INVOCATION_STATES = [
   'outcome_unknown',
   'skipped_budget',
 ] as const;
-
-const LIST_TABLE =
-  'bg-card rounded-xl shadow-xs [&_td:first-child]:ps-4 [&_td:last-child]:pe-4 [&_th]:text-muted-foreground [&_th:first-child]:ps-4 [&_th:last-child]:pe-4';
 
 const COLUMNS: readonly ColumnSpec<InvocationListItem>[] = [
   {
@@ -127,7 +125,7 @@ export default function InvocationsPage(): React.ReactElement {
         factory={invocationsQuery}
         filters={filters}
         renderItems={(items) => (
-          <TableShell columns={COLUMNS} data={items} rowKey={(row) => row.id} className={LIST_TABLE} />
+          <TableShell columns={COLUMNS} data={items} rowKey={(row) => row.id} className={LIST_TABLE_CLASS} />
         )}
       />
     </div>

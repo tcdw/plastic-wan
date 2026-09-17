@@ -1,5 +1,6 @@
 import { access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { serve, type ServerType } from '@hono/node-server';
 import type { FileConfig, RawConfig } from '../src/platform/config.ts';
 import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from '../src/platform/system-resources.ts';
 import type {
@@ -259,6 +260,26 @@ export async function pathExists(path: string): Promise<boolean> {
     () => true,
     () => false,
   );
+}
+
+/** Local loopback fixture server on a random port, replacing the former Bun.serve test fixtures. */
+export async function startFixtureServer(
+  fetch: (request: Request) => Response | Promise<Response>,
+): Promise<{ server: ServerType; port: number }> {
+  const server = serve({ hostname: '127.0.0.1', port: 0, fetch });
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    await stopFixtureServer(server);
+    throw new Error('Fixture server did not report a listening address');
+  }
+  return { server, port: address.port };
+}
+
+export async function stopFixtureServer(server: ServerType): Promise<void> {
+  if ('closeAllConnections' in server) {
+    server.closeAllConnections();
+  }
+  await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
 export async function writeTestConfig(

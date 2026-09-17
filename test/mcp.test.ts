@@ -12,7 +12,13 @@ import { McpManager } from '../src/capabilities/mcp.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { renderInvocationContext, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import {
+  renderInvocationContext,
+  startFixtureServer,
+  stopFixtureServer,
+  testConfigJsonc,
+  writeTestConfig,
+} from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -143,19 +149,15 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
     sessionIdGenerator: () => crypto.randomUUID(),
   });
   await server.connect(transport);
-  const http = Bun.serve({
-    hostname: '127.0.0.1',
-    port: 0,
-    fetch: (request) => {
-      const url = new URL(request.url);
-      if (url.searchParams.get('api_key') !== 'public-key') {
-        return new Response('unauthorized', { status: 401 });
-      }
-      if (request.headers.get('authorization') !== 'Bearer static-secret') {
-        return new Response('unauthorized', { status: 401 });
-      }
-      return transport.handleRequest(request);
-    },
+  const http = await startFixtureServer((request) => {
+    const url = new URL(request.url);
+    if (url.searchParams.get('api_key') !== 'public-key') {
+      return new Response('unauthorized', { status: 401 });
+    }
+    if (request.headers.get('authorization') !== 'Bearer static-secret') {
+      return new Response('unauthorized', { status: 401 });
+    }
+    return transport.handleRequest(request);
   });
   const jsonc = testConfigJsonc(directory, (config) => {
     config.mcp = {
@@ -226,17 +228,13 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
     expect(text.text).toContain('value:answer');
   } finally {
     await manager.stop();
-    http.stop(true);
+    await stopFixtureServer(http.server);
     await server.close();
     store.close();
   }
 
   const redirectConfigPath = join(directory, 'redirect.jsonc');
-  const redirect = Bun.serve({
-    hostname: '127.0.0.1',
-    port: 0,
-    fetch: () => Response.redirect('http://127.0.0.1/', 302),
-  });
+  const redirect = await startFixtureServer(() => Response.redirect('http://127.0.0.1/', 302));
   try {
     const redirectJsonc = testConfigJsonc(directory, (config) => {
       config.mcp = {
@@ -279,6 +277,6 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
       redirectStore.close();
     }
   } finally {
-    redirect.stop(true);
+    await stopFixtureServer(redirect.server);
   }
 });

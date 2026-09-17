@@ -14,7 +14,7 @@ import {
 } from '../src/tui/models-dev.ts';
 import { fetchProviderModels, modelsEndpoint } from '../src/tui/provider-models.ts';
 import { filterSearchChoices } from '../src/tui/provider-wizard.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { startFixtureServer, stopFixtureServer, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -118,28 +118,24 @@ describe('provider wizard discovery', () => {
     let observedPath = '';
     let observedAuthorization = '';
     let observedRoute = '';
-    const server = Bun.serve({
-      hostname: '127.0.0.1',
-      port: 0,
-      fetch(request) {
-        observedPath = new URL(request.url).pathname;
-        observedAuthorization = request.headers.get('authorization') ?? '';
-        observedRoute = request.headers.get('x-route') ?? '';
-        if (observedPath === '/invalid/models') {
-          return Response.json({ models: [] });
-        }
-        return Response.json({
-          object: 'list',
-          data: [
-            { id: 'zeta', object: 'model' },
-            { id: 'alpha', name: 'Alpha', object: 'model' },
-            { id: 'zeta', object: 'model' },
-          ],
-        });
-      },
+    const server = await startFixtureServer((request) => {
+      observedPath = new URL(request.url).pathname;
+      observedAuthorization = request.headers.get('authorization') ?? '';
+      observedRoute = request.headers.get('x-route') ?? '';
+      if (observedPath === '/invalid/models') {
+        return Response.json({ models: [] });
+      }
+      return Response.json({
+        object: 'list',
+        data: [
+          { id: 'zeta', object: 'model' },
+          { id: 'alpha', name: 'Alpha', object: 'model' },
+          { id: 'zeta', object: 'model' },
+        ],
+      });
     });
     try {
-      const baseUrl = server.url.toString().replace(/\/$/, '');
+      const baseUrl = `http://127.0.0.1:${server.port}`;
       const models = await fetchProviderModels(
         {
           baseUrl: `${baseUrl}/v1`,
@@ -165,7 +161,7 @@ describe('provider wizard discovery', () => {
         ),
       ).rejects.toThrow('invalid OpenAI models response');
     } finally {
-      await server.stop(true);
+      await stopFixtureServer(server.server);
     }
   });
 });

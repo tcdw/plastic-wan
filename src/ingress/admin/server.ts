@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
-import type { Server } from 'bun';
+import { serve, type ServerType } from '@hono/node-server';
 import type { RawConfig } from '../../platform/config.ts';
 import type { SqliteStore } from '../../store/database.ts';
 import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from '../../context/memory.ts';
@@ -81,7 +81,7 @@ export class AdminServer {
   readonly #modelSwitcher: AgentModelSwitcher | undefined;
   readonly #staticDir: string;
   readonly #memoryWarningDays: number;
-  #server: Server<undefined> | undefined;
+  #server: ServerType | undefined;
 
   constructor(options: AdminServerOptions) {
     const admin = options.config.admin;
@@ -105,14 +105,24 @@ export class AdminServer {
       throw new Error('Admin server is already listening');
     }
     this.#auth.purgeExpired();
-    const server = Bun.serve({
+    const server = serve({
+      fetch: (request) => this.handle(request),
       hostname: this.#admin.host,
       port: this.#admin.port,
-      idleTimeout: 30,
-      fetch: (request) => this.handle(request),
+      serverOptions: {
+        // Bun.serve's idleTimeout (seconds) mapped to the Node equivalents:
+        // idle header waiting and idle keep-alive sockets are cut at 30s,
+        // while slow but actively streaming responses are not interrupted.
+        headersTimeout: 30_000,
+        keepAliveTimeout: 30_000,
+      },
     });
     this.#server = server;
-    return { hostname: server.hostname ?? this.#admin.host, port: server.port ?? this.#admin.port };
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('Admin server did not report a listening address');
+    }
+    return { hostname: address.address, port: address.port };
   }
 
   async stop(): Promise<void> {
@@ -121,7 +131,7 @@ export class AdminServer {
     if (server === undefined) {
       return;
     }
-    await server.stop(true);
+    await closeServer(server);
   }
 
   async handle(request: Request): Promise<Response> {
@@ -400,6 +410,15 @@ function json(body: unknown, status = 200, cookie?: string): Response {
     headers.set('set-cookie', cookie);
   }
   return new Response(JSON.stringify(body), { status, headers });
+}
+
+function closeServer(server: ServerType): Promise<void> {
+  // Only the plain HTTP server variant exposes closeAllConnections; the
+  // adaptor never creates HTTP/2 servers in this project.
+  if ('closeAllConnections' in server) {
+    server.closeAllConnections();
+  }
+  return new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
 function asset(body: Buffer, path: string): Response {

@@ -2,12 +2,12 @@ import type { Api, Model, Models } from '@earendil-works/pi-ai';
 import type { RawConfig } from './config.ts';
 
 export class ModelSwitchError extends Error {
-  constructor(
-    readonly code: 'unknown_provider' | 'unknown_model' | 'not_text_capable',
-    message: string,
-  ) {
+  readonly code: 'unknown_provider' | 'unknown_model' | 'not_text_capable';
+
+  constructor(code: 'unknown_provider' | 'unknown_model' | 'not_text_capable', message: string) {
     super(message);
     this.name = 'ModelSwitchError';
+    this.code = code;
   }
 }
 

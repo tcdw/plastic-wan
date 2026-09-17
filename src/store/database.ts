@@ -427,7 +427,7 @@ async function rotateBackups(backupDir: string, keep: number): Promise<void> {
 }
 
 async function loadMigrations(): Promise<Migration[]> {
-  const directory = join(import.meta.dir, 'migrations');
+  const directory = join(import.meta.dirname, 'migrations');
   const names = (await readdir(directory)).filter((name) => /^\d{3}_[a-z0-9_]+\.sql$/.test(name)).sort();
   const migrations: Migration[] = [];
   for (const name of names) {

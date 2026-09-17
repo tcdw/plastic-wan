@@ -124,6 +124,8 @@ pnpm run admin:dev
 ## Coding Style & Naming Conventions
 
 - TypeScript ESM，运行时为 Bun；本地源码导入保留 `.ts` 后缀。
+- 源码必须是 Node type stripping 可擦除语法：禁 `enum`、`namespace`、构造器参数属性（`constructor(private x: T)`）与 `import x = require()`。`tsconfig.json` 的 `erasableSyntaxOnly` + `module: "nodenext"` 让 `pnpm check` 在评审时强制这条；Node type stripping 本身不读 tsconfig，只认可擦除语法。
+- 只用 Node 与 Bun 共有的运行时 API；目录定位用 `import.meta.dirname`（不要用 Bun 专有的 `import.meta.dir`）。
 - 2 空格缩进、分号、双引号、尾随逗号；沿用现有文件格式。
 - `strict`、`noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`、`noImplicitReturns` 必须保持通过。
 - `pnpm run lint` 需要保持通过，如果存在问题需要先使用 `pnpm run lint:fix` 进行自动修复，如果无法自动修复需要尝试进行手动修改。

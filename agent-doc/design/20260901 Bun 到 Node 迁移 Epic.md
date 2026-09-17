@@ -24,6 +24,8 @@
 >
 > 2026-09-17 晚间更新：**Phase 3 已完成**（含 `apps/admin-next/e2e/server.ts` 与 `apps/admin-next/src/lib/*.test.ts` 两处盘点遗漏的补全；剩余 Bun 引用收敛为 `bun:sqlite` import ×3（doctor/database/scrub 脚本）、`drizzle-orm/bun-sqlite` driver、shebang、`@types/bun` 与历史性注释，全部属 Phase 4/5 范围）。下一步 Phase 4（tsconfig 与 type stripping 审计；root tsconfig 已顺带纳入 `vitest.config.ts`）。
 >
+> 2026-09-17 深夜更新：**Phase 4 已完成**。原计划只是改 tsconfig 加"已核验"记录，实际核验推翻了原文结论——仓库有 4 处构造器参数属性（不可擦除语法）与 5 处 Bun 专有的 `import.meta.dir`，均已修复；`erasableSyntaxOnly` 已固化为持续闸门。下一步 Phase 5（切换运行时到 Node + `node:sqlite`）。
+>
 > 2026-09-04 状态速览：Phase 0 部分完成（drizzle-orm 已锁定）、**Phase 2 已完成**、Phase 1/3–6 未开始。下一步是 Phase 1（pnpm monorepo）或直接进入 Phase 3（运行时无关化，每项独立提交）。
 
 | 类别 | 位置 |
@@ -94,13 +96,23 @@
 - 出口条件：✅ 达成。除 `drizzle-orm/bun-sqlite` driver、`bun:sqlite` import ×3（`database.ts`/`doctor.ts`/`scripts/scrub-model-request-images.ts`，Phase 5）、shebang、`@types/bun` 外，仓库（src/test/scripts/apps/vitest.config）零 Bun 代码引用；剩余匹配均为历史性注释。**盘点遗漏补全**：`apps/admin-next/e2e/server.ts`（Bun.serve）与 `apps/admin-next/src/lib/*.test.ts` ×3（bun:test，贡献 27 个测试）不在原盘点内，已随子项 5/7 一并迁移。
 - 验收：✅ 每项经独立验收 agent 审查通过；全量 `pnpm test` 305/305（33 文件）、`pnpm run check`、`pnpm run lint` 全绿；`check-config` config_hash 与迁移前逐字一致；doctor 的 ffmpeg/ffprobe/lottie 子进程探针在新 spawn 实现下通过；admin e2e 80/80（Playwright 真实浏览器全链路，含存量 hash 登录路径外的面板冒烟）。Argon2 存量账号的**真实浏览器登录**留人工验收。
 
-### Phase 4 — tsconfig 与 Node type stripping 审计
+### Phase 4 — tsconfig 与 Node type stripping 审计 ✅（2026-09-17 完成）
 
-- [ ] `moduleResolution: "Bundler"` → `"nodenext"`，`module: "nodenext"`；删除 `"types": ["bun"]`。
-- [ ] 保留 `allowImportingTsExtensions`（仓库已强制相对导入带 `.ts` 后缀，天然满足 Node strip-types 要求）；no-emit 行为由 `package.json` 的 `tsc --noEmit` 脚本维持，tsconfig 无 `noEmit` 键。
-- [ ] 已核验：src/test 无 `enum`/`namespace`/构造器参数属性（不可擦除语法）；将此作为评审守则记录。
-- [ ] 注意：Node type stripping 不读 tsconfig，只要求可擦除语法；`tsc --noEmit` 仍是类型闸门。
-- 验收：`pnpm check` 在新 tsconfig 下通过（重点观察依赖 export map 在 nodenext 解析下的差异）。
+- [x] `moduleResolution: "Bundler"` → `"nodenext"`，`module: "nodenext"`；删除 `"types": ["bun"]`（`@types/bun` 仍在 devDependencies，靠 `node_modules/@types` 默认自动包含继续为 `bun:sqlite` 提供类型，Phase 5 移除时才真正消失）。依赖 export map 在 nodenext 解析下**零差异**，未触发回退预案。
+- [x] 保留 `allowImportingTsExtensions`（仓库已强制相对导入带 `.ts` 后缀，天然满足 Node strip-types 要求）；no-emit 行为由 `package.json` 的 `tsc --noEmit` 脚本维持，tsconfig 无 `noEmit` 键。
+- [x] 新增 `erasableSyntaxOnly: true`：把"评审守则"变成 `pnpm check` 的机器闸门（实测能报 TS1294）。原计划只写"核验 + 记录"，但核验结论与原文不符（见下），单靠文档守则不足以防止回退。
+- [x] 新增 `isolatedModules: true`（实测零错误、零改动）：Node strip-types 是逐文件转换，它与 `erasableSyntaxOnly` 一起覆盖单文件转换的两类陷阱（不可擦除语法 / 跨文件类型 re-export）。
+- [x] **核验推翻原文结论**：原文称"src/test 无 enum/namespace/构造器参数属性"，实际存在 4 处**构造器参数属性**（Node strip 模式报 `TypeScript parameter property is not supported in strip-only mode`）：
+  - `capabilities/web-fetch.ts`（`WebFetchError.code`）、`platform/model-switch.ts`（`ModelSwitchError.code`）、`platform/system-resources.ts`（`SystemResourceError.code`）：改为显式 `readonly` 字段 + 构造器赋值。
+  - `platform/concurrency.ts`（`AsyncSemaphore` 的 `private readonly onIdle?`）：改为 `#onIdle` 私有字段 + 构造器赋值（`exactOptionalPropertyTypes` 下字段类型写 `T | undefined`）。
+- [x] **Phase 3 遗漏补全**：`import.meta.dir`（Bun 专有，Node 下为 `undefined`，`join(undefined, …)` 抛 `ERR_INVALID_ARG_TYPE`）5 处 → `import.meta.dirname`：`platform/system-resources.ts`、`store/database.ts`、`ingress/admin/server.ts`、`test/mcp.test.ts`、`apps/admin-next/e2e/server.ts`。
+- [x] 守则记录到 `AGENTS.md` Coding Style：禁不可擦除语法（enum/namespace/构造器参数属性/`import x = require()`），只用 Node 与 Bun 共有的运行时 API。
+- [x] 注意（已记录）：Node type stripping 不读 tsconfig，只要求可擦除语法；`tsc --noEmit` 仍是类型闸门。
+- 审计证据（本机 Node v26.5.0，脚本未入库）：
+  - `module.stripTypeScriptTypes(code, { mode: 'strip' })` 遍历 `src/`、`test/`、`scripts/`、`apps/admin-next/{src,e2e}`、`vitest.config.ts` 共 120 个 `.ts`：0 失败。
+  - 真实模块图加载：mock `bun:sqlite` 后逐个 `import()` 全部 59 个 `src/**/*.ts`：0 失败——除 Phase 5 要换的 SQLite 驱动外，src 已可被 Node 直接加载。
+- 验收：✅ `pnpm run check`（root + admin 两段 tsc）、`pnpm run lint`、`pnpm test` 305/305（33 文件）全绿。
+- Phase 5 提示：`apps/admin-next/tsconfig.json` 仍写 `types: ["vite/client", "bun"]`，`e2e/server.ts` 的 Node 类型目前由 bun-types 提供；Phase 5 移除 `@types/bun` 时需同步换 `@types/node`，否则 admin 段 `tsc` 会报 TS2688。
 
 ### Phase 5 — 切换运行时：Node.js + node:sqlite（单次小步）
 
@@ -129,7 +141,7 @@
 | drizzle bun-sqlite 驱动维护节奏 | Phase 2–5 过渡期维护负担 | 过渡期短；驱动仅一处引用，随时可切 |
 | Hono 与 Bun.serve 行为差（传输层 body 上限、headers 后 body 停滞无空闲切断、端口占用报错变钝） | Admin Panel 可用性 | Phase 3 验收记录：Bun.serve 的 128MB 传输上限与 idle 断开在 node-server 无直接对应；回环绑定缓解，低风险。端口占用时 start() 抛通用错、真实原因走 stderr 未处理 error 事件——未来可在 null-address 分支挂一次性 error listener 改善可诊断性 |
 | Bun 1.4 的 `node:sqlite` close 后 Windows 句柄需 GC 释放 | 过渡期测试临时目录泄漏（EBUSY） | 仅影响 `operations.test.ts` 的 afterAll 清理（已容错 + 注释）；Phase 5 切 Node 后自然消失（Node close 即释放） |
-| nodenext 解析下依赖子路径类型差异 | `check` 失败 | Phase 4 独立成阶段，失败即回退 Bundler 并排查具体包 |
+| nodenext 解析下依赖子路径类型差异 | `check` 失败 | ✅ Phase 4 实测零差异，未触发回退 |
 | Electron 自带 Node 的 `node:sqlite` 可用性/稳定性未核实 | 桌面版数据层需改驱动 | 桌面壳 spike 时验证；不可用则 better-sqlite3 + 针对 Electron ABI 重建 |
 | 原生模块（`sharp`、`@node-rs/argon2`）在 Electron 打包后加载 | 桌面版媒体/登录不可用 | 优先 N-API 预编译包；asar unpack；spike 时三平台冒烟 |
 

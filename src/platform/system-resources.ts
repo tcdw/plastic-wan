@@ -15,7 +15,7 @@ import { truncateUtf8 } from './truncate.ts';
 export const SYSTEM_URI_PREFIX = 'system:///';
 export const SYSTEM_RESOURCE_MAX_BYTES = 32_768;
 /** Content root shipped inside the repository; Docker copies src/ verbatim. */
-export const BUNDLED_SYSTEM_RESOURCES_DIR = join(import.meta.dir, '..', 'system-resources');
+export const BUNDLED_SYSTEM_RESOURCES_DIR = join(import.meta.dirname, '..', 'system-resources');
 
 const SKILL_NAME_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 const SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -42,11 +42,11 @@ export interface SystemResourceText {
 }
 
 export class SystemResourceError extends Error {
-  constructor(
-    readonly code: 'invalid_uri' | 'resource_not_found' | 'unsupported_resource',
-    message: string,
-  ) {
+  readonly code: 'invalid_uri' | 'resource_not_found' | 'unsupported_resource';
+
+  constructor(code: 'invalid_uri' | 'resource_not_found' | 'unsupported_resource', message: string) {
     super(message);
+    this.code = code;
   }
 }
 

@@ -9,18 +9,17 @@ interface Waiter {
 
 export class AsyncSemaphore {
   readonly #limit: number;
+  readonly #onIdle: ((semaphore: AsyncSemaphore) => void) | undefined;
   readonly #waiters: Waiter[] = [];
   #active = 0;
   #sequence = 0;
 
-  constructor(
-    limit: number,
-    private readonly onIdle?: (semaphore: AsyncSemaphore) => void,
-  ) {
+  constructor(limit: number, onIdle?: (semaphore: AsyncSemaphore) => void) {
     if (!Number.isInteger(limit) || limit < 1) {
       throw new Error('Semaphore limit must be a positive integer');
     }
     this.#limit = limit;
+    this.#onIdle = onIdle;
   }
 
   acquire(signal: AbortSignal, priority = 0): Promise<() => void> {
@@ -68,7 +67,7 @@ export class AsyncSemaphore {
 
   #notifyIdle(): void {
     if (this.#active === 0 && this.#waiters.length === 0) {
-      this.onIdle?.(this);
+      this.#onIdle?.(this);
     }
   }
 }

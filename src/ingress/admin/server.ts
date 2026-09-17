@@ -95,7 +95,7 @@ export class AdminServer {
     this.#scheduler = options.scheduler;
     this.#modelSwitcher = options.modelSwitcher;
     this.#staticDir = resolve(
-      admin.static_dir ?? join(import.meta.dir, '..', '..', '..', 'apps', 'admin-next', 'dist'),
+      admin.static_dir ?? join(import.meta.dirname, '..', '..', '..', 'apps', 'admin-next', 'dist'),
     );
     this.#memoryWarningDays = options.config.agent.memory_ttl_warning_days ?? DEFAULT_MEMORY_TTL_WARNING_DAYS;
   }

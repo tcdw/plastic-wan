@@ -32,7 +32,7 @@ test('stdio MCP discovery, result bounds, audit, and unmetered repeat calls', as
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-mcp-'));
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
-  const fixturePath = join(import.meta.dir, 'fixtures', 'mcp-server.ts');
+  const fixturePath = join(import.meta.dirname, 'fixtures', 'mcp-server.ts');
   const jsonc = testConfigJsonc(directory, (config) => {
     config.mcp = {
       servers: [

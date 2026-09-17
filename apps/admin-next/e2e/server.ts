@@ -140,7 +140,7 @@ async function handleHook(request: Request, url: URL): Promise<Response> {
 async function main(): Promise<void> {
   directory = await mkdtemp(join(tmpdir(), 'plasticwan-admin-e2e-'));
   const configPath = join(directory, 'config.jsonc');
-  const staticDir = resolve(join(import.meta.dir, '..', 'dist'));
+  const staticDir = resolve(join(import.meta.dirname, '..', 'dist'));
   await writeTestConfig(
     directory,
     configPath,

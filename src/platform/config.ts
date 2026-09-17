@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { parse as parseJsonc, printParseErrorCode, type ParseError } from 'jsonc-parser';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import type { TLocalizedValidationError } from 'typebox/error';
@@ -272,14 +273,32 @@ export interface LoadedConfig {
 
 const validator = Compile(ConfigSchema);
 
+function describeOffset(source: string, offset: number): string {
+  let line = 0;
+  let lineStart = 0;
+  for (let index = 0; index < offset && index < source.length; index += 1) {
+    if (source.charCodeAt(index) === 0x0a) {
+      line += 1;
+      lineStart = index + 1;
+    }
+  }
+  return `line ${line + 1}, column ${offset - lineStart + 1}`;
+}
+
 export async function loadConfig(path: string): Promise<LoadedConfig> {
   const configPath = resolve(path);
   const text = await readFile(configPath, 'utf8');
-  let parsed: unknown;
-  try {
-    parsed = Bun.JSONC.parse(text);
-  } catch (error) {
-    throw new Error(`Invalid JSONC: ${error instanceof Error ? error.message : String(error)}`);
+  // Bun.JSONC.parse accepted a UTF-8 BOM; jsonc-parser records it as an invalid
+  // symbol, so strip it before parsing. The hash below still covers the raw text.
+  const source = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const parseErrors: ParseError[] = [];
+  const parsed = parseJsonc(source, parseErrors, { allowTrailingComma: true }) as unknown;
+  if (parsed === undefined || parseErrors.length > 0) {
+    const details = parseErrors
+      .slice(0, 10)
+      .map((error) => `${printParseErrorCode(error.error)} at ${describeOffset(source, error.offset)}`)
+      .join('; ');
+    throw new Error(`Invalid JSONC: ${details || 'empty document'}`);
   }
   if (!validator.Check(parsed)) {
     const details = validator

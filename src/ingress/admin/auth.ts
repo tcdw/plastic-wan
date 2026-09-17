@@ -1,3 +1,4 @@
+import { hash, verify } from '@node-rs/argon2';
 import { createHash, randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { type Orm, asRunResult } from '../../store/database.ts';
@@ -9,7 +10,16 @@ const LOCKOUT_MS = 15 * 60_000;
 const MIN_PASSWORD_LENGTH = 12;
 const MAX_PASSWORD_LENGTH = 200;
 const USERNAME_PATTERN = /^[A-Za-z0-9._-]{3,32}$/;
-const HASH_OPTIONS = { algorithm: 'argon2id' } as const;
+// The runtime defaults to Argon2id; the explicit cost parameters keep the
+// strength of the Bun.password defaults this project was built on (64 MiB
+// memory), where @node-rs/argon2 would otherwise drop to its 19 MiB default.
+// Stored PHC strings carry their own parameters, so hashes created before
+// the switch verify either way.
+const HASH_OPTIONS = {
+  memoryCost: 65_536,
+  timeCost: 2,
+  parallelism: 1,
+} as const;
 
 export interface AdminCredentials {
   readonly username: string;
@@ -62,7 +72,7 @@ export class AdminAuth {
 
   async createFirstUser(credentials: AdminCredentials, now = new Date()): Promise<string> {
     assertCredentials(credentials);
-    const passwordHash = await Bun.password.hash(credentials.password, HASH_OPTIONS);
+    const passwordHash = await hash(credentials.password, HASH_OPTIONS);
     const iso = now.toISOString();
     const userId = this.#orm.transaction(
       () => {
@@ -91,7 +101,7 @@ export class AdminAuth {
   }
   async changeCredentials(userId: bigint, credentials: AdminCredentials, now = new Date()): Promise<string> {
     assertCredentials(credentials);
-    const passwordHash = await Bun.password.hash(credentials.password, HASH_OPTIONS);
+    const passwordHash = await hash(credentials.password, HASH_OPTIONS);
     const iso = now.toISOString();
     return this.#orm.transaction(
       () => {
@@ -136,9 +146,9 @@ export class AdminAuth {
     let verified = false;
     if (row === undefined) {
       // Burn comparable time on unknown usernames so response latency does not leak account existence.
-      await Bun.password.hash(password.length === 0 ? 'absent-account-placeholder' : password, HASH_OPTIONS);
+      await hash(password.length === 0 ? 'absent-account-placeholder' : password, HASH_OPTIONS);
     } else {
-      verified = await Bun.password.verify(password, row.passwordHash);
+      verified = await verify(row.passwordHash, password);
     }
     if (row === undefined || !verified) {
       const count = (failure?.count ?? 0) + 1;

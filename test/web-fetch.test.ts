@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from 'bun:test';
+import { afterAll, expect, test } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -83,8 +83,8 @@ test('web_fetch returns bounded untrusted text through proxy synthetic DNS and a
     const result = await tool.execute('web-1', { url: 'https://public.example/article?q=1' });
     const text = result.content[0]?.type === 'text' ? result.content[0].text : '';
     expect(Buffer.byteLength(text)).toBeLessThanOrEqual(32_768);
-    expect(text).toStartWith('Untrusted web content follows.');
-    expect(text).toEndWith('[content truncated]');
+    expect(text.startsWith('Untrusted web content follows.')).toBe(true);
+    expect(text.endsWith('[content truncated]')).toBe(true);
     expect(result.details).toEqual({
       url: 'https://public.example/article?q=1',
       status: 200,

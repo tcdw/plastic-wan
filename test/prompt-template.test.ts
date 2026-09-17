@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, test } from 'vitest';
 import { renderPromptTemplate, validatePromptTemplate } from '../src/platform/prompt-template.ts';
 
 test('renders the allowlisted model and timezone values', () => {

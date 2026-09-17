@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { ApiError } from './api.ts';
 import { errorMessage } from './errors.ts';
 

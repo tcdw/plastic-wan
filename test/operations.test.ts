@@ -1,5 +1,5 @@
-import { Database } from 'bun:sqlite';
-import { afterAll, expect, test } from 'bun:test';
+import { afterAll, expect, test } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
 import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,8 +13,15 @@ import { writeTestConfig, pathExists } from './helpers.ts';
 const directories: string[] = [];
 
 afterAll(async () => {
+  // The node:sqlite integrity probe keeps the Windows file handle alive on
+  // Bun until GC collects it, so cleanup may lose the race. A leaked temp
+  // directory is acceptable here; failing the suite over it is not. Node
+  // releases the handle on close, so this fallback is a no-op after the
+  // runtime switch.
   await Promise.all(
-    directories.map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })),
+    directories.map((directory) =>
+      rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }).catch(() => undefined),
+    ),
   );
 });
 
@@ -173,8 +180,9 @@ test('retention scrubs referenced history and backup keeps seven consistent copi
   expect(await pathExists(backupPath)).toBe(true);
   const backups = (await readdir(loaded.config.paths.backups)).filter((name) => name.endsWith('.sqlite'));
   expect(backups).toHaveLength(7);
-  const backup = new Database(backupPath, { readonly: true, strict: true, safeIntegers: true });
-  expect(backup.query<{ integrity_check: string }, []>('PRAGMA integrity_check').get()?.integrity_check).toBe('ok');
+  const backup = new DatabaseSync(backupPath, { readOnly: true });
+  const integrity = backup.prepare('PRAGMA integrity_check').get() as { integrity_check: string } | undefined;
+  expect(integrity?.integrity_check).toBe('ok');
   backup.close();
 });
 

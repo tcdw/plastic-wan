@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from 'bun:test';
+import { afterAll, expect, test } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -71,8 +71,7 @@ test('switch applies to the next session and reset reverts to the config default
 
 test('rejects unknown providers, unknown models and image-only models', async () => {
   const switcher = await switcherWith(addImageOnlyModel);
-  // Message-based assertions: bun:test mis-evaluates instanceof against
-  // classes imported from another module inside toThrowError predicates.
+  // Message-based assertions keep the failure output explicit.
   expect(() => switcher.switch('ghost', 'agent-model')).toThrowError('Provider ghost is not configured');
   expect(() => switcher.switch('agent', 'ghost-model')).toThrowError('Model agent/ghost-model is not registered');
   expect(() => switcher.switch('agent', 'vision-only')).toThrowError(

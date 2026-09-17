@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,7 +7,7 @@ import { type FileConfig, type LoadedConfig, loadConfig } from '../src/platform/
 import { SqliteStore } from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { sleep, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -291,7 +291,7 @@ describe('bucket scheduler', () => {
         if (invocation !== null && invocation.state !== 'queued' && invocation.state !== 'running') {
           break;
         }
-        await Bun.sleep(10);
+        await sleep(10);
       }
       if (invocation === null) {
         throw new Error('Expected an invocation');

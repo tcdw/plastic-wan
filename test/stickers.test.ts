@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from 'bun:test';
+import { afterAll, expect, test } from 'vitest';
 import { copyFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

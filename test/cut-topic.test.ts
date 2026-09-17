@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,7 +10,7 @@ import { SqliteStore } from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { ConversationContextStore } from '../src/context/context-store.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { sleep, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 const ALICE = { id: 42n, name: 'Alice', username: 'alice' };
@@ -343,7 +343,7 @@ describe('cut_topic', () => {
         Date.now() < deadline &&
         store.db.query<{ id: bigint }, []>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1").get() === null
       ) {
-        await Bun.sleep(10);
+        await sleep(10);
       }
       expect(
         store.db.query<{ id: bigint }, []>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1").get(),

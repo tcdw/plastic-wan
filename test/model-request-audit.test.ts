@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, test } from 'vitest';
 import { createHash } from 'node:crypto';
 import { scrubModelRequestAuditJson } from '../src/platform/model-request-audit.ts';
 

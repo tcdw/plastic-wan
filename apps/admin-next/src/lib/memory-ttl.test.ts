@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import {
   DAY_SECONDS,
   MEMORY_MAX_CONTENT_LENGTH,

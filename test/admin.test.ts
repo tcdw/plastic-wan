@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from 'bun:test';
+import { afterAll, expect, test } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -130,7 +130,7 @@ test('admin login persists only hashes and rejects invalid credentials', async (
     const token = cookie.slice(cookie.indexOf('=') + 1);
 
     const stored = store.db.query<{ password_hash: string }, []>('SELECT password_hash FROM admin_users').get();
-    expect(stored?.password_hash).toStartWith('$argon2id$');
+    expect(stored?.password_hash).toMatch(/^\$argon2id\$/);
     expect(stored?.password_hash).not.toContain(PASSWORD);
     const sessionRow = store.db.query<{ token_hash: string }, []>('SELECT token_hash FROM admin_sessions').get();
     expect(sessionRow?.token_hash).toMatch(/^[a-f0-9]{64}$/);
@@ -229,7 +229,7 @@ test('admin can change username and password from an authenticated session', asy
       .query<{ username: string; password_hash: string }, []>('SELECT username, password_hash FROM admin_users')
       .get();
     expect(stored?.username).toBe('new-owner');
-    expect(stored?.password_hash).toStartWith('$argon2id$');
+    expect(stored?.password_hash).toMatch(/^\$argon2id\$/);
     expect(stored?.password_hash).not.toContain('new-correct-horse-battery');
   } finally {
     store.close();

@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,7 +20,7 @@ import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from '../src/orchestratio
 import { SecretStore } from '../src/platform/secrets.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { ConversationContextStore } from '../src/context/context-store.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { sleep, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 const BOT_USERNAME = 'plasticwan_test_bot';
@@ -413,7 +413,7 @@ describe('bot command service', () => {
       expect(firstPage).toContain('可用模型（第 1/3 页，共 42 条）:');
       expect(firstPage).toContain('1. agent / agent-model（Agent Model）');
       expect(firstPage).toContain('20. agent / agent-extra-19（Agent Extra 19）');
-      expect(firstPage.some((line) => line.startsWith('21. '))).toBeFalse();
+      expect(firstPage.some((line) => line.startsWith('21. '))).toBe(false);
 
       const secondPage = commands.run({ name: 'model', argument: 'page 2' }, 123456789n, ALICE, FIXED_NOW).split('\n');
       expect(secondPage).toContain('可用模型（第 2/3 页，共 42 条）:');
@@ -442,7 +442,7 @@ describe('bot command service', () => {
       const { store, commands, switcher } = await commandSetup(manyModelTransform(40));
       for (const argument of ['page 0', 'page 4', 'page 999999999999999999999999999999999999999']) {
         const reply = commands.run({ name: 'model', argument }, 123456789n, ALICE, FIXED_NOW);
-        expect(reply).toStartWith('无效页码。');
+        expect(reply.startsWith('无效页码。')).toBe(true);
         expect(reply).toContain('可用模型（第 1/3 页，共 42 条）:');
         expect(switcher.current()).toMatchObject({ provider: 'agent', model: 'agent-model' });
       }
@@ -647,7 +647,7 @@ describe('scheduler pause enforcement', () => {
         if (store.db.query<{ state: string }, []>('SELECT state FROM invocations LIMIT 1').get()?.state === state) {
           return;
         }
-        await Bun.sleep(10);
+        await sleep(10);
       }
       throw new Error(`Invocation never reached ${state}`);
     };

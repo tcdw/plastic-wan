@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,7 +17,7 @@ import { SecretStore } from '../src/platform/secrets.ts';
 import { SystemResources } from '../src/platform/system-resources.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { sleep, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 const CHAT_ID = 123456789;
@@ -133,7 +133,7 @@ async function until(condition: () => boolean, label: string, timeoutMillisecond
     if (condition()) {
       return;
     }
-    await Bun.sleep(10);
+    await sleep(10);
   }
   throw new Error(`Timed out waiting for ${label}`);
 }
@@ -191,7 +191,7 @@ describe('long-lived invocation', () => {
       const secondIngestAt = Date.now();
       fixtureSetup.ingestion.ingest(update(2, 11, 'second'), new Date());
       scheduler.wake();
-      await Bun.sleep(150);
+      await sleep(150);
 
       const bucket = fixtureSetup.store.db
         .query<{ id: bigint; state: string; first_received_at: string; deadline_at: string }, []>(
@@ -244,7 +244,7 @@ describe('long-lived invocation', () => {
         options?.onPayload?.({ model: 'agent-model', messages: context.messages }, faux.getModel());
         fixtureSetup.ingestion.ingest(update(2, 11, 'second message'), new Date());
         scheduler.wake();
-        await Bun.sleep(200);
+        await sleep(200);
         collectingDuringRound =
           fixtureSetup.store.db
             .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM buckets WHERE state = 'collecting'")
@@ -291,7 +291,7 @@ describe('long-lived invocation', () => {
       scheduler.wake();
       await finishedSignal;
       // Let the scheduler's terminal-state transaction land before asserting.
-      await Bun.sleep(50);
+      await sleep(50);
 
       // The batch stayed out of the run for the whole round, then joined it once
       // the agent was free again: exactly one invocation, one batch per round.
@@ -345,7 +345,7 @@ describe('long-lived invocation', () => {
         scheduler.wake();
         // The round outlives the batch's own window, so a batch handed over on
         // its own deadline would be injected while the model is still working.
-        await Bun.sleep(1_500);
+        await sleep(1_500);
         collectingDuringRound =
           fixtureSetup.store.db.query<{ state: string }, []>('SELECT state FROM buckets ORDER BY id DESC LIMIT 1').get()
             ?.state ?? '';
@@ -401,7 +401,7 @@ describe('long-lived invocation', () => {
       fixtureSetup.ingestion.ingest(update(1, 10, 'hello'), new Date());
       scheduler.wake();
       await finishedSignal;
-      await Bun.sleep(50);
+      await sleep(50);
 
       // The window restarted at the round end, so the batch waited out a full
       // window from there: without the round-end anchor it would have been
@@ -565,7 +565,7 @@ describe('long-lived invocation', () => {
       fixtureSetup.ingestion.ingest(update(1, 10, 'hello'), new Date());
       scheduler.wake();
       await until(() => started.length === 1 && requests.length === 1, 'the first invocation');
-      await Bun.sleep(50);
+      await sleep(50);
       fixtureSetup.ingestion.ingest(update(2, 11, 'next'), new Date());
       scheduler.wake();
       await secondFinishedSignal;
@@ -649,7 +649,7 @@ describe('long-lived invocation', () => {
       fixtureSetup.ingestion.ingest(update(2, 11, 'second message'), new Date());
       scheduler.wake();
       await until(() => requests.some((request) => request.includes('second message')), 'the second batch');
-      await Bun.sleep(50);
+      await sleep(50);
 
       expect(requests[0]).toContain('first message');
       expect(requests[1]).toContain('call the send tool');

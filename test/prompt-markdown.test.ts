@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, test } from 'vitest';
 import { stripHtmlComments } from '../src/platform/prompt-markdown.ts';
 
 test('removes annotations and the lines that held only an annotation', () => {

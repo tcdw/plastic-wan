@@ -255,6 +255,8 @@ export function testConfigJsonc(directory: string, transform?: (config: FileConf
   return `${JSON.stringify(config, null, 2)}\n`;
 }
 
+export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function pathExists(path: string): Promise<boolean> {
   return access(path).then(
     () => true,

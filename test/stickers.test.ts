@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai';
@@ -68,7 +68,7 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
     download: async (fileId, destination, signal) => {
       signal.throwIfAborted();
       downloadedFileIds.push(fileId);
-      await Bun.write(destination, Bun.file(fixturePath));
+      await copyFile(fixturePath, destination);
     },
   };
   const media = new MediaService({

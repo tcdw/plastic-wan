@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseCli } from '../src/cli-options.ts';
@@ -35,7 +35,7 @@ describe('configure JSONC round-trip', () => {
     const { configPath } = await fixture();
     const { fileConfig } = await loadConfig(configPath);
     const outPath = configPath.replace('config.jsonc', 'out.jsonc');
-    await Bun.write(outPath, `${JSON.stringify(fileConfig, null, 2)}\n`);
+    await writeFile(outPath, `${JSON.stringify(fileConfig, null, 2)}\n`);
     const { config: reparsed } = await loadConfig(outPath);
     expect(reparsed.version).toBe(1);
     expect(reparsed.providers.agent?.kind).toBe('custom');

@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-import { copyFile, mkdir, stat } from 'node:fs/promises';
+import { access, copyFile, mkdir, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { ServeLock } from '../src/store/database.ts';
 import { scrubModelRequestAuditJson } from '../src/platform/model-request-audit.ts';
@@ -51,8 +51,12 @@ function assertIntegrity(database: Database, phase: string): void {
 
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
-  const databaseFile = Bun.file(options.database);
-  if (!(await databaseFile.exists())) {
+  if (
+    !(await access(options.database).then(
+      () => true,
+      () => false,
+    ))
+  ) {
     throw new Error(`Database does not exist: ${options.database}`);
   }
 

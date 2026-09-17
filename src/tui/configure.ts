@@ -1,4 +1,5 @@
 import { confirm, select } from '@inquirer/prompts';
+import { readFile, writeFile } from 'node:fs/promises';
 import { loadConfig, type FileConfig } from '../platform/config.ts';
 import { runProviderWizard } from './provider-wizard.ts';
 
@@ -15,8 +16,7 @@ export async function runConfigure(configPath: string): Promise<void> {
   try {
     const loaded = await loadConfig(configPath);
     config = loaded.fileConfig;
-    const file = Bun.file(configPath);
-    originalSource = (await file.exists()) ? await file.text() : '';
+    originalSource = await readFile(configPath, 'utf8');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Failed to load config: ${message}`);
@@ -68,7 +68,7 @@ export async function runConfigure(configPath: string): Promise<void> {
 
 async function saveConfig(path: string, config: FileConfig, originalSource: string): Promise<boolean> {
   try {
-    await Bun.write(path, `${JSON.stringify(config, null, 2)}\n`);
+    await writeFile(path, `${JSON.stringify(config, null, 2)}\n`);
     const loaded = await loadConfig(path);
     console.log(`Config saved and validated. Hash: ${loaded.hash}`);
     return true;
@@ -77,7 +77,7 @@ async function saveConfig(path: string, config: FileConfig, originalSource: stri
     console.error(`Failed to save config: ${message}`);
     const restore = await confirm({ message: 'Restore previous config?', default: true });
     if (restore) {
-      await Bun.write(path, originalSource);
+      await writeFile(path, originalSource);
       console.log('Previous config restored.');
     }
     return false;

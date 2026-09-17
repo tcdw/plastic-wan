@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
@@ -252,7 +252,8 @@ test('admin panel manages memories with chat filter and long-TTL warnings', asyn
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
   const staticDir = join(directory, 'bundle');
-  await Bun.write(join(staticDir, 'index.html'), '<!doctype html><title>admin</title>');
+  await mkdir(staticDir, { recursive: true });
+  await writeFile(join(staticDir, 'index.html'), '<!doctype html><title>admin</title>');
   await writeTestConfig(
     directory,
     configPath,

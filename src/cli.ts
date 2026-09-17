@@ -7,7 +7,7 @@ import { runDoctor } from './doctor.ts';
 import { runConfigure } from './tui/configure.ts';
 
 try {
-  const options = parseCli(Bun.argv.slice(2));
+  const options = parseCli(process.argv.slice(2));
   switch (options.command) {
     case 'check-config': {
       const loaded = await loadConfig(options.configPath);

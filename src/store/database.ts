@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-import { chmod, type FileHandle, mkdir, open, readdir, readFile, rename, unlink } from 'node:fs/promises';
+import { access, chmod, type FileHandle, mkdir, open, readdir, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { and, eq, sql } from 'drizzle-orm';
 import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
@@ -88,7 +88,10 @@ export class SqliteStore {
   static async open(config: RawConfig, migrate = true): Promise<SqliteStore> {
     const path = config.paths.database;
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    const existed = await Bun.file(path).exists();
+    const existed = await access(path).then(
+      () => true,
+      () => false,
+    );
     const database = new Database(path, { create: true, strict: true, safeIntegers: true });
     database.exec('PRAGMA journal_mode = WAL;');
     database.exec('PRAGMA synchronous = FULL;');
@@ -411,13 +414,15 @@ async function createBackupFile(database: Database, backupDir: string, filename:
 }
 async function rotateBackups(backupDir: string, keep: number): Promise<void> {
   const entries = await readdir(backupDir, { withFileTypes: true });
-  const files = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.sqlite'))
-    .map((entry) => ({
-      path: join(backupDir, entry.name),
-      modified: Bun.file(join(backupDir, entry.name)).lastModified,
-    }))
-    .sort((left, right) => right.modified - left.modified);
+  const files = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.sqlite'))
+      .map(async (entry) => ({
+        path: join(backupDir, entry.name),
+        modified: (await stat(join(backupDir, entry.name))).mtimeMs,
+      })),
+  );
+  files.sort((left, right) => right.modified - left.modified);
   await Promise.all(files.slice(keep).map((file) => unlink(file.path)));
 }
 
@@ -427,7 +432,7 @@ async function loadMigrations(): Promise<Migration[]> {
   const migrations: Migration[] = [];
   for (const name of names) {
     const version = Number.parseInt(name.slice(0, 3), 10);
-    migrations.push({ version, name, sql: await Bun.file(join(directory, name)).text() });
+    migrations.push({ version, name, sql: await readFile(join(directory, name), 'utf8') });
   }
   for (let index = 1; index < migrations.length; index += 1) {
     const previous = migrations[index - 1];

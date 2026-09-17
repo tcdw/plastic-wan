@@ -377,9 +377,14 @@ async function resolvePrompts(
 async function readPromptFile(path: string, label: string, sink: PromptFile[]): Promise<string> {
   let raw: string;
   try {
-    raw = await Bun.file(path).text();
+    raw = await readFile(path, 'utf8');
   } catch (error) {
     throw new Error(`Cannot read ${label} file ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  // Bun.file().text() silently stripped a UTF-8 BOM; keep that behaviour so
+  // prompts and their hashes stay identical across the runtime switch.
+  if (raw.charCodeAt(0) === 0xfeff) {
+    raw = raw.slice(1);
   }
   if (raw.includes('\u0000')) {
     throw new Error(`${label} file ${path} contains a NUL character`);

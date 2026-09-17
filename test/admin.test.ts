@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
@@ -36,8 +36,9 @@ async function fixture(): Promise<Fixture> {
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
   const staticDir = join(directory, 'bundle');
-  await Bun.write(join(staticDir, 'index.html'), '<!doctype html><title>admin</title>');
-  await Bun.write(join(staticDir, 'static', 'app.js'), "console.log('admin');");
+  await mkdir(join(staticDir, 'static'), { recursive: true });
+  await writeFile(join(staticDir, 'index.html'), '<!doctype html><title>admin</title>');
+  await writeFile(join(staticDir, 'static', 'app.js'), "console.log('admin');");
   await writeTestConfig(
     directory,
     configPath,
@@ -625,7 +626,7 @@ test('admin config rejects a non-loopback bind host', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-admin-host-'));
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
-  await Bun.write(
+  await writeFile(
     configPath,
     testConfigJsonc(directory, (config) => {
       config.admin = {

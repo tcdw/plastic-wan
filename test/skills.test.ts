@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -111,7 +111,7 @@ async function indexOneSticker(setup: InvocationSetup): Promise<{ stickers: Stic
   const downloader: MediaDownloader = {
     download: async (_fileId, destination, signal) => {
       signal.throwIfAborted();
-      await Bun.write(destination, Bun.file(fixturePath));
+      await copyFile(fixturePath, destination);
     },
   };
   const media = new MediaService({

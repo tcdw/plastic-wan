@@ -1,3 +1,4 @@
+import { access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FileConfig, RawConfig } from '../src/platform/config.ts';
 import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from '../src/platform/system-resources.ts';
@@ -253,6 +254,13 @@ export function testConfigJsonc(directory: string, transform?: (config: FileConf
   return `${JSON.stringify(config, null, 2)}\n`;
 }
 
+export async function pathExists(path: string): Promise<boolean> {
+  return access(path).then(
+    () => true,
+    () => false,
+  );
+}
+
 export async function writeTestConfig(
   directory: string,
   configPath: string,
@@ -260,7 +268,7 @@ export async function writeTestConfig(
   systemPrompt = 'Participate safely.',
   chatInstructions = 'private',
 ): Promise<void> {
-  await Bun.write(join(directory, 'agent-system-prompt.md'), systemPrompt);
-  await Bun.write(join(directory, 'chat-instructions.md'), chatInstructions);
-  await Bun.write(configPath, jsonc);
+  await writeFile(join(directory, 'agent-system-prompt.md'), systemPrompt);
+  await writeFile(join(directory, 'chat-instructions.md'), chatInstructions);
+  await writeFile(configPath, jsonc);
 }

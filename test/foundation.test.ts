@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm, unlink } from 'node:fs/promises';
+import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/platform/config.ts';
@@ -7,7 +7,7 @@ import { createModelRegistry } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { backupDatabase, SqliteStore } from '../src/store/database.ts';
 import { schemaMigrations } from '../src/store/schema.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { pathExists, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -43,7 +43,7 @@ describe('configuration', () => {
 
   test('rejects unknown fields', async () => {
     const { directory, configPath } = await fixture();
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => Object.assign(config, { unknown: true })),
     );
@@ -53,7 +53,7 @@ describe('configuration', () => {
   test('rejects the removed per-invocation limits', async () => {
     const { directory, configPath } = await fixture();
     for (const key of ['max_turns', 'max_sends', 'timeout_seconds'] as const) {
-      await Bun.write(
+      await writeFile(
         configPath,
         testConfigJsonc(directory, (config) => Object.assign(config.agent, { [key]: 5 })),
       );
@@ -65,7 +65,7 @@ describe('configuration', () => {
   test('enforces the Conversation Context invariants', async () => {
     const { directory, configPath } = await fixture();
     const reload = async (transform: Parameters<typeof testConfigJsonc>[1]): Promise<unknown> => {
-      await Bun.write(configPath, testConfigJsonc(directory, transform));
+      await writeFile(configPath, testConfigJsonc(directory, transform));
       return loadConfig(configPath);
     };
     // A target that is not below the trigger threshold can never converge.
@@ -109,14 +109,14 @@ describe('configuration', () => {
 
   test('accepts zero-second bucket windows and rejects values above three hundred seconds', async () => {
     const { directory, configPath } = await fixture();
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => {
         config.telegram.bucket_window_seconds = 0;
       }),
     );
     expect((await loadConfig(configPath)).config.telegram.bucket_window_seconds).toBe(0);
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => {
         config.telegram.bucket_window_seconds = 301;
@@ -134,7 +134,7 @@ describe('configuration', () => {
       }
       provider.models[0].input = ['text'];
     });
-    await Bun.write(configPath, config);
+    await writeFile(configPath, config);
     const loaded = await loadConfig(configPath);
     const registry = await createModelRegistry(loaded.config, new SecretStore());
     expect(registry.agentModel.input).toEqual(['text']);
@@ -142,7 +142,7 @@ describe('configuration', () => {
 
   test('rejects a vision model without image input', async () => {
     const { directory, configPath } = await fixture();
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => {
         const provider = config.providers.vision;
@@ -157,7 +157,7 @@ describe('configuration', () => {
 
   test('rejects developer-role compatibility for an Anthropic adapter', async () => {
     const { directory, configPath } = await fixture();
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => {
         const provider = config.providers.agent;
@@ -172,7 +172,7 @@ describe('configuration', () => {
 
   test('rejects a leftover max_output_tokens in the agent section', async () => {
     const { directory, configPath } = await fixture();
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => Object.assign(config.agent, { max_output_tokens: 4096 })),
     );
@@ -181,7 +181,7 @@ describe('configuration', () => {
 
   test('accepts chat-scoped ignored Telegram user IDs', async () => {
     const { directory, configPath } = await fixture();
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => {
         const chat = config.telegram.chats[0];
@@ -197,7 +197,7 @@ describe('configuration', () => {
 
   test('rejects invalid chat-scoped ignored Telegram user IDs', async () => {
     const { directory, configPath } = await fixture();
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => {
         const chat = config.telegram.chats[0];
@@ -208,7 +208,7 @@ describe('configuration', () => {
       }),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => {
         const chat = config.telegram.chats[0];
@@ -219,7 +219,7 @@ describe('configuration', () => {
       }),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => {
         const chat = config.telegram.chats[0];
@@ -234,7 +234,7 @@ describe('configuration', () => {
 
   test('accepts configured telegram admin user IDs', async () => {
     const { directory, configPath } = await fixture();
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => {
         config.telegram.admins = [42, 99];
@@ -246,21 +246,21 @@ describe('configuration', () => {
 
   test('rejects invalid telegram admin user IDs', async () => {
     const { directory, configPath } = await fixture();
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => {
         config.telegram.admins = [0];
       }),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => {
         config.telegram.admins = [9_007_199_254_740_992];
       }),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid Telegram admin user ID');
-    await Bun.write(
+    await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => {
         config.telegram.admins = [42, 42];
@@ -274,13 +274,13 @@ describe('configuration', () => {
     const source = testConfigJsonc(directory)
       .replace('{', '{\n  // Operator-managed configuration')
       .replace('"version": 1,', '"version": 1, /* schema version */');
-    await Bun.write(configPath, source.replace(/\n}\n$/, ',\n}\n'));
+    await writeFile(configPath, source.replace(/\n}\n$/, ',\n}\n'));
     expect((await loadConfig(configPath)).config.version).toBe(1);
   });
 
   test('rejects invalid JSONC syntax', async () => {
     const { configPath } = await fixture();
-    await Bun.write(configPath, '{ "version": 1,, }');
+    await writeFile(configPath, '{ "version": 1,, }');
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid JSONC');
   });
 
@@ -353,7 +353,7 @@ describe('database', () => {
       store.close();
       expect(() => prepared.all()).toThrow();
       await unlink(config.paths.database);
-      expect(await Bun.file(config.paths.database).exists()).toBe(false);
+      expect(await pathExists(config.paths.database)).toBe(false);
     } finally {
       store.db.close(true);
     }
@@ -370,9 +370,9 @@ describe('database', () => {
     store.close();
 
     const backupPath = await backupDatabase(config);
-    expect(await Bun.file(backupPath).exists()).toBe(true);
+    expect(await pathExists(backupPath)).toBe(true);
     await unlink(config.paths.database);
-    expect(await Bun.file(config.paths.database).exists()).toBe(false);
+    expect(await pathExists(config.paths.database)).toBe(false);
   });
 
   test('a failed backup releases the source file after running ORM queries', async () => {
@@ -387,6 +387,6 @@ describe('database', () => {
 
     await expect(backupDatabase(config)).rejects.toThrow('telegram_updates');
     await unlink(config.paths.database);
-    expect(await Bun.file(config.paths.database).exists()).toBe(false);
+    expect(await pathExists(config.paths.database)).toBe(false);
   });
 });

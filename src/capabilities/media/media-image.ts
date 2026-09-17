@@ -1,4 +1,4 @@
-import { chmod } from 'node:fs/promises';
+import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import sharp from 'sharp';
@@ -110,7 +110,7 @@ export async function prepareMediaImage(
     return normalizeImage(outputPath, directory);
   }
   const outputPath = join(directory, 'representative.svg');
-  const compressed = new Uint8Array(await Bun.file(inputPath).arrayBuffer());
+  const compressed = new Uint8Array(await readFile(inputPath));
   let metadata: unknown;
   try {
     metadata = JSON.parse(new TextDecoder().decode(gunzipSync(compressed)));
@@ -171,7 +171,7 @@ async function runExternal(argv: readonly string[], captureOutput: boolean, sign
 }
 
 async function normalizeImage(inputPath: string, directory: string): Promise<NormalizedImage> {
-  const input = Buffer.from(await Bun.file(inputPath).arrayBuffer());
+  const input = await readFile(inputPath);
   if (input.byteLength > MAX_DOWNLOAD_BYTES) {
     throw new Error('Image input exceeds 20 MB');
   }
@@ -200,7 +200,7 @@ async function normalizeImage(inputPath: string, directory: string): Promise<Nor
   if (output.data.byteLength > MAX_NORMALIZED_BYTES) {
     throw new Error('Normalized image exceeds output limit');
   }
-  await Bun.write(outputPath, output.data);
+  await writeFile(outputPath, output.data);
   if (process.platform !== 'win32') {
     await chmod(outputPath, 0o600);
   }

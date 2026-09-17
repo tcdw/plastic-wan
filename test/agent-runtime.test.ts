@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
@@ -421,7 +421,7 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
     download: async (fileId, destination, signal) => {
       signal.throwIfAborted();
       expect(fileId).toBe('photo-large');
-      await Bun.write(destination, Bun.file(fixturePath));
+      await copyFile(fixturePath, destination);
     },
   };
   const media = new MediaService({
@@ -599,7 +599,7 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
       download: async (fileId, destination, signal) => {
         signal.throwIfAborted();
         expect(fileId).toBe('history-photo');
-        await Bun.write(destination, Bun.file(fixturePath));
+        await copyFile(fixturePath, destination);
       },
     },
     modelGate: new KeyedSemaphore(),
@@ -728,7 +728,7 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
       download: async (fileId, destination, signal) => {
         signal.throwIfAborted();
         expect(fileId).toBe('photo-file');
-        await Bun.write(destination, Bun.file(fixturePath));
+        await copyFile(fixturePath, destination);
       },
     },
     modelGate: new KeyedSemaphore(),

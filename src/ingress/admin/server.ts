@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import type { Server } from 'bun';
 import type { RawConfig } from '../../platform/config.ts';
@@ -365,19 +366,19 @@ export class AdminServer {
     if (candidate !== this.#staticDir && !candidate.startsWith(this.#staticDir + sep)) {
       return json({ error: 'not_found', message: 'Asset does not exist' }, 404);
     }
-    const direct = Bun.file(candidate);
-    if (await direct.exists()) {
+    const direct = await readAsset(candidate);
+    if (direct !== undefined) {
       return asset(direct, candidate);
     }
     const indexPath = join(this.#staticDir, 'index.html');
-    const index = Bun.file(indexPath);
-    if (await index.exists()) {
+    const index = await readAsset(indexPath);
+    if (index !== undefined) {
       return asset(index, indexPath);
     }
     return json(
       {
         error: 'admin_bundle_missing',
-        message: `Admin bundle is absent: ${this.#staticDir}. Run bun run admin:build.`,
+        message: `Admin bundle is absent: ${this.#staticDir}. Run pnpm run admin:build.`,
       },
       503,
     );
@@ -401,7 +402,7 @@ function json(body: unknown, status = 200, cookie?: string): Response {
   return new Response(JSON.stringify(body), { status, headers });
 }
 
-function asset(file: Bun.BunFile, path: string): Response {
+function asset(body: Buffer, path: string): Response {
   const extension = path.slice(path.lastIndexOf('.'));
   const isHtml = extension === '.html';
   const headers = new Headers({
@@ -410,7 +411,18 @@ function asset(file: Bun.BunFile, path: string): Response {
     'content-security-policy': CONTENT_SECURITY_POLICY,
     'cache-control': isHtml ? 'no-store' : 'public, max-age=3600',
   });
-  return new Response(file, { headers });
+  return new Response(new Uint8Array(body), { headers });
+}
+
+async function readAsset(path: string): Promise<Buffer | undefined> {
+  try {
+    return await readFile(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function readCookie(request: Request, name: string): string {

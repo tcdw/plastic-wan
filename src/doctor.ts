@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-import { mkdir, mkdtemp, rm, stat, statfs } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import type { Api, AssistantMessage, Context, Model, ModelThinkingLevel, ThinkingLevel } from '@earendil-works/pi-ai';
@@ -320,7 +320,7 @@ async function verifyLottie(dataDir: string): Promise<void> {
       assets: [],
       layers: [],
     });
-    await Bun.write(input, gzipSync(fixture));
+    await writeFile(input, gzipSync(fixture));
     await runDependency(createLottieCommand([input, output]));
     const rendered = await sharp(output).png().toBuffer({ resolveWithObject: true });
     if (rendered.info.format !== 'png') {

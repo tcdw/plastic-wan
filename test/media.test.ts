@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createModels, fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai';
@@ -108,7 +108,7 @@ test('read_image normalizes once and reuses the 30-day description cache', async
     download: async (_fileId, destination, signal) => {
       signal.throwIfAborted();
       downloads += 1;
-      await Bun.write(destination, Bun.file(fixturePath));
+      await copyFile(fixturePath, destination);
     },
   };
   const media = new MediaService({

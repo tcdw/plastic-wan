@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { afterAll, expect, test } from 'bun:test';
-import { mkdtemp, readdir, rm, utimes } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
@@ -8,7 +8,7 @@ import { loadConfig } from '../src/platform/config.ts';
 import { backupDatabase, purgeExpiredData, SqliteStore } from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { writeTestConfig } from './helpers.ts';
+import { writeTestConfig, pathExists } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -162,15 +162,16 @@ test('retention scrubs referenced history and backup keeps seven consistent copi
   expect(retainedSnapshot?.snapshot_json).toContain('old private text');
   store.close();
 
+  await mkdir(loaded.config.paths.backups, { recursive: true });
   await Promise.all(
     Array.from({ length: 8 }, async (_, index) => {
       const path = join(loaded.config.paths.backups, `old-${index}.sqlite`);
-      await Bun.write(path, 'old');
+      await writeFile(path, 'old');
       await utimes(path, new Date(0), new Date(index * 1_000));
     }),
   );
   const backupPath = await backupDatabase(loaded.config);
-  expect(await Bun.file(backupPath).exists()).toBe(true);
+  expect(await pathExists(backupPath)).toBe(true);
   const backups = (await readdir(loaded.config.paths.backups)).filter((name) => name.endsWith('.sqlite'));
   expect(backups).toHaveLength(7);
   const backup = new Database(backupPath, { readonly: true, strict: true, safeIntegers: true });

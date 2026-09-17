@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -262,7 +262,7 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
         ],
       };
     });
-    await Bun.write(redirectConfigPath, redirectJsonc);
+    await writeFile(redirectConfigPath, redirectJsonc);
     const redirectLoaded = await loadConfig(redirectConfigPath);
     const redirectStore = await SqliteStore.open({
       ...redirectLoaded.config,

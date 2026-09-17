@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import type { Api, AssistantMessage, ImageContent, Model, Models } from '@earendil-works/pi-ai';
@@ -115,7 +115,7 @@ export class MediaService {
         );
         content.push({
           type: 'image',
-          data: Buffer.from(await Bun.file(normalized.path).arrayBuffer()).toString('base64'),
+          data: Buffer.from(await readFile(normalized.path)).toString('base64'),
           mimeType: normalized.mimeType,
         });
       }
@@ -363,7 +363,7 @@ export class MediaService {
         const callId = this.#startVisionCall(scope, analysisId);
         let response: AssistantMessage;
         try {
-          const data = Buffer.from(await Bun.file(normalized.path).arrayBuffer()).toString('base64');
+          const data = Buffer.from(await readFile(normalized.path)).toString('base64');
           response = await this.#models.completeSimple(
             this.#model,
             {

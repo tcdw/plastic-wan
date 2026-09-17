@@ -8,7 +8,13 @@ import { loadConfig } from '../src/platform/config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { testConfigJsonc, writeTestConfig, renderInvocationContext, type TestContextOptions } from './helpers.ts';
+import {
+  testConfigJsonc,
+  writeTestConfig,
+  renderInvocationContext,
+  pathExists,
+  type TestContextOptions,
+} from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -469,6 +475,6 @@ describe('alarm internal context and ownership', () => {
       reopenedForPurge.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM internal_contexts').get()?.count,
     ).toBe(0n);
     reopenedForPurge.close();
-    expect(await Bun.file(join(directory, 'config.jsonc')).exists()).toBe(true);
+    expect(await pathExists(join(directory, 'config.jsonc'))).toBe(true);
   });
 });

@@ -279,3 +279,51 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
     await stopFixtureServer(redirect.server);
   }
 });
+
+test('required stdio server failure reports the full underlying error', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-mcp-secret-'));
+  directories.push(directory);
+  const configPath = join(directory, 'config.jsonc');
+  const fixturePath = join(import.meta.dirname, 'fixtures', 'mcp-server.ts');
+  const jsonc = testConfigJsonc(directory, (config) => {
+    config.mcp = {
+      servers: [
+        {
+          alias: 'missing-secret',
+          transport: 'stdio',
+          command: [process.execPath, fixturePath],
+          required: true,
+          tools: ['echo'],
+          payload_max_bytes: 1048576,
+          result_max_bytes: 128,
+          env: { PLASTICWAN_MCP_UNSET_SECRET: { env: 'PLASTICWAN_MCP_UNSET_SECRET' } },
+          tool_policies: [
+            {
+              name: 'echo',
+              read_only: true,
+              timeout_seconds: 5,
+            },
+          ],
+        },
+      ],
+    };
+  });
+  await writeTestConfig(directory, configPath, jsonc);
+  const loaded = await loadConfig(configPath);
+  const store = await SqliteStore.open(loaded.config);
+  const manager = new McpManager(store, loaded.config, new SecretStore());
+  try {
+    // Regression: this used to collapse to "failed to initialize: Error"
+    // (safeErrorName returned only the class name) and hid which variable
+    // was missing.
+    await expect(manager.start()).rejects.toThrow(
+      /Required MCP server missing-secret failed to initialize:[\s\S]*Secret environment variable is not set: PLASTICWAN_MCP_UNSET_SECRET/,
+    );
+    expect(
+      store.db.prepare<[], { state: string }>("SELECT state FROM mcp_server_state WHERE alias = 'missing-secret'").get()
+        ?.state,
+    ).toBe('stopped');
+  } finally {
+    store.close();
+  }
+});

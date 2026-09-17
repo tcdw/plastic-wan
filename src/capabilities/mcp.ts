@@ -94,7 +94,9 @@ export class McpManager {
         this.#setState(server, 'degraded', 'initialization_failed');
         if (server.config.required) {
           await this.stop();
-          throw new Error(`Required MCP server ${server.config.alias} failed to initialize: ${safeErrorName(error)}`);
+          throw new Error(
+            `Required MCP server ${server.config.alias} failed to initialize: ${this.#secrets.redactError(error)}`,
+          );
         }
         this.#scheduleReconnect(server);
       }
@@ -687,14 +689,4 @@ function classifyMcpError(error: unknown): string {
     return 'aborted';
   }
   return 'transport_error';
-}
-
-function safeErrorName(error: unknown): string {
-  if (error instanceof McpError) {
-    return `mcp_${error.code}`;
-  }
-  if (error instanceof Error) {
-    return error.name;
-  }
-  return 'unknown_error';
 }

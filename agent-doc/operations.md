@@ -37,7 +37,8 @@ Linux/macOS 要求 `lottie_convert.py` 本身在服务 PATH 中（`pip --user` �
 cd ~/Projects/plasticwan
 pnpm install
 
-export GOOGLE_API_KEY="<rotated-key>"
+# 本地 Secret 写进仓库根目录的 .env（已 gitignore；CLI 启动时自动加载，
+# 只补缺、不覆盖 shell 里已 export 的变量），或在 shell 里 export。
 node src/cli.ts check-config --config dev-data/config.jsonc
 node src/cli.ts doctor --config dev-data/config.jsonc
 ```
@@ -188,6 +189,8 @@ node src/cli.ts backup --config dev-data/config.jsonc
 | `/config/*.md` | Prompt 文件；`system_prompt_file`、`instructions_file` 相对配置文件解析，必须和 `config.jsonc` 放在一起 |
 | `/data` | `data_dir`、SQLite、媒体缓存与备份 |
 
+Secret 建议用 compose `environment:`/`env_file:` 注入；挂载到 `/app/.env`（容器工作目录）也会被 CLI 加载，但真实环境变量优先，见[配置：`.env` 加载](configuration.md#secretref)。
+
 配置里必须使用容器内路径，而不是宿主机路径：
 
 ```jsonc
@@ -250,7 +253,7 @@ Admin Panel 的 `admin.host` 只接受回环地址，因此它绑定的是**容�
 | `/var/lib/plasticwan` | SQLite、媒体和备份唯一写目录 |
 | `/usr/local/bin/node` | Node.js 可执行文件 |
 
-服务用户/组为 `plasticwan`。主服务 `Restart=on-failure`、`UMask=0077`，systemd sandbox 只开放 `/var/lib/plasticwan` 写权限。备份 timer 每天 UTC 00:00 运行并带 `Persistent=true`。
+服务用户/组为 `plasticwan`。主服务 `Restart=on-failure`、`UMask=0077`，systemd sandbox 只开放 `/var/lib/plasticwan` 写权限。备份 timer 每天 UTC 00:00 运行并带 `Persistent=true`。Secret 通过 `Environment=` 注入；工作目录（`/opt/plasticwan`）下若存在 `.env` 也会被加载，但真实环境变量优先，见[配置：`.env` 加载](configuration.md#secretref)。
 
 部署前要保证 systemd 的服务 PATH 能找到 `ffmpeg`、`ffprobe`、`lottie_convert.py` 及其 Python。安装单元后验证：
 

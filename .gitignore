@@ -8,4 +8,5 @@ docs/plan/
 *.sqlite-wal
 test-tmp/
 dev-data/
+.env
 .env.local

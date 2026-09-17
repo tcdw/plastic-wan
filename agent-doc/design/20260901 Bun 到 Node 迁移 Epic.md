@@ -28,6 +28,8 @@
 >
 > 2026-09-18 凌晨更新：**Phase 5 已完成**，但驱动改为 **better-sqlite3**——`drizzle-orm/node-sqlite` 只存在于 drizzle 1.0-rc 线，stable 0.45.2 没有；三条路线实测后选择代价最小的 better-sqlite3（详见 Phase 5 章节的路线变更说明）。运行时切换顺带暴露了 3 处"只在 Node 下失败"的启动缺陷（`@hono/node-server` 异步绑定）与 `.get()` 的 null→undefined 语义漂移，均已修复。下一步 Phase 6（清理与文档收尾）。
 >
+> 2026-09-18 补记（Phase 5 后续补漏）：Bun 由运行时隐式加载的 CWD `.env` 在 Node 下没有对应行为，`required` MCP 的 env SecretRef 直接以 `Secret environment variable is not set: BRAVE_API_KEY` 失败（本机 doctor 实测复现，exit 1）。修复用 Node 原生 `process.loadEnvFile`（新模块 `src/platform/load-env.ts`，CLI 入口 existsSync 守卫加载：缺失跳过、只按 CWD 解析、真实环境变量优先不被覆盖），**未引入 dotenv**——Node ≥24 原生覆盖该能力，与决策表「Node 没有原生实现才引包」（jsonc-parser）的惯例一致。`.gitignore` 同步补 `.env`（原先只有 `.env.local`，存在误提交真实 key 的风险）。验证：`test/load-env.test.ts` 3 例 + doctor 前后对照（同一错误路径下临时 `.env` 后全探针 `status: ok`，验后即删）；`agent-doc/` 的 configuration/operations/verification 已同步。
+>
 > 2026-09-04 状态速览：Phase 0 部分完成（drizzle-orm 已锁定）、**Phase 2 已完成**、Phase 1/3–6 未开始。下一步是 Phase 1（pnpm monorepo）或直接进入 Phase 3（运行时无关化，每项独立提交）。
 
 | 类别 | 位置 |

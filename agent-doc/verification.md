@@ -20,7 +20,7 @@ pnpm test test/agent-runtime.test.ts test/model-request-audit.test.ts
 pnpm test test/skills.test.ts test/system-resources.test.ts
 pnpm test test/media.test.ts test/stickers.test.ts
 pnpm test test/mcp.test.ts test/web-fetch.test.ts
-pnpm test test/operations.test.ts test/foundation.test.ts test/schema.test.ts
+pnpm test test/operations.test.ts test/foundation.test.ts test/schema.test.ts test/load-env.test.ts
 pnpm test test/admin.test.ts test/model-switch.test.ts
 pnpm test test/bot-commands.test.ts
 pnpm test test/memory.test.ts
@@ -33,6 +33,7 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | 测试 | 主要契约 |
 | --- | --- |
 | `foundation.test.ts` | 严格配置（含 `agent.context` 与 `agent.rate_limits`）、Secret 脱敏、迁移与备份 |
+| `load-env.test.ts` | CLI `.env` 加载语义：文件缺失为 no-op、存在则加载、真实环境变量优先不被覆盖 |
 | `schema.test.ts` | Drizzle 层 bigint/boolean 往返、STRICT 与 CHECK 约束、better-sqlite3 IMMEDIATE 事务回滚、`sql` 模板绑定与 FTS5 查询 |
 | `telegram-ingestion.test.ts` | allowlist、Revision、Bot/Service、Topic 隔离 |
 | `participation.test.ts` | 全局/每 Chat 规则合并、私聊配置拒绝、跨午夜时段、触发与注意力窗口、暂停/编辑边界、启动追赶与清理 |

@@ -2,11 +2,13 @@
 import { serve } from './application.ts';
 import { parseCli } from './cli-options.ts';
 import { loadConfig } from './platform/config.ts';
+import { loadEnvFileIfPresent } from './platform/load-env.ts';
 import { backupDatabase } from './store/database.ts';
 import { runDoctor } from './doctor.ts';
 import { runConfigure } from './tui/configure.ts';
 
 try {
+  loadEnvFileIfPresent();
   const options = parseCli(process.argv.slice(2));
   switch (options.command) {
     case 'check-config': {

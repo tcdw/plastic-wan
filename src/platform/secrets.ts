@@ -1,5 +1,5 @@
 import type { SecretRef } from './config.ts';
-import { pickEnv, readBoundedOutput } from './subprocess.ts';
+import { pickEnv, readBoundedOutput, spawnProcess } from './subprocess.ts';
 
 const MAX_SECRET_BYTES = 4_096;
 const SECRET_TIMEOUT_MS = 5_000;
@@ -56,16 +56,17 @@ function formatErrorDetail(error: unknown): string {
 }
 
 async function resolveCommand(argv: readonly string[]): Promise<string> {
-  const processHandle = Bun.spawn([...argv], {
-    stdin: 'ignore',
-    stdout: 'pipe',
-    stderr: 'ignore',
+  const processHandle = spawnProcess(argv, {
     env: pickEnv(
       process.platform === 'win32'
         ? ['PATH', 'SystemRoot', 'WINDIR', 'USERPROFILE', 'TEMP', 'TMP']
         : ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TMPDIR'],
     ),
+    stdout: 'pipe',
   });
+  if (processHandle.stdout === null) {
+    throw new Error('Secret command stdout is unavailable');
+  }
   const timeout = setTimeout(() => processHandle.kill(), SECRET_TIMEOUT_MS);
   try {
     const stdout = await readBoundedOutput(processHandle.stdout, MAX_SECRET_BYTES, () => {

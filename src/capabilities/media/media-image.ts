@@ -5,7 +5,7 @@ import sharp from 'sharp';
 import Type from 'typebox';
 import Compile from 'typebox/compile';
 import type { MediaDownloader } from './media-download.ts';
-import { pickEnv, readBoundedOutput } from '../../platform/subprocess.ts';
+import { pickEnv, readBoundedOutput, spawnProcess } from '../../platform/subprocess.ts';
 
 export const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 const MAX_DECODED_PIXELS = 40_000_000;
@@ -135,22 +135,20 @@ export function createLottieCommand(argumentsList: readonly string[]): string[] 
 }
 
 async function runExternal(argv: readonly string[], captureOutput: boolean, signal: AbortSignal): Promise<string> {
-  const processHandle = Bun.spawn([...argv], {
-    stdin: 'ignore',
-    stdout: captureOutput ? 'pipe' : 'ignore',
-    stderr: 'ignore',
+  const processHandle = spawnProcess(argv, {
     env: pickEnv(
       process.platform === 'win32'
         ? ['PATH', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP']
         : ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR'],
     ),
+    stdout: captureOutput ? 'pipe' : 'ignore',
   });
   const abortProcess = (): void => processHandle.kill();
   signal.addEventListener('abort', abortProcess, { once: true });
   const timeout = setTimeout(() => processHandle.kill(), 30_000);
   try {
     const output =
-      captureOutput && processHandle.stdout instanceof ReadableStream
+      captureOutput && processHandle.stdout !== null
         ? await readBoundedOutput(processHandle.stdout, 65_536, () => {
             processHandle.kill();
             return new Error('Media command output exceeds 64 KiB');

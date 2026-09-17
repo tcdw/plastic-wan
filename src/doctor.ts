@@ -12,7 +12,7 @@ import type { McpServerConfig, ProviderConfig, RawConfig, SecretRef } from './pl
 import { assertConfigPermissions, loadConfig } from './platform/config.ts';
 import { SqliteStore } from './store/database.ts';
 import { previewContext } from './platform/invocation-context.ts';
-import { pickEnv } from './platform/subprocess.ts';
+import { pickEnv, spawnProcess } from './platform/subprocess.ts';
 import { McpManager } from './capabilities/mcp.ts';
 import { createLottieCommand } from './capabilities/media/media-image.ts';
 import { TelegramMediaClient } from './capabilities/media/media-download.ts';
@@ -332,12 +332,7 @@ async function verifyLottie(dataDir: string): Promise<void> {
 }
 
 async function runDependency(argv: readonly string[]): Promise<void> {
-  const processHandle = Bun.spawn([...argv], {
-    stdin: 'ignore',
-    stdout: 'ignore',
-    stderr: 'ignore',
-    env: pickEnv(DEPENDENCY_ENV_NAMES),
-  });
+  const processHandle = spawnProcess(argv, { env: pickEnv(DEPENDENCY_ENV_NAMES), stdout: 'ignore' });
   const timeout = setTimeout(() => processHandle.kill(), 10_000);
   try {
     const exitCode = await processHandle.exited;

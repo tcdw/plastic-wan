@@ -5,7 +5,7 @@
 // cross-site writes).
 //
 // Run from the repo root:
-//   bun run scripts/admin-dev-proxy-probe.ts
+//   node scripts/admin-dev-proxy-probe.ts
 //
 // It starts an echo server (127.0.0.1:8891) that mirrors the Host/Origin
 // headers it receives, starts `vite dev` in apps/admin-next with
@@ -13,28 +13,46 @@
 // proxy and asserts the backend would accept/reject each one. Exits non-zero
 // on failure and kills the vite process tree when done.
 //
-// Why not part of the default `bun test`: it needs a real `vite dev` server
+// Why not part of the default test run: it needs a real `vite dev` server
 // on a fixed port plus curl, so it is slow and flaky in CI/headless runs.
 // Browser-level dev-proxy behavior is covered manually; production serving
 // (no proxy) is what the automated tests exercise.
 
-import { spawn, type Subprocess } from 'bun';
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 
 const PROBE_PORT = 8891;
 const VITE_PORT = 5273;
 const API_TARGET = `http://127.0.0.1:${PROBE_PORT}`;
 const VITE_BASE = `http://127.0.0.1:${VITE_PORT}`;
 
-const children: Subprocess[] = [];
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-function killTree(proc: Subprocess): void {
+function readAllText(stream: Readable | null): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (stream === null) {
+      resolve('');
+      return;
+    }
+    let data = '';
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk: string) => {
+      data += chunk;
+    });
+    stream.on('end', () => resolve(data));
+    stream.on('error', reject);
+  });
+}
+
+function killTree(proc: ChildProcess): void {
+  if (proc.pid === undefined) {
+    return;
+  }
   // Synchronous so taskkill finishes before the script exits and the whole
   // vite tree (bun → node/vite → esbuild) is actually gone.
-  Bun.spawnSync(['taskkill', '/PID', String(proc.pid), '/T', '/F'], {
-    stdout: 'ignore',
-    stderr: 'ignore',
-  });
+  spawnSync('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { stdio: 'ignore' });
 }
 
 async function waitFor(url: string, timeoutMs: number): Promise<void> {
@@ -48,7 +66,7 @@ async function waitFor(url: string, timeoutMs: number): Promise<void> {
     } catch {
       // not up yet
     }
-    await Bun.sleep(250);
+    await sleep(250);
   }
   throw new Error(`Timed out waiting for ${url}`);
 }
@@ -59,36 +77,31 @@ async function curlOnce(header: string | null): Promise<string> {
     args.push('-H', header);
   }
   args.push(`${VITE_BASE}/api/probe`);
-  const proc = spawn({ cmd: ['curl', ...args], stdout: 'pipe', stderr: 'pipe' });
-  children.push(proc);
-  const out = await new Response(proc.stdout).text();
-  await proc.exited;
+  const proc = spawn('curl', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  const out = await readAllText(proc.stdout);
+  await new Promise<void>((resolve) => proc.once('close', () => resolve()));
   return out.trim();
 }
 
-const probe = Bun.serve({
-  hostname: '127.0.0.1',
-  port: PROBE_PORT,
-  fetch: (req) =>
-    Response.json({
-      host: req.headers.get('host'),
-      origin: req.headers.get('origin'),
-      path: new URL(req.url).pathname,
-    }),
+const probe = createServer((req, res) => {
+  const host = req.headers.host ?? null;
+  const path = req.url === undefined ? '/' : new URL(req.url, `http://${host ?? 'localhost'}`).pathname;
+  res.setHeader('content-type', 'application/json');
+  res.end(JSON.stringify({ host, origin: req.headers.origin ?? null, path }));
 });
+probe.listen(PROBE_PORT, '127.0.0.1');
+await new Promise<void>((resolve) => probe.once('listening', resolve));
 
-let vite: Subprocess | undefined;
+let vite: ChildProcess | undefined;
 let pass = true;
 try {
   console.log(`echo probe listening on ${API_TARGET}`);
-  vite = spawn({
-    cmd: ['bun', 'run', 'dev'],
-    cwd: join(import.meta.dir, '..', 'apps', 'admin-next'),
+  vite = spawn('bun', ['run', 'dev'], {
+    cwd: join(import.meta.dirname, '..', 'apps', 'admin-next'),
     env: { ...process.env, ADMIN_API_TARGET: API_TARGET },
-    stdout: 'pipe',
-    stderr: 'pipe',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   });
-  children.push(vite);
   await waitFor(`${VITE_BASE}/`, 20_000);
   console.log(`vite dev listening on ${VITE_BASE}`);
 
@@ -131,7 +144,8 @@ try {
 
   console.log(pass ? '\nPROXY PROBE PASSED.' : '\nPROXY PROBE FAILED.');
 } finally {
-  probe.stop(true);
+  probe.closeAllConnections();
+  probe.close();
   if (vite !== undefined) {
     killTree(vite);
   }

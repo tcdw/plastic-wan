@@ -29,7 +29,8 @@ services:
     # environment:
     #   PUID: "1000"
     #   PGID: "1000"
-    # Admin panel binds to 127.0.0.1 inside the container.
-    # To access it, use:  docker exec -it <container> curl http://127.0.0.1:8787
+    # Admin panel binds to admin.host from config.jsonc (typically 127.0.0.1,
+    # which Docker port publishing cannot reach). To publish the panel, set
+    # admin.host to 0.0.0.0 in config.jsonc and uncomment:
     # ports:
     #   - "127.0.0.1:8787:8787"

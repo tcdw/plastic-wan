@@ -229,7 +229,7 @@ docker compose run --rm plasticwan backup --config /config/config.jsonc
 
 注意：`serve` 是长期进程且受 `ServeLock` 约束，同一 `data_dir` 只能有一个实例。上面的一次性命令都不启动 `serve`，可以与运行中的容器共存；但**不要**用 `docker compose run` 再起一个 `serve`。
 
-Admin Panel 的 `admin.host` 只接受回环地址，因此它绑定的是**容器内**的 `127.0.0.1`。Docker 的端口发布转发到容器在 bridge 网络上的地址，够不到 loopback，所以 `docker-compose.yml` 里的 `ports:` 默认是注释掉的，取消注释也不会让面板可达。可行的访问方式：
+`admin.host` 不再限制回环。容器内绑定 `127.0.0.1` 时，Docker 的端口发布转发到容器在 bridge 网络上的地址、够不到 loopback，所以 `docker-compose.yml` 里的 `ports:` 默认是注释掉的；要在容器外直接访问面板，需把 `admin.host` 显式改为 `0.0.0.0` 再取消 `ports:` 注释——这会把面板暴露给宿主网络，TLS 与访问控制由运维承担。更稳妥的访问方式：
 
 - `docker compose exec plasticwan <客户端> http://127.0.0.1:8787/...`（镜像未显式安装 curl，先确认基础镜像里有没有）；
 - 让反向代理与容器共享网络命名空间（`network_mode: "service:plasticwan"`），由它承担 TLS 与对外暴露。

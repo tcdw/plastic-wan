@@ -4,7 +4,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 审计数据只读；记忆管理、Bot 管理员列表管理、模型热切换、解除睡眠、取消挂起会话与取消 pending Alarm 是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume`、`/cut_topic` 等 Bot 管理员命令的 Telegram 用户，热切换 agent 模型，唤醒/取消挂起会话，或取消尚未触发的 Alarm。面板不能改写配置文件、不能重跑 Invocation 或删除审计记录。
 
-`admin` section 的字段语义见 [configuration.md](configuration.md#admin-panel)；`admin.host` 的回环限制在 `validateSemantics` 中强制，配置整体参与 `config_hash`，改动后必须重启 `serve`。
+`admin` section 的字段语义见 [configuration.md](configuration.md#admin-panel)；`admin.host` 不限制取值，绑定地址与暴露风险由运维负责（推荐回环 + 反向代理），配置整体参与 `config_hash`，改动后必须重启 `serve`。
 
 ## 生命周期
 

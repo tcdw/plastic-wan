@@ -119,7 +119,7 @@ pnpm run admin:dev
 - 同一 `data_dir` 只能有一个实例；`ServeLock` 使用 `serve.lock` 防止双实例和 Telegram long polling 竞争。
 - 修改 `config.jsonc` 后必须重启。用启动日志中的 `config_hash` 与 `check-config` 输出对比，避免误判白名单或模型配置。
 - 本地人工运行使用 `Ctrl+C` 停止；不要用未验证 PID 的强制终止命令。
-- Admin Panel 随 `serve` 在同一进程内启动，仅在 `admin.enabled = true` 时监听，且必须绑定回环地址。
+- Admin Panel 随 `serve` 在同一进程内启动，仅在 `admin.enabled = true` 时监听；`admin.host` 不限制回环，非回环绑定的暴露风险由运维承担。
 
 ## Coding Style & Naming Conventions
 

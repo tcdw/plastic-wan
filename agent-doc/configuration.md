@@ -343,7 +343,7 @@ Streamable HTTP 使用 `url` 与可选 SecretRef `headers`，且 `follow_redirec
 ```
 
 - `enabled = false` 或省略整个 section 时 `serve` 不监听任何 HTTP 端口。
-- `host` 只接受 `127.0.0.1`、`::1`、`localhost`；远程访问必须由反向代理承担 TLS 与网络暴露。
+- `host` 是任意非空字符串，不做回环限制；绑定非回环地址（如 `0.0.0.0`）会把面板暴露给所在网络，TLS 与访问控制由运维负责。推荐保持回环并经反向代理对外。
 - `session_ttl_hours` 同时决定 Session 过期与 Cookie `Max-Age`。
 - `static_dir` 可选，默认 `apps/admin-next/dist`（相对仓库根解释）；目录缺失时审计 API 仍可用，静态路由返回 503 `admin_bundle_missing`。
 

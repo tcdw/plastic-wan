@@ -652,11 +652,12 @@ test('admin static serving falls back to index.html and refuses traversal', asyn
   }
 });
 
-test('admin config rejects a non-loopback bind host', async () => {
+test('admin config accepts a non-loopback bind host', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-admin-host-'));
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
-  await writeFile(
+  await writeTestConfig(
+    directory,
     configPath,
     testConfigJsonc(directory, (config) => {
       config.admin = {
@@ -667,7 +668,11 @@ test('admin config rejects a non-loopback bind host', async () => {
       };
     }),
   );
-  await expect(loadConfig(configPath)).rejects.toThrow('admin.host must be a loopback address');
+  // The loopback restriction was deliberately removed: the operator owns the bind
+  // address, so a non-loopback host must load for LAN/desktop deployments.
+  await expect(loadConfig(configPath)).resolves.toMatchObject({
+    config: { admin: { host: '0.0.0.0', port: 8899 } },
+  });
 });
 
 test('admin can cancel all pending sessions', async () => {

@@ -117,7 +117,7 @@ node src/cli.ts serve --config dev-data/config.jsonc
 
 验证：
 
-1. 出现一次 `admin_started`，host 为回环地址。
+1. 出现一次 `admin_started`，host/port 与配置一致。
 2. 首次打开 `http://127.0.0.1:<port>/` 渲染 “Create the administrator account” 表单（按钮 “Create account”），`GET /api/auth/session` 返回 `setup_required = true`。
 3. 创建账号后 Overview 显示 Invocations / Stored messages / Cached media analyses 统计卡，以及 Invocation states、Configured sticker index states、Top tools 表和 7d/30d Usage 图表。
 4. Tool session 详情六个 Tab（Overview / Tool calls / Model calls / Telegram sends / Agent transcript / Frozen context）各自渲染；默认落在 Overview 时间线。

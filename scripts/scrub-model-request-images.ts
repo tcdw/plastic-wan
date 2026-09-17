@@ -1,4 +1,4 @@
-import { Database } from 'bun:sqlite';
+import Database from 'better-sqlite3';
 import { access, copyFile, mkdir, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { ServeLock } from '../src/store/database.ts';
@@ -33,7 +33,7 @@ function parseOptions(argv: readonly string[]): Options {
     throw new Error(`Unknown argument: ${argument ?? ''}`);
   }
   if (database === undefined || database.length === 0) {
-    throw new Error('Usage: bun run scripts/scrub-model-request-images.ts --database <path> [--no-backup]');
+    throw new Error('Usage: node scripts/scrub-model-request-images.ts --database <path> [--no-backup]');
   }
   return { database: resolve(database), backup };
 }
@@ -42,8 +42,8 @@ function timestampForFile(): string {
   return new Date().toISOString().replaceAll(':', '-');
 }
 
-function assertIntegrity(database: Database, phase: string): void {
-  const rows = database.query<{ integrity_check: string }, []>('PRAGMA integrity_check').all();
+function assertIntegrity(database: Database.Database, phase: string): void {
+  const rows = database.prepare<[], { integrity_check: string }>('PRAGMA integrity_check').all();
   if (rows.length !== 1 || rows[0]?.integrity_check !== 'ok') {
     throw new Error(`${phase} integrity_check failed: ${JSON.stringify(rows)}`);
   }
@@ -62,10 +62,11 @@ async function main(): Promise<void> {
 
   const dataDir = dirname(options.database);
   const lock = await ServeLock.acquire(dataDir);
-  let database: Database | undefined;
+  let database: Database.Database | undefined;
   try {
     const beforeBytes = (await stat(options.database)).size;
-    database = new Database(options.database, { create: false, strict: true, safeIntegers: true });
+    database = new Database(options.database, { fileMustExist: true });
+    database.defaultSafeIntegers(true);
     database.exec('PRAGMA journal_mode = WAL;');
     database.exec('PRAGMA synchronous = FULL;');
     database.exec('PRAGMA foreign_keys = ON;');
@@ -74,11 +75,11 @@ async function main(): Promise<void> {
     assertIntegrity(database, 'before migration');
 
     const table = database
-      .query<{ present: bigint }, []>(
+      .prepare<[], { present: bigint }>(
         "SELECT 1 AS present FROM pragma_table_info('model_calls') WHERE name = 'request_json'",
       )
       .get();
-    if (table === null) {
+    if (table === undefined) {
       throw new Error('model_calls.request_json does not exist');
     }
 
@@ -90,7 +91,8 @@ async function main(): Promise<void> {
       await mkdir(backupDir, { recursive: true, mode: 0o700 });
       backupPath = join(backupDir, `before-request-image-scrub-${timestampForFile()}-${basename(options.database)}`);
       await copyFile(options.database, backupPath);
-      database = new Database(options.database, { create: false, strict: true, safeIntegers: true });
+      database = new Database(options.database, { fileMustExist: true });
+      database.defaultSafeIntegers(true);
       database.exec('PRAGMA journal_mode = WAL;');
       database.exec('PRAGMA synchronous = FULL;');
       database.exec('PRAGMA foreign_keys = ON;');
@@ -104,7 +106,7 @@ async function main(): Promise<void> {
     let decodedBytes = 0;
     while (true) {
       const rows = database
-        .query<RequestRow, [bigint, bigint]>(
+        .prepare<[bigint, bigint], RequestRow>(
           `SELECT id, request_json
            FROM model_calls
            WHERE id > ?
@@ -118,7 +120,7 @@ async function main(): Promise<void> {
       }
       database
         .transaction(() => {
-          const update = database?.query('UPDATE model_calls SET request_json = ? WHERE id = ? AND request_json = ?');
+          const update = database?.prepare('UPDATE model_calls SET request_json = ? WHERE id = ? AND request_json = ?');
           if (update === undefined) {
             throw new Error('Database closed during migration');
           }
@@ -146,14 +148,14 @@ async function main(): Promise<void> {
     }
 
     const remaining = database
-      .query<{ count: bigint }, []>(
+      .prepare<[], { count: bigint }>(
         `SELECT COUNT(*) AS count
          FROM model_calls
          WHERE request_json IS NOT NULL
            AND lower(request_json) LIKE '%data:image/%;base64,%'`,
       )
       .get();
-    if (remaining === null || remaining.count !== 0n) {
+    if (remaining === undefined || remaining.count !== 0n) {
       throw new Error(`Inline image data remains in ${remaining?.count.toString() ?? 'unknown'} rows`);
     }
 

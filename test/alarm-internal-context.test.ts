@@ -78,10 +78,12 @@ function futureIso(offsetMilliseconds: number): string {
 
 function finishInvocation(store: SqliteStore, invocationId: bigint, at: string): void {
   store.db
-    .query("UPDATE invocations SET state = 'completed', finished_at = ?, completion_reason = 'completed' WHERE id = ?")
+    .prepare(
+      "UPDATE invocations SET state = 'completed', finished_at = ?, completion_reason = 'completed' WHERE id = ?",
+    )
     .run(at, invocationId);
   store.db
-    .query(
+    .prepare(
       "UPDATE buckets SET state = 'completed', finished_at = ?, updated_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
     )
     .run(at, at, invocationId);
@@ -96,7 +98,7 @@ function insertAlarm(
   createdByUserId: bigint | null = targetUserId,
 ): bigint {
   const created = store.db
-    .query(
+    .prepare(
       `INSERT INTO alarms(conversation_id, target_user_id, created_by_user_id, target_display_name, summary,
                           scheduled_at, created_at, state, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
@@ -121,7 +123,7 @@ describe('alarm internal context and ownership', () => {
     ingestion.ingest(update(1, 10, '我有哪些闹钟'), received);
     const invocationId = processOne(scheduler, new Date(received.getTime() + 15_000));
     const conversationId = store.db
-      .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
+      .prepare<[bigint], { conversation_id: bigint }>('SELECT conversation_id FROM invocations WHERE id = ?')
       .get(invocationId)?.conversation_id;
     if (conversationId === undefined) {
       throw new Error('Expected conversation');
@@ -130,11 +132,11 @@ describe('alarm internal context and ownership', () => {
     const a2 = insertAlarm(store, conversationId, 42n, '吃饭', '2026-08-16T10:00:00.000Z');
     insertAlarm(store, conversationId, 99n, '别人的', '2026-08-16T08:00:00.000Z');
     store.db
-      .query("UPDATE alarms SET state = 'fired', updated_at = ? WHERE id = ?")
+      .prepare("UPDATE alarms SET state = 'fired', updated_at = ? WHERE id = ?")
       .run('2026-08-16T04:31:00.000Z', a1);
     const a3 = insertAlarm(store, conversationId, 42n, '开会', '2026-08-16T12:00:00.000Z');
     store.db
-      .query(
+      .prepare(
         "UPDATE alarms SET state = 'cancelled', cancelled_at = ?, cancel_reason = 'test', updated_at = ? WHERE id = ?",
       )
       .run('2026-08-16T12:01:00.000Z', '2026-08-16T12:01:00.000Z', a3);
@@ -148,7 +150,7 @@ describe('alarm internal context and ownership', () => {
       runtime: {
         recordAgentMessage: (currentInvocationId, role, text) => {
           const created = store.db
-            .query(
+            .prepare(
               "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, 1, ?, ?, '', ?)",
             )
             .run(currentInvocationId, role, text, '2026-08-15T00:00:15.000Z');
@@ -162,7 +164,7 @@ describe('alarm internal context and ownership', () => {
       { id: pending.toString(), scheduled_at: '2026-08-16T14:00:00.000Z', summary: '复盘' },
     ]);
     const audit = store.db
-      .query<{ state: string; error_code: string | null; result_text: string | null }, [string]>(
+      .prepare<[string], { state: string; error_code: string | null; result_text: string | null }>(
         'SELECT state, error_code, result_text FROM tool_calls WHERE tool_call_id = ?',
       )
       .get('call-1');
@@ -172,22 +174,24 @@ describe('alarm internal context and ownership', () => {
       result_text: `count=2 1:${a2.toString()}@2026-08-16T10:00:00.000Z 2:${pending.toString()}@2026-08-16T14:00:00.000Z`,
     });
     const internal = store.db
-      .query<
+      .prepare<
+        [],
         {
           kind: string;
           version: bigint;
           observed_at: string;
           payload_json: string;
           source_agent_message_id: bigint | null;
-        },
-        []
+        }
       >('SELECT kind, version, observed_at, payload_json, source_agent_message_id FROM internal_contexts')
       .get();
     expect(internal?.kind).toBe('alarm_list');
     expect(internal?.version).toBe(1n);
     expect(internal?.payload_json).toContain(`"id":"${pending.toString()}"`);
     const toolResultMessage = store.db
-      .query<{ id: bigint; role: string }, []>("SELECT id, role FROM agent_messages WHERE role = 'tool_result' LIMIT 1")
+      .prepare<[], { id: bigint; role: string }>(
+        "SELECT id, role FROM agent_messages WHERE role = 'tool_result' LIMIT 1",
+      )
       .get();
     expect(internal?.source_agent_message_id).toBe(toolResultMessage?.id ?? null);
     finishInvocation(store, invocationId, '2026-08-15T00:00:20.000Z');
@@ -227,7 +231,7 @@ describe('alarm internal context and ownership', () => {
       runtime: {
         recordAgentMessage: (currentInvocationId, role, text) => {
           const inserted = store.db
-            .query(
+            .prepare(
               "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, 1, ?, ?, '', ?)",
             )
             .run(currentInvocationId, role, text, '2026-08-15T00:00:15.000Z');
@@ -251,7 +255,7 @@ describe('alarm internal context and ownership', () => {
       runtime: {
         recordAgentMessage: (currentInvocationId, role, text) => {
           const inserted = store.db
-            .query(
+            .prepare(
               "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, 1, ?, ?, '', ?)",
             )
             .run(currentInvocationId, role, text, '2026-08-15T00:00:35.000Z');
@@ -281,7 +285,7 @@ describe('alarm internal context and ownership', () => {
     expect(ok.details.state).toBe('cancelled');
     expect(
       store.db
-        .query<{ state: string; cancel_reason: string | null }, [bigint]>(
+        .prepare<[bigint], { state: string; cancel_reason: string | null }>(
           'SELECT state, cancel_reason FROM alarms WHERE id = ?',
         )
         .get(own),
@@ -290,11 +294,11 @@ describe('alarm internal context and ownership', () => {
     await expect(tool.execute('delete-other', { id: other.toString() })).rejects.toThrow('alarm not found');
     await expect(tool.execute('delete-missing', { id: '999999' })).rejects.toThrow('alarm not found');
     store.db
-      .query("UPDATE alarms SET state = 'fired', updated_at = ? WHERE id = ?")
+      .prepare("UPDATE alarms SET state = 'fired', updated_at = ? WHERE id = ?")
       .run('2026-08-16T07:30:00.000Z', other);
     await expect(tool.execute('delete-changed', { id: other.toString() })).rejects.toThrow('alarm not found');
     const audits = store.db
-      .query<{ tool_call_id: string; state: string; error_code: string | null }, []>(
+      .prepare<[], { tool_call_id: string; state: string; error_code: string | null }>(
         "SELECT tool_call_id, state, error_code FROM tool_calls WHERE tool_name = 'delete_alarm' ORDER BY id",
       )
       .all();
@@ -328,7 +332,7 @@ describe('alarm internal context and ownership', () => {
     });
     expect(
       store.db
-        .query<{ created_by_user_id: bigint | null; target_user_id: bigint }, [string]>(
+        .prepare<[string], { created_by_user_id: bigint | null; target_user_id: bigint }>(
           'SELECT created_by_user_id, target_user_id FROM alarms WHERE id = ?',
         )
         .get(created.details.id),
@@ -343,15 +347,15 @@ describe('alarm internal context and ownership', () => {
     const seedInvocation = processOne(scheduler, new Date(received.getTime() + 15_000));
     finishInvocation(store, seedInvocation, '2026-08-15T00:00:20.000Z');
     store.db
-      .query(
+      .prepare(
         `INSERT INTO senders(telegram_type, telegram_id, is_bot, display_name, username, updated_at)
          VALUES ('sender_chat', 777, 0, 'Channel', NULL, ?)`,
       )
       .run('2026-08-15T00:00:20.000Z');
     ingestion.ingest(update(2, 11, 'alice', 42), new Date(received.getTime() + 20_000));
-    store.db.query('UPDATE messages SET sent_by_bot = 0 WHERE telegram_message_id = 11').run();
+    store.db.prepare('UPDATE messages SET sent_by_bot = 0 WHERE telegram_message_id = 11').run();
     store.db
-      .query(
+      .prepare(
         `UPDATE message_revisions
          SET sender_id = (SELECT id FROM senders WHERE telegram_type = 'sender_chat' ORDER BY id DESC LIMIT 1)
          WHERE message_id = (SELECT id FROM messages WHERE telegram_message_id = 11)
@@ -366,7 +370,7 @@ describe('alarm internal context and ownership', () => {
       runtime: {
         recordAgentMessage: (currentInvocationId, role, text) => {
           const created = store.db
-            .query(
+            .prepare(
               "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, 1, ?, ?, '', ?)",
             )
             .run(currentInvocationId, role, text, '2026-08-15T00:00:15.000Z');
@@ -387,7 +391,7 @@ describe('alarm internal context and ownership', () => {
     await expect(deleteTool.execute('delete-closed', { id: '1' })).rejects.toThrow('caller identity');
     expect(
       store.db
-        .query<{ tool_name: string; error_code: string }, []>(
+        .prepare<[], { tool_name: string; error_code: string }>(
           "SELECT tool_name, error_code FROM tool_calls WHERE error_code = 'alarm_caller_not_available' ORDER BY id",
         )
         .all(),
@@ -412,7 +416,7 @@ describe('alarm internal context and ownership', () => {
       runtime: {
         recordAgentMessage: (currentInvocationId, role, text) => {
           const created = store.db
-            .query(
+            .prepare(
               "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, 1, ?, ?, '', ?)",
             )
             .run(currentInvocationId, role, text, '2026-08-15T00:00:15.000Z');
@@ -440,7 +444,7 @@ describe('alarm internal context and ownership', () => {
       runtime: {
         recordAgentMessage: (currentInvocationId, role, text) => {
           const created = store.db
-            .query(
+            .prepare(
               "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, 1, ?, ?, '', ?)",
             )
             .run(currentInvocationId, role, text, '2026-08-15T00:00:15.000Z');
@@ -471,7 +475,8 @@ describe('alarm internal context and ownership', () => {
     const { purgeExpiredData } = await import('../src/store/database.ts');
     purgeExpiredData(reopenedForPurge.orm, loaded.config, new Date('2026-10-01T00:00:00.000Z'));
     expect(
-      reopenedForPurge.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM internal_contexts').get()?.count,
+      reopenedForPurge.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM internal_contexts').get()
+        ?.count,
     ).toBe(0n);
     reopenedForPurge.close();
     expect(await pathExists(join(directory, 'config.jsonc'))).toBe(true);

@@ -272,7 +272,7 @@ export class ConversationContextStore {
 
   stats(header: ContextHeader): ContextStats {
     const row = this.#store.db
-      .query<{ count: bigint; sends: bigint; tokens: bigint | null }, [bigint, bigint]>(
+      .prepare<[bigint, bigint], { count: bigint; sends: bigint; tokens: bigint | null }>(
         `SELECT COUNT(*) AS count,
                 COALESCE(SUM(CASE WHEN send_seq IS NOT NULL THEN 1 ELSE 0 END), 0) AS sends,
                 SUM(est_tokens) AS tokens

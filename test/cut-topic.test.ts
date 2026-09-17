@@ -95,16 +95,16 @@ async function setup(): Promise<{
 
 function completeInvocation(store: SqliteStore, invocationId: bigint, at: Date): void {
   store.db
-    .query("UPDATE invocations SET state = 'completed', started_at = ?, finished_at = ? WHERE id = ?")
+    .prepare("UPDATE invocations SET state = 'completed', started_at = ?, finished_at = ? WHERE id = ?")
     .run(new Date(at.getTime() - 1_000).toISOString(), at.toISOString(), invocationId);
   store.db
-    .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+    .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
     .run(invocationId);
 }
 
 function chatOfInvocation(store: SqliteStore, invocationId: bigint): bigint | undefined {
   return store.db
-    .query<{ chat_id: bigint }, [bigint]>(
+    .prepare<[bigint], { chat_id: bigint }>(
       'SELECT c.telegram_chat_id AS chat_id FROM invocations i JOIN conversations v ON v.id = i.conversation_id JOIN chats c ON c.id = v.chat_id WHERE i.id = ?',
     )
     .get(invocationId)?.chat_id;
@@ -145,7 +145,7 @@ function invocationHistory(
     throw new Error(`No queued invocation found for chat ${chatId}`);
   }
   return store.db
-    .query<{ snapshot_json: string }, [bigint]>(
+    .prepare<[bigint], { snapshot_json: string }>(
       "SELECT snapshot_json FROM invocation_messages WHERE invocation_id = ? AND section = 'history' ORDER BY sequence_no",
     )
     .all(invocationId)
@@ -181,8 +181,9 @@ describe('cut_topic', () => {
     expect(command).toEqual({ name: 'cut_topic', messageId: 12n });
     expect(commands.run(command!, FIRST_CHAT, ALICE)).toContain('已切掉');
     expect(
-      store.db.query<{ telegram_message_id: bigint }, []>('SELECT telegram_message_id FROM chat_context_cutoffs').get()
-        ?.telegram_message_id,
+      store.db
+        .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM chat_context_cutoffs')
+        .get()?.telegram_message_id,
     ).toBe(12n);
 
     const history = invocationHistory(
@@ -208,7 +209,7 @@ describe('cut_topic', () => {
       throw new Error('Expected an invocation');
     }
     const conversationId = store.db
-      .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
+      .prepare<[bigint], { conversation_id: bigint }>('SELECT conversation_id FROM invocations WHERE id = ?')
       .get(invocationId)?.conversation_id;
     if (conversationId === undefined) {
       throw new Error('Expected a conversation');
@@ -279,7 +280,7 @@ describe('cut_topic', () => {
         throw new Error('Expected an invocation');
       }
       const conversationId = store.db
-        .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
+        .prepare<[bigint], { conversation_id: bigint }>('SELECT conversation_id FROM invocations WHERE id = ?')
         .get(invocationId)?.conversation_id;
       if (conversationId === undefined) {
         throw new Error('Expected a conversation');
@@ -287,7 +288,7 @@ describe('cut_topic', () => {
       // Ingestion put this Conversation on thread 0, because the chat is not a forum.
       expect(
         store.db
-          .query<{ message_thread_id: bigint }, [bigint]>('SELECT message_thread_id FROM conversations WHERE id = ?')
+          .prepare<[bigint], { message_thread_id: bigint }>('SELECT message_thread_id FROM conversations WHERE id = ?')
           .get(conversationId)?.message_thread_id,
       ).toBe(0n);
       const contexts = new ConversationContextStore(store);
@@ -341,13 +342,14 @@ describe('cut_topic', () => {
       const deadline = Date.now() + 10_000;
       while (
         Date.now() < deadline &&
-        store.db.query<{ id: bigint }, []>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1").get() === null
+        store.db.prepare<[], { id: bigint }>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1").get() ===
+          undefined
       ) {
         await sleep(10);
       }
       expect(
-        store.db.query<{ id: bigint }, []>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1").get(),
-      ).not.toBeNull();
+        store.db.prepare<[], { id: bigint }>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1").get(),
+      ).not.toBeUndefined();
 
       const command = ingestion.ingest(commandUpdate(3, 12, FIRST_CHAT), new Date()).command;
       expect(commands.run(command!, FIRST_CHAT, ALICE)).toContain('清空');
@@ -375,8 +377,9 @@ describe('cut_topic', () => {
     const second = ingestion.ingest(commandUpdate(4, 13, FIRST_CHAT), at(34)).command;
     commands.run(second!, FIRST_CHAT, ALICE);
     expect(
-      store.db.query<{ telegram_message_id: bigint }, []>('SELECT telegram_message_id FROM chat_context_cutoffs').get()
-        ?.telegram_message_id,
+      store.db
+        .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM chat_context_cutoffs')
+        .get()?.telegram_message_id,
     ).toBe(13n);
 
     // A message arriving after the second cut stays eligible for later sessions.
@@ -393,7 +396,7 @@ describe('cut_topic', () => {
     const command = ingestion.ingest(commandUpdate(3, 11, FIRST_CHAT), new Date(start.getTime() + 1_000)).command;
     commands.run(command!, FIRST_CHAT, ALICE);
     expect(
-      store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM chat_context_cutoffs').get()?.count,
+      store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM chat_context_cutoffs').get()?.count,
     ).toBe(1n);
 
     expect(
@@ -431,7 +434,7 @@ describe('cut_topic', () => {
       '该命令仅对本 Bot 的管理员可用。',
     );
     expect(
-      store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM chat_context_cutoffs').get()?.count,
+      store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM chat_context_cutoffs').get()?.count,
     ).toBe(0n);
     store.close();
   });
@@ -450,13 +453,15 @@ describe('cut_topic', () => {
     }));
     const recreatedCommands = new BotCommandService(store, loaded.config, reopened);
     expect(
-      store.db.query<{ telegram_message_id: bigint }, []>('SELECT telegram_message_id FROM chat_context_cutoffs').get()
-        ?.telegram_message_id,
+      store.db
+        .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM chat_context_cutoffs')
+        .get()?.telegram_message_id,
     ).toBe(11n);
     recreatedCommands.run({ name: 'cut_topic', messageId: 20n }, FIRST_CHAT, ALICE);
     expect(
-      store.db.query<{ telegram_message_id: bigint }, []>('SELECT telegram_message_id FROM chat_context_cutoffs').get()
-        ?.telegram_message_id,
+      store.db
+        .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM chat_context_cutoffs')
+        .get()?.telegram_message_id,
     ).toBe(20n);
     expect(
       invocationHistory(

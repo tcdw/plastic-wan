@@ -91,11 +91,11 @@ describe('bucket scheduler', () => {
     expect(scheduler.processDue(new Date(start.getTime() + 5_999))).toHaveLength(0);
     expect(scheduler.processDue(new Date(start.getTime() + 6_000))).toHaveLength(1);
     const snapshot = store.db
-      .query<{ snapshot_json: string }, []>("SELECT snapshot_json FROM invocation_messages WHERE section = 'new'")
+      .prepare<[], { snapshot_json: string }>("SELECT snapshot_json FROM invocation_messages WHERE section = 'new'")
       .get();
-    expect(snapshot === null ? null : JSON.parse(snapshot.snapshot_json).text).toBe('after');
+    expect(snapshot === undefined ? null : JSON.parse(snapshot.snapshot_json).text).toBe('after');
     expect(
-      store.db.query<{ prompt_version: bigint }, []>('SELECT prompt_version FROM invocations').get()?.prompt_version,
+      store.db.prepare<[], { prompt_version: bigint }>('SELECT prompt_version FROM invocations').get()?.prompt_version,
     ).toBe(5n);
     store.close();
   });
@@ -109,9 +109,9 @@ describe('bucket scheduler', () => {
       throw new Error('Expected first invocation');
     }
     store.db
-      .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+      .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
       .run(firstInvocation);
-    store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(firstInvocation);
+    store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(firstInvocation);
     const edited: Update = {
       update_id: 2,
       edited_message: {
@@ -130,17 +130,17 @@ describe('bucket scheduler', () => {
       throw new Error('Expected second invocation');
     }
     const frozen = store.db
-      .query<{ snapshot_json: string }, [bigint]>(
+      .prepare<[bigint], { snapshot_json: string }>(
         "SELECT snapshot_json FROM invocation_messages WHERE invocation_id = ? AND section = 'new'",
       )
       .get(firstInvocation);
     const future = store.db
-      .query<{ snapshot_json: string }, [bigint]>(
+      .prepare<[bigint], { snapshot_json: string }>(
         "SELECT snapshot_json FROM invocation_messages WHERE invocation_id = ? AND section = 'history' ORDER BY sequence_no DESC LIMIT 1",
       )
       .get(secondInvocation);
-    expect(frozen === null ? null : JSON.parse(frozen.snapshot_json).text).toBe('before');
-    expect(future === null ? null : JSON.parse(future.snapshot_json).text).toBe('after');
+    expect(frozen === undefined ? null : JSON.parse(frozen.snapshot_json).text).toBe('before');
+    expect(future === undefined ? null : JSON.parse(future.snapshot_json).text).toBe('after');
     store.close();
   });
 
@@ -152,7 +152,7 @@ describe('bucket scheduler', () => {
     scheduler.recover(recoveredAt);
     const [invocationId] = scheduler.processDue(recoveredAt);
     expect(invocationId).toBeDefined();
-    expect(store.db.query<{ state: string }, []>('SELECT state FROM buckets').get()?.state).toBe('queued');
+    expect(store.db.prepare<[], { state: string }>('SELECT state FROM buckets').get()?.state).toBe('queued');
     store.close();
   });
 
@@ -161,7 +161,7 @@ describe('bucket scheduler', () => {
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'old'), start);
     scheduler.recover(new Date(start.getTime() + 5 * 60_000 + 1));
-    expect(store.db.query<{ state: string }, []>('SELECT state FROM buckets').get()?.state).toBe('expired');
+    expect(store.db.prepare<[], { state: string }>('SELECT state FROM buckets').get()?.state).toBe('expired');
     store.close();
   });
 
@@ -174,17 +174,17 @@ describe('bucket scheduler', () => {
       throw new Error('Expected first invocation');
     }
     store.db
-      .query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
+      .prepare("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
       .run(new Date(start.getTime() + 15_000).toISOString(), firstInvocation);
     store.db
-      .query(
+      .prepare(
         "UPDATE buckets SET state = 'running', started_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
       )
       .run(new Date(start.getTime() + 15_000).toISOString(), firstInvocation);
     ingestion.ingest(textUpdate(2, 11, 'during'), new Date(start.getTime() + 16_000));
     expect(scheduler.processDue(new Date(start.getTime() + 60_000))).toHaveLength(0);
     expect(
-      store.db.query<{ state: string }, []>('SELECT state FROM buckets ORDER BY id DESC LIMIT 1').get()?.state,
+      store.db.prepare<[], { state: string }>('SELECT state FROM buckets ORDER BY id DESC LIMIT 1').get()?.state,
     ).toBe('collecting');
     store.close();
   });
@@ -201,20 +201,20 @@ describe('bucket scheduler', () => {
     }
     const firstStarted = new Date(start.getTime() + 6_000);
     store.db
-      .query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
+      .prepare("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
       .run(firstStarted.toISOString(), firstInvocation);
     store.db
-      .query(
+      .prepare(
         "UPDATE buckets SET state = 'running', started_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
       )
       .run(firstStarted.toISOString(), firstInvocation);
     ingestion.ingest(textUpdate(2, 11, 'next'), new Date(start.getTime() + 9_000));
     expect(scheduler.processDue(new Date(start.getTime() + 11_999))).toHaveLength(0);
     store.db
-      .query("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
+      .prepare("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
       .run(new Date(start.getTime() + 10_000).toISOString(), firstInvocation);
     store.db
-      .query(
+      .prepare(
         "UPDATE buckets SET state = 'completed', finished_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
       )
       .run(new Date(start.getTime() + 10_000).toISOString(), firstInvocation);
@@ -224,7 +224,7 @@ describe('bucket scheduler', () => {
     expect(scheduler.processDue(new Date(start.getTime() + 14_999))).toHaveLength(0);
     expect(scheduler.processDue(new Date(start.getTime() + 15_000))).toHaveLength(1);
     const secondDeadline = store.db
-      .query<{ deadline_at: string }, []>('SELECT deadline_at FROM buckets ORDER BY id DESC LIMIT 1')
+      .prepare<[], { deadline_at: string }>('SELECT deadline_at FROM buckets ORDER BY id DESC LIMIT 1')
       .get();
     expect(secondDeadline?.deadline_at).toBe('2026-08-15T00:00:15.000Z');
     store.close();
@@ -241,20 +241,20 @@ describe('bucket scheduler', () => {
       throw new Error('Expected first invocation');
     }
     store.db
-      .query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
+      .prepare("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
       .run(new Date(start.getTime() + 6_000).toISOString(), firstInvocation);
     store.db
-      .query(
+      .prepare(
         "UPDATE buckets SET state = 'running', started_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
       )
       .run(new Date(start.getTime() + 6_000).toISOString(), firstInvocation);
     ingestion.ingest(textUpdate(2, 11, 'during'), new Date(start.getTime() + 8_000));
     expect(scheduler.processDue(new Date(start.getTime() + 20_000))).toHaveLength(0);
     store.db
-      .query("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
+      .prepare("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
       .run(new Date(start.getTime() + 20_000).toISOString(), firstInvocation);
     store.db
-      .query(
+      .prepare(
         "UPDATE buckets SET state = 'completed', finished_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
       )
       .run(new Date(start.getTime() + 20_000).toISOString(), firstInvocation);
@@ -281,19 +281,19 @@ describe('bucket scheduler', () => {
       ingestion.ingest(textUpdate(1, 10, 'only'), new Date());
       scheduler.wake();
       const deadline = Date.now() + 10_000;
-      let invocation: { id: bigint; state: string; completion_reason: string | null } | null = null;
+      let invocation: { id: bigint; state: string; completion_reason: string | null } | undefined;
       while (Date.now() < deadline) {
         invocation = store.db
-          .query<{ id: bigint; state: string; completion_reason: string | null }, []>(
+          .prepare<[], { id: bigint; state: string; completion_reason: string | null }>(
             'SELECT id, state, completion_reason FROM invocations ORDER BY id DESC LIMIT 1',
           )
           .get();
-        if (invocation !== null && invocation.state !== 'queued' && invocation.state !== 'running') {
+        if (invocation !== undefined && invocation.state !== 'queued' && invocation.state !== 'running') {
           break;
         }
         await sleep(10);
       }
-      if (invocation === null) {
+      if (invocation === undefined) {
         throw new Error('Expected an invocation');
       }
       // The audit row names the failure class instead of a bare "Error".
@@ -304,7 +304,7 @@ describe('bucket scheduler', () => {
       // The bucket this run consumed fails with it instead of staying open.
       expect(
         store.db
-          .query<{ state: string }, [bigint]>(
+          .prepare<[bigint], { state: string }>(
             'SELECT state FROM buckets WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)',
           )
           .get(invocation.id)?.state,
@@ -324,11 +324,11 @@ describe('bucket scheduler', () => {
       throw new Error('Expected invocation');
     }
     store.db
-      .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+      .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
       .run(invocationId);
-    store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(invocationId);
+    store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(invocationId);
     expect(scheduler.processDue(new Date(start.getTime() + 60_000))).toHaveLength(0);
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM invocations').get()?.count).toBe(1n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM invocations').get()?.count).toBe(1n);
     store.close();
   });
 
@@ -388,7 +388,7 @@ describe('bucket scheduler', () => {
       expect(started).toHaveLength(1);
       expect(maxActive).toBe(1);
       expect(
-        store.db.query<{ state: string }, []>('SELECT state FROM buckets ORDER BY id DESC LIMIT 1').get()?.state,
+        store.db.prepare<[], { state: string }>('SELECT state FROM buckets ORDER BY id DESC LIMIT 1').get()?.state,
       ).toBe('collecting');
 
       releaseFirst();
@@ -398,17 +398,19 @@ describe('bucket scheduler', () => {
       await scheduler.stop();
       expect(scheduler.processDue()).toHaveLength(0);
       expect(started).toHaveLength(2);
-      expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM invocations').get()?.count).toBe(2n);
+      expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM invocations').get()?.count).toBe(
+        2n,
+      );
       expect(
         store.db
-          .query<{ count: bigint }, [bigint]>(
+          .prepare<[bigint], { count: bigint }>(
             "SELECT COUNT(*) AS count FROM invocation_messages WHERE message_id = ? AND section = 'new'",
           )
           .get(during.messageId!)?.count,
       ).toBe(1n);
       expect(
         store.db
-          .query<{ count: bigint }, []>(
+          .prepare<[], { count: bigint }>(
             "SELECT COUNT(*) AS count FROM buckets WHERE state IN ('collecting', 'queued', 'running')",
           )
           .get()?.count,
@@ -433,10 +435,10 @@ describe('bucket scheduler', () => {
     }
     const firstStarted = new Date(start.getTime() + 6_000);
     store.db
-      .query("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
+      .prepare("UPDATE invocations SET state = 'running', started_at = ? WHERE id = ?")
       .run(firstStarted.toISOString(), firstId);
     store.db
-      .query(
+      .prepare(
         "UPDATE buckets SET state = 'running', started_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
       )
       .run(firstStarted.toISOString(), firstId);
@@ -444,16 +446,18 @@ describe('bucket scheduler', () => {
     expect(scheduler.processDue(new Date(start.getTime() + 7_000))).toHaveLength(0);
     // finish the first session; its completion pushes every collecting bucket of the chat to the pace
     store.db
-      .query("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
+      .prepare("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
       .run(new Date(start.getTime() + 6_500).toISOString(), firstId);
     store.db
-      .query(
+      .prepare(
         "UPDATE buckets SET state = 'completed', finished_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
       )
       .run(new Date(start.getTime() + 6_500).toISOString(), firstId);
-    const chatId = store.db.query<{ chat_id: bigint }, []>('SELECT chat_id FROM conversations LIMIT 1').get()!.chat_id;
+    const chatId = store.db
+      .prepare<[], { chat_id: bigint }>('SELECT chat_id FROM conversations LIMIT 1')
+      .get()!.chat_id;
     store.db
-      .query(
+      .prepare(
         `UPDATE buckets SET deadline_at = ?, updated_at = ?
          WHERE conversation_id IN (SELECT id FROM conversations WHERE chat_id = ?) AND state = 'collecting'`,
       )
@@ -462,7 +466,7 @@ describe('bucket scheduler', () => {
     const [secondId] = scheduler.processDue(new Date(start.getTime() + 12_000));
     expect(secondId).toBeDefined();
     const secondBucket = store.db
-      .query<{ conversation_id: bigint; thread_id: bigint }, [bigint]>(
+      .prepare<[bigint], { conversation_id: bigint; thread_id: bigint }>(
         `SELECT b.conversation_id, v.message_thread_id AS thread_id FROM buckets b
          JOIN conversations v ON v.id = b.conversation_id
          WHERE b.id = (SELECT bucket_id FROM invocations WHERE id = ?)`,

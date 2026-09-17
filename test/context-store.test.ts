@@ -27,23 +27,23 @@ async function fixture(): Promise<{ store: SqliteStore; loaded: Awaited<ReturnTy
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
   store.db
-    .query(
+    .prepare(
       "INSERT INTO chats(telegram_chat_id, canonical_chat_id, type, updated_at) VALUES (1, 1, 'private', '2026-08-15T00:00:00.000Z')",
     )
     .run();
   store.db
-    .query(
+    .prepare(
       "INSERT INTO conversations(chat_id, message_thread_id, created_at, updated_at) VALUES ((SELECT id FROM chats LIMIT 1), 0, '2026-08-15T00:00:00.000Z', '2026-08-15T00:00:00.000Z')",
     )
     .run();
   store.db
-    .query(
+    .prepare(
       `INSERT INTO messages(conversation_id, chat_id, telegram_message_id, visible, sent_by_bot, telegram_date, received_at)
        VALUES ((SELECT id FROM conversations LIMIT 1), (SELECT id FROM chats LIMIT 1), 1, 1, 0, '2026-08-15T00:00:00.000Z', '2026-08-15T00:00:00.000Z')`,
     )
     .run();
   store.db
-    .query(
+    .prepare(
       `INSERT INTO message_revisions(message_id, revision_no, kind, created_at, raw_fragment_json)
        VALUES ((SELECT id FROM messages LIMIT 1), 1, 'photo', '2026-08-15T00:00:00.000Z', '{}')`,
     )
@@ -53,7 +53,7 @@ async function fixture(): Promise<{ store: SqliteStore; loaded: Awaited<ReturnTy
     ['file-2', 'unique-2'],
   ] as const) {
     store.db
-      .query(
+      .prepare(
         `INSERT INTO media(revision_id, kind, file_id, file_unique_id, mime_type, telegram_json)
          VALUES ((SELECT id FROM message_revisions LIMIT 1), 'photo', ?, ?, 'image/jpeg', '{}')`,
       )
@@ -63,7 +63,7 @@ async function fixture(): Promise<{ store: SqliteStore; loaded: Awaited<ReturnTy
 }
 
 function mediaId(store: SqliteStore, index: number): bigint {
-  const rows = store.db.query<{ id: bigint }, []>('SELECT id FROM media ORDER BY id').all();
+  const rows = store.db.prepare<[], { id: bigint }>('SELECT id FROM media ORDER BY id').all();
   const row = rows[index];
   if (row === undefined) {
     throw new Error('Fixture has no media row');
@@ -72,8 +72,8 @@ function mediaId(store: SqliteStore, index: number): bigint {
 }
 
 function conversationId(store: SqliteStore): bigint {
-  const row = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations LIMIT 1').get();
-  if (row === null) {
+  const row = store.db.prepare<[], { id: bigint }>('SELECT id FROM conversations LIMIT 1').get();
+  if (row === undefined) {
     throw new Error('Fixture has no conversation');
   }
   return row.id;
@@ -369,7 +369,7 @@ describe('conversation context store', () => {
     // The ref was carried by an evicted row, so it must stop resolving.
     expect(refs.resolve(header, ref, 'media')).toBeUndefined();
     const evicted = store.db
-      .query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM context_messages WHERE evicted_at IS NOT NULL')
+      .prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM context_messages WHERE evicted_at IS NOT NULL')
       .get();
     expect(evicted?.count).toBe(2n);
     expect(() => contexts.advanceHead(header, 2n)).toThrow('Refusing to advance');
@@ -462,13 +462,13 @@ describe('capability references', () => {
   test('reuses one media ref inside the context and refuses a cross-context lookup', async () => {
     const { store, loaded } = await fixture();
     store.db
-      .query(
+      .prepare(
         "INSERT INTO conversations(chat_id, message_thread_id, created_at, updated_at) VALUES ((SELECT id FROM chats LIMIT 1), 99, '2026-08-15T00:00:00.000Z', '2026-08-15T00:00:00.000Z')",
       )
       .run();
     const contexts = new ConversationContextStore(store);
     const refs = new ContextRefStore(store, { ttlHours: loaded.config.agent.context.ref_ttl_hours });
-    const conversations = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations ORDER BY id').all();
+    const conversations = store.db.prepare<[], { id: bigint }>('SELECT id FROM conversations ORDER BY id').all();
     const first = contexts.open(conversations[0]?.id ?? 0n, 'hash-a');
     const second = contexts.open(conversations[1]?.id ?? 0n, 'hash-a');
 

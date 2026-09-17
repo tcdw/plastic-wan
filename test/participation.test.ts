@@ -155,20 +155,20 @@ function editedGroupMessage(updateId: number, messageId: number, editDate: numbe
 }
 
 function bucketCount(store: SqliteStore): bigint {
-  return store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM buckets').get()?.count ?? -1n;
+  return store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM buckets').get()?.count ?? -1n;
 }
 
 function bucketMessages(store: SqliteStore): bigint {
-  return store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM bucket_messages').get()?.count ?? -1n;
+  return store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM bucket_messages').get()?.count ?? -1n;
 }
 
 function attention(store: SqliteStore): { expiresAt: string; triggerKind: string } | null {
   const row = store.db
-    .query<{ expires_at: string; trigger_kind: string }, []>(
+    .prepare<[], { expires_at: string; trigger_kind: string }>(
       'SELECT expires_at, trigger_kind FROM conversation_attention',
     )
     .get();
-  return row === null ? null : { expiresAt: row.expires_at, triggerKind: row.trigger_kind };
+  return row === undefined ? null : { expiresAt: row.expires_at, triggerKind: row.trigger_kind };
 }
 
 function ruleOf(options: {
@@ -376,7 +376,7 @@ describe('participation gate', () => {
     expect(result.bucketId).toBeUndefined();
     expect(bucketCount(store)).toBe(0n);
     expect(attention(store)).toBeNull();
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(1n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(1n);
     store.close();
   });
 
@@ -475,7 +475,7 @@ describe('participation gate', () => {
       throw new Error('Expected the first invocation');
     }
     const conversationId = store.db
-      .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
+      .prepare<[bigint], { conversation_id: bigint }>('SELECT conversation_id FROM invocations WHERE id = ?')
       .get(first)?.conversation_id;
     if (conversationId === undefined) {
       throw new Error('Expected a conversation');
@@ -500,9 +500,9 @@ describe('participation gate', () => {
       { provider: config.agent.provider, model: config.agent.model },
     );
     contexts.open(conversationId, stable.systemPromptHash);
-    store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
+    store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
     store.db
-      .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+      .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
       .run(first);
 
     // The window lapses, so this message never opens a bucket on its own.
@@ -542,7 +542,7 @@ describe('participation gate', () => {
     expect(attention(store)?.expiresAt).toBe('2026-08-15T13:01:00.000Z');
     expect(
       store.db
-        .query<{ count: bigint }, []>(
+        .prepare<[], { count: bigint }>(
           'SELECT COUNT(*) AS count FROM message_revisions WHERE message_id = (SELECT id FROM messages WHERE telegram_message_id = 10)',
         )
         .get()?.count,
@@ -597,9 +597,9 @@ describe('startup catch-up participation', () => {
     });
     expect(result.invocationIds).toHaveLength(0);
     expect(
-      store.db.query<{ state: string; error_code: string }, []>('SELECT state, error_code FROM buckets').get(),
+      store.db.prepare<[], { state: string; error_code: string }>('SELECT state, error_code FROM buckets').get(),
     ).toEqual({ state: 'skipped_budget', error_code: 'participation_gated' });
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM invocations').get()?.count).toBe(0n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM invocations').get()?.count).toBe(0n);
     store.close();
   });
 
@@ -615,7 +615,7 @@ describe('startup catch-up participation', () => {
     });
     expect(result.invocationIds).toHaveLength(1);
     expect(attention(store)).toEqual({ expiresAt: '2026-08-15T13:05:10.000Z', triggerKind: 'mention' });
-    expect(store.db.query<{ kind: string; state: string }, []>('SELECT kind, state FROM buckets').get()).toEqual({
+    expect(store.db.prepare<[], { kind: string; state: string }>('SELECT kind, state FROM buckets').get()).toEqual({
       kind: 'startup_catch_up',
       state: 'queued',
     });

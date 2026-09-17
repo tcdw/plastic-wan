@@ -63,9 +63,9 @@ async function fixture(): Promise<Fixture> {
     throw new Error('Expected a due invocation');
   }
   const conversation = store.db
-    .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
+    .prepare<[bigint], { conversation_id: bigint }>('SELECT conversation_id FROM invocations WHERE id = ?')
     .get(invocationId);
-  if (conversation === null) {
+  if (conversation === undefined) {
     throw new Error('Expected the invocation conversation');
   }
   return { store, loaded, conversationId: conversation.conversation_id, invocationId };
@@ -89,18 +89,18 @@ test('memories persist per conversation, expire by TTL, and purge expired rows',
     const later = new Date('2026-08-15T14:00:01.000Z');
     expect(memory.listActive(conversationId, later).map((entry) => entry.id)).toEqual([first.id]);
     memory.add(conversationId, 'third', 86_400, later);
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM memories').get()?.count).toBe(2n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM memories').get()?.count).toBe(2n);
 
     // Cross-conversation delete is a no-op and leaks nothing.
     const otherConversation = conversationId + 1n;
     expect(memory.remove(first.id, otherConversation, later)).toBe(false);
     expect(
-      store.db.query<{ count: bigint }, [string]>('SELECT COUNT(*) AS count FROM memories WHERE id = ?').get(first.id)
+      store.db.prepare<[string], { count: bigint }>('SELECT COUNT(*) AS count FROM memories WHERE id = ?').get(first.id)
         ?.count,
     ).toBe(1n);
     expect(memory.remove(first.id, conversationId, later)).toBe(true);
     expect(
-      store.db.query<{ count: bigint }, [string]>('SELECT COUNT(*) AS count FROM memories WHERE id = ?').get(first.id)
+      store.db.prepare<[string], { count: bigint }>('SELECT COUNT(*) AS count FROM memories WHERE id = ?').get(first.id)
         ?.count,
     ).toBe(0n);
 
@@ -108,13 +108,15 @@ test('memories persist per conversation, expire by TTL, and purge expired rows',
     memory.add(conversationId, 'ephemeral', 60, new Date('2026-08-15T15:00:00.000Z'));
     purgeExpiredData(store.orm, loaded.config, new Date('2026-08-15T15:00:30.000Z'));
     expect(
-      store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM memories WHERE content = 'ephemeral'").get()
-        ?.count,
+      store.db
+        .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM memories WHERE content = 'ephemeral'")
+        .get()?.count,
     ).toBe(1n);
     purgeExpiredData(store.orm, loaded.config, new Date('2026-08-15T15:01:01.000Z'));
     expect(
-      store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM memories WHERE content = 'ephemeral'").get()
-        ?.count,
+      store.db
+        .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM memories WHERE content = 'ephemeral'")
+        .get()?.count,
     ).toBe(0n);
   } finally {
     store.close();
@@ -148,9 +150,9 @@ test('add_memory and delete_memory audit tool calls and respect conversation sco
     const id = added.details.id;
     expect(id).toMatch(/^mem_[a-f0-9]{32}$/);
     const row = store.db
-      .query<
-        { tool_name: string; state: string; side_effect: bigint; result_text: string; arguments_json: string },
-        []
+      .prepare<
+        [],
+        { tool_name: string; state: string; side_effect: bigint; result_text: string; arguments_json: string }
       >(
         "SELECT tool_name, state, side_effect, result_text, arguments_json FROM tool_calls WHERE tool_call_id = 'call-1'",
       )
@@ -169,7 +171,7 @@ test('add_memory and delete_memory audit tool calls and respect conversation sco
       new AbortController().signal,
     );
     const stored = store.db
-      .query<{ created_at: string; expires_at: string }, [string]>(
+      .prepare<[string], { created_at: string; expires_at: string }>(
         'SELECT created_at, expires_at FROM memories WHERE id = ?',
       )
       .get(custom.details.id);
@@ -181,16 +183,18 @@ test('add_memory and delete_memory audit tool calls and respect conversation sco
     const foreignDelete = await deleteTool.execute('call-3', { id: foreign.id }, new AbortController().signal);
     expect(foreignDelete.details.id).toBe(foreign.id);
     expect(
-      store.db.query<{ count: bigint }, [string]>('SELECT COUNT(*) AS count FROM memories WHERE id = ?').get(foreign.id)
-        ?.count,
+      store.db
+        .prepare<[string], { count: bigint }>('SELECT COUNT(*) AS count FROM memories WHERE id = ?')
+        .get(foreign.id)?.count,
     ).toBe(1n);
     const deleted = await deleteTool.execute('call-4', { id }, new AbortController().signal);
     expect(deleted.details.id).toBe(id);
     expect(
-      store.db.query<{ count: bigint }, [string]>('SELECT COUNT(*) AS count FROM memories WHERE id = ?').get(id)?.count,
+      store.db.prepare<[string], { count: bigint }>('SELECT COUNT(*) AS count FROM memories WHERE id = ?').get(id)
+        ?.count,
     ).toBe(0n);
     const audit = store.db
-      .query<{ state: string; result_text: string }, []>(
+      .prepare<[], { state: string; result_text: string }>(
         "SELECT state, result_text FROM tool_calls WHERE tool_call_id = 'call-4'",
       )
       .get();
@@ -320,7 +324,7 @@ test('admin panel manages memories with chat filter and long-TTL warnings', asyn
 
     // Expired rows surface with the expired flag and filter.
     store.db
-      .query('UPDATE memories SET created_at = ?, expires_at = ? WHERE id = ?')
+      .prepare('UPDATE memories SET created_at = ?, expires_at = ? WHERE id = ?')
       .run('2026-08-01T00:00:00.000Z', '2026-08-02T00:00:00.000Z', item.id);
     const expiredOnly = await readJson(await server.handle(request('/api/memories?state=expired', { headers })));
     expect(expiredOnly.items).toHaveLength(1);
@@ -401,14 +405,14 @@ test('admin panel manages memories with chat filter and long-TTL warnings', asyn
 
 function secondConversation(store: SqliteStore, conversationId: bigint): bigint {
   const chat = store.db
-    .query<{ chat_id: bigint }, [bigint]>('SELECT chat_id FROM conversations WHERE id = ?')
+    .prepare<[bigint], { chat_id: bigint }>('SELECT chat_id FROM conversations WHERE id = ?')
     .get(conversationId);
-  if (chat === null) {
+  if (chat === undefined) {
     throw new Error('Expected the conversation chat');
   }
   const timestamp = new Date().toISOString();
   const created = store.db
-    .query('INSERT INTO conversations(chat_id, message_thread_id, created_at, updated_at) VALUES (?, 1, ?, ?)')
+    .prepare('INSERT INTO conversations(chat_id, message_thread_id, created_at, updated_at) VALUES (?, 1, ?, ?)')
     .run(chat.chat_id, timestamp, timestamp);
   return BigInt(created.lastInsertRowid);
 }

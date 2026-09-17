@@ -139,7 +139,7 @@ function refsReplyTargets(
   header: ContextHeader,
 ): { messageId: string; conversationId: bigint; threadId: bigint }[] {
   return store.db
-    .query<{ ref: string; target_conversation_id: bigint; target_thread_id: bigint }, [bigint]>(
+    .prepare<[bigint], { ref: string; target_conversation_id: bigint; target_thread_id: bigint }>(
       "SELECT ref, target_conversation_id, target_thread_id FROM context_refs WHERE context_id = ? AND kind = 'reply'",
     )
     .all(header.id)
@@ -269,6 +269,11 @@ export async function startFixtureServer(
   fetch: (request: Request) => Response | Promise<Response>,
 ): Promise<{ server: ServerType; port: number }> {
   const server = serve({ hostname: '127.0.0.1', port: 0, fetch });
+  // @hono/node-server binds asynchronously; Bun.serve was listening on return.
+  await new Promise<void>((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
   const address = server.address();
   if (address === null || typeof address === 'string') {
     await stopFixtureServer(server);

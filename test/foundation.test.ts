@@ -355,7 +355,7 @@ describe('database', () => {
       await unlink(config.paths.database);
       expect(await pathExists(config.paths.database)).toBe(false);
     } finally {
-      store.db.close(true);
+      store.db.close();
     }
   });
 
@@ -364,7 +364,7 @@ describe('database', () => {
     const { config } = await loadConfig(configPath);
     const store = await SqliteStore.open(config);
     const version = store.db
-      .query<{ version: bigint }, []>('SELECT MAX(version) AS version FROM schema_migrations')
+      .prepare<[], { version: bigint }>('SELECT MAX(version) AS version FROM schema_migrations')
       .get();
     expect(version?.version).toBe(17n);
     store.close();

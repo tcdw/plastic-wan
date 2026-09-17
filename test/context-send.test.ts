@@ -84,12 +84,12 @@ describe('invocation context', () => {
       ingestion.ingest(update(index + 1, index + 1, `message-${index}`), received);
       latestInvocation = processOne(scheduler, new Date(received.getTime() + 15_000));
       store.db
-        .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
         .run(latestInvocation);
-      store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(latestInvocation);
+      store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(latestInvocation);
     }
     const counts = store.db
-      .query<{ section: string; count: bigint }, [bigint]>(
+      .prepare<[bigint], { section: string; count: bigint }>(
         'SELECT section, COUNT(*) AS count FROM invocation_messages WHERE invocation_id = ? GROUP BY section ORDER BY section',
       )
       .all(latestInvocation);
@@ -123,9 +123,9 @@ describe('invocation context', () => {
     ingestion.ingest(update(1, 1, 'hello'), received);
     const invocationId = processOne(scheduler, new Date(received.getTime() + 15_000));
     const conversation = store.db
-      .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
+      .prepare<[bigint], { conversation_id: bigint }>('SELECT conversation_id FROM invocations WHERE id = ?')
       .get(invocationId);
-    if (conversation === null) {
+    if (conversation === undefined) {
       throw new Error('Expected invocation conversation');
     }
     memory.add(conversation.conversation_id, '{{ agent.model }}', 86_400);
@@ -185,7 +185,7 @@ describe('send tool', () => {
       { text: '*formatted*', options: { parse_mode: 'MarkdownV2' } },
     ]);
     const audits = store.db
-      .query<{ tool_state: string; send_state: string; sent_by_bot: bigint; text: string }, []>(
+      .prepare<[], { tool_state: string; send_state: string; sent_by_bot: bigint; text: string }>(
         'SELECT tc.state AS tool_state, ts.state AS send_state, m.sent_by_bot, r.text FROM tool_calls tc JOIN telegram_sends ts ON ts.tool_call_id = tc.id JOIN messages m ON m.telegram_message_id = ts.telegram_message_id JOIN message_revisions r ON r.id = m.current_revision_id ORDER BY tc.id',
       )
       .all();
@@ -221,10 +221,12 @@ describe('send tool', () => {
       'not visible',
     );
     const row = store.db
-      .query<{ state: string; error_code: string }, []>('SELECT state, error_code FROM tool_calls')
+      .prepare<[], { state: string; error_code: string }>('SELECT state, error_code FROM tool_calls')
       .get();
     expect(row).toEqual({ state: 'error', error_code: 'reply_not_visible' });
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM telegram_sends').get()?.count).toBe(0n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM telegram_sends').get()?.count).toBe(
+      0n,
+    );
     store.close();
   });
   test('limits sends to the sliding window and does not retry an unknown network outcome', async () => {
@@ -258,7 +260,7 @@ describe('send tool', () => {
     // Failed attempts still count. Before, the window only counted success, pending
     // and unknown outcomes, so a loop whose every send Telegram rejected had no brake.
     store.db
-      .query(
+      .prepare(
         "UPDATE telegram_sends SET state = 'error' WHERE id IN (SELECT id FROM telegram_sends ORDER BY id LIMIT 3)",
       )
       .run();
@@ -267,7 +269,7 @@ describe('send tool', () => {
     // The rejection is audited as an error tool call, not as a silent no-op.
     expect(
       store.db
-        .query<{ state: string; error_code: string | null }, []>(
+        .prepare<[], { state: string; error_code: string | null }>(
           "SELECT state, error_code FROM tool_calls WHERE tool_call_id = 'quota-6'",
         )
         .get(),
@@ -306,7 +308,7 @@ describe('send tool', () => {
     expect(unknownCalls).toBe(1);
     expect(
       store.db
-        .query<{ state: string }, []>(
+        .prepare<[], { state: string }>(
           'SELECT state FROM telegram_sends WHERE id = (SELECT MAX(id) FROM telegram_sends)',
         )
         .get()?.state,
@@ -345,14 +347,16 @@ describe('send tool', () => {
     );
     expect(sendMessageCalls).toBe(0);
     const row = store.db
-      .query<{ state: string; error_code: string; arguments_json: string }, []>(
+      .prepare<[], { state: string; error_code: string; arguments_json: string }>(
         'SELECT state, error_code, arguments_json FROM tool_calls',
       )
       .get();
     expect(row?.state).toBe('error');
     expect(row?.error_code).toBe('send_text_too_long');
     expect(JSON.parse(row?.arguments_json ?? '{}')).toEqual({ kind: 'text', text: 'too long' });
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM telegram_sends').get()?.count).toBe(0n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM telegram_sends').get()?.count).toBe(
+      0n,
+    );
     // A rejected send never reaches Telegram, so it costs nothing in the window.
     await tool.execute('call-2', { kind: 'text', text: 'ok' });
     expect(sendMessageCalls).toBe(1);
@@ -398,7 +402,7 @@ describe('send tool', () => {
     await strict.execute('call-5', { kind: 'text', text: 'a\n b \nc' });
     expect(requests).toEqual(['a\n\n\nb', 'a\nb', 'a\n b \nc']);
     const rejected = store.db
-      .query<{ tool_call_id: string; error_code: string }, []>(
+      .prepare<[], { tool_call_id: string; error_code: string }>(
         "SELECT tool_call_id, error_code FROM tool_calls WHERE error_code = 'send_blank_lines' ORDER BY tool_call_id",
       )
       .all();

@@ -1,4 +1,4 @@
-import { Database } from 'bun:sqlite';
+import Database from 'better-sqlite3';
 import { mkdir, mkdtemp, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -182,7 +182,7 @@ async function runDoctorChecks(
     console.log(
       JSON.stringify({
         status: 'ok',
-        runtime: process.versions.bun ?? process.version,
+        runtime: process.version,
         fts5_trigram: true,
         sharp: true,
         ffmpeg: true,
@@ -218,7 +218,7 @@ async function completeDoctorCall(
   const startedAt = performance.now();
   const now = new Date().toISOString();
   const created = store.db
-    .query(
+    .prepare(
       "INSERT INTO model_calls(invocation_id, media_analysis_id, role, provider, model, attempt, state, created_at) VALUES (NULL, NULL, 'doctor', ?, ?, 1, 'pending', ?)",
     )
     .run(model.provider, model.id, now);
@@ -234,7 +234,7 @@ async function completeDoctorCall(
     const usage = response.usage;
     const state = response.stopReason === 'error' || response.stopReason === 'aborted' ? 'error' : 'success';
     store.db
-      .query(
+      .prepare(
         'UPDATE model_calls SET state = ?, input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_write_tokens = ?, total_tokens = ?, cost = ?, duration_ms = ?, error_code = ?, finished_at = ? WHERE id = ?',
       )
       .run(
@@ -256,7 +256,7 @@ async function completeDoctorCall(
     return response;
   } catch (error) {
     store.db
-      .query(
+      .prepare(
         "UPDATE model_calls SET state = 'error', error_code = 'doctor_model_error', duration_ms = ?, finished_at = ? WHERE id = ? AND state = 'pending'",
       )
       .run(BigInt(Math.max(0, Math.round(performance.now() - startedAt))), new Date().toISOString(), callId);
@@ -288,12 +288,13 @@ async function resolveAllSecrets(
 }
 
 function verifyFtsTrigram(): void {
-  const database = new Database(':memory:', { strict: true, safeIntegers: true });
+  const database = new Database(':memory:');
+  database.defaultSafeIntegers(true);
   try {
     database.exec("CREATE VIRTUAL TABLE probe USING fts5(value, tokenize='trigram');");
-    database.query('INSERT INTO probe(value) VALUES (?)').run('telegram sticker');
+    database.prepare('INSERT INTO probe(value) VALUES (?)').run('telegram sticker');
     const result = database
-      .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM probe WHERE probe MATCH 'stick'")
+      .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM probe WHERE probe MATCH 'stick'")
       .get();
     if (result?.count !== 1n) {
       throw new Error('SQLite FTS5 trigram probe returned an invalid result');

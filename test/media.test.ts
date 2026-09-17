@@ -127,8 +127,9 @@ test('read_image normalizes once and reuses the 30-day description cache', async
   expect(faux.state.callCount).toBe(1);
   expect(visionReasoning).toBe('low');
   expect(
-    store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM media_analyses WHERE state = 'success'").get()
-      ?.count,
+    store.db
+      .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM media_analyses WHERE state = 'success'")
+      .get()?.count,
   ).toBe(1n);
   expect(await readdir(loaded.config.paths.media_cache)).toEqual([]);
   store.close();

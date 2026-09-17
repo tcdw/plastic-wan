@@ -369,7 +369,7 @@ export function createSendTool(
 function recentSendCount(environment: SendToolEnvironment, now: Date): number {
   const since = new Date(now.getTime() - environment.sendRateLimit.windowSeconds * 1_000).toISOString();
   const row = environment.store.db
-    .query<{ count: bigint }, [bigint, string]>(
+    .prepare<[bigint, string], { count: bigint }>(
       `SELECT COUNT(*) AS count
        FROM telegram_sends ts
        JOIN conversations v ON v.id = ts.conversation_id

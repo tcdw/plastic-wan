@@ -94,7 +94,7 @@ test('admin panel demands first-run setup, then authenticates and revokes sessio
     const weak = await server.handle(post('/api/auth/setup', { username: 'owner', password: 'short' }));
     expect(weak.status).toBe(400);
     expect(await readJson(weak)).toMatchObject({ error: 'invalid_password' });
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM admin_users').get()?.count).toBe(0n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM admin_users').get()?.count).toBe(0n);
 
     const created = await server.handle(post('/api/auth/setup', { username: 'owner', password: PASSWORD }));
     expect(created.status).toBe(200);
@@ -116,7 +116,9 @@ test('admin panel demands first-run setup, then authenticates and revokes sessio
     expect((await server.handle(post('/api/auth/logout', {}, cookie))).status).toBe(200);
     const afterLogout = await server.handle(request('/api/invocations', { headers: { cookie } }));
     expect(afterLogout.status).toBe(401);
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM admin_sessions').get()?.count).toBe(0n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM admin_sessions').get()?.count).toBe(
+      0n,
+    );
   } finally {
     store.close();
   }
@@ -129,10 +131,10 @@ test('admin login persists only hashes and rejects invalid credentials', async (
     const cookie = sessionCookie(created);
     const token = cookie.slice(cookie.indexOf('=') + 1);
 
-    const stored = store.db.query<{ password_hash: string }, []>('SELECT password_hash FROM admin_users').get();
+    const stored = store.db.prepare<[], { password_hash: string }>('SELECT password_hash FROM admin_users').get();
     expect(stored?.password_hash).toMatch(/^\$argon2id\$/);
     expect(stored?.password_hash).not.toContain(PASSWORD);
-    const sessionRow = store.db.query<{ token_hash: string }, []>('SELECT token_hash FROM admin_sessions').get();
+    const sessionRow = store.db.prepare<[], { token_hash: string }>('SELECT token_hash FROM admin_sessions').get();
     expect(sessionRow?.token_hash).toMatch(/^[a-f0-9]{64}$/);
     expect(sessionRow?.token_hash).not.toBe(token);
 
@@ -151,7 +153,7 @@ test('admin login persists only hashes and rejects invalid credentials', async (
     expect(second).not.toBe(cookie);
     expect((await server.handle(request('/api/auth/session', { headers: { cookie: second } }))).status).toBe(200);
     expect(
-      store.db.query<{ last_login_at: string | null }, []>('SELECT last_login_at FROM admin_users').get()
+      store.db.prepare<[], { last_login_at: string | null }>('SELECT last_login_at FROM admin_users').get()
         ?.last_login_at,
     ).not.toBeNull();
 
@@ -179,7 +181,7 @@ test('login verifies a legacy Bun.password hash with the argon2 runtime', async 
       '$argon2id$v=19$m=65536,t=2,p=1$qqFrECrTOHeD0MZPyFSrw5qy1PwJmdOjo25xGu12zo0$xBM+zfhLz2zdpwT8CwseqbDa0Y9/3K4B7RRxYwmSzEc';
     const now = new Date().toISOString();
     store.db
-      .query(
+      .prepare(
         'INSERT INTO admin_users (username, password_hash, created_at, updated_at, last_login_at) VALUES (?, ?, ?, ?, ?)',
       )
       .run('legacy', legacyHash, now, now, now);
@@ -226,7 +228,7 @@ test('admin can change username and password from an authenticated session', asy
     ).toBe(200);
 
     const stored = store.db
-      .query<{ username: string; password_hash: string }, []>('SELECT username, password_hash FROM admin_users')
+      .prepare<[], { username: string; password_hash: string }>('SELECT username, password_hash FROM admin_users')
       .get();
     expect(stored?.username).toBe('new-owner');
     expect(stored?.password_hash).toMatch(/^\$argon2id\$/);
@@ -252,7 +254,7 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
     }
     const iso = received.toISOString();
     store.db
-      .query(
+      .prepare(
         "UPDATE invocations SET state = 'completed', started_at = ?, finished_at = ?, completion_reason = 'done', turns_used = 1, tool_calls_used = 1, sends_used = 1, tool_registry_json = ? WHERE id = ?",
       )
       .run(
@@ -265,47 +267,49 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
         invocationId,
       );
     store.db
-      .query(
+      .prepare(
         "INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, result_text, state, side_effect, duration_ms, created_at, finished_at) VALUES (?, 'call-1', 'send', '{\"text\":\"hi\"}', 'sent', 'success', 1, 42, ?, ?)",
       )
       .run(invocationId, iso, iso);
-    const toolRow = store.db.query<{ id: bigint }, []>("SELECT id FROM tool_calls WHERE tool_call_id = 'call-1'").get();
-    if (toolRow === null) {
+    const toolRow = store.db
+      .prepare<[], { id: bigint }>("SELECT id FROM tool_calls WHERE tool_call_id = 'call-1'")
+      .get();
+    if (toolRow === undefined) {
       throw new Error('Expected the tool call row');
     }
     store.db
-      .query(
+      .prepare(
         "INSERT INTO telegram_sends(tool_call_id, conversation_id, kind, request_json, state, telegram_message_id, created_at, finished_at) VALUES (?, (SELECT conversation_id FROM invocations WHERE id = ?), 'text', '{\"text\":\"hi\"}', 'success', 555, ?, ?)",
       )
       .run(toolRow.id, invocationId, iso, iso);
     store.db
-      .query(
+      .prepare(
         "INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, input_tokens, output_tokens, total_tokens, cost, duration_ms, error_code, error_detail, tools_json, created_at, finished_at) VALUES (?, 'agent', 'agent', 'agent-model', 1, 'error', 100, 20, 120, 0.5, 900, 'model_error', 'status=500\nbody={\"error\":\"upstream exploded\"}', ?, ?, ?)",
       )
       .run(invocationId, JSON.stringify(['send', 'add_memory']), iso, iso);
     store.db
-      .query(
+      .prepare(
         "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, created_at) VALUES (?, 1, 'assistant', 'private reasoning', ?)",
       )
       .run(invocationId, iso);
     store.db
-      .query(
+      .prepare(
         "INSERT INTO sticker_sets(alias, telegram_name, title, configured, sync_state, last_synced_at, updated_at) VALUES ('cats', 'CatPack', 'Cat Pack', 1, 'success', ?, ?)",
       )
       .run(iso, iso);
     store.db
-      .query(
+      .prepare(
         "INSERT INTO media_analyses(file_unique_id, analysis_version, provider, model, prompt_version, kind, state, description, metadata_json, created_at, updated_at) VALUES ('uniq-1', 'v1', 'vision', 'vision-model', 1, 'sticker', 'success', 'a grinning cat', '{\"tags_en\":[\"cat\"]}', ?, ?)",
       )
       .run(iso, iso);
     const analysis = store.db
-      .query<{ id: bigint }, []>("SELECT id FROM media_analyses WHERE file_unique_id = 'uniq-1'")
+      .prepare<[], { id: bigint }>("SELECT id FROM media_analyses WHERE file_unique_id = 'uniq-1'")
       .get();
-    if (analysis === null) {
+    if (analysis === undefined) {
       throw new Error('Expected the analysis row');
     }
     store.db
-      .query(
+      .prepare(
         "INSERT INTO stickers(sticker_set_id, file_unique_id, file_id, emoji, format, active, current_analysis_id, index_state, updated_at) VALUES ((SELECT id FROM sticker_sets WHERE alias = 'cats'), 'uniq-1', 'file-1', '😺', 'static', 1, ?, 'success', ?)",
       )
       .run(analysis.id, iso);
@@ -382,11 +386,11 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
     const otherSet = await readJson(await server.handle(request('/api/stickers?set=dogs', { headers })));
     expect(otherSet.items).toHaveLength(0);
 
-    const chat = store.db.query<{ id: bigint }, []>('SELECT id FROM chats WHERE telegram_chat_id = 123456789').get();
-    if (chat === null) {
+    const chat = store.db.prepare<[], { id: bigint }>('SELECT id FROM chats WHERE telegram_chat_id = 123456789').get();
+    if (chat === undefined) {
       throw new Error('Expected the chat row');
     }
-    store.db.query('INSERT INTO chat_pause(chat_id, paused_at) VALUES (?, ?)').run(chat.id, iso);
+    store.db.prepare('INSERT INTO chat_pause(chat_id, paused_at) VALUES (?, ?)').run(chat.id, iso);
     const sleeping = enterSleep(store.orm);
 
     const overview = await readJson(await server.handle(request('/api/overview', { headers })));
@@ -422,15 +426,15 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
 
     const now = new Date().toISOString();
     store.db
-      .query(
+      .prepare(
         "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', '123456789', 'model_tokens', 500, ?)",
       )
       .run(now.slice(0, 10), now);
 
     // Invocation and tool-call counts are read straight from the audit tables,
     // so date them into the requested window instead of writing daily_usage.
-    store.db.query('UPDATE invocations SET created_at = ?').run(now);
-    store.db.query('UPDATE tool_calls SET created_at = ?').run(now);
+    store.db.prepare('UPDATE invocations SET created_at = ?').run(now);
+    store.db.prepare('UPDATE tool_calls SET created_at = ?').run(now);
 
     const usage = await readJson(await server.handle(request('/api/usage?days=7', { headers })));
     expect(usage.days).toBe(7);
@@ -465,54 +469,56 @@ test('context API exposes conversation contexts read-only', async () => {
     ingestion.ingest(textUpdate(1, 10, 'context audit'), received);
 
     const conversation = store.db
-      .query<{ id: bigint; chat_id: bigint }, []>('SELECT id, chat_id FROM conversations')
+      .prepare<[], { id: bigint; chat_id: bigint }>('SELECT id, chat_id FROM conversations')
       .get();
-    if (conversation === null) {
+    if (conversation === undefined) {
       throw new Error('Expected the conversation row');
     }
     const iso = received.toISOString();
     const olderIso = new Date(received.getTime() - 60_000).toISOString();
     const expiresIso = new Date(received.getTime() + 3_600_000).toISOString();
     store.db
-      .query('INSERT INTO conversations(chat_id, message_thread_id, created_at, updated_at) VALUES (?, 7, ?, ?)')
+      .prepare('INSERT INTO conversations(chat_id, message_thread_id, created_at, updated_at) VALUES (?, 7, ?, ?)')
       .run(conversation.chat_id, iso, iso);
-    const second = store.db.query<{ id: bigint }, []>('SELECT id FROM conversations WHERE message_thread_id = 7').get();
-    if (second === null) {
+    const second = store.db
+      .prepare<[], { id: bigint }>('SELECT id FROM conversations WHERE message_thread_id = 7')
+      .get();
+    if (second === undefined) {
       throw new Error('Expected the second conversation row');
     }
     store.db
-      .query(
+      .prepare(
         "INSERT INTO conversation_contexts(conversation_id, head_seq, next_seq, send_count_total, system_prompt_hash, last_active_at, last_gc_at, created_at, updated_at) VALUES (?, 2, 4, 1, 'prompt-hash', ?, NULL, ?, ?)",
       )
       .run(conversation.id, iso, iso, iso);
     store.db
-      .query(
+      .prepare(
         "INSERT INTO conversation_contexts(conversation_id, head_seq, next_seq, send_count_total, system_prompt_hash, last_active_at, created_at, updated_at) VALUES (?, 1, 1, 0, 'other-hash', ?, ?, ?)",
       )
       .run(second.id, olderIso, olderIso, olderIso);
-    const context = store.db.query<{ id: bigint }, []>('SELECT id FROM conversation_contexts ORDER BY id').get();
-    if (context === null) {
+    const context = store.db.prepare<[], { id: bigint }>('SELECT id FROM conversation_contexts ORDER BY id').get();
+    if (context === undefined) {
       throw new Error('Expected the context row');
     }
     // seq 1 sits below head_seq: it is soft-evicted and must stay out of the detail payload.
     store.db
-      .query(
+      .prepare(
         'INSERT INTO context_messages(context_id, seq, role, payload_json, invocation_id, is_checkpoint, send_seq, est_tokens, evicted_at, created_at) VALUES (?, 1, \'user\', \'{"role":"user","text":"evicted"}\', NULL, 1, NULL, 3, ?, ?)',
       )
       .run(context.id, iso, iso);
     const longPayload = `{"role":"user","text":"${'x'.repeat(2_500)}"}`;
     store.db
-      .query(
+      .prepare(
         "INSERT INTO context_messages(context_id, seq, role, payload_json, invocation_id, is_checkpoint, send_seq, est_tokens, evicted_at, created_at) VALUES (?, 2, 'user', ?, NULL, 1, NULL, 12, NULL, ?)",
       )
       .run(context.id, longPayload, iso);
     store.db
-      .query(
+      .prepare(
         "INSERT INTO context_messages(context_id, seq, role, payload_json, invocation_id, is_checkpoint, send_seq, est_tokens, evicted_at, created_at) VALUES (?, 3, 'assistant', ?, NULL, 0, 1, 4, NULL, ?)",
       )
       .run(context.id, JSON.stringify({ role: 'assistant', text: 'ok' }), iso);
     store.db
-      .query(
+      .prepare(
         "INSERT INTO context_refs(context_id, ref, kind, source_seq, media_id, sticker_file_id, target_conversation_id, target_thread_id, expires_at, created_at) VALUES (?, 'cap-1', 'media', 2, NULL, NULL, NULL, NULL, ?, ?)",
       )
       .run(context.id, expiresIso, iso);
@@ -689,10 +695,10 @@ test('admin can cancel all pending sessions', async () => {
     const body = await readJson(canceled);
     expect(body).toMatchObject({ canceled_buckets: 1, canceled_invocations: 1 });
 
-    const bucketState = store.db.query<{ state: string }, []>('SELECT state FROM buckets').get()?.state;
+    const bucketState = store.db.prepare<[], { state: string }>('SELECT state FROM buckets').get()?.state;
     expect(bucketState).toBe('expired');
     const invocationState = store.db
-      .query<{ state: string }, [bigint]>('SELECT state FROM invocations WHERE id = ?')
+      .prepare<[bigint], { state: string }>('SELECT state FROM invocations WHERE id = ?')
       .get(invocationId)?.state;
     expect(invocationState).toBe('aborted');
 
@@ -748,7 +754,7 @@ test('admins API lists, adds and removes bot admins', async () => {
     const removed = await server.handle(request('/api/admins/42', { method: 'DELETE', headers: { cookie } }));
     expect(removed.status).toBe(200);
     expect(await readJson(removed)).toEqual({ status: 'ok' });
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM bot_admins').get()?.count).toBe(0n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM bot_admins').get()?.count).toBe(0n);
   } finally {
     store.close();
   }

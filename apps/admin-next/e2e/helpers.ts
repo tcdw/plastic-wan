@@ -17,7 +17,7 @@ export async function e2eState(): Promise<E2eServerState> {
   }
   const stateFile = process.env.E2E_STATE_FILE;
   if (stateFile === undefined || stateFile.length === 0) {
-    throw new Error('E2E_STATE_FILE is not set — run via `bun run admin:test:e2e`');
+    throw new Error('E2E_STATE_FILE is not set — run via `pnpm run admin:test:e2e`');
   }
   cachedState = JSON.parse(await readFile(stateFile, 'utf8')) as E2eServerState;
   return cachedState;
@@ -48,7 +48,7 @@ export async function e2eFetch<T>(path: string, init?: RequestInit): Promise<T> 
 export function authStoragePath(): string {
   const stateFile = process.env.E2E_STATE_FILE;
   if (stateFile === undefined || stateFile.length === 0) {
-    throw new Error('E2E_STATE_FILE is not set — run via `bun run admin:test:e2e`');
+    throw new Error('E2E_STATE_FILE is not set — run via `pnpm run admin:test:e2e`');
   }
   return `${stateFile}.auth.json`;
 }

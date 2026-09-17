@@ -244,23 +244,23 @@ describe('bot command service', () => {
     if (invocationId === undefined) {
       throw new Error('Expected queued invocation');
     }
-    expect(store.db.query<{ state: string }, []>('SELECT state FROM invocations').get()?.state).toBe('queued');
+    expect(store.db.prepare<[], { state: string }>('SELECT state FROM invocations').get()?.state).toBe('queued');
 
     const reply = commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
     expect(reply).toContain('/resume');
-    expect(store.db.query<{ paused_at: string }, []>('SELECT paused_at FROM chat_pause').get()?.paused_at).toBe(
+    expect(store.db.prepare<[], { paused_at: string }>('SELECT paused_at FROM chat_pause').get()?.paused_at).toBe(
       FIXED_NOW.toISOString(),
     );
-    expect(store.db.query<{ state: string }, []>('SELECT state FROM buckets').get()?.state).toBe('expired');
+    expect(store.db.prepare<[], { state: string }>('SELECT state FROM buckets').get()?.state).toBe('expired');
     const invocation = store.db
-      .query<{ state: string; completion_reason: string }, []>('SELECT state, completion_reason FROM invocations')
+      .prepare<[], { state: string; completion_reason: string }>('SELECT state, completion_reason FROM invocations')
       .get();
     expect(invocation?.state).toBe('aborted');
     expect(invocation?.completion_reason).toBe('chat_paused');
 
     ingestion.ingest(textUpdate(2, 11, 'while paused'), new Date(start.getTime() + 20_000));
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(1n);
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(2n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(1n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(2n);
     expect(scheduler.processDue(new Date(start.getTime() + 60_000))).toHaveLength(0);
     store.close();
   });
@@ -272,7 +272,7 @@ describe('bot command service', () => {
     scheduler.processDue(new Date(start.getTime() + 15_000));
     commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
     commands.run({ name: 'resume' }, 123456789n, ALICE, FIXED_NOW);
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM chat_pause').get()?.count).toBe(0n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM chat_pause').get()?.count).toBe(0n);
     ingestion.ingest(textUpdate(2, 11, 'after resume'), new Date(start.getTime() + 30_000));
     expect(scheduler.processDue(new Date(start.getTime() + 45_000))).toHaveLength(1);
     store.close();
@@ -282,12 +282,12 @@ describe('bot command service', () => {
     const { store, ingestion, scheduler, commands } = await setup();
     ingestion.ingest(textUpdate(1, 10, 'hello'), FIXED_NOW);
     store.db
-      .query(
+      .prepare(
         "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', 1234, ?)",
       )
       .run(FIXED_NOW.toISOString().slice(0, 10), '123456789', FIXED_NOW.toISOString());
     store.db
-      .query(
+      .prepare(
         "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', 66, ?)",
       )
       .run(FIXED_NOW.toISOString().slice(0, 10), '987654321', FIXED_NOW.toISOString());
@@ -296,7 +296,7 @@ describe('bot command service', () => {
       throw new Error('Expected queued invocation');
     }
     store.db
-      .query(
+      .prepare(
         "INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens, created_at, finished_at) VALUES (?, 'agent', 'agent', 'agent-model', 1, 'success', 500, 200, 400, 134, 1234, ?, ?)",
       )
       .run(invocationId, FIXED_NOW.toISOString(), FIXED_NOW.toISOString());
@@ -320,7 +320,7 @@ describe('bot command service', () => {
       throw new Error('Expected queued invocation');
     }
     const conversationId = store.db
-      .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
+      .prepare<[bigint], { conversation_id: bigint }>('SELECT conversation_id FROM invocations WHERE id = ?')
       .get(invocationId)?.conversation_id;
     if (conversationId === undefined) {
       throw new Error('Expected a conversation');
@@ -481,12 +481,12 @@ describe('bot command service', () => {
   test('status isolates per-chat usage and includes other chats in the global total', async () => {
     const { store, commands } = await setup();
     store.db
-      .query(
+      .prepare(
         "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', 999, ?)",
       )
       .run('2026-08-14', '123456789', FIXED_NOW.toISOString());
     store.db
-      .query(
+      .prepare(
         "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', 888, ?)",
       )
       .run(FIXED_NOW.toISOString().slice(0, 10), '987654321', FIXED_NOW.toISOString());
@@ -506,9 +506,9 @@ describe('bot command service', () => {
     }
     const mallory: CommandSender = { id: 99n, name: 'Mallory', username: 'mallory' };
     expect(commands.run({ name: 'pause' }, 123456789n, mallory, FIXED_NOW)).toBe('该命令仅对本 Bot 的管理员可用。');
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM chat_pause').get()?.count).toBe(0n);
-    expect(store.db.query<{ state: string }, []>('SELECT state FROM buckets').get()?.state).toBe('queued');
-    expect(store.db.query<{ state: string }, []>('SELECT state FROM invocations').get()?.state).toBe('queued');
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM chat_pause').get()?.count).toBe(0n);
+    expect(store.db.prepare<[], { state: string }>('SELECT state FROM buckets').get()?.state).toBe('queued');
+    expect(store.db.prepare<[], { state: string }>('SELECT state FROM invocations').get()?.state).toBe('queued');
     expect(commands.run({ name: 'resume' }, 123456789n, mallory, FIXED_NOW)).toBe('该命令仅对本 Bot 的管理员可用。');
     store.close();
   });
@@ -519,7 +519,7 @@ describe('bot command service', () => {
     const stranger: CommandSender = { id: 42n, name: 'Alice', username: 'alice' };
     expect(commands.run({ name: 'pause' }, 123456789n, stranger, FIXED_NOW)).toBe('该命令仅对本 Bot 的管理员可用。');
     expect(commands.run({ name: 'status' }, 123456789n, stranger, FIXED_NOW)).toContain('当前模型');
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM chat_pause').get()?.count).toBe(0n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM chat_pause').get()?.count).toBe(0n);
     store.close();
   });
 
@@ -528,7 +528,7 @@ describe('bot command service', () => {
     ingestion.ingest(textUpdate(1, 10, 'hello'), FIXED_NOW);
     commands.run({ name: 'pause' }, 123456789n, { id: 42n, name: 'Alice Liddell', username: 'alice' }, FIXED_NOW);
     const row = store.db
-      .query<{ display_name: string; added_by: string }, []>('SELECT display_name, added_by FROM bot_admins')
+      .prepare<[], { display_name: string; added_by: string }>('SELECT display_name, added_by FROM bot_admins')
       .get();
     expect(row?.display_name).toBe('Alice Liddell');
     expect(row?.added_by).toBe('config');
@@ -543,10 +543,10 @@ describe('ingestion command interception', () => {
     expect(result.command).toEqual({ name: 'status', messageId: 10n });
     expect(result.messageId).toBeUndefined();
     expect(result.bucketId).toBeUndefined();
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(0n);
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(0n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(0n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(0n);
     const audit = store.db
-      .query<{ allowed: bigint; rejection_reason: string | null }, []>(
+      .prepare<[], { allowed: bigint; rejection_reason: string | null }>(
         'SELECT allowed, rejection_reason FROM telegram_updates',
       )
       .get();
@@ -560,7 +560,7 @@ describe('ingestion command interception', () => {
     const result = ingestion.ingest(commandUpdate(1, 10, '/pause@OtherBot'), FIXED_NOW);
     expect(result.command).toBeUndefined();
     expect(result.messageId).toBeDefined();
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(1n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(1n);
     store.close();
   });
 
@@ -568,7 +568,7 @@ describe('ingestion command interception', () => {
     const { store, ingestion } = await setup();
     const result = ingestion.ingest(commandUpdate(1, 10, '/pause', 987654321), FIXED_NOW);
     const audit = store.db
-      .query<{ allowed: bigint; rejection_reason: string }, []>(
+      .prepare<[], { allowed: bigint; rejection_reason: string }>(
         'SELECT allowed, rejection_reason FROM telegram_updates',
       )
       .get();
@@ -585,19 +585,21 @@ describe('scheduler pause enforcement', () => {
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'hello'), start);
     commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
-    const chatId = store.db.query<{ chat_id: bigint }, []>('SELECT chat_id FROM conversations LIMIT 1').get()!.chat_id;
+    const chatId = store.db
+      .prepare<[], { chat_id: bigint }>('SELECT chat_id FROM conversations LIMIT 1')
+      .get()!.chat_id;
     const now = new Date(start.getTime() + 15_000).toISOString();
     store.db
-      .query(
+      .prepare(
         "INSERT INTO buckets(conversation_id, state, first_received_at, deadline_at, created_at, updated_at) VALUES ((SELECT id FROM conversations LIMIT 1), 'collecting', ?, ?, ?, ?)",
       )
       .run(now, now, now, now);
     expect(scheduler.processDue(new Date(start.getTime() + 60_000))).toHaveLength(0);
-    const bucket = store.db.query<{ state: string }, []>('SELECT state FROM buckets').get();
+    const bucket = store.db.prepare<[], { state: string }>('SELECT state FROM buckets').get();
     expect(bucket?.state).toBe('collecting');
     expect(
       store.db
-        .query<{ count: bigint }, [bigint]>('SELECT COUNT(*) AS count FROM chat_pause WHERE chat_id = ?')
+        .prepare<[bigint], { count: bigint }>('SELECT COUNT(*) AS count FROM chat_pause WHERE chat_id = ?')
         .get(chatId)?.count,
     ).toBe(1n);
     store.close();
@@ -607,13 +609,13 @@ describe('scheduler pause enforcement', () => {
     const { store, ingestion, scheduler, commands } = await setup();
     const start = new Date('2026-08-15T00:00:00.000Z');
     store.db
-      .query('INSERT INTO app_state(key, value, updated_at) VALUES (?, ?, ?)')
+      .prepare('INSERT INTO app_state(key, value, updated_at) VALUES (?, ?, ?)')
       .run(STARTUP_CATCH_UP_STATE_KEY, start.toISOString(), start.toISOString());
     ingestion.ingestCatchUp(textUpdate(1, 10, 'pending'), start);
     commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
     expect(scheduler.finishStartupCatchUp(start)).toEqual([]);
     const bucket = store.db
-      .query<{ state: string; error_code: string | null }, []>('SELECT state, error_code FROM buckets')
+      .prepare<[], { state: string; error_code: string | null }>('SELECT state, error_code FROM buckets')
       .get();
     expect(bucket?.state).toBe('skipped_budget');
     expect(bucket?.error_code).toBe('chat_paused');
@@ -640,11 +642,11 @@ describe('scheduler pause enforcement', () => {
     const start = new Date();
     ingestion.ingest(textUpdate(1, 10, 'hello'), start);
     store.db
-      .query('UPDATE buckets SET deadline_at = ? WHERE id = (SELECT id FROM buckets LIMIT 1)')
+      .prepare('UPDATE buckets SET deadline_at = ? WHERE id = (SELECT id FROM buckets LIMIT 1)')
       .run(new Date(start.getTime() - 1_000).toISOString());
     const waitForState = async (state: string): Promise<void> => {
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        if (store.db.query<{ state: string }, []>('SELECT state FROM invocations LIMIT 1').get()?.state === state) {
+        if (store.db.prepare<[], { state: string }>('SELECT state FROM invocations LIMIT 1').get()?.state === state) {
           return;
         }
         await sleep(10);
@@ -655,7 +657,7 @@ describe('scheduler pause enforcement', () => {
       scheduler.start();
       await waitForState('running');
       const chatId = store.db
-        .query<{ chat_id: bigint }, []>('SELECT chat_id FROM conversations LIMIT 1')
+        .prepare<[], { chat_id: bigint }>('SELECT chat_id FROM conversations LIMIT 1')
         .get()!.chat_id;
       scheduler.pauseChat(chatId);
       release();

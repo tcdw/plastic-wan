@@ -82,12 +82,12 @@ describe('Telegram ingestion', () => {
     const { store, ingestion } = await setup();
     ingestion.ingest(textUpdate(1, 10, 'private text', 777));
     const row = store.db
-      .query<{ raw_json: string | null; rejection_reason: string }, []>(
+      .prepare<[], { raw_json: string | null; rejection_reason: string }>(
         'SELECT raw_json, rejection_reason FROM telegram_updates',
       )
       .get();
     expect(row).toEqual({ raw_json: null, rejection_reason: 'chat_not_allowed' });
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(0n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(0n);
     store.close();
   });
 
@@ -102,7 +102,7 @@ describe('Telegram ingestion', () => {
     expect(duplicate.messageId).toBeUndefined();
     expect(first.bucketId).toBe(second.bucketId);
     const bucket = store.db
-      .query<{ deadline_at: string; messages: bigint }, []>(
+      .prepare<[], { deadline_at: string; messages: bigint }>(
         'SELECT b.deadline_at, COUNT(bm.message_id) AS messages FROM buckets b JOIN bucket_messages bm ON bm.bucket_id = b.id GROUP BY b.id',
       )
       .get();
@@ -122,16 +122,18 @@ describe('Telegram ingestion', () => {
     ingestion.ingest(textUpdate(1, 10, 'first'), start);
     // The conversation is being served right now, past its own window.
     store.db
-      .query(
+      .prepare(
         `INSERT INTO invocations(bucket_id, conversation_id, state, config_hash, prompt_version, started_at, created_at)
          VALUES ((SELECT id FROM buckets LIMIT 1), (SELECT id FROM conversations LIMIT 1), 'running', 'hash', 1, ?, ?)`,
       )
       .run(new Date(start.getTime() + 6_000).toISOString(), start.toISOString());
-    store.db.query("UPDATE buckets SET state = 'running' WHERE id = (SELECT bucket_id FROM invocations LIMIT 1)").run();
+    store.db
+      .prepare("UPDATE buckets SET state = 'running' WHERE id = (SELECT bucket_id FROM invocations LIMIT 1)")
+      .run();
 
     ingestion.ingest(textUpdate(2, 11, 'late arrival'), new Date(start.getTime() + 20_000));
     const bucket = store.db
-      .query<{ state: string; first_received_at: string; deadline_at: string }, []>(
+      .prepare<[], { state: string; first_received_at: string; deadline_at: string }>(
         'SELECT state, first_received_at, deadline_at FROM buckets ORDER BY id DESC LIMIT 1',
       )
       .get();
@@ -162,7 +164,7 @@ describe('Telegram ingestion', () => {
     };
     ingestion.ingest(edited, new Date(receivedAt.getTime() + 5_000));
     const row = store.db
-      .query<{ revisions: bigint; text: string; buckets: bigint }, []>(
+      .prepare<[], { revisions: bigint; text: string; buckets: bigint }>(
         'SELECT (SELECT COUNT(*) FROM message_revisions) AS revisions, r.text, (SELECT COUNT(*) FROM buckets) AS buckets FROM messages m JOIN message_revisions r ON r.id = m.current_revision_id',
       )
       .get();
@@ -190,7 +192,7 @@ describe('Telegram ingestion', () => {
     };
     ingestion.ingest(botUpdate);
     ingestion.ingest(serviceUpdate);
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(0n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(0n);
     store.close();
   });
 
@@ -229,17 +231,17 @@ describe('Telegram ingestion', () => {
     expect(trigger.bucketId).toBeDefined();
     expect(ignored).toEqual({});
     expect(ignoredCommand).toEqual({});
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM telegram_updates').get()?.count).toBe(
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM telegram_updates').get()?.count).toBe(
       4n,
     );
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(2n);
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM senders').get()?.count).toBe(1n);
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM bucket_messages').get()?.count).toBe(
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(2n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM senders').get()?.count).toBe(1n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM bucket_messages').get()?.count).toBe(
       2n,
     );
     expect(
       store.db
-        .query<{ reply_to_message_id: bigint | null; reply_snapshot_json: string | null }, [string]>(
+        .prepare<[string], { reply_to_message_id: bigint | null; reply_snapshot_json: string | null }>(
           'SELECT reply_to_message_id, reply_snapshot_json FROM message_revisions WHERE text = ?',
         )
         .get('reply from 7'),
@@ -268,7 +270,7 @@ describe('Telegram ingestion', () => {
     expect(ingestion.ingest(editedUpdate)).toEqual({});
     expect(
       store.db
-        .query<{ revisions: bigint; text: string }, []>(
+        .prepare<[], { revisions: bigint; text: string }>(
           'SELECT COUNT(*) AS revisions, MAX(text) AS text FROM message_revisions',
         )
         .get(),
@@ -302,7 +304,7 @@ describe('Telegram ingestion', () => {
       },
     };
     expect(ingestion.ingest(senderChatUpdate).messageId).toBeDefined();
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(2n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(2n);
     store.close();
   });
 
@@ -324,7 +326,7 @@ describe('Telegram ingestion', () => {
     ingestion.ingest(migration);
 
     expect(ingestion.ingest(groupTextUpdate(2, 11, 42, migratedChatId))).toEqual({});
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(1n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(1n);
     store.close();
   });
 
@@ -333,14 +335,14 @@ describe('Telegram ingestion', () => {
     const standalone = disabled.ingestion.ingest(stickerUpdate(1, 10));
     expect(standalone.messageId).toBeDefined();
     expect(standalone.bucketId).toBeUndefined();
-    expect(disabled.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(
+    expect(disabled.store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(
       0n,
     );
     const text = disabled.ingestion.ingest(textUpdate(2, 11, 'hello'));
     const companion = disabled.ingestion.ingest(stickerUpdate(3, 12));
     expect(companion.bucketId).toBe(text.bucketId);
     expect(
-      disabled.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM bucket_messages').get()?.count,
+      disabled.store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM bucket_messages').get()?.count,
     ).toBe(2n);
     disabled.store.close();
 
@@ -364,7 +366,7 @@ describe('Telegram ingestion', () => {
     });
     const bucketRows = (store: SqliteStore) =>
       store.db
-        .query<{ bucket_id: bigint; sequence_no: bigint; telegram_message_id: bigint }, []>(
+        .prepare<[], { bucket_id: bigint; sequence_no: bigint; telegram_message_id: bigint }>(
           `SELECT bm.bucket_id, bm.sequence_no, m.telegram_message_id
            FROM bucket_messages bm JOIN messages m ON m.id = bm.message_id
            ORDER BY bm.bucket_id, bm.sequence_no`,
@@ -373,9 +375,9 @@ describe('Telegram ingestion', () => {
 
     const disabled = await setup();
     expect(disabled.ingestion.ingest(botUpdate(1, 10))).toEqual({});
-    expect(disabled.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(
-      0n,
-    );
+    expect(
+      disabled.store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM messages').get()?.count,
+    ).toBe(0n);
     disabled.store.close();
 
     const { store, ingestion } = await setup((config) => {
@@ -401,7 +403,7 @@ describe('Telegram ingestion', () => {
 
     // Once that bucket is consumed, later bot messages wait for the next human
     // and are adopted exactly once.
-    store.db.run("UPDATE buckets SET state = 'running'");
+    store.db.prepare("UPDATE buckets SET state = 'running'").run();
     expect(ingestion.ingest(botUpdate(5, 14)).bucketId).toBeUndefined();
     const next = ingestion.ingest(groupTextUpdate(6, 15, 42));
     expect(next.bucketId).toBeDefined();
@@ -438,7 +440,7 @@ describe('Telegram ingestion', () => {
     expect(second.bucketId).toBe(first.bucketId);
     expect(
       store.db
-        .query<{ conversations: bigint; thread_id: bigint; messages: bigint }, []>(
+        .prepare<[], { conversations: bigint; thread_id: bigint; messages: bigint }>(
           `SELECT COUNT(DISTINCT v.id) AS conversations, MAX(v.message_thread_id) AS thread_id,
                   COUNT(bm.message_id) AS messages
            FROM conversations v
@@ -473,11 +475,13 @@ describe('Telegram ingestion', () => {
     ingestion.ingest(topicUpdate(1, 10, 100));
     ingestion.ingest(topicUpdate(2, 11, 200));
     ingestion.ingest(topicUpdate(3, 12, 300));
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM conversations').get()?.count).toBe(2n);
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(2n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM conversations').get()?.count).toBe(
+      2n,
+    );
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM buckets').get()?.count).toBe(2n);
     expect(
       store.db
-        .query<{ reason: string }, []>('SELECT rejection_reason AS reason FROM telegram_updates WHERE update_id = 3')
+        .prepare<[], { reason: string }>('SELECT rejection_reason AS reason FROM telegram_updates WHERE update_id = 3')
         .get()?.reason,
     ).toBe('topic_not_allowed');
     store.close();

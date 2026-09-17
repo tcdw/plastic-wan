@@ -26,6 +26,8 @@
 >
 > 2026-09-17 深夜更新：**Phase 4 已完成**。原计划只是改 tsconfig 加"已核验"记录，实际核验推翻了原文结论——仓库有 4 处构造器参数属性（不可擦除语法）与 5 处 Bun 专有的 `import.meta.dir`，均已修复；`erasableSyntaxOnly` 已固化为持续闸门。下一步 Phase 5（切换运行时到 Node + `node:sqlite`）。
 >
+> 2026-09-18 凌晨更新：**Phase 5 已完成**，但驱动改为 **better-sqlite3**——`drizzle-orm/node-sqlite` 只存在于 drizzle 1.0-rc 线，stable 0.45.2 没有；三条路线实测后选择代价最小的 better-sqlite3（详见 Phase 5 章节的路线变更说明）。运行时切换顺带暴露了 3 处"只在 Node 下失败"的启动缺陷（`@hono/node-server` 异步绑定）与 `.get()` 的 null→undefined 语义漂移，均已修复。下一步 Phase 6（清理与文档收尾）。
+>
 > 2026-09-04 状态速览：Phase 0 部分完成（drizzle-orm 已锁定）、**Phase 2 已完成**、Phase 1/3–6 未开始。下一步是 Phase 1（pnpm monorepo）或直接进入 Phase 3（运行时无关化，每项独立提交）。
 
 | 类别 | 位置 |
@@ -114,16 +116,27 @@
 - 验收：✅ `pnpm run check`（root + admin 两段 tsc）、`pnpm run lint`、`pnpm test` 305/305（33 文件）全绿。
 - Phase 5 提示：`apps/admin-next/tsconfig.json` 仍写 `types: ["vite/client", "bun"]`，`e2e/server.ts` 的 Node 类型目前由 bun-types 提供；Phase 5 移除 `@types/bun` 时需同步换 `@types/node`，否则 admin 段 `tsc` 会报 TS2688。
 
-### Phase 5 — 切换运行时：Node.js + node:sqlite（单次小步）
+### Phase 5 — 切换运行时：Node.js + better-sqlite3 ✅（2026-09-17 完成）
 
-- [ ] shebang → `#!/usr/bin/env node`；`engines` 生效。
-- [ ] 测试切换：`package.json` 的 `test` 由 `bun test` 改为 `vitest run`（vitest.config.ts 已就位，include 覆盖 `test/` + `apps/admin-next/src/`；root tsconfig 已含 vitest.config.ts）。Phase 3 后测试文件已全部 vitest-ready（双框架共有 API），此步应仅为改 script 一行。
-- [ ] Drizzle 驱动 `drizzle-orm/bun-sqlite` → `drizzle-orm/node-sqlite`（唯一 import 位；2026-09-01 已确认收敛为 `src/store/database.ts` 单处）。
-- [ ] **最高风险项**：`node:sqlite` 默认把 INTEGER 读成 Number；确认 Drizzle node-sqlite 会话对 bigint 列的处理，否则 Telegram ID 精度丢失。若无法保证，降级决策点：改用 `better-sqlite3` 驱动（成熟但引入原生依赖）。
-- [ ] 接受 `node:sqlite` 稳定性现状：Node 24.15+ 为 Stability 1.2 Release Candidate，无需 flag；记录到 operations.md。
-- [ ] 移除 `@types/bun`，新增 `@types/node`。
-- [ ] `deploy/systemd` 单元 `ExecStart` 由 bun 改 node；权限检查、`UMask=0077`、ServeLock 语义不变。
-- 验收：完整矩阵跑一遍（见下）。
+> **路线变更**：原计划用 `drizzle-orm/node-sqlite`，实测发现该驱动只存在于 drizzle 1.0-rc 线（stable 0.45.2 只有 `bun-sqlite`/`better-sqlite3`/`sqlite-proxy` 等，`sqlite-proxy` 是异步接口、与现有同步调用方不兼容）。三条路线实测后选择 **better-sqlite3**：stable 驱动、零类型错误、零调用点改动，代价是 V8 ABI 原生模块（Node 大版本升级需重编译、Electron 需 electron-rebuild）。drizzle 1.0-rc.4 + node-sqlite 路线实测需要修 85 个类型错误（1.0 移除了 `db.all<T>()`/`db.get<T>()` 的泛型形式），且引入 RC 依赖；自建 node:sqlite 适配层因自维护 drizzle 内部契约被否决。
+
+- [x] shebang → `#!/usr/bin/env node`；`package.json` 新增 `engines.node >= 24.0.0`（type stripping 默认开启 + `node:sqlite` 无需 flag）。
+- [x] 测试切换：`test` 由 `bun test` 改为 `vitest run`；`apps/admin-next` 的 `test: bun test src` script 删除（根 vitest 的 include 已覆盖 `apps/admin-next/src/**/*.test.ts`，无调用方）。
+- [x] 驱动切换：`bun:sqlite` → `better-sqlite3` 13.0.3 + `drizzle-orm/better-sqlite3`（`store/database.ts`、`doctor.ts`、`scripts/scrub-model-request-images.ts`）。`safeIntegers` → `defaultSafeIntegers(true)`；`create:false/strict` → `fileMustExist`；`close(true)` → `close()`；`db.query()` → `db.prepare()`；`db.transaction(fn).immediate()` 语义不变（better-sqlite3 原生支持）。
+- [x] **435 处 `.query()` 机械迁移**：bun:sqlite 是 `query<Result, Params>`，better-sqlite3 是 `prepare<Params, Result>`——泛型顺序相反。用 TypeScript AST 脚本一次性调换 297 处泛型（单泛型补 `unknown[]` 绑定位），并处理多行泛型。
+- [x] **`.get()` 的 null → undefined 语义**（最高风险项的实际形态）：better-sqlite3 无行时返回 `undefined`（bun 返回 `null`），`=== null` 检查会**静默失效**且 TS 不报错。修复 56 处 TS 报错 + 6 处运行时静默失效（含 `cut-topic.test.ts` 的 running 轮询循环、fixture 的 `!== null`）；测试断言同步改 `toBeUndefined()`。`test/operations.test.ts` 的备份完整性验证仍用 `node:sqlite`（独立验证手段，不随驱动走）。
+- [x] **只在 Node 下暴露的启动缺陷**（Phase 3 遗留）：`@hono/node-server` 的 `serve()` 是异步绑定，紧跟的 `server.address()` 返回 null。修复 3 处：`AdminServer.start()`（改 async，等待 `listening`/`error`——顺带把端口占用从"未处理的 error 事件"变成真实 reject，落实风险登记里的可诊断性改进）、`test/helpers.ts` 的 `startFixtureServer`、`apps/admin-next/e2e/server.ts`。
+- [x] `test/mcp.test.ts` 的 stdio fixture 命令由 `[process.execPath, 'run', fixturePath]`（bun 子命令）改为 `[process.execPath, fixturePath]`。
+- [x] 移除 `@types/bun`，新增 `@types/node@24`（根 + `apps/admin-next`）；`apps/admin-next/tsconfig.json` 的 `types` 由 `bun` 改 `node`。
+- [x] 部署同步：`deploy/plasticwan{,-backup}.service` 的 `ExecStart` 由 `bun run` 改 `node`；`docker-entrypoint.sh` 同步；`Dockerfile` runtime 阶段由 `oven/bun:1.4-debian` 改 `node:24-bookworm-slim`（builder 预置 python3/make/g++，兜底 better-sqlite3 的源码编译路径）；`apps/admin-next/e2e/global-setup.ts` 由 `spawn('bun', …)` 改 `spawn(process.execPath, …)`；CI 已是 `node-version: 24`，无需改动。
+- [x] 文档同步运行时事实：`operations.md`（Node ≥24、better-sqlite3 原生模块说明、镜像结构、systemd 路径）、`architecture.md`、`data-layer.md`、`configuration.md`、`verification.md`、`admin-panel.md`、`AGENTS.md`、`apps/admin-next/README.md`。
+- 验收（本机 Node v26.5.0；目标运行时 Node 24）：
+  - `pnpm install`、`pnpm run check`（root + admin 两段 tsc）、`pnpm run lint`、`pnpm test` **305/305**（vitest run，Node 下）全绿。
+  - `check-config` 在 Node 与 Bun 下输出同一 `config_hash`（`f056c037…`；与 Phase 3 记录的 `8339d3f5…` 不同是因为 `dev-data/config.jsonc` 之后被本地修改过）。
+  - `doctor` 依赖探针全部通过（ffmpeg/ffprobe 真实探针 + lottie 链路经 `spawnProcess`；本机未装真实 `lottie` 包，用 stub 验证了命令构造、spawn、退出码与 sharp 读回链路）；model probe 因本机无真实 `GOOGLE_API_KEY` 失败，与迁移无关。
+  - Admin Panel：`pnpm run admin:test:e2e` **79 passed**（Node 下的 e2e server + 真实 Chromium 全链路）；`AdminServer.start()` 额外单独验证——Node 下返回 `127.0.0.1:8787`，`/api/auth/session` 返回 200。
+  - `backup` 在 Node 下执行保留清理 + `VACUUM INTO`：备份文件 0600、`integrity_check = ok`、42 张表，轮换正常。
+  - **未执行（需生产凭据/真实消息，留人工验收）**：真实 Telegram 私聊全链路、图片与 Sticker 视觉链路、存量管理员密码的真实浏览器登录。
 
 ### Phase 6 — 清理与文档收尾
 
@@ -135,14 +148,14 @@
 
 | 风险 | 影响 | 缓解 |
 | --- | --- | --- |
-| `node:sqlite` bigint 回落 Number | Telegram ID 精度损坏（数据损坏级） | ✅ Phase 2 已在 Drizzle 层固定 bigint 映射（customType）并在 Bun 上写了精度/行为测试（`test/schema.test.ts`）；切换时刻仅换驱动再复测；兜底 better-sqlite3 |
+| `node:sqlite` bigint 回落 Number | Telegram ID 精度损坏（数据损坏级） | ✅ 已消解：Phase 5 实测 `drizzle-orm/node-sqlite` 不在 stable 线，改用 better-sqlite3；bigint 由 `defaultSafeIntegers(true)` + Drizzle `customType` 双重保证，`schema.test.ts` 覆盖 int64 边界往返 |
 | Argon2 库参数不一致 | 存量密码无法登录 | PHC 字符串自描述参数；切换前用真实账号回归 |
-| Hono 与 Bun.serve 行为差（idleTimeout、请求体上限、错误响应形状） | Admin Panel 可用性 | Phase 3 用现有 admin 测试 + 手动面板冒烟覆盖 |
-| drizzle bun-sqlite 驱动维护节奏 | Phase 2–5 过渡期维护负担 | 过渡期短；驱动仅一处引用，随时可切 |
-| Hono 与 Bun.serve 行为差（传输层 body 上限、headers 后 body 停滞无空闲切断、端口占用报错变钝） | Admin Panel 可用性 | Phase 3 验收记录：Bun.serve 的 128MB 传输上限与 idle 断开在 node-server 无直接对应；回环绑定缓解，低风险。端口占用时 start() 抛通用错、真实原因走 stderr 未处理 error 事件——未来可在 null-address 分支挂一次性 error listener 改善可诊断性 |
-| Bun 1.4 的 `node:sqlite` close 后 Windows 句柄需 GC 释放 | 过渡期测试临时目录泄漏（EBUSY） | 仅影响 `operations.test.ts` 的 afterAll 清理（已容错 + 注释）；Phase 5 切 Node 后自然消失（Node close 即释放） |
+| Hono 与 Bun.serve 行为差（idleTimeout、请求体上限、错误响应形状） | Admin Panel 可用性 | ✅ Phase 5 用 admin e2e（79 passed，真实 Chromium）与 `AdminServer.start()` 冒烟覆盖 |
+| drizzle bun-sqlite 驱动维护节奏 | Phase 2–5 过渡期维护负担 | ✅ 已结束：Phase 5 切到 `drizzle-orm/better-sqlite3`（stable 驱动，不随 1.0-rc 波动） |
+| Hono 与 Bun.serve 行为差（传输层 body 上限、headers 后 body 停滞无空闲切断、端口占用报错变钝） | Admin Panel 可用性 | Phase 3 验收记录：Bun.serve 的 128MB 传输上限与 idle 断开在 node-server 无直接对应；回环绑定缓解，低风险。✅ 端口占用可诊断性已在 Phase 5 修复：`AdminServer.start()` 等待 `listening`/`error`，bind 失败以真实错误 reject |
+| Bun 1.4 的 `node:sqlite` close 后 Windows 句柄需 GC 释放 | 过渡期测试临时目录泄漏（EBUSY） | ✅ 已消失：Phase 5 后测试在 Node 下跑（Node close 即释放句柄） |
 | nodenext 解析下依赖子路径类型差异 | `check` 失败 | ✅ Phase 4 实测零差异，未触发回退 |
-| Electron 自带 Node 的 `node:sqlite` 可用性/稳定性未核实 | 桌面版数据层需改驱动 | 桌面壳 spike 时验证；不可用则 better-sqlite3 + 针对 Electron ABI 重建 |
+| better-sqlite3 是 V8 ABI 原生模块（非 N-API） | Node 大版本升级需重编译；Electron 打包需 `electron-rebuild` | 服务端跟随 Node LTS（当前 24）；Docker builder 预置 python3/make/g++ 兜底源码编译；桌面壳 spike 时验证 electron-rebuild 与 asar unpack |
 | 原生模块（`sharp`、`@node-rs/argon2`）在 Electron 打包后加载 | 桌面版媒体/登录不可用 | 优先 N-API 预编译包；asar unpack；spike 时三平台冒烟 |
 
 ## 验证矩阵（Phase 5 验收最低集）

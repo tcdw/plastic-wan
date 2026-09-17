@@ -101,7 +101,7 @@ test('strict tables still reject text values in integer columns through sql temp
   }
 });
 
-test('drizzle statements join bun immediate transactions and roll back on throw', async () => {
+test('drizzle statements join better-sqlite3 immediate transactions and roll back on throw', async () => {
   const { store } = await openStore();
   try {
     const now = new Date('2026-09-01T00:00:00.000Z').toISOString();

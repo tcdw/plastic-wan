@@ -39,7 +39,7 @@ test('stdio MCP discovery, result bounds, audit, and unmetered repeat calls', as
         {
           alias: 'local',
           transport: 'stdio',
-          command: [process.execPath, 'run', fixturePath],
+          command: [process.execPath, fixturePath],
           required: true,
           tools: ['echo'],
           payload_max_bytes: 1048576,
@@ -67,7 +67,7 @@ test('stdio MCP discovery, result bounds, audit, and unmetered repeat calls', as
     await manager.start();
     expect(validatedNames).toEqual(['local__echo']);
     expect(
-      store.db.query<{ state: string }, []>("SELECT state FROM mcp_server_state WHERE alias = 'local'").get()?.state,
+      store.db.prepare<[], { state: string }>("SELECT state FROM mcp_server_state WHERE alias = 'local'").get()?.state,
     ).toBe('ready');
 
     const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
@@ -112,7 +112,7 @@ test('stdio MCP discovery, result bounds, audit, and unmetered repeat calls', as
     expect(repeat.content.some((entry) => entry.type === 'text')).toBe(true);
     await expect(tool.execute('mcp-3', {})).rejects.toThrow('arguments');
     const calls = store.db
-      .query<{ state: string; error_code: string | null }, []>('SELECT state, error_code FROM tool_calls ORDER BY id')
+      .prepare<[], { state: string; error_code: string | null }>('SELECT state, error_code FROM tool_calls ORDER BY id')
       .all();
     expect(calls).toEqual([
       { state: 'success', error_code: null },
@@ -121,7 +121,7 @@ test('stdio MCP discovery, result bounds, audit, and unmetered repeat calls', as
     ]);
     expect(
       store.db
-        .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM daily_usage WHERE metric = 'tool_calls'")
+        .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM daily_usage WHERE metric = 'tool_calls'")
         .get()?.count,
     ).toBe(0n);
   } finally {

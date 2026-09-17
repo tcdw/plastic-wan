@@ -51,7 +51,7 @@ function killTree(proc: ChildProcess): void {
     return;
   }
   // Synchronous so taskkill finishes before the script exits and the whole
-  // vite tree (bun → node/vite → esbuild) is actually gone.
+  // vite tree (pnpm → node/vite → esbuild) is actually gone.
   spawnSync('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { stdio: 'ignore' });
 }
 
@@ -96,7 +96,7 @@ let vite: ChildProcess | undefined;
 let pass = true;
 try {
   console.log(`echo probe listening on ${API_TARGET}`);
-  vite = spawn('bun', ['run', 'dev'], {
+  vite = spawn('pnpm', ['run', 'dev'], {
     cwd: join(import.meta.dirname, '..', 'apps', 'admin-next'),
     env: { ...process.env, ADMIN_API_TARGET: API_TARGET },
     stdio: ['ignore', 'pipe', 'pipe'],

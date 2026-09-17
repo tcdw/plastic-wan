@@ -2,7 +2,7 @@
 
 ## 进程组成
 
-Plastic Wan 是单进程 Bun 服务。`src/application.ts` 负责装配以下组件：
+Plastic Wan 是单进程 Node.js 服务。`src/application.ts` 负责装配以下组件：
 
 ```text
 Config + SecretStore
@@ -133,7 +133,7 @@ Conversation Context 是运行时自己写下的历史，但它由模型输出�
 | --- | --- |
 | grammY | Telegram long polling 与 API |
 | Pi Agent Core / Pi AI | Agent 循环、模型和 Provider 抽象 |
-| Bun SQLite + Drizzle ORM | 持久化、状态机与审计（连接层 bun:sqlite，业务查询 Drizzle；见 data-layer.md） |
+| better-sqlite3 + Drizzle ORM | 持久化、状态机与审计（连接层 better-sqlite3，业务查询 Drizzle；见 data-layer.md） |
 | Sharp | 图片解码、缩放和格式转换 |
 | FFmpeg / FFprobe | 视频 Sticker 中间帧提取 |
 | python-lottie | TGS 代表帧先导出 SVG，再由 Sharp 转 PNG/JPEG |

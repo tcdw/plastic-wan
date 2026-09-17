@@ -3,7 +3,12 @@ FROM node:24-bookworm-slim AS builder
 
 WORKDIR /app
 
-# pnpm 是包管理器；bun 仍是运行时（切换见 agent-doc/design/20260901 Bun 到 Node 迁移 Epic.md，Phase 5）
+# better-sqlite3 ships prebuilt binaries for Node LTS; keep a toolchain for
+# platforms where prebuild-install falls back to a source build.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# pnpm 是包管理器；Node.js 24 是运行时
 RUN npm install --global pnpm@12.4.2
 
 # Cache layer: install deps before copying source
@@ -18,8 +23,8 @@ RUN pnpm run admin:build
 # Prune devDependencies — runtime only needs production deps
 RUN pnpm install --prod --frozen-lockfile
 
-# ── Stage 2: Runtime (Bun，Phase 5 切换 Node) ────────────────────
-FROM oven/bun:1.4-debian
+# ── Stage 2: Runtime (Node.js 24) ───────────────────────────────
+FROM node:24-bookworm-slim
 
 # Runtime system dependencies:
 #   ffmpeg / ffprobe — video sticker representative frame extraction

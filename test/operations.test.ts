@@ -44,15 +44,15 @@ test('retention scrubs referenced history and backup keeps seven consistent copi
     throw new Error('Expected old invocation');
   }
   store.db
-    .query("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
+    .prepare("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
     .run(oldReceived.toISOString(), oldInvocation);
   store.db
-    .query(
+    .prepare(
       "UPDATE buckets SET state = 'completed', finished_at = ?, updated_at = ? WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)",
     )
     .run(oldReceived.toISOString(), oldReceived.toISOString(), oldInvocation);
   store.db
-    .query(
+    .prepare(
       "INSERT INTO tool_calls(invocation_id, tool_call_id, tool_name, arguments_json, result_text, state, side_effect, created_at, finished_at) VALUES (?, 'old-tool', 'probe', '{\"secret\":true}', 'old result', 'success', 0, ?, ?)",
     )
     .run(oldInvocation, oldReceived.toISOString(), oldReceived.toISOString());
@@ -64,14 +64,14 @@ test('retention scrubs referenced history and backup keeps seven consistent copi
     throw new Error('Expected new invocation');
   }
   const historyBefore = store.db
-    .query<{ snapshot_json: string }, [bigint]>(
+    .prepare<[bigint], { snapshot_json: string }>(
       "SELECT snapshot_json FROM invocation_messages WHERE invocation_id = ? AND section = 'history'",
     )
     .get(newInvocation);
   expect(historyBefore?.snapshot_json).toContain('old private text');
 
   store.db
-    .query(
+    .prepare(
       `INSERT INTO internal_contexts(
          conversation_id, invocation_id, source_agent_message_id, kind, version, observed_at, payload_json, created_at
        ) VALUES (
@@ -98,7 +98,7 @@ test('retention scrubs referenced history and backup keeps seven consistent copi
       oldReceived.toISOString(),
     );
   store.db
-    .query(
+    .prepare(
       `INSERT INTO internal_contexts(
          conversation_id, invocation_id, source_agent_message_id, kind, version, observed_at, payload_json, created_at
        ) VALUES (
@@ -128,40 +128,40 @@ test('retention scrubs referenced history and backup keeps seven consistent copi
   purgeExpiredData(store.orm, loaded.config, newReceived);
   expect(
     store.db
-      .query<{ count: bigint }, [bigint]>('SELECT COUNT(*) AS count FROM invocations WHERE id = ?')
+      .prepare<[bigint], { count: bigint }>('SELECT COUNT(*) AS count FROM invocations WHERE id = ?')
       .get(oldInvocation)?.count,
   ).toBe(0n);
   expect(
     store.db
-      .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM tool_calls WHERE tool_call_id = 'old-tool'")
+      .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM tool_calls WHERE tool_call_id = 'old-tool'")
       .get()?.count,
   ).toBe(0n);
   expect(
-    store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM telegram_updates WHERE update_id = 1').get()
+    store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM telegram_updates WHERE update_id = 1').get()
       ?.count,
   ).toBe(0n);
   expect(
     store.db
-      .query<{ count: bigint }, []>(
+      .prepare<[], { count: bigint }>(
         "SELECT COUNT(*) AS count FROM internal_contexts WHERE payload_json LIKE '%old-alarm%'",
       )
       .get()?.count,
   ).toBe(0n);
   expect(
     store.db
-      .query<{ count: bigint }, []>(
+      .prepare<[], { count: bigint }>(
         "SELECT COUNT(*) AS count FROM internal_contexts WHERE payload_json LIKE '%new-alarm%'",
       )
       .get()?.count,
   ).toBe(1n);
   const scrubbed = store.db
-    .query<{ text: string | null; raw: string }, []>(
+    .prepare<[], { text: string | null; raw: string }>(
       'SELECT r.text, r.raw_fragment_json AS raw FROM message_revisions r JOIN messages m ON m.id = r.message_id WHERE m.telegram_message_id = 10',
     )
     .get();
   expect(scrubbed).toEqual({ text: null, raw: '{}' });
   const retainedSnapshot = store.db
-    .query<{ snapshot_json: string }, [bigint]>(
+    .prepare<[bigint], { snapshot_json: string }>(
       "SELECT snapshot_json FROM invocation_messages WHERE invocation_id = ? AND section = 'history'",
     )
     .get(newInvocation);

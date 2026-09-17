@@ -18,7 +18,7 @@ Plastic Wan 使用严格 JSONC 配置。Schema 位于 `src/platform/config.ts`�
 验证命令：
 
 ```bash
-bun run src/cli.ts check-config --config dev-data/config.jsonc
+node src/cli.ts check-config --config dev-data/config.jsonc
 ```
 
 ## SecretRef

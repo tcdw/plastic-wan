@@ -1,8 +1,9 @@
 packages:
   - apps/*
 
-# 显式放行依赖的 build scripts（pnpm 10+ 默认拦截；与迁移前 bun 时代行为对齐）
+# 显式放行依赖的 build scripts（pnpm 10+ 默认拦截）
 allowBuilds:
   '@google/genai': true
+  better-sqlite3: true
   esbuild: true
   protobufjs: true

@@ -17,7 +17,7 @@ import {
  *
  * drizzle's SQLite dialect has no built-in bigint mode, so this custom type
  * keeps the project invariant that SQLite row IDs and Telegram IDs are
- * `bigint` on both read and write. `bun:sqlite` accepts bigint bindings
+ * `bigint` on both read and write. `better-sqlite3` accepts bigint bindings
  * natively; `fromDriver` also coerces plain numbers so the layer stays correct
  * regardless of the driver's safeIntegers setting.
  */

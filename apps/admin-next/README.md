@@ -43,8 +43,8 @@ pnpm --filter plasticwan-admin-next exec playwright install chromium  # 首次�
 pnpm run admin:test:e2e                    # 或在本目录 pnpm --filter plasticwan-admin-next run test:e2e
 ```
 
-Playwright 套件位于 `e2e/**/*.e2e.ts`（文件名不以 `.test.ts` 结尾，`bun test`
-不会发现它们）。`globalSetup` 派生 Bun 子进程 `e2e/server.ts`：临时目录 + 临时
+Playwright 套件位于 `e2e/**/*.e2e.ts`（文件名不以 `.test.ts` 结尾，vitest
+不会发现它们）。`globalSetup` 派生 Node 子进程 `e2e/server.ts`：临时目录 + 临时
 SQLite + `test/fixtures/admin-seed.ts` 合成数据 + 真实 `AdminServer`
 （`static_dir` 指向本包 `dist`），回环随机端口；`globalTeardown` 关闭并清理。
 用例覆盖认证状态机、13 路由深链接、列表过滤与 Load more 游标分页、Invocation

@@ -146,7 +146,7 @@ async function indexOneSticker(setup: InvocationSetup): Promise<{ stickers: Stic
   });
   await stickers.sync();
   expect(await stickers.runOne()).toBe(true);
-  const stickerId = store.db.query<{ id: bigint }, []>('SELECT id FROM stickers').get()?.id;
+  const stickerId = store.db.prepare<[], { id: bigint }>('SELECT id FROM stickers').get()?.id;
   if (stickerId === undefined) {
     throw new Error('Sticker indexing did not create a row');
   }
@@ -234,7 +234,7 @@ test('the skill index reaches the system prompt and primitives stay directly cal
     reason: 'completed',
   });
   const executeRows = store.db
-    .query<{ state: string; error_code: string | null }, []>(
+    .prepare<[], { state: string; error_code: string | null }>(
       "SELECT state, error_code FROM tool_calls WHERE tool_name = 'execute' ORDER BY id",
     )
     .all();
@@ -315,7 +315,7 @@ test('search_stickers runs through execute and its refs authorize a sticker send
   });
   expect(sentSticker).toBe('sticker-file');
   const rows = store.db
-    .query<{ tool_name: string; state: string; error_code: string | null }, []>(
+    .prepare<[], { tool_name: string; state: string; error_code: string | null }>(
       'SELECT tool_name, state, error_code FROM tool_calls ORDER BY id',
     )
     .all();
@@ -325,8 +325,9 @@ test('search_stickers runs through execute and its refs authorize a sticker send
     { tool_name: 'send', state: 'success', error_code: null },
   ]);
   expect(
-    store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM telegram_sends WHERE state = 'success'").get()
-      ?.count,
+    store.db
+      .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM telegram_sends WHERE state = 'success'")
+      .get()?.count,
   ).toBe(1n);
   store.close();
 });
@@ -393,7 +394,7 @@ test('execute refuses primitives and unknown capabilities while memory calls sti
     reason: 'completed',
   });
   const rows = store.db
-    .query<{ tool_name: string; state: string; error_code: string | null }, []>(
+    .prepare<[], { tool_name: string; state: string; error_code: string | null }>(
       'SELECT tool_name, state, error_code FROM tool_calls ORDER BY id',
     )
     .all();
@@ -405,7 +406,7 @@ test('execute refuses primitives and unknown capabilities while memory calls sti
     { tool_name: 'send', state: 'success', error_code: null },
   ]);
   const memories = store.db
-    .query<{ content: string }, []>('SELECT content FROM memories')
+    .prepare<[], { content: string }>('SELECT content FROM memories')
     .all()
     .map((row) => row.content);
   expect(memories).toEqual(['owner likes cats']);

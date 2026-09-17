@@ -194,11 +194,11 @@ describe('long-lived invocation', () => {
       await sleep(150);
 
       const bucket = fixtureSetup.store.db
-        .query<{ id: bigint; state: string; first_received_at: string; deadline_at: string }, []>(
+        .prepare<[], { id: bigint; state: string; first_received_at: string; deadline_at: string }>(
           'SELECT id, state, first_received_at, deadline_at FROM buckets ORDER BY id DESC LIMIT 1',
         )
         .get();
-      if (bucket === null) {
+      if (bucket === undefined) {
         throw new Error('Expected a second bucket');
       }
       // The bucket is still collecting its own window instead of being injected a
@@ -207,14 +207,14 @@ describe('long-lived invocation', () => {
       const windowMilliseconds = Date.parse(bucket.deadline_at) - Date.parse(bucket.first_received_at);
       expect(windowMilliseconds).toBeGreaterThanOrEqual(1_000);
       expect(
-        fixtureSetup.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM invocation_buckets').get()
+        fixtureSetup.store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM invocation_buckets').get()
           ?.count,
       ).toBe(1n);
 
       // It is injected once its own window closes, into the same invocation.
       await until(() => requests.length === 2, 'the second batch');
       const attachments = fixtureSetup.store.db
-        .query<{ invocation_id: bigint; bucket_id: bigint; injected_at: string | null }, []>(
+        .prepare<[], { invocation_id: bigint; bucket_id: bigint; injected_at: string | null }>(
           'SELECT invocation_id, bucket_id, injected_at FROM invocation_buckets ORDER BY bucket_id',
         )
         .all();
@@ -247,10 +247,10 @@ describe('long-lived invocation', () => {
         await sleep(200);
         collectingDuringRound =
           fixtureSetup.store.db
-            .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM buckets WHERE state = 'collecting'")
+            .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM buckets WHERE state = 'collecting'")
             .get()?.count ?? 0n;
         attachedDuringRound =
-          fixtureSetup.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM invocation_buckets').get()
+          fixtureSetup.store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM invocation_buckets').get()
             ?.count ?? 0n;
         return fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'first answer' }), {
           stopReason: 'toolUse',
@@ -302,14 +302,14 @@ describe('long-lived invocation', () => {
       expect(requests[1]).not.toContain('second message');
       expect(requests[2]).toContain('second message');
       const attached2 = fixtureSetup.store.db
-        .query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM invocation_buckets')
+        .prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM invocation_buckets')
         .get();
       expect(attached2?.count).toBe(2n);
-      expect(fixtureSetup.store.db.query<{ state: string }, []>('SELECT state FROM buckets ORDER BY id').all()).toEqual(
-        [{ state: 'completed' }, { state: 'completed' }],
-      );
+      expect(
+        fixtureSetup.store.db.prepare<[], { state: string }>('SELECT state FROM buckets ORDER BY id').all(),
+      ).toEqual([{ state: 'completed' }, { state: 'completed' }]);
       const head = fixtureSetup.store.db
-        .query<{ is_checkpoint: bigint; role: string }, []>(
+        .prepare<[], { is_checkpoint: bigint; role: string }>(
           'SELECT is_checkpoint, role FROM context_messages ORDER BY seq',
         )
         .all()
@@ -347,8 +347,9 @@ describe('long-lived invocation', () => {
         // its own deadline would be injected while the model is still working.
         await sleep(1_500);
         collectingDuringRound =
-          fixtureSetup.store.db.query<{ state: string }, []>('SELECT state FROM buckets ORDER BY id DESC LIMIT 1').get()
-            ?.state ?? '';
+          fixtureSetup.store.db
+            .prepare<[], { state: string }>('SELECT state FROM buckets ORDER BY id DESC LIMIT 1')
+            .get()?.state ?? '';
         return fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'first answer' }), {
           stopReason: 'toolUse',
         });
@@ -388,7 +389,7 @@ describe('long-lived invocation', () => {
     );
     function recordInjection(): void {
       const row = fixtureSetup.store.db
-        .query<{ injected_at: string | null }, []>(
+        .prepare<[], { injected_at: string | null }>(
           'SELECT injected_at FROM invocation_buckets ORDER BY bucket_id DESC LIMIT 1',
         )
         .get();
@@ -411,7 +412,7 @@ describe('long-lived invocation', () => {
       expect(injectedAt).toBeGreaterThan(0);
       expect(injectedAt - roundEnd).toBeGreaterThanOrEqual(900);
       expect(
-        fixtureSetup.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM invocations').get()?.count,
+        fixtureSetup.store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM invocations').get()?.count,
       ).toBe(1n);
     } finally {
       await scheduler.stop();
@@ -507,7 +508,7 @@ describe('long-lived invocation', () => {
       // The run now sits in its idle grace (2 s). Aborting must end it right
       // away; if it did not, this test would time out waiting for the grace.
       const chatId = fixtureSetup.store.db
-        .query<{ chat_id: bigint }, []>('SELECT chat_id FROM conversations LIMIT 1')
+        .prepare<[], { chat_id: bigint }>('SELECT chat_id FROM conversations LIMIT 1')
         .get()?.chat_id;
       if (chatId === undefined) {
         throw new Error('Expected a chat');
@@ -575,7 +576,7 @@ describe('long-lived invocation', () => {
       expect(started).toHaveLength(2);
       for (const invocationId of started) {
         const attached = fixtureSetup.store.db
-          .query<{ count: bigint }, [bigint]>(
+          .prepare<[bigint], { count: bigint }>(
             'SELECT COUNT(*) AS count FROM invocation_buckets WHERE invocation_id = ?',
           )
           .get(invocationId);
@@ -655,19 +656,21 @@ describe('long-lived invocation', () => {
       expect(requests[1]).toContain('call the send tool');
       expect(
         fixtureSetup.store.db
-          .query<{ text: string }, []>('SELECT text FROM agent_messages')
+          .prepare<[], { text: string }>('SELECT text FROM agent_messages')
           .all()
           .map((row) => row.text),
       ).toContain('draft for the first batch');
       const published = fixtureSetup.store.db
-        .query<{ arguments_json: string }, []>("SELECT arguments_json FROM tool_calls WHERE tool_name = 'send'")
+        .prepare<[], { arguments_json: string }>("SELECT arguments_json FROM tool_calls WHERE tool_name = 'send'")
         .all();
       expect(published).toHaveLength(1);
       expect(published[0]?.arguments_json).toContain('published first batch');
       // The reminder precedes the newer batch, so the model is told about the
       // unpublished draft while its own batch is still the newest one.
       const seqs = fixtureSetup.store.db
-        .query<{ seq: bigint; payload_json: string }, []>('SELECT seq, payload_json FROM context_messages ORDER BY seq')
+        .prepare<[], { seq: bigint; payload_json: string }>(
+          'SELECT seq, payload_json FROM context_messages ORDER BY seq',
+        )
         .all();
       const nudgeSeq = seqs.find((row) => row.payload_json.includes('call the send tool'))?.seq;
       const secondBatchSeq = seqs.find((row) => row.payload_json.includes('second message'))?.seq;
@@ -698,23 +701,23 @@ describe('long-lived invocation', () => {
       if (invocationId === undefined) {
         throw new Error('Expected an opening invocation');
       }
-      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
       fixtureSetup.store.db
-        .query("UPDATE buckets SET state = 'running' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .prepare("UPDATE buckets SET state = 'running' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
         .run(invocationId);
 
       fixtureSetup.ingestion.ingest(update(2, 11, 'topic', 100), new Date());
       expect(service.processDue(new Date())).toHaveLength(0);
       expect(
         fixtureSetup.store.db
-          .query<{ count: bigint }, [bigint]>(
+          .prepare<[bigint], { count: bigint }>(
             'SELECT COUNT(*) AS count FROM invocation_buckets WHERE invocation_id = ?',
           )
           .get(invocationId)?.count,
       ).toBe(1n);
       expect(
         fixtureSetup.store.db
-          .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM buckets WHERE state = 'collecting'")
+          .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM buckets WHERE state = 'collecting'")
           .get()?.count,
       ).toBe(1n);
     } finally {
@@ -735,14 +738,14 @@ describe('long-lived invocation', () => {
       if (invocationId === undefined) {
         throw new Error('Expected an opening invocation');
       }
-      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
       fixtureSetup.store.db
-        .query("UPDATE buckets SET state = 'running' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .prepare("UPDATE buckets SET state = 'running' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
         .run(invocationId);
       fixtureSetup.ingestion.ingest(update(2, 11, 'attached later'), new Date());
       expect(service.processDue(new Date())).toHaveLength(0);
       expect(
-        fixtureSetup.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM invocation_buckets').get()
+        fixtureSetup.store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM invocation_buckets').get()
           ?.count,
       ).toBe(2n);
 
@@ -752,12 +755,12 @@ describe('long-lived invocation', () => {
       service.releaseUninjectedBuckets(invocationId, new Date());
       expect(
         fixtureSetup.store.db
-          .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM invocations WHERE state = 'queued'")
+          .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM invocations WHERE state = 'queued'")
           .get()?.count,
       ).toBe(1n);
-      expect(fixtureSetup.store.db.query<{ state: string }, []>('SELECT state FROM buckets ORDER BY id').all()).toEqual(
-        [{ state: 'running' }, { state: 'queued' }],
-      );
+      expect(
+        fixtureSetup.store.db.prepare<[], { state: string }>('SELECT state FROM buckets ORDER BY id').all(),
+      ).toEqual([{ state: 'running' }, { state: 'queued' }]);
     } finally {
       fixtureSetup.store.close();
     }
@@ -777,9 +780,9 @@ describe('long-lived invocation', () => {
       if (invocationId === undefined) {
         throw new Error('Expected an opening invocation');
       }
-      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
       fixtureSetup.store.db
-        .query("UPDATE buckets SET state = 'running' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .prepare("UPDATE buckets SET state = 'running' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
         .run(invocationId);
       fixtureSetup.ingestion.ingest(update(2, 11, 'too late'), new Date());
       // A run that already decided to stop leaves the bucket collecting for the
@@ -787,7 +790,7 @@ describe('long-lived invocation', () => {
       expect(service.processDue(new Date())).toHaveLength(0);
       expect(injected).toEqual([]);
       expect(
-        fixtureSetup.store.db.query<{ state: string }, []>('SELECT state FROM buckets ORDER BY id DESC LIMIT 1').get()
+        fixtureSetup.store.db.prepare<[], { state: string }>('SELECT state FROM buckets ORDER BY id DESC LIMIT 1').get()
           ?.state,
       ).toBe('collecting');
     } finally {
@@ -834,7 +837,7 @@ describe('long-lived invocation', () => {
       if (invocationId === undefined) {
         throw new Error('Expected an opening invocation');
       }
-      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
 
       const outcome = await runtime.run(invocationId, new AbortController().signal);
       expect(outcome).toEqual({ state: 'completed', reason: 'context_limit' });
@@ -842,11 +845,11 @@ describe('long-lived invocation', () => {
       expect(closingTools).toEqual([['send']]);
       expect(
         fixtureSetup.store.db
-          .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM telegram_sends WHERE state = 'success'")
+          .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM telegram_sends WHERE state = 'success'")
           .get()?.count,
       ).toBe(1n);
       expect(
-        fixtureSetup.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM model_calls').get()?.count,
+        fixtureSetup.store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM model_calls').get()?.count,
       ).toBe(2n);
     } finally {
       fixtureSetup.store.close();
@@ -887,14 +890,14 @@ describe('long-lived invocation', () => {
       if (invocationId === undefined) {
         throw new Error('Expected an opening invocation');
       }
-      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
 
       const outcome = await runtime.run(invocationId, new AbortController().signal);
       // The run ends because the model stopped calling tools, not because the
       // estimate said the window was full.
       expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
       const requests = fixtureSetup.store.db
-        .query<{ tools_json: string }, []>('SELECT tools_json FROM model_calls ORDER BY id')
+        .prepare<[], { tools_json: string }>('SELECT tools_json FROM model_calls ORDER BY id')
         .all();
       expect(requests).toHaveLength(31);
       // Closing mode trims the registry to send-only, so a full registry on the
@@ -942,18 +945,18 @@ describe('long-lived invocation', () => {
       await until(
         () =>
           fixtureSetup.store.db
-            .query<{ id: bigint }, []>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1")
-            .get() !== null,
+            .prepare<[], { id: bigint }>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1")
+            .get() !== undefined,
         'the opening invocation to start',
       );
       const openingInvocation = fixtureSetup.store.db
-        .query<{ id: bigint }, []>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1")
+        .prepare<[], { id: bigint }>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1")
         .get();
       fixtureSetup.ingestion.ingest(update(2, 11, 'attached but never injected'), new Date());
       const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', attachment);
       expect(service.processDue(new Date())).toHaveLength(0);
       expect(
-        fixtureSetup.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM invocation_buckets').get()
+        fixtureSetup.store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM invocation_buckets').get()
           ?.count,
       ).toBe(2n);
 
@@ -967,14 +970,14 @@ describe('long-lived invocation', () => {
       // `queued` and owns the fresh invocation that will replay it.
       expect(
         fixtureSetup.store.db
-          .query<{ id: bigint; state: string }, []>('SELECT id, state FROM buckets ORDER BY id')
+          .prepare<[], { id: bigint; state: string }>('SELECT id, state FROM buckets ORDER BY id')
           .all(),
       ).toEqual([
         { id: 1n, state: 'completed' },
         { id: 2n, state: 'queued' },
       ]);
       const queued = fixtureSetup.store.db
-        .query<{ id: bigint; bucket_id: bigint }, []>("SELECT id, bucket_id FROM invocations WHERE state = 'queued'")
+        .prepare<[], { id: bigint; bucket_id: bigint }>("SELECT id, bucket_id FROM invocations WHERE state = 'queued'")
         .all();
       expect(queued).toHaveLength(1);
       expect(queued[0]?.bucket_id).toBe(2n);
@@ -1008,9 +1011,9 @@ describe('long-lived invocation', () => {
       if (invocationId === undefined) {
         throw new Error('Expected an opening invocation');
       }
-      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
       const conversationId = fixtureSetup.store.db
-        .query<{ conversation_id: bigint }, [bigint]>('SELECT conversation_id FROM invocations WHERE id = ?')
+        .prepare<[bigint], { conversation_id: bigint }>('SELECT conversation_id FROM invocations WHERE id = ?')
         .get(invocationId)?.conversation_id;
       if (conversationId === undefined) {
         throw new Error('Expected a conversation');
@@ -1027,7 +1030,7 @@ describe('long-lived invocation', () => {
       // Only the opening batch reached the transcript.
       expect(
         fixtureSetup.store.db
-          .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM context_messages WHERE role = 'user'")
+          .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM context_messages WHERE role = 'user'")
           .get()?.count,
       ).toBe(1n);
     } finally {
@@ -1071,14 +1074,14 @@ describe('conversation continuity', () => {
           throw new Error(`Expected invocation ${index + 1}`);
         }
         await runtime.run(invocationId, new AbortController().signal);
-        fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(invocationId);
+        fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(invocationId);
         fixtureSetup.store.db
-          .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+          .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
           .run(invocationId);
       }
       // Nothing was collected: the run's own window is nowhere near full.
       const context = fixtureSetup.store.db
-        .query<{ head_seq: bigint; last_gc_at: string | null }, []>(
+        .prepare<[], { head_seq: bigint; last_gc_at: string | null }>(
           'SELECT head_seq, last_gc_at FROM conversation_contexts',
         )
         .get();
@@ -1121,11 +1124,11 @@ describe('conversation continuity', () => {
       if (first === undefined) {
         throw new Error('Expected the first invocation');
       }
-      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(first);
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'running' WHERE id = ?").run(first);
       await runtime.run(first, new AbortController().signal);
-      fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
       fixtureSetup.store.db
-        .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
         .run(first);
 
       // Run two reuses it, and takes two batches: its opening bucket and one attach.
@@ -1134,11 +1137,11 @@ describe('conversation continuity', () => {
       if (second === undefined) {
         throw new Error('Expected the second invocation');
       }
-      fixtureSetup.store.db.query("UPDATE invocations SET state = 'running' WHERE id = ?").run(second);
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'running' WHERE id = ?").run(second);
       fixtureSetup.ingestion.ingest(update(3, 12, 'third'), new Date());
       expect(service.processDue(new Date())).toHaveLength(0);
       const conversationId = fixtureSetup.store.db
-        .query<{ id: bigint }, []>('SELECT id FROM conversations LIMIT 1')
+        .prepare<[], { id: bigint }>('SELECT id FROM conversations LIMIT 1')
         .get()?.id;
       if (conversationId === undefined) {
         throw new Error('Expected a conversation');
@@ -1152,7 +1155,7 @@ describe('conversation continuity', () => {
       // two batches of run two do not share one anchor.
       const refs = new Map(
         fixtureSetup.store.db
-          .query<{ ref: string; source_seq: bigint }, []>(
+          .prepare<[], { ref: string; source_seq: bigint }>(
             "SELECT ref, source_seq FROM context_refs WHERE kind = 'reply'",
           )
           .all()
@@ -1166,7 +1169,7 @@ describe('conversation continuity', () => {
       // Stronger than "it moved": the anchor is the sequence number of the user row
       // that actually carries the batch.
       const userRows = fixtureSetup.store.db
-        .query<{ seq: bigint; payload_json: string }, []>(
+        .prepare<[], { seq: bigint; payload_json: string }>(
           "SELECT seq, payload_json FROM context_messages WHERE role = 'user' ORDER BY seq",
         )
         .all();
@@ -1218,14 +1221,14 @@ describe('conversation continuity', () => {
         }
         const outcome = await runtime.run(invocationId, new AbortController().signal);
         expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
-        fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(invocationId);
+        fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(invocationId);
         fixtureSetup.store.db
-          .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+          .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
           .run(invocationId);
       }
 
       const requests = fixtureSetup.store.db
-        .query<{ request_json: string | null }, []>(
+        .prepare<[], { request_json: string | null }>(
           "SELECT request_json FROM model_calls WHERE role = 'agent' AND request_json IS NOT NULL ORDER BY id",
         )
         .all();
@@ -1253,12 +1256,12 @@ describe('conversation continuity', () => {
       expect(transcript).toContain(`Sent Telegram message ${SEND_MESSAGE_ID}`);
       expect(transcript).toContain('second answer');
       const head = fixtureSetup.store.db
-        .query<{ head_seq: bigint; next_seq: bigint }, []>('SELECT head_seq, next_seq FROM conversation_contexts')
+        .prepare<[], { head_seq: bigint; next_seq: bigint }>('SELECT head_seq, next_seq FROM conversation_contexts')
         .get();
       // Nothing was collected, so the whole history stays inside the window.
       expect(head?.head_seq).toBe(1n);
       expect(
-        fixtureSetup.store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM context_messages').get()
+        fixtureSetup.store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM context_messages').get()
           ?.count,
       ).toBe((head?.next_seq ?? 0n) - 1n);
     } finally {
@@ -1298,31 +1301,31 @@ describe('conversation continuity', () => {
         throw new Error('Expected the first invocation');
       }
       await runtime.run(first, new AbortController().signal);
-      fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
       fixtureSetup.store.db
-        .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
         .run(first);
       // Rewrite the stored row the way a real provider payload reads: the
       // encoder copies `usage` verbatim, so `reasoning` and the cache write split
       // sit in the column exactly like this.
       const stored = fixtureSetup.store.db
-        .query<{ seq: bigint; payload_json: string }, []>(
+        .prepare<[], { seq: bigint; payload_json: string }>(
           "SELECT seq, payload_json FROM context_messages WHERE role = 'assistant'",
         )
         .get();
-      if (stored === null) {
+      if (stored === undefined) {
         throw new Error('Expected a stored assistant message');
       }
       const payload = JSON.parse(stored.payload_json) as { usage: Record<string, unknown> };
       payload.usage.reasoning = 0;
       payload.usage.cacheWrite1h = 12;
       fixtureSetup.store.db
-        .query('UPDATE context_messages SET payload_json = ? WHERE seq = ?')
+        .prepare('UPDATE context_messages SET payload_json = ? WHERE seq = ?')
         .run(JSON.stringify(payload), stored.seq);
 
       // The agent cache is gone — a restart in production, an LRU eviction here.
       const conversationId = fixtureSetup.store.db
-        .query<{ id: bigint }, []>('SELECT id FROM conversations LIMIT 1')
+        .prepare<[], { id: bigint }>('SELECT id FROM conversations LIMIT 1')
         .get()?.id;
       if (conversationId === undefined) {
         throw new Error('Expected a conversation');
@@ -1385,12 +1388,12 @@ describe('conversation continuity', () => {
         throw new Error('Expected the first invocation');
       }
       await runtime.run(first, new AbortController().signal);
-      fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
       fixtureSetup.store.db
-        .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
         .run(first);
       const conversationId = fixtureSetup.store.db
-        .query<{ id: bigint }, []>('SELECT id FROM conversations LIMIT 1')
+        .prepare<[], { id: bigint }>('SELECT id FROM conversations LIMIT 1')
         .get()?.id;
       if (conversationId === undefined) {
         throw new Error('Expected a conversation');
@@ -1399,15 +1402,15 @@ describe('conversation continuity', () => {
       // the assistant turn that made the call is evicted, and the `send` tool result
       // is the first row of the retained window.
       const sendResult = fixtureSetup.store.db
-        .query<{ seq: bigint }, []>("SELECT seq FROM context_messages WHERE role = 'toolResult' ORDER BY seq LIMIT 1")
+        .prepare<[], { seq: bigint }>("SELECT seq FROM context_messages WHERE role = 'toolResult' ORDER BY seq LIMIT 1")
         .get();
-      if (sendResult === null) {
+      if (sendResult === undefined) {
         throw new Error('Expected a stored send result');
       }
       fixtureSetup.store.db
-        .query('UPDATE context_messages SET evicted_at = ? WHERE seq < ?')
+        .prepare('UPDATE context_messages SET evicted_at = ? WHERE seq < ?')
         .run(new Date().toISOString(), sendResult.seq);
-      fixtureSetup.store.db.query('UPDATE conversation_contexts SET head_seq = ?').run(sendResult.seq);
+      fixtureSetup.store.db.prepare('UPDATE conversation_contexts SET head_seq = ?').run(sendResult.seq);
       fixtureSetup.conversationRuntime.forget(conversationId);
 
       fixtureSetup.ingestion.ingest(update(2, 11, 'second'), new Date());
@@ -1422,7 +1425,7 @@ describe('conversation continuity', () => {
       const carried = JSON.parse(requests[0] ?? '[]') as { role: string }[];
       expect(carried.map((message) => message.role)).toEqual(['user']);
       const head = fixtureSetup.store.db
-        .query<{ head_seq: bigint; next_seq: bigint }, []>('SELECT head_seq, next_seq FROM conversation_contexts')
+        .prepare<[], { head_seq: bigint; next_seq: bigint }>('SELECT head_seq, next_seq FROM conversation_contexts')
         .get();
       expect(head?.head_seq).toBeGreaterThan(sendResult.seq);
     } finally {
@@ -1461,12 +1464,12 @@ describe('conversation continuity', () => {
         throw new Error('Expected the first invocation');
       }
       await runtime.run(first, new AbortController().signal);
-      fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
       fixtureSetup.store.db
-        .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
         .run(first);
       const conversationId = fixtureSetup.store.db
-        .query<{ id: bigint }, []>('SELECT id FROM conversations LIMIT 1')
+        .prepare<[], { id: bigint }>('SELECT id FROM conversations LIMIT 1')
         .get()?.id;
       if (conversationId === undefined) {
         throw new Error('Expected a conversation');
@@ -1486,15 +1489,15 @@ describe('conversation continuity', () => {
         role: 'user',
       });
       const sendResult = fixtureSetup.store.db
-        .query<{ seq: bigint }, []>("SELECT seq FROM context_messages WHERE role = 'toolResult' ORDER BY seq LIMIT 1")
+        .prepare<[], { seq: bigint }>("SELECT seq FROM context_messages WHERE role = 'toolResult' ORDER BY seq LIMIT 1")
         .get();
-      if (sendResult === null) {
+      if (sendResult === undefined) {
         throw new Error('Expected a stored send result');
       }
       fixtureSetup.store.db
-        .query('UPDATE context_messages SET evicted_at = ? WHERE seq < ?')
+        .prepare('UPDATE context_messages SET evicted_at = ? WHERE seq < ?')
         .run(new Date().toISOString(), sendResult.seq);
-      fixtureSetup.store.db.query('UPDATE conversation_contexts SET head_seq = ?').run(sendResult.seq);
+      fixtureSetup.store.db.prepare('UPDATE conversation_contexts SET head_seq = ?').run(sendResult.seq);
       fixtureSetup.conversationRuntime.forget(conversationId);
 
       fixtureSetup.ingestion.ingest(update(2, 11, 'second'), new Date());
@@ -1507,7 +1510,7 @@ describe('conversation continuity', () => {
       // Head moved forward to the boundary, not to the end: the retained batch is
       // still replayed alongside the new one, and the orphan is gone.
       expect(
-        fixtureSetup.store.db.query<{ head_seq: bigint }, []>('SELECT head_seq FROM conversation_contexts').get()
+        fixtureSetup.store.db.prepare<[], { head_seq: bigint }>('SELECT head_seq FROM conversation_contexts').get()
           ?.head_seq,
       ).toBe(boundarySeq);
       const carried = JSON.parse(requests[0] ?? '[]') as { role: string }[];
@@ -1534,12 +1537,12 @@ describe('conversation continuity', () => {
         throw new Error('Expected the first invocation');
       }
       await fixtureSetup.runtimeWith(faux, { systemPrompt: 'prompt A' }).run(first, new AbortController().signal);
-      fixtureSetup.store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
       fixtureSetup.store.db
-        .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
         .run(first);
       const before = fixtureSetup.store.db
-        .query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM context_messages')
+        .prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM context_messages')
         .get();
       expect(before?.count).toBeGreaterThan(0n);
 
@@ -1553,14 +1556,14 @@ describe('conversation continuity', () => {
       // The old rows were dropped, so every row left in the canonical history
       // belongs to the new run and the retained window starts fresh.
       const retained = fixtureSetup.store.db
-        .query<{ invocation_id: bigint }, [bigint]>(
+        .prepare<[], { invocation_id: bigint }>(
           'SELECT invocation_id FROM context_messages WHERE seq >= (SELECT head_seq FROM conversation_contexts)',
         )
-        .all(second);
+        .all();
       expect(retained.length).toBeGreaterThan(0n);
       expect(retained.every((row) => row.invocation_id === second)).toBe(true);
       const head = fixtureSetup.store.db
-        .query<{ head_seq: bigint; next_seq: bigint }, []>('SELECT head_seq, next_seq FROM conversation_contexts')
+        .prepare<[], { head_seq: bigint; next_seq: bigint }>('SELECT head_seq, next_seq FROM conversation_contexts')
         .get();
       expect(head?.head_seq).toBe(1n);
       expect(head?.next_seq).toBe(BigInt(retained.length) + 1n);

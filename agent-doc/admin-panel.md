@@ -23,7 +23,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 - 首次访问时 `GET /api/auth/session` 返回 `setup_required = true`，前端渲染创建管理员表单。
 - `POST /api/auth/setup` 在事务内再次确认无用户后写入 `admin_users`；重复调用返回 409 `setup_complete`。
 - 密码 12–200 字符，用户名 `^[A-Za-z0-9._-]{3,32}$`。
-- 密码只以 Bun `argon2id` hash 存储，明文不落库、不进日志。
+- 密码只以 `argon2id` hash（`@node-rs/argon2`）存储，明文不落库、不进日志。
 - Session Token 为 32 字节随机值，返回给 Cookie，数据库只存 SHA-256 摘要。
 - Cookie 为 `HttpOnly; SameSite=Strict; Path=/`，`Max-Age` 等于 `session_ttl_hours`。
 - 用户名不存在时仍执行一次 hash 运算，避免枚举时间差。

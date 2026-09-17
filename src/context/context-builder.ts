@@ -224,7 +224,7 @@ export class ContextBuilder {
   /** Resolves the Conversation identity and alarm context of one invocation. */
   identity(invocationId: bigint): ContextIdentity {
     const identity = this.#store.db
-      .query<InvocationIdentityRow, [bigint]>(
+      .prepare<[bigint], InvocationIdentityRow>(
         `SELECT i.conversation_id, c.telegram_chat_id, v.message_thread_id, c.type AS chat_type,
                 b.kind AS bucket_kind
          FROM invocations i
@@ -234,7 +234,7 @@ export class ContextBuilder {
          WHERE i.id = ?`,
       )
       .get(invocationId);
-    if (identity === null) {
+    if (identity === undefined) {
       throw new Error(`Invocation ${invocationId} does not exist`);
     }
     const chatConfig = resolveChatConfig(this.#config, this.#store.orm, identity.telegram_chat_id);
@@ -242,7 +242,7 @@ export class ContextBuilder {
       throw new Error(`Invocation chat ${identity.telegram_chat_id} is no longer configured`);
     }
     const alarmIdentity = this.#store.db
-      .query<AlarmIdentityRow, [bigint]>(
+      .prepare<[bigint], AlarmIdentityRow>(
         'SELECT id, target_user_id, target_display_name, summary FROM alarms WHERE invocation_id = ?',
       )
       .get(invocationId);
@@ -254,7 +254,7 @@ export class ContextBuilder {
       chatType: identity.chat_type,
       bucketKind: identity.bucket_kind,
       alarm:
-        alarmIdentity === null
+        alarmIdentity === undefined
           ? null
           : {
               userId: alarmIdentity.target_user_id,
@@ -324,7 +324,7 @@ export class ContextBuilder {
     const { identity } = input;
     const now = input.now ?? new Date();
     const rows = this.#store.db
-      .query<InvocationMessageRow, [bigint, bigint]>(
+      .prepare<[bigint, bigint], InvocationMessageRow>(
         `SELECT im.section, im.sequence_no, im.message_id, im.revision_id, im.snapshot_json,
                 m.conversation_id, v.message_thread_id
          FROM invocation_messages im
@@ -335,7 +335,7 @@ export class ContextBuilder {
       )
       .all(identity.invocationId, input.bucketId);
     const senderRows = this.#store.db
-      .query<SenderIdentityRow, [bigint]>(
+      .prepare<[bigint], SenderIdentityRow>(
         `SELECT im.message_id, s.telegram_id, s.display_name, s.username
          FROM invocation_messages im
          JOIN message_revisions r ON r.id = im.revision_id
@@ -538,7 +538,7 @@ export class ContextBuilder {
 
   #stickerCatalog(): string {
     return this.#store.db
-      .query<StickerCatalogRow, []>(
+      .prepare<[], StickerCatalogRow>(
         `SELECT s.id, s.emoji
          FROM stickers s
          JOIN sticker_sets ss ON ss.id = s.sticker_set_id

@@ -100,7 +100,7 @@ export class AdminServer {
     this.#memoryWarningDays = options.config.agent.memory_ttl_warning_days ?? DEFAULT_MEMORY_TTL_WARNING_DAYS;
   }
 
-  start(): { readonly hostname: string; readonly port: number } {
+  async start(): Promise<{ readonly hostname: string; readonly port: number }> {
     if (this.#server !== undefined) {
       throw new Error('Admin server is already listening');
     }
@@ -118,6 +118,18 @@ export class AdminServer {
       },
     });
     this.#server = server;
+    try {
+      // @hono/node-server binds asynchronously (Bun.serve was listening on
+      // return). The error listener surfaces bind failures such as EADDRINUSE
+      // instead of leaving only an unhandled 'error' event on stderr.
+      await new Promise<void>((resolve, reject) => {
+        server.once('listening', resolve);
+        server.once('error', reject);
+      });
+    } catch (error) {
+      this.#server = undefined;
+      throw error;
+    }
     const address = server.address();
     if (address === null || typeof address === 'string') {
       throw new Error('Admin server did not report a listening address');

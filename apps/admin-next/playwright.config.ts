@@ -7,9 +7,9 @@ import { defineConfig } from '@playwright/test';
  * + real `SqliteStore` + `test/fixtures/admin-seed.ts` synthetic data through
  * the built SPA (`dist/`), served with the production CSP.
  *
- * - `globalSetup` spawns `e2e/server.ts` (a Bun process) on a random loopback
+ * - `globalSetup` spawns `e2e/server.ts` (a Node process) on a random loopback
  *   port and records the base URL; `globalTeardown` shuts it down.
- * - `*.e2e.ts` is excluded from `bun test` discovery (separate directory,
+ * - `*.e2e.ts` is excluded from vitest discovery (separate directory,
  *   non-`.test.ts` names) and this `testMatch`.
  * - `workers: 1` keeps the shared seeded server + session deterministic.
  */

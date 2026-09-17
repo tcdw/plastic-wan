@@ -23,7 +23,7 @@ Plastic Wan 是一个运行在 Telegram 私聊、群组、Supergroup 与 Forum T
 
 ```text
 plasticwan/
-├── src/                    # Bun/TypeScript 运行时代码；依赖自上而下
+├── src/                    # Node.js/TypeScript 运行时代码；依赖自上而下
 │   ├── application.ts      # 组合根：进程装配、启动与优雅关闭
 │   ├── cli.ts              # serve/check-config/doctor/backup/configure 入口
 │   ├── doctor.ts           # 真实依赖与外部连接诊断
@@ -36,8 +36,8 @@ plasticwan/
 │   ├── store/              # database、schema、migrations/、internal-context、sleep、admins
 │   ├── platform/           # config、secrets、providers、system-resources 等无业务依赖模块
 │   └── system-resources/   # 随 runtime 发布的 system:/// 只读资源树（System Skills）
-├── test/                   # Bun 行为测试与 MCP fixture
-├── scripts/                # 一次性维护脚本（直连 bun:sqlite，不属于业务层）
+├── test/                   # vitest 行为测试与 MCP fixture
+├── scripts/                # 一次性维护脚本（直连 better-sqlite3，不属于业务层）
 ├── apps/admin-next/        # Vite + React + Tailwind + shadcn Admin Panel 前端（纯静态 SPA）
 ├── deploy/                 # systemd service 与 backup timer
 ├── Dockerfile              # 两阶段镜像；媒体依赖打包在内
@@ -93,16 +93,16 @@ Invocation 是运行窗口而不是一次问答：`agent.context.idle_grace_seco
 pnpm install
 pnpm run check
 pnpm test
-bun run src/cli.ts check-config --config dev-data/config.jsonc
-bun run src/cli.ts doctor --config dev-data/config.jsonc
-bun run src/cli.ts serve --config dev-data/config.jsonc
-bun run src/cli.ts backup --config dev-data/config.jsonc
-bun run src/cli.ts configure --config dev-data/config.jsonc
+node src/cli.ts check-config --config dev-data/config.jsonc
+node src/cli.ts doctor --config dev-data/config.jsonc
+node src/cli.ts serve --config dev-data/config.jsonc
+node src/cli.ts backup --config dev-data/config.jsonc
+node src/cli.ts configure --config dev-data/config.jsonc
 pnpm run admin:build
 pnpm run admin:dev
 ```
 
-- 包管理器为 pnpm（`pnpm-lock.yaml`）；测试运行器与 CLI 入口在迁移完成前仍由 Bun 执行（`bun test`、`bun run src/cli.ts …`），见 [agent-doc/design/20260901 Bun 到 Node 迁移 Epic.md](agent-doc/design/20260901%20Bun%20到%20Node%20迁移%20Epic.md)。
+- 包管理器为 pnpm（`pnpm-lock.yaml`）；运行时为 Node.js ≥24，测试运行器为 vitest（`pnpm test`），CLI 入口为 `node src/cli.ts …`。
 - `pnpm run check`：严格 TypeScript 检查，不生成文件。
 - `pnpm test`：运行全部行为测试。
 - `check-config`：只验证 JSONC Schema、语义与引用，输出配置哈希。
@@ -123,9 +123,9 @@ pnpm run admin:dev
 
 ## Coding Style & Naming Conventions
 
-- TypeScript ESM，运行时为 Bun；本地源码导入保留 `.ts` 后缀。
+- TypeScript ESM，运行时为 Node.js ≥24（type stripping 直接执行 `.ts`）；本地源码导入保留 `.ts` 后缀。
 - 源码必须是 Node type stripping 可擦除语法：禁 `enum`、`namespace`、构造器参数属性（`constructor(private x: T)`）与 `import x = require()`。`tsconfig.json` 的 `erasableSyntaxOnly` + `module: "nodenext"` 让 `pnpm check` 在评审时强制这条；Node type stripping 本身不读 tsconfig，只认可擦除语法。
-- 只用 Node 与 Bun 共有的运行时 API；目录定位用 `import.meta.dirname`（不要用 Bun 专有的 `import.meta.dir`）。
+- 只用 Node.js 运行时 API；目录定位用 `import.meta.dirname`。
 - 2 空格缩进、分号、双引号、尾随逗号；沿用现有文件格式。
 - `strict`、`noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`、`noImplicitReturns` 必须保持通过。
 - `pnpm run lint` 需要保持通过，如果存在问题需要先使用 `pnpm run lint:fix` 进行自动修复，如果无法自动修复需要尝试进行手动修改。

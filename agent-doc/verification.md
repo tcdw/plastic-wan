@@ -28,12 +28,12 @@ pnpm test test/alarm.test.ts test/alarm-internal-context.test.ts
 pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-configure.test.ts
 ```
 
-上面的命令按改动范围组织；新增测试文件时同步补充对应命令与下表契约。完整测试集以 `test/*.test.ts` 为准，`pnpm test` 运行全部测试（测试运行器在迁移完成前仍为 bun）。
+上面的命令按改动范围组织；新增测试文件时同步补充对应命令与下表契约。完整测试集以 `test/*.test.ts` 为准，`pnpm test` 运行全部测试（vitest，单进程串行）。
 
 | 测试 | 主要契约 |
 | --- | --- |
 | `foundation.test.ts` | 严格配置（含 `agent.context` 与 `agent.rate_limits`）、Secret 脱敏、迁移与备份 |
-| `schema.test.ts` | Drizzle 层 bigint/boolean 往返、STRICT 与 CHECK 约束、bun IMMEDIATE 事务回滚、`sql` 模板绑定与 FTS5 查询 |
+| `schema.test.ts` | Drizzle 层 bigint/boolean 往返、STRICT 与 CHECK 约束、better-sqlite3 IMMEDIATE 事务回滚、`sql` 模板绑定与 FTS5 查询 |
 | `telegram-ingestion.test.ts` | allowlist、Revision、Bot/Service、Topic 隔离 |
 | `participation.test.ts` | 全局/每 Chat 规则合并、私聊配置拒绝、跨午夜时段、触发与注意力窗口、暂停/编辑边界、启动追赶与清理 |
 | `startup-catch-up.test.ts` | 每 Chat 一个追赶 Invocation、`history_messages` 上限、`ignored_user_ids` 与 `sticker_trigger_enabled` 生效、排空后切换实时 Bucket、Reply 的 Topic 路由 |
@@ -67,7 +67,7 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 ## 配置验证
 
 ```bash
-bun run src/cli.ts check-config --config dev-data/config.jsonc
+node src/cli.ts check-config --config dev-data/config.jsonc
 ```
 
 检查：
@@ -111,7 +111,7 @@ Doctor 成功只证明连接与最小能力，不证明真实群聊调度、Repl
 
 ```bash
 pnpm run admin:build   # 产出 apps/admin-next/dist
-bun run src/cli.ts serve --config dev-data/config.jsonc
+node src/cli.ts serve --config dev-data/config.jsonc
 ```
 
 验证：
@@ -141,7 +141,7 @@ pnpm --filter plasticwan-admin-next exec playwright install chromium   # 首次�
 pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.ts）
 ```
 
-- **真实后端夹具**：`globalSetup` 派生一个 Bun 子进程运行 `apps/admin-next/e2e/server.ts`，
+- **真实后端夹具**：`globalSetup` 派生一个 Node 子进程运行 `apps/admin-next/e2e/server.ts`，
   它创建临时目录 + 临时 SQLite，加载 `test/fixtures/admin-seed.ts`（基础行 +
   `seedAdminBulkRows` 的批量分页数据），构造 `SqliteStore` / `AgentModelSwitcher` /
   `AdminServer`，在回环地址随机端口启动，并同端口暴露只读的 `/__e2e/**` 状态钩子；
@@ -151,7 +151,7 @@ pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.t
   复用同一 session（storageState），会话撤销用例直接删除 `admin_sessions` 行后断言
   401 回落登录页并重新登录。
 - 用例文件名以 `.e2e.ts` 结尾、目录独立，Playwright `testMatch` 单独声明，**不会**被
-  `bun test` 发现；`workers: 1` 串行执行，端口随机，不与固定端口冲突。
+  vitest 与 `pnpm test` 发现；`workers: 1` 串行执行，端口随机，不与固定端口冲突。
 - 覆盖契约（全部断言真实 UI 状态，非仅文案）：
   1. 认证：setup → shell；错误密码表单内显示 `invalid_credentials` 且 URL 不变；
      登出回登录页；会话撤销后受保护请求 401 → 登录页且无错误屏。

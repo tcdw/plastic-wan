@@ -102,15 +102,15 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
     },
   });
   await stickers.sync();
-  const stickerRow = store.db.query<{ id: bigint }, []>('SELECT id FROM stickers').get();
-  if (stickerRow === null) {
+  const stickerRow = store.db.prepare<[], { id: bigint }>('SELECT id FROM stickers').get();
+  if (stickerRow === undefined) {
     throw new Error('Sticker sync did not create a row');
   }
   const directAnalysis = await media.analyzeStickerForIndex(stickerRow.id, new AbortController().signal);
   expect(directAnalysis.description).toBe('一只委屈猫正在哭泣');
   expect(await stickers.runOne()).toBe(true);
   expect(downloadedFileIds).toEqual(['thumb-file']);
-  expect(store.db.query<{ state: string }, []>('SELECT index_state AS state FROM stickers').get()?.state).toBe(
+  expect(store.db.prepare<[], { state: string }>('SELECT index_state AS state FROM stickers').get()?.state).toBe(
     'success',
   );
 

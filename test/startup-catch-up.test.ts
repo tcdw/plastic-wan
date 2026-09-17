@@ -151,13 +151,13 @@ describe('startup catch-up', () => {
     expect(result.updates).toBe(30);
     expect(result.invocationIds).toHaveLength(2);
     const buckets = store.db
-      .query<{ kind: string; state: string; count: bigint }, []>(
+      .prepare<[], { kind: string; state: string; count: bigint }>(
         'SELECT kind, state, COUNT(*) AS count FROM buckets GROUP BY kind, state',
       )
       .all();
     expect(buckets).toEqual([{ kind: 'startup_catch_up', state: 'queued', count: 2n }]);
     const snapshots = store.db
-      .query<{ chat_id: bigint; section: string; count: bigint; first_message: bigint; last_message: bigint }, []>(
+      .prepare<[], { chat_id: bigint; section: string; count: bigint; first_message: bigint; last_message: bigint }>(
         `SELECT c.telegram_chat_id AS chat_id, im.section, COUNT(*) AS count,
                 MIN(m.telegram_message_id) AS first_message, MAX(m.telegram_message_id) AS last_message
          FROM invocation_messages im
@@ -173,7 +173,9 @@ describe('startup catch-up', () => {
       { chat_id: BigInt(FIRST_CHAT_ID), section: 'new', count: 10n, first_message: 6n, last_message: 15n },
       { chat_id: BigInt(SECOND_CHAT_ID), section: 'new', count: 10n, first_message: 106n, last_message: 115n },
     ]);
-    expect(store.db.query('SELECT value FROM app_state WHERE key = ?').get(STARTUP_CATCH_UP_STATE_KEY)).toBeNull();
+    expect(
+      store.db.prepare('SELECT value FROM app_state WHERE key = ?').get(STARTUP_CATCH_UP_STATE_KEY),
+    ).toBeUndefined();
     store.close();
   });
 
@@ -196,11 +198,11 @@ describe('startup catch-up', () => {
 
     expect(result.storedMessages).toBe(1);
     expect(result.invocationIds).toHaveLength(1);
-    expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(1n);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM messages').get()?.count).toBe(1n);
     const snapshot = store.db
-      .query<{ snapshot_json: string }, []>('SELECT snapshot_json FROM invocation_messages')
+      .prepare<[], { snapshot_json: string }>('SELECT snapshot_json FROM invocation_messages')
       .get();
-    expect(snapshot === null ? null : JSON.parse(snapshot.snapshot_json).sender.id).toBe('7');
+    expect(snapshot === undefined ? null : JSON.parse(snapshot.snapshot_json).sender.id).toBe('7');
     store.close();
 
     const ignoredOnly = await setup(false, (config) => {
@@ -269,7 +271,7 @@ describe('startup catch-up', () => {
     );
     expect(live.bucketId).toBeDefined();
     const states = store.db
-      .query<{ kind: string; state: string; count: bigint }, []>(
+      .prepare<[], { kind: string; state: string; count: bigint }>(
         'SELECT kind, state, COUNT(*) AS count FROM buckets GROUP BY kind, state ORDER BY kind',
       )
       .all();
@@ -324,7 +326,7 @@ describe('startup catch-up', () => {
     expect(context.userPrompt).toContain('"message_thread_id":"100"');
     expect(context.userPrompt).toContain('"message_thread_id":"200"');
     const outgoingThreads = store.db
-      .query<{ message_thread_id: bigint }, []>(
+      .prepare<[], { message_thread_id: bigint }>(
         'SELECT v.message_thread_id FROM messages m JOIN conversations v ON v.id = m.conversation_id WHERE m.sent_by_bot = 1 ORDER BY m.id',
       )
       .all()

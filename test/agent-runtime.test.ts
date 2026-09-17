@@ -98,43 +98,45 @@ test('a fresh Agent publishes only through send and audits model usage', async (
   const outcome = await runtime.run(invocationId, new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
   expect(
-    store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM telegram_sends WHERE state = 'success'").get()
-      ?.count,
+    store.db
+      .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM telegram_sends WHERE state = 'success'")
+      .get()?.count,
   ).toBe(1n);
   expect(
-    store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM messages WHERE sent_by_bot = 1').get()?.count,
+    store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM messages WHERE sent_by_bot = 1').get()
+      ?.count,
   ).toBe(1n);
   const assistantTexts = store.db
-    .query<{ text: string }, []>("SELECT text FROM agent_messages WHERE role = 'assistant' ORDER BY sequence_no")
+    .prepare<[], { text: string }>("SELECT text FROM agent_messages WHERE role = 'assistant' ORDER BY sequence_no")
     .all()
     .map((row) => row.text);
   expect(assistantTexts).toContain('private assistant text');
   expect(
-    store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM model_calls WHERE state = 'success'").get()
+    store.db.prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM model_calls WHERE state = 'success'").get()
       ?.count,
   ).toBe(2n);
   const presented = store.db
-    .query<{ tools_json: string | null }, []>(
+    .prepare<[], { tools_json: string | null }>(
       "SELECT tools_json FROM model_calls WHERE role = 'agent' ORDER BY id LIMIT 1",
     )
     .get();
   expect(presented?.tools_json).toBe(JSON.stringify(['read', 'send', 'execute']));
   const snapshot = store.db
-    .query<{ request_json: string | null; response_json: string | null }, []>(
+    .prepare<[], { request_json: string | null; response_json: string | null }>(
       "SELECT request_json, response_json FROM model_calls WHERE role = 'agent' AND request_json IS NOT NULL ORDER BY id LIMIT 1",
     )
     .get();
   expect(String(snapshot?.request_json)).toContain('"messages"');
   expect(snapshot?.response_json).toBe(JSON.stringify({ status: 200 }));
   const registryRow = store.db
-    .query<{ tool_registry_json: string | null }, [bigint]>('SELECT tool_registry_json FROM invocations WHERE id = ?')
+    .prepare<[bigint], { tool_registry_json: string | null }>('SELECT tool_registry_json FROM invocations WHERE id = ?')
     .get(invocationId);
   expect(registryRow?.tool_registry_json).toContain('"name":"send"');
   expect(registryRow?.tool_registry_json).toContain('"label":"Send to Telegram"');
   expect(registryRow?.tool_registry_json).toContain('Publish exactly one warranted user-visible Telegram message');
   expect(
     store.db
-      .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM agent_messages WHERE role = 'harness_nudge'")
+      .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM agent_messages WHERE role = 'harness_nudge'")
       .get()?.count,
   ).toBe(0n);
   store.close();
@@ -213,7 +215,7 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
   const outcome = await runtime.run(invocationId, new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'turn_budget' });
   const audited = store.db
-    .query<{ tool_calls_used: bigint }, [bigint]>('SELECT tool_calls_used FROM invocations WHERE id = ?')
+    .prepare<[bigint], { tool_calls_used: bigint }>('SELECT tool_calls_used FROM invocations WHERE id = ?')
     .get(invocationId);
   expect(audited?.tool_calls_used).toBe(18n);
   store.close();
@@ -324,7 +326,7 @@ test('audits complete redacted model error details', async () => {
   });
   expect(
     store.db
-      .query<{ state: string; error_code: string | null; error_detail: string | null }, []>(
+      .prepare<[], { state: string; error_code: string | null; error_detail: string | null }>(
         'SELECT state, error_code, error_detail FROM model_calls',
       )
       .get(),
@@ -448,18 +450,19 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
   });
   const outcome = await runtime.run(invocationId, new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
-  expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM media').get()?.count).toBe(2n);
+  expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM media').get()?.count).toBe(2n);
   expect(
     store.db
-      .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM tool_calls WHERE tool_name = 'read_image'")
+      .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM tool_calls WHERE tool_name = 'read_image'")
       .get()?.count,
   ).toBe(0n);
   expect(
-    store.db.query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM model_calls WHERE role = 'vision_chat'").get()
-      ?.count,
+    store.db
+      .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM model_calls WHERE role = 'vision_chat'")
+      .get()?.count,
   ).toBe(0n);
   const requestJson = store.db
-    .query<{ request_json: string | null }, []>(
+    .prepare<[], { request_json: string | null }>(
       "SELECT request_json FROM model_calls WHERE role = 'agent' AND request_json IS NOT NULL ORDER BY id LIMIT 1",
     )
     .get()?.request_json;
@@ -526,9 +529,9 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
     throw new Error('Expected the first invocation');
   }
   store.db
-    .query("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+    .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
     .run(firstInvocation);
-  store.db.query("UPDATE invocations SET state = 'completed' WHERE id = ?").run(firstInvocation);
+  store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(firstInvocation);
 
   // Second bucket: text-only trigger; the earlier photo is history now.
   const secondReceived = new Date(firstReceived.getTime() + 60_000);
@@ -625,14 +628,14 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
   expect(visionFaux.state.callCount).toBe(1);
   expect(
     store.db
-      .query<{ count: bigint }, []>(
+      .prepare<[], { count: bigint }>(
         "SELECT COUNT(*) AS count FROM tool_calls WHERE tool_name = 'read_image' AND state = 'success'",
       )
       .get()?.count,
   ).toBe(1n);
   expect(
     store.db
-      .query<{ count: bigint }, []>(
+      .prepare<[], { count: bigint }>(
         "SELECT COUNT(*) AS count FROM model_calls WHERE role = 'vision_chat' AND state = 'success'",
       )
       .get()?.count,
@@ -754,20 +757,20 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
   expect(visionFaux.state.callCount).toBe(1);
   expect(
     store.db
-      .query<{ count: bigint }, []>(
+      .prepare<[], { count: bigint }>(
         "SELECT COUNT(*) AS count FROM tool_calls WHERE tool_name = 'read_image' AND state = 'success'",
       )
       .get()?.count,
   ).toBe(1n);
   expect(
     store.db
-      .query<{ count: bigint }, []>(
+      .prepare<[], { count: bigint }>(
         "SELECT COUNT(*) AS count FROM model_calls WHERE role = 'vision_chat' AND state = 'success'",
       )
       .get()?.count,
   ).toBe(1n);
   const presented = store.db
-    .query<{ tools_json: string | null }, []>(
+    .prepare<[], { tools_json: string | null }>(
       "SELECT tools_json FROM model_calls WHERE role = 'agent' ORDER BY id LIMIT 1",
     )
     .get();
@@ -849,10 +852,10 @@ test('nudges the model once to use send when it drafts a private reply and never
   expect(sawNudge).toBe(true);
   expect(
     store.db
-      .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM agent_messages WHERE role = 'harness_nudge'")
+      .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM agent_messages WHERE role = 'harness_nudge'")
       .get()?.count,
   ).toBe(1n);
-  expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM telegram_sends').get()?.count).toBe(0n);
+  expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM telegram_sends').get()?.count).toBe(0n);
   expect(faux.state.callCount).toBe(2);
   store.close();
 });
@@ -913,7 +916,7 @@ test('does not nudge when the model ends without any draft text', async () => {
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
   expect(
     store.db
-      .query<{ count: bigint }, []>("SELECT COUNT(*) AS count FROM agent_messages WHERE role = 'harness_nudge'")
+      .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM agent_messages WHERE role = 'harness_nudge'")
       .get()?.count,
   ).toBe(0n);
   expect(faux.state.callCount).toBe(1);

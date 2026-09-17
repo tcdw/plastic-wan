@@ -1,17 +1,17 @@
-import { Database } from 'bun:sqlite';
+import Database from 'better-sqlite3';
 import { access, chmod, type FileHandle, mkdir, open, readdir, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { and, eq, sql } from 'drizzle-orm';
-import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { RawConfig } from '../platform/config.ts';
 import * as schema from './schema.ts';
 import { chatMigrations, chatPause, toolCalls } from './schema.ts';
 
-/** Typed query layer over the raw Bun SQLite connection. */
-export type Orm = BunSQLiteDatabase<typeof schema>;
+/** Typed query layer over the raw better-sqlite3 connection. */
+export type Orm = BetterSQLite3Database<typeof schema>;
 
 /**
- * The bun-sqlite drizzle driver types `.run()` as `void`, but at runtime it
+ * The better-sqlite3 drizzle driver types `.run()` as `void`, but at runtime it
  * returns the native result with `changes`. Use this whenever a write needs
  * its affected-row count.
  */
@@ -74,12 +74,12 @@ export class ServeLock {
 }
 
 export class SqliteStore {
-  readonly db: Database;
+  readonly db: Database.Database;
   /** Drizzle query layer. Use sync methods (`.all()`, `.get()`, `.run()`, `.values()`) so statements execute inside `transaction()`. */
   readonly orm: Orm;
   readonly path: string;
 
-  private constructor(path: string, database: Database, orm: Orm) {
+  private constructor(path: string, database: Database.Database, orm: Orm) {
     this.path = path;
     this.db = database;
     this.orm = orm;
@@ -92,7 +92,8 @@ export class SqliteStore {
       () => true,
       () => false,
     );
-    const database = new Database(path, { create: true, strict: true, safeIntegers: true });
+    const database = new Database(path);
+    database.defaultSafeIntegers(true);
     database.exec('PRAGMA journal_mode = WAL;');
     database.exec('PRAGMA synchronous = FULL;');
     database.exec('PRAGMA foreign_keys = ON;');
@@ -107,7 +108,7 @@ export class SqliteStore {
       }
       return store;
     } catch (error) {
-      database.close(true);
+      database.close();
       throw error;
     }
   }
@@ -115,7 +116,7 @@ export class SqliteStore {
   close(): void {
     // Drizzle statements must not retain file handles until GC.
     this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
-    this.db.close(true);
+    this.db.close();
   }
 
   transaction<T>(work: () => T): T {
@@ -127,7 +128,7 @@ export class SqliteStore {
     const applied = this.hasTable('schema_migrations')
       ? new Set(
           this.db
-            .query<{ version: bigint }, []>('SELECT version FROM schema_migrations ORDER BY version')
+            .prepare<[], { version: bigint }>('SELECT version FROM schema_migrations ORDER BY version')
             .all()
             .map((row) => Number(row.version)),
         )
@@ -147,24 +148,27 @@ export class SqliteStore {
       this.transaction(() => {
         this.db.exec(migration.sql);
         this.db
-          .query('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)')
+          .prepare('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)')
           .run(BigInt(migration.version), new Date().toISOString());
       });
     }
   }
 
   private hasTable(name: string): boolean {
-    return this.db.query("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== null;
+    return (
+      this.db
+        .prepare<[string], { present: number }>(
+          "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?",
+        )
+        .get(name) !== undefined
+    );
   }
 }
 
 export async function backupDatabase(config: RawConfig): Promise<string> {
   await mkdir(config.paths.backups, { recursive: true, mode: 0o700 });
-  const source = new Database(config.paths.database, {
-    create: false,
-    strict: true,
-    safeIntegers: true,
-  });
+  const source = new Database(config.paths.database, { fileMustExist: true });
+  source.defaultSafeIntegers(true);
   try {
     source.exec('PRAGMA journal_mode = WAL;');
     source.exec('PRAGMA synchronous = FULL;');
@@ -180,7 +184,7 @@ export async function backupDatabase(config: RawConfig): Promise<string> {
     await rotateBackups(config.paths.backups, config.retention.backup_copies);
     return path;
   } finally {
-    source.close(true);
+    source.close();
   }
 }
 
@@ -401,11 +405,11 @@ export function finishToolCall(
     .run();
 }
 
-async function createBackupFile(database: Database, backupDir: string, filename: string): Promise<string> {
+async function createBackupFile(database: Database.Database, backupDir: string, filename: string): Promise<string> {
   await mkdir(backupDir, { recursive: true, mode: 0o700 });
   const finalPath = join(backupDir, filename);
   const temporaryPath = `${finalPath}.tmp-${crypto.randomUUID()}`;
-  database.query('VACUUM INTO ?').run(temporaryPath);
+  database.prepare('VACUUM INTO ?').run(temporaryPath);
   if (process.platform !== 'win32') {
     await chmod(temporaryPath, 0o600);
   }

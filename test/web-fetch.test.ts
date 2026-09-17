@@ -92,7 +92,7 @@ test('web_fetch returns bounded untrusted text through proxy synthetic DNS and a
     });
     expect(
       store.db
-        .query<{ state: string; side_effect: bigint; result_text: string }, []>(
+        .prepare<[], { state: string; side_effect: bigint; result_text: string }>(
           "SELECT state, side_effect, result_text FROM tool_calls WHERE tool_call_id = 'web-1'",
         )
         .get(),
@@ -126,7 +126,7 @@ test('web_fetch blocks private and literal synthetic addresses, including redire
     expect(requests).toBe(1);
     expect(
       store.db
-        .query<{ tool_call_id: string; state: string; error_code: string }, []>(
+        .prepare<[], { tool_call_id: string; state: string; error_code: string }>(
           'SELECT tool_call_id, state, error_code FROM tool_calls ORDER BY id',
         )
         .all(),

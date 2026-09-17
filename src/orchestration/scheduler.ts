@@ -440,7 +440,7 @@ export class BucketScheduler {
           gc_heap_total_bytes: gcMemory?.heapTotal ?? null,
           gc_external_bytes: gcMemory?.external ?? null,
           gc_array_buffers_bytes: gcMemory?.arrayBuffers ?? null,
-          runtime_version: process.versions.bun ?? process.version,
+          runtime_version: process.version,
           at: now.toISOString(),
         }),
       );

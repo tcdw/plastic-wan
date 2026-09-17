@@ -75,7 +75,7 @@ async function runtimeSetup(
   }
   const now = new Date().toISOString();
   store.db
-    .query(
+    .prepare(
       "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', ?, ?)",
     )
     .run(now.slice(0, 10), usageResource, usedTokens, now);
@@ -108,7 +108,7 @@ async function runtimeSetup(
 
 function modelToolLists(store: SqliteStore): string[][] {
   return store.db
-    .query<{ tools_json: string }, []>("SELECT tools_json FROM model_calls WHERE role = 'agent' ORDER BY id")
+    .prepare<[], { tools_json: string }>("SELECT tools_json FROM model_calls WHERE role = 'agent' ORDER BY id")
     .all()
     .map((row) => JSON.parse(row.tools_json) as string[]);
 }
@@ -205,7 +205,7 @@ test('states the sleep state only while zzz is exposed', async () => {
   expect(awakePrompts[0]).not.toContain(SLEEP_STATE_PROMPT);
   expect(
     awake.store.db
-      .query<{ payload_json: string }, []>(
+      .prepare<[], { payload_json: string }>(
         "SELECT payload_json FROM context_messages WHERE role = 'user' ORDER BY seq DESC LIMIT 1",
       )
       .get()?.payload_json,
@@ -225,7 +225,7 @@ test('states the sleep state only while zzz is exposed', async () => {
   expect(sleepyPrompts[0]).not.toContain(SLEEP_STATE_PROMPT);
   expect(
     sleepy.store.db
-      .query<{ payload_json: string }, []>(
+      .prepare<[], { payload_json: string }>(
         "SELECT payload_json FROM context_messages WHERE role = 'user' ORDER BY seq DESC LIMIT 1",
       )
       .get()?.payload_json,
@@ -244,12 +244,12 @@ test('zzz enters sleeping and ends without another model turn', async () => {
   expect(modelToolLists(store)).toHaveLength(1);
   expect(
     store.db
-      .query<{ count: bigint }, []>(
+      .prepare<[], { count: bigint }>(
         "SELECT COUNT(*) AS count FROM tool_calls WHERE tool_name = 'zzz' AND state = 'success'",
       )
       .get()?.count,
   ).toBe(1n);
-  expect(store.db.query<{ count: bigint }, []>('SELECT COUNT(*) AS count FROM telegram_sends').get()?.count).toBe(0n);
+  expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM telegram_sends').get()?.count).toBe(0n);
   store.close();
 });
 
@@ -272,7 +272,7 @@ test('sleeping skips both due and already queued agent sessions', async () => {
   secondUpdate.message.message_id = 11;
   const secondReceived = new Date(now.getTime() + 17_000);
   activeSleepUntil(store.orm, new Date(now.getTime() + 16_500));
-  store.db.query('DELETE FROM app_state WHERE key = ?').run(SLEEP_STATE_KEY);
+  store.db.prepare('DELETE FROM app_state WHERE key = ?').run(SLEEP_STATE_KEY);
   ingestion.ingest(secondUpdate, secondReceived);
   const [queuedId] = scheduler.processDue(new Date(secondReceived.getTime() + 15_000));
   if (queuedId === undefined) {
@@ -282,7 +282,7 @@ test('sleeping skips both due and already queued agent sessions', async () => {
   scheduler.start(new Date(secondReceived.getTime() + 16_000));
   await scheduler.stop();
   expect(
-    store.db.query<{ state: string }, [bigint]>('SELECT state FROM invocations WHERE id = ?').get(queuedId)?.state,
+    store.db.prepare<[bigint], { state: string }>('SELECT state FROM invocations WHERE id = ?').get(queuedId)?.state,
   ).toBe('skipped_budget');
   store.close();
 });
@@ -302,7 +302,7 @@ test('the next UTC budget period wakes the bot after its minimum sleep', async (
   expect(slept.sleepUntil).toBe('2026-08-16T00:00:00.000Z');
   expect(activeSleepUntil(store.orm, new Date('2026-08-15T23:59:59.999Z'))).toBe(slept.sleepUntil);
   expect(activeSleepUntil(store.orm, new Date('2026-08-16T00:00:00.000Z'))).toBeNull();
-  expect(store.db.query('SELECT value FROM app_state WHERE key = ?').get(SLEEP_STATE_KEY)).toBeNull();
+  expect(store.db.prepare('SELECT value FROM app_state WHERE key = ?').get(SLEEP_STATE_KEY)).toBeUndefined();
   const awakeAt = new Date('2026-08-16T00:00:00.001Z');
   const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
   const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
@@ -322,7 +322,7 @@ test('repeated concurrent sleep requests keep one unchanged state', async () => 
   expect(new Set(transitions.map((transition) => transition.sleepUntil)).size).toBe(1);
   expect(
     store.db
-      .query<{ count: bigint }, [string]>('SELECT COUNT(*) AS count FROM app_state WHERE key = ?')
+      .prepare<[string], { count: bigint }>('SELECT COUNT(*) AS count FROM app_state WHERE key = ?')
       .get(SLEEP_STATE_KEY)?.count,
   ).toBe(1n);
   store.close();

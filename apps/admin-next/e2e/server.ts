@@ -1,8 +1,7 @@
 /**
  * E2E backend process. Started by Playwright's globalSetup as a child process
  * so the real `AdminServer` + real `SqliteStore` + the synthetic admin fixture
- * run (currently under Bun; the src layer is runtime-agnostic except for
- * `bun:sqlite`). It binds 127.0.0.1 on a random port and prints:
+ * run under Node.js. It binds 127.0.0.1 on a random port and prints:
  *
  *   E2E_READY base=http://127.0.0.1:<port>
  *
@@ -171,7 +170,7 @@ async function main(): Promise<void> {
   const modelSwitcher = new AgentModelSwitcher(loaded.config, registry.models);
   const admin = new AdminServer({ store, config: loaded.config, modelSwitcher });
 
-  server = serve({
+  const started = serve({
     hostname: '127.0.0.1',
     port: 0,
     fetch: async (request) => {
@@ -182,7 +181,13 @@ async function main(): Promise<void> {
       return await admin.handle(request);
     },
   });
-  const address = server.address();
+  server = started;
+  // @hono/node-server binds asynchronously; Bun.serve was listening on return.
+  await new Promise<void>((resolve, reject) => {
+    started.once('listening', resolve);
+    started.once('error', reject);
+  });
+  const address = started.address();
   if (address === null || typeof address === 'string') {
     throw new Error('E2E server did not bind a port');
   }

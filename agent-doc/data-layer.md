@@ -4,7 +4,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 ## 打开与迁移
 
-`SqliteStore.open` 使用 Bun SQLite，并启用：
+`SqliteStore.open` 使用 better-sqlite3，并启用：
 
 - `strict: true`
 - `safeIntegers: true`
@@ -25,11 +25,11 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 ## 查询层（Drizzle）
 
-业务查询统一走 `SqliteStore.orm`（Drizzle `bun-sqlite` 驱动的同步 API；依赖版本见 [package.json](../package.json) 与 [pnpm-lock.yaml](../pnpm-lock.yaml)）；`store.db` 仅供连接层自身（迁移、备份、`VACUUM INTO`）、`doctor.ts` 探针与测试验证断言使用。表定义在 [src/store/schema.ts](../src/store/schema.ts)，是迁移终态的类型化映射——新增迁移必须同步更新它。
+业务查询统一走 `SqliteStore.orm`（Drizzle `better-sqlite3` 驱动的同步 API；依赖版本见 [package.json](../package.json) 与 [pnpm-lock.yaml](../pnpm-lock.yaml)）；`store.db` 仅供连接层自身（迁移、备份、`VACUUM INTO`）、`doctor.ts` 探针与测试验证断言使用。表定义在 [src/store/schema.ts](../src/store/schema.ts)，是迁移终态的类型化映射——新增迁移必须同步更新它。
 
 约定：
 
-- 只用同步方法 `.all()/.get()/.run()/.values()`；禁止 `await orm...`（bun 原生事务回调是同步的）。
+- 只用同步方法 `.all()/.get()/.run()/.values()`；禁止 `await orm...`（better-sqlite3 事务回调是同步的）。
 - 事务：模块持有 `SqliteStore` 时用 `store.transaction(fn)`（IMMEDIATE）；仅持有 `Orm` 时用 `orm.transaction(fn, { behavior: 'immediate' })`。
 - SQLite dialect 没有 bigint 列模式：ID/计数值列用 `sqliteBigInt`（customType，读写 `bigint`），自增主键用 `sqliteBigIntId`（insert 可省略 id，新 id 用 `.returning({ id }).get()`）；0/1 标志列用 `integer(..., { mode: 'boolean' })`。
 - 该驱动把 `.run()` 的类型标为 `void`（运行时返回 `{ changes, lastInsertRowid }`）；需要 `changes` 时用 `asRunResult`（`database.ts`）。
@@ -152,7 +152,7 @@ Admin 侧的 `admin_users`/`admin_sessions`/`bot_admins` 语义见 [admin-panel.
 ## 备份
 
 ```bash
-bun run src/cli.ts backup --config dev-data/config.jsonc
+node src/cli.ts backup --config dev-data/config.jsonc
 ```
 
 流程：

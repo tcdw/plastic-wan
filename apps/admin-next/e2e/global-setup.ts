@@ -14,7 +14,7 @@ const READY_TIMEOUT_MS = 60_000;
 
 /**
  * Starts the E2E backend (real AdminServer + SqliteStore + seeded fixture)
- * as a child Bun process, waits for its `E2E_READY` line, and publishes the
+ * as a child Node process, waits for its `E2E_READY` line, and publishes the
  * state file path + base URL through the environment for the workers.
  */
 export default async function globalSetup(): Promise<void> {
@@ -24,7 +24,7 @@ export default async function globalSetup(): Promise<void> {
   const stateFile = join(tmpdir(), 'plasticwan-admin-e2e-state.json');
   await rm(stateFile, { force: true });
 
-  const child = spawn('bun', ['run', 'e2e/server.ts'], {
+  const child = spawn(process.execPath, ['e2e/server.ts'], {
     cwd: root,
     stdio: ['ignore', 'pipe', 'inherit'],
     windowsHide: true,

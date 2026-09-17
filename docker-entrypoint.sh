@@ -19,4 +19,4 @@ chmod 700 /config /data 2>/dev/null || true
 [ -f /config/config.jsonc ] && chmod 600 /config/config.jsonc 2>/dev/null || true
 
 # Drop to non-root user and execute
-exec gosu plasticwan bun run /app/src/cli.ts "$@"
+exec gosu plasticwan node /app/src/cli.ts "$@"

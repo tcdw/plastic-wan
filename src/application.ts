@@ -191,7 +191,7 @@ export async function serve(configPath: string): Promise<void> {
     if (loaded.config.admin?.enabled === true) {
       const adminServer = new AdminServer({ store, config: loaded.config, scheduler: startedScheduler, modelSwitcher });
       admin = adminServer;
-      const listening = adminServer.start();
+      const listening = await adminServer.start();
       logEvent('admin_started', { host: listening.hostname, port: listening.port });
     }
     bot.use(async (context) => {

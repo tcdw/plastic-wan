@@ -4,12 +4,14 @@
 
 必需：
 
-- Bun
+- Node.js ≥24.0（type stripping 默认开启，直接执行 `.ts`）
 - FFmpeg 与 FFprobe
 - Python
 - `lottie` Python package，提供 `lottie_convert.py`
 - Provider API key
 - Telegram Bot Token
+
+数据层使用 `better-sqlite3`（原生模块，随 `pnpm install` 安装）。官方为 Node LTS 提供预编译二进制；没有匹配的预编译包时会回退到本地源码编译，此时需要 `python3`、`make` 与 C++ 工具链（Docker 镜像已在 builder 阶段预置）。
 
 macOS（Homebrew）：
 
@@ -36,8 +38,8 @@ cd ~/Projects/plasticwan
 pnpm install
 
 export GOOGLE_API_KEY="<rotated-key>"
-bun run src/cli.ts check-config --config dev-data/config.jsonc
-bun run src/cli.ts doctor --config dev-data/config.jsonc
+node src/cli.ts check-config --config dev-data/config.jsonc
+node src/cli.ts doctor --config dev-data/config.jsonc
 ```
 
 `dev-data/config.jsonc`、数据库、媒体和备份已由 `.gitignore` 排除。不要把 Secret 复制到受版本控制的示例或文档。
@@ -45,7 +47,7 @@ bun run src/cli.ts doctor --config dev-data/config.jsonc
 ## 启动与停止
 
 ```bash
-bun run src/cli.ts serve --config dev-data/config.jsonc
+node src/cli.ts serve --config dev-data/config.jsonc
 ```
 
 成功标志依次包含启动追赶完成与常规轮询启动：
@@ -71,9 +73,9 @@ bun run src/cli.ts serve --config dev-data/config.jsonc
 配置不热重载。变更后：
 
 ```bash
-bun run src/cli.ts check-config --config dev-data/config.jsonc
+node src/cli.ts check-config --config dev-data/config.jsonc
 # 停止旧进程
-bun run src/cli.ts serve --config dev-data/config.jsonc
+node src/cli.ts serve --config dev-data/config.jsonc
 ```
 
 必须确认新 `serve_started.config_hash` 与 `check-config.config_hash` 一致。Chat 已写入文件但仍出现 `chat_not_allowed` 时，首先检查旧进程是否仍使用旧哈希。
@@ -81,7 +83,7 @@ bun run src/cli.ts serve --config dev-data/config.jsonc
 ## Doctor
 
 ```bash
-bun run src/cli.ts doctor --config dev-data/config.jsonc
+node src/cli.ts doctor --config dev-data/config.jsonc
 ```
 
 Doctor 是对已配置运行环境执行的真实依赖检查，不是静态 lint；完整检查范围与何时可判定通过见[验证：Doctor](verification.md#doctor)。它会产生 `role = 'doctor'` 的模型调用审计并消耗少量 Provider Token。
@@ -89,7 +91,7 @@ Doctor 是对已配置运行环境执行的真实依赖检查，不是静态 lin
 如需查看配置中 Agent 系统 Prompt 的模板渲染结果：
 
 ```bash
-bun run src/cli.ts doctor --config dev-data/config.jsonc --output-agent-prompt
+node src/cli.ts doctor --config dev-data/config.jsonc --output-agent-prompt
 ```
 
 该选项仍会执行完整 Doctor 检查；成功 JSON 中增加 `agent_prompt` 字段。输出包含 Prompt 正文，但不会包含 Secret、Chat 记忆或 Chat-specific instructions。不要在共享日志中使用该选项。
@@ -154,7 +156,7 @@ bun run src/cli.ts doctor --config dev-data/config.jsonc --output-agent-prompt
 手动：
 
 ```bash
-bun run src/cli.ts backup --config dev-data/config.jsonc
+node src/cli.ts backup --config dev-data/config.jsonc
 ```
 
 备份前会执行保留清理，完成后按 `backup_copies` 轮换。备份文件的完整性和可恢复性验收见[验证：备份与恢复验证](verification.md#备份与恢复验证)；“命令成功”不等于恢复路径已验证。
@@ -164,13 +166,13 @@ bun run src/cli.ts backup --config dev-data/config.jsonc
 仓库提供两条部署路径，二选一：
 
 - **Docker**：`Dockerfile` + `docker-compose.yml`，镜像由 CI 推到 GHCR。媒体依赖已打进镜像。
-- **systemd**：`deploy/` 下的三个单元，直接在宿主机跑 Bun。需要自己保证 FFmpeg/python-lottie 在服务 PATH 中。
+- **systemd**：`deploy/` 下的三个单元，直接在宿主机跑 Node.js。需要自己保证 FFmpeg/python-lottie 在服务 PATH 中。
 
 ## Docker 部署
 
 `.github/workflows/docker.yml` 在推送 `develop` 分支和 `v*` tag 时构建 `linux/amd64` 与 `linux/arm64` 镜像并推送到 `ghcr.io/tcdw/plasticwan`：`develop` 产出 `nightly` 与 `develop` tag，`v*` 产出 `latest` 与 semver tag。
 
-镜像结构（`Dockerfile`，builder 基于 `node:24-bookworm-slim` + pnpm，runtime 基于 `oven/bun:1.4-debian` 两阶段；Bun 作为运行时保留到迁移 Phase 5）：
+镜像结构（`Dockerfile`，builder 与 runtime 均为 `node:24-bookworm-slim` 两阶段）：
 
 - builder 阶段 `pnpm install --frozen-lockfile` → `pnpm run admin:build` → 再以 `pnpm install --prod --frozen-lockfile` 剪掉 devDependencies。
 - runtime 阶段用 apt 装 `ffmpeg`（含 `ffprobe`）、`python3` 与 `gosu`，再 pip 装 `lottie`；因此**不需要**在宿主机准备任何媒体依赖。
@@ -212,7 +214,7 @@ docker compose logs -f          # 确认 serve_started 与 config_hash
 
 1. 按 `PUID`/`PGID`（默认 `1000`）重映射容器内 `plasticwan` 用户，避免 bind mount 的属主冲突。
 2. `chown -R` 挂载卷，并把 `/config`、`/data` 设为 `0700`、`/config/config.jsonc` 设为 `0600` —— 这是为了满足 `assertConfigPermissions` 的权限检查，宿主机上不必手动 chmod。
-3. `exec gosu plasticwan bun run /app/src/cli.ts "$@"`。
+3. `exec gosu plasticwan node /app/src/cli.ts "$@"`。
 
 因为最后一步把参数原样传给 CLI，其它子命令都能用同一镜像跑：
 
@@ -246,7 +248,7 @@ Admin Panel 的 `admin.host` 只接受回环地址，因此它绑定的是**容�
 | `/opt/plasticwan` | 只读应用工作目录 |
 | `/etc/plasticwan/config.jsonc` | `0600` 配置 |
 | `/var/lib/plasticwan` | SQLite、媒体和备份唯一写目录 |
-| `/usr/local/bin/bun` | Bun 可执行文件 |
+| `/usr/local/bin/node` | Node.js 可执行文件 |
 
 服务用户/组为 `plasticwan`。主服务 `Restart=on-failure`、`UMask=0077`，systemd sandbox 只开放 `/var/lib/plasticwan` 写权限。备份 timer 每天 UTC 00:00 运行并带 `Persistent=true`。
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { serve } from './application.ts';
 import { parseCli } from './cli-options.ts';
 import { loadConfig } from './platform/config.ts';

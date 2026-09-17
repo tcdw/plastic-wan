@@ -1,8 +1,8 @@
 /**
- * E2E backend process (Bun runtime). Started by Playwright's globalSetup as a
- * child process so the real `AdminServer` + real `SqliteStore` + the synthetic
- * admin fixture run under Bun (the server uses `Bun.serve` / `Bun.password`,
- * which Node cannot execute). It binds 127.0.0.1 on a random port and prints:
+ * E2E backend process. Started by Playwright's globalSetup as a child process
+ * so the real `AdminServer` + real `SqliteStore` + the synthetic admin fixture
+ * run (currently under Bun; the src layer is runtime-agnostic except for
+ * `bun:sqlite`). It binds 127.0.0.1 on a random port and prints:
  *
  *   E2E_READY base=http://127.0.0.1:<port>
  *
@@ -17,6 +17,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { serve, type ServerType } from '@hono/node-server';
 import { and, eq, sql } from 'drizzle-orm';
 import { AdminServer } from '../../../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../../../src/platform/config.ts';
@@ -33,7 +34,7 @@ const ADMIN_USERNAME = 'e2e-admin';
 const ADMIN_PASSWORD = 'e2e-correct-horse';
 
 let store: SqliteStore | null = null;
-let server: ReturnType<typeof Bun.serve> | null = null;
+let server: ServerType | null = null;
 let directory = '';
 let shuttingDown = false;
 
@@ -43,7 +44,12 @@ async function shutdown(): Promise<void> {
   }
   shuttingDown = true;
   try {
-    await server?.stop(true);
+    if (server !== null) {
+      if ('closeAllConnections' in server) {
+        server.closeAllConnections();
+      }
+      server.close();
+    }
   } catch {
     // best effort
   }
@@ -165,7 +171,7 @@ async function main(): Promise<void> {
   const modelSwitcher = new AgentModelSwitcher(loaded.config, registry.models);
   const admin = new AdminServer({ store, config: loaded.config, modelSwitcher });
 
-  server = Bun.serve({
+  server = serve({
     hostname: '127.0.0.1',
     port: 0,
     fetch: async (request) => {
@@ -176,10 +182,11 @@ async function main(): Promise<void> {
       return await admin.handle(request);
     },
   });
-  const port = server.port;
-  if (port === undefined) {
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
     throw new Error('E2E server did not bind a port');
   }
+  const port = address.port;
   console.log(`E2E_READY base=http://127.0.0.1:${port}`);
   // Exposed to the specs so they can log in again after revoking sessions.
   console.log(`E2E_CREDENTIALS ${ADMIN_USERNAME} ${ADMIN_PASSWORD}`);

@@ -2,8 +2,9 @@ packages:
   - apps/*
 
 # 显式放行依赖的 build scripts（pnpm 10+ 默认拦截）
+# better-sqlite3 13.x 自带 prebuilds，禁用构建以避免 pnpm 对 binding.gyp 的隐式 node-gyp rebuild
 allowBuilds:
   '@google/genai': true
-  better-sqlite3: true
+  better-sqlite3: false
   esbuild: true
   protobufjs: true

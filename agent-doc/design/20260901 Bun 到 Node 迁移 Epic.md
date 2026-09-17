@@ -22,6 +22,8 @@
 >
 > 2026-09-17 更新：**Phase 1 已完成**（pnpm monorepo，见下方状态标记；`src/` 的 Bun 依赖面复核数不变）。下一步进入 Phase 3（运行时无关化，每项独立提交）。
 >
+> 2026-09-17 晚间更新：**Phase 3 已完成**（含 `apps/admin-next/e2e/server.ts` 与 `apps/admin-next/src/lib/*.test.ts` 两处盘点遗漏的补全；剩余 Bun 引用收敛为 `bun:sqlite` import ×3（doctor/database/scrub 脚本）、`drizzle-orm/bun-sqlite` driver、shebang、`@types/bun` 与历史性注释，全部属 Phase 4/5 范围）。下一步 Phase 4（tsconfig 与 type stripping 审计；root tsconfig 已顺带纳入 `vitest.config.ts`）。
+>
 > 2026-09-04 状态速览：Phase 0 部分完成（drizzle-orm 已锁定）、**Phase 2 已完成**、Phase 1/3–6 未开始。下一步是 Phase 1（pnpm monorepo）或直接进入 Phase 3（运行时无关化，每项独立提交）。
 
 | 类别 | 位置 |
@@ -49,6 +51,7 @@
 | JSONC | `jsonc-parser` | Node.js 没有支持注释与尾逗号的原生 JSON parser；保持现有 JSONC 契约 |
 | 子进程 | `node:child_process.spawn` | 手工聚合 stdout（现有 `readCommandOutput` 模式平移） |
 | 包管理 | pnpm workspaces | 替换 `workspaces` 字段与 `bun run --filter` |
+| 测试运行器过渡 | 测试 import 写 `vitest`，`pnpm test` 仍为 `bun test`（Bun 官方重定向 vitest import）；Phase 5 切 `vitest run`（Node） | vitest 无法在 Node 下解析 `bun:sqlite`（Phase 5 前存在）；`bun --bun vitest` 不可用（Bun worker 缺陷） |
 
 ## 阶段拆解
 
@@ -56,8 +59,10 @@
 
 - [ ] 记录基线：全量 `bun test`、`bun run check`、`check-config`、`doctor` 输出。
   - 2026-09-04：`bun test`（176/176，23 个文件）与 `bun run check` 全绿，可作为基线；`check-config` 与 `doctor` 输出待正式记录（生产试运行的 doctor 输出可直接归档为基线）。
-- [ ] 安装并锁定版本：`drizzle-orm`、`vitest`、`@node-rs/argon2`、`hono`、`@hono/node-server`。
-  - 2026-09-01：`drizzle-orm@^0.45.2` 已安装锁定（随 Phase 2 提前完成）；其余四项待 Phase 3 启动时安装。
+  - 2026-09-17 Phase 3 开工时基线：`pnpm test` 304/304（33 文件）、`pnpm run check` 全绿、`check-config` config_hash `8339d3f5…`；`doctor` 依赖探针通过、model probe 因外部 Provider 环境失败（与本迁移无关）。
+- [x] 安装并锁定版本：`drizzle-orm`、`vitest`、`@node-rs/argon2`、`hono`、`@hono/node-server`。
+  - 2026-09-01：`drizzle-orm@^0.45.2` 已安装锁定（随 Phase 2 提前完成）。
+  - 2026-09-17：其余四项 + `jsonc-parser`（Phase 0 清单遗漏，Phase 3.2 需要）已安装锁定（提交 7b19b4f）：hono 4.13.8、@hono/node-server 2.1.1、@node-rs/argon2 2.2.1、jsonc-parser 3.3.1、vitest 5.0.1。
 - [ ] 确认目标 Node 版本下限（type stripping 默认开启的版本）写入 `engines`。
 
 ### Phase 1 — pnpm monorepo（运行时仍为 Bun）✅（2026-09-17 完成）
@@ -77,16 +82,17 @@
 - 实施要点：只用 drizzle 同步 API（`.all()/.get()/.run()/.values()`，与同步事务回调兼容）；该 driver 把 `.run()` 类型标为 `void`，取 `changes` 用 `asRunResult`；裸 `sql` 单行查询须 `.all<Row>(sql\`…\`).at(0)`（`orm.get(sql)` 返回列值数组）；sql 模板内的 `${}` 一律是绑定参数，常量 SQL 片段须 `sql.raw`。测试的裸 SQL 审计断言保留（验证层惯例）。
 - 验收：✅ 全量 `bun test` 绿（Phase 2 验收时 168/168；2026-09-04 复测 176/176）；`bun run check`、`bun run lint` 零错误；备份/保留清理、Admin 审计分页、FTS5 搜索测试全部通过。`bun:sqlite` import 面收敛为 `database.ts`（连接/迁移/备份）、`doctor.ts`（探针）、`scripts/scrub-model-request-images.ts`（维护脚本）、`operations.test.ts`（备份验证）。
 
-### Phase 3 — 运行时无关化（每项独立提交，均在 Bun 上回归）
+### Phase 3 — 运行时无关化（每项独立提交，均在 Bun 上回归）✅（2026-09-17 完成）
 
-1. `Bun.file`/`Bun.write`/`exists`/`lastModified` → `node:fs/promises`（`readFile`/`writeFile`/`stat`/`access`）；`capabilities/media/` 中 `arrayBuffer()` 读法改为 `readFile` 直取 Buffer。
-2. `Bun.JSONC.parse` → `jsonc-parser`（`config.ts`）。
-3. `Bun.spawn` → `node:child_process.spawn`；`readCommandOutput` 平移到 `Readable` 流聚合；覆盖 `doctor`、`media`、`secrets` 三处。
-4. `Bun.password` → `@node-rs/argon2`；**必须用存量管理员账号做登录回归**，证明旧 PHC hash 可验证；`HASH_OPTIONS` 参数逐项映射。
-5. `Bun.serve` → Hono + `@hono/node-server`：回环绑定、`idleTimeout: 30` 对应参数、静态资源 fallback（`index.html`）、错误 JSON 形状不变。
-6. `Bun.gc(true)` 移除（或 gate 在 `--expose-gc`）；指标字段 `bun_version` 更名 `runtime_version`（确认无持久化消费者）。
-7. `bun:test` → Vitest：23 个测试文件机械改 import；`bun:test` 特有行为（如隐式超时差异）逐一确认。
-- 出口条件：除 `drizzle-orm/bun-sqlite` 单一 import、shebang、`@types/bun` 外，仓库零 Bun 引用（`grep -r "Bun\.\|bun:"` 为空）。
+1. ✅ `Bun.file`/`Bun.write`/`exists`/`lastModified` → `node:fs/promises`（提交 d5de5c1）。语义补偿：`Bun.write` 自动建父目录 → fixture 补 mkdir；`Bun.file().text()` 剥 UTF-8 BOM → `readPromptFile` 显式剥（hash 语义保持）；`lastModified`（Bun 1.4 运行时同步 number，Unix ms）→ `stat().mtimeMs`；`Bun.argv` → `process.argv` 一并处理。
+2. ✅ `Bun.JSONC.parse` → `jsonc-parser`（提交 ab60257）。必须 `allowTrailingComma: true` + 显式 errors 数组检查 + BOM 剥离；错误消息保持 `Invalid JSONC: ` 前缀并给出行列定位。
+3. ✅ `Bun.spawn` → `node:child_process.spawn`（提交 57a1cc2）：`subprocess.ts` 新增 `spawnProcess`（error/close 双监听防 ENOENT 挂死、`windowsHide: true` 对齐 Bun 默认）；`readBoundedOutput` 平移为 Node Readable 聚合。`scripts/admin-dev-proxy-probe.ts` 同步迁移。
+4. ✅ `Bun.password` → `@node-rs/argon2`（提交 aacf9cf）：HASH_OPTIONS 显式 `memoryCost: 65536, timeCost: 2, parallelism: 1`（@node-rs 默认 19456 会静默降强度）；verify 参数顺序相反（hash 在前）；`Algorithm` const enum 因 verbatimModuleSyntax 不可 import，依赖默认 Argon2id。跨库互验 fixture 测试固化（Bun 1.4.0 生成的 PHC 直接插入 DB 验证登录）；存量管理员 hash（m=65536,t=2,p=1）格式确认兼容。
+5. ✅ `Bun.serve` → Hono + `@hono/node-server`（提交 dc3950e + e2e fixture 补遗 5066442）：只用了 `serve()` fetch 适配（不实例化 Hono app，路由已在 handle 内）；`idleTimeout: 30`（秒）映射为 `headersTimeout`/`keepAliveTimeout` 各 30s（不误伤慢响应）；`stop(true)` → `closeAllConnections()` + `close()`。测试 fixture 收敛到 `test/helpers.ts` 的 `startFixtureServer`/`stopFixtureServer`。
+6. ✅ `Bun.gc(true)` 移除、指标字段 `bun_version` → `runtime_version`（提交 d5a68a3）：强制 GC gate 在 `globalThis.gc`（Node 需 `--expose-gc`；Bun 1.4 下 `globalThis.gc` 为 undefined，指标自然退化为 null/forced_gc:false）；doctor 成功输出字段 `bun` → `runtime`；24 个测试文件（盘点表写 19，实际 24）的钩子内 `Bun.gc(true)` 直接删除（rm 清理有 maxRetries 兜底）。
+7. ✅ `bun:test` → Vitest（提交 795b014）：**运行时矛盾与解法**——vitest 跑在 Node，而 src 仍 import `bun:sqlite`（Phase 5 才切），直跑 `vitest run` 会 26/30 文件失败、`bun --bun vitest` 也不可用；采用 Bun 官方的 **vitest import 重定向**（`bun test` 把 `from 'vitest'` 重定向到自身 runner，实测通过），故测试文件全部改为 `from 'vitest'` 而 `pnpm test` 保持 `bun test`，`vitest.config.ts`（`fileParallelism: false`、include 覆盖 test/ + admin-next/src）作为 Phase 5 切换 `vitest run` 的现成配置。bun:test 独有断言适配（toStartWith/toEndWith/toBeFalse → toMatch/startsWith/endsWith/toBe）；`Bun.sleep` → helpers `sleep` ×11；`operations.test.ts` 备份验证 `bun:sqlite` → `node:sqlite DatabaseSync`，Bun 1.4 的 node:sqlite close 后 Windows 句柄需 GC 释放（100% EBUSY 复现；Node 即时释放），afterAll 清理容错 + 注释说明。
+- 出口条件：✅ 达成。除 `drizzle-orm/bun-sqlite` driver、`bun:sqlite` import ×3（`database.ts`/`doctor.ts`/`scripts/scrub-model-request-images.ts`，Phase 5）、shebang、`@types/bun` 外，仓库（src/test/scripts/apps/vitest.config）零 Bun 代码引用；剩余匹配均为历史性注释。**盘点遗漏补全**：`apps/admin-next/e2e/server.ts`（Bun.serve）与 `apps/admin-next/src/lib/*.test.ts` ×3（bun:test，贡献 27 个测试）不在原盘点内，已随子项 5/7 一并迁移。
+- 验收：✅ 每项经独立验收 agent 审查通过；全量 `pnpm test` 305/305（33 文件）、`pnpm run check`、`pnpm run lint` 全绿；`check-config` config_hash 与迁移前逐字一致；doctor 的 ffmpeg/ffprobe/lottie 子进程探针在新 spawn 实现下通过；admin e2e 80/80（Playwright 真实浏览器全链路，含存量 hash 登录路径外的面板冒烟）。Argon2 存量账号的**真实浏览器登录**留人工验收。
 
 ### Phase 4 — tsconfig 与 Node type stripping 审计
 
@@ -99,6 +105,7 @@
 ### Phase 5 — 切换运行时：Node.js + node:sqlite（单次小步）
 
 - [ ] shebang → `#!/usr/bin/env node`；`engines` 生效。
+- [ ] 测试切换：`package.json` 的 `test` 由 `bun test` 改为 `vitest run`（vitest.config.ts 已就位，include 覆盖 `test/` + `apps/admin-next/src/`；root tsconfig 已含 vitest.config.ts）。Phase 3 后测试文件已全部 vitest-ready（双框架共有 API），此步应仅为改 script 一行。
 - [ ] Drizzle 驱动 `drizzle-orm/bun-sqlite` → `drizzle-orm/node-sqlite`（唯一 import 位；2026-09-01 已确认收敛为 `src/store/database.ts` 单处）。
 - [ ] **最高风险项**：`node:sqlite` 默认把 INTEGER 读成 Number；确认 Drizzle node-sqlite 会话对 bigint 列的处理，否则 Telegram ID 精度丢失。若无法保证，降级决策点：改用 `better-sqlite3` 驱动（成熟但引入原生依赖）。
 - [ ] 接受 `node:sqlite` 稳定性现状：Node 24.15+ 为 Stability 1.2 Release Candidate，无需 flag；记录到 operations.md。
@@ -120,6 +127,8 @@
 | Argon2 库参数不一致 | 存量密码无法登录 | PHC 字符串自描述参数；切换前用真实账号回归 |
 | Hono 与 Bun.serve 行为差（idleTimeout、请求体上限、错误响应形状） | Admin Panel 可用性 | Phase 3 用现有 admin 测试 + 手动面板冒烟覆盖 |
 | drizzle bun-sqlite 驱动维护节奏 | Phase 2–5 过渡期维护负担 | 过渡期短；驱动仅一处引用，随时可切 |
+| Hono 与 Bun.serve 行为差（传输层 body 上限、headers 后 body 停滞无空闲切断、端口占用报错变钝） | Admin Panel 可用性 | Phase 3 验收记录：Bun.serve 的 128MB 传输上限与 idle 断开在 node-server 无直接对应；回环绑定缓解，低风险。端口占用时 start() 抛通用错、真实原因走 stderr 未处理 error 事件——未来可在 null-address 分支挂一次性 error listener 改善可诊断性 |
+| Bun 1.4 的 `node:sqlite` close 后 Windows 句柄需 GC 释放 | 过渡期测试临时目录泄漏（EBUSY） | 仅影响 `operations.test.ts` 的 afterAll 清理（已容错 + 注释）；Phase 5 切 Node 后自然消失（Node close 即释放） |
 | nodenext 解析下依赖子路径类型差异 | `check` 失败 | Phase 4 独立成阶段，失败即回退 Bundler 并排查具体包 |
 | Electron 自带 Node 的 `node:sqlite` 可用性/稳定性未核实 | 桌面版数据层需改驱动 | 桌面壳 spike 时验证；不可用则 better-sqlite3 + 针对 Electron ABI 重建 |
 | 原生模块（`sharp`、`@node-rs/argon2`）在 Electron 打包后加载 | 桌面版媒体/登录不可用 | 优先 N-API 预编译包；asar unpack；spike 时三平台冒烟 |

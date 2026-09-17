@@ -30,6 +30,8 @@
 >
 > 2026-09-18 补记（Phase 5 后续补漏）：Bun 由运行时隐式加载的 CWD `.env` 在 Node 下没有对应行为，`required` MCP 的 env SecretRef 直接以 `Secret environment variable is not set: BRAVE_API_KEY` 失败（本机 doctor 实测复现，exit 1）。修复用 Node 原生 `process.loadEnvFile`（新模块 `src/platform/load-env.ts`，CLI 入口 existsSync 守卫加载：缺失跳过、只按 CWD 解析、真实环境变量优先不被覆盖），**未引入 dotenv**——Node ≥24 原生覆盖该能力，与决策表「Node 没有原生实现才引包」（jsonc-parser）的惯例一致。`.gitignore` 同步补 `.env`（原先只有 `.env.local`，存在误提交真实 key 的风险）。验证：`test/load-env.test.ts` 3 例 + doctor 前后对照（同一错误路径下临时 `.env` 后全探针 `status: ok`，验后即删）；`agent-doc/` 的 configuration/operations/verification 已同步。
 >
+> 2026-09-18 再补记：上面的原生方案随即推翻，改用 **dotenv**——本地密钥实际放在 `.env.local`（Bun 会自动加载整个 `.env*` 家族，原生方案只覆盖了 `.env`），且该路径暴露了 `mcp.ts` 的 `safeErrorName` 只输出错误构造器名、把 `Secret environment variable is not set` 吞成 `failed to initialize: Error` 的诊断缺陷。dotenv 一次对齐 Bun 的多文件语义与解析边界（BOM/CRLF）：加载顺序 `.env.local` → `.env`，真实环境变量优先；`safeErrorName` 移除，required MCP 初始化失败改为输出经 `SecretStore.redactError` 的完整错误（message/stack/cause 链）。回归测试在 `test/mcp.test.ts`（未设 Secret 变量的完整错误文本）与 `test/load-env.test.ts`（多文件优先级 + BOM）。
+>
 > 2026-09-04 状态速览：Phase 0 部分完成（drizzle-orm 已锁定）、**Phase 2 已完成**、Phase 1/3–6 未开始。下一步是 Phase 1（pnpm monorepo）或直接进入 Phase 3（运行时无关化，每项独立提交）。
 
 | 类别 | 位置 |
@@ -58,6 +60,7 @@
 | 子进程 | `node:child_process.spawn` | 手工聚合 stdout（现有 `readCommandOutput` 模式平移） |
 | 包管理 | pnpm workspaces | 替换 `workspaces` 字段与 `bun run --filter` |
 | 测试运行器过渡 | 测试 import 写 `vitest`，`pnpm test` 仍为 `bun test`（Bun 官方重定向 vitest import）；Phase 5 切 `vitest run`（Node） | vitest 无法在 Node 下解析 `bun:sqlite`（Phase 5 前存在）；`bun --bun vitest` 不可用（Bun worker 缺陷） |
+| `.env` 加载 | dotenv | Bun 自动加载 `.env*` 家族；dotenv 是事实标准并处理 BOM/CRLF 解析边界，显式加载 `.env.local` + `.env`，真实环境变量优先 |
 
 ## 阶段拆解
 

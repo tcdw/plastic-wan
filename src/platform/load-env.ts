@@ -1,12 +1,13 @@
-import { existsSync } from 'node:fs';
+import { config } from 'dotenv';
 
-// Bun auto-loaded a `.env` file from the working directory; Node does not, so the
-// CLI entry restores it explicitly. A missing file is a no-op, and variables
-// already present in the real environment always win (`process.loadEnvFile`
-// never overrides), so systemd or compose injection keeps precedence.
-export function loadEnvFileIfPresent(path: string = '.env'): void {
-  if (!existsSync(path)) {
-    return;
+// Bun auto-loaded the `.env*` file family from the working directory; Node does
+// not, so the CLI entry restores it with dotenv. Files load in order, dotenv
+// never overrides already-set variables, so precedence is: real environment >
+// `.env.local` > `.env`. Missing files are skipped silently.
+const ENV_FILES = ['.env.local', '.env'] as const;
+
+export function loadEnvFiles(paths: readonly string[] = ENV_FILES): void {
+  for (const path of paths) {
+    config({ path, quiet: true });
   }
-  process.loadEnvFile(path);
 }

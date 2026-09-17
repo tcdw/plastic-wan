@@ -37,8 +37,8 @@ Linux/macOS 要求 `lottie_convert.py` 本身在服务 PATH 中（`pip --user` �
 cd ~/Projects/plasticwan
 pnpm install
 
-# 本地 Secret 写进仓库根目录的 .env（已 gitignore；CLI 启动时自动加载，
-# 只补缺、不覆盖 shell 里已 export 的变量），或在 shell 里 export。
+# 本地 Secret 写进仓库根目录的 .env.local（已 gitignore；CLI 启动时自动加载
+# .env.local 与 .env，真实环境变量优先、.env.local 压过 .env），或在 shell 里 export。
 node src/cli.ts check-config --config dev-data/config.jsonc
 node src/cli.ts doctor --config dev-data/config.jsonc
 ```

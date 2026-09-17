@@ -28,6 +28,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@node-rs/argon2": "^2.2.1",
     "better-sqlite3": "^13.0.3",
+    "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "grammy": "1.45.1",
     "hono": "^4.13.8",

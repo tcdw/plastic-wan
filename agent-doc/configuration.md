@@ -44,12 +44,12 @@ command SecretRef：
 - 子进程只继承最小环境变量集合。
 - 已解析 Secret 会在向用户报告错误前脱敏。
 
-`.env` 加载：
+`.env` / `.env.local` 加载：
 
-- 所有 CLI 子命令（`serve`/`check-config`/`doctor`/`backup`/`configure`）启动时加载当前工作目录下的 `.env`（Node 原生 `process.loadEnvFile`）；文件缺失时静默跳过。
+- 所有 CLI 子命令（`serve`/`check-config`/`doctor`/`backup`/`configure`）启动时用 dotenv 加载当前工作目录下的 `.env.local` 与 `.env`；文件缺失时静默跳过。
 - 只按 CWD 解析，不向上递归查找目录。
-- 已在真实环境中存在的变量优先，`.env` 只补缺；systemd `Environment=`、compose `environment:`/`env_file:` 注入的值不会被覆盖。
-- `.env` 已被 `.gitignore` 排除，用于本地开发便利；生产部署仍应使用环境注入。
+- 优先级：真实环境变量 > `.env.local` > `.env`；systemd `Environment=`、compose `environment:`/`env_file:` 注入的值不会被覆盖。
+- 两份文件均已被 `.gitignore` 排除，用于本地开发便利；生产部署仍应使用环境注入。
 
 不要把真实 Token/API key 写进文档、测试、日志或提交。
 

@@ -11,7 +11,6 @@ import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 const directories: string[] = [];
 
 afterEach(async () => {
-  Bun.gc(true);
   await Promise.all(
     directories
       .splice(0)

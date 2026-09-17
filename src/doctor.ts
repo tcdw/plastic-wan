@@ -182,7 +182,7 @@ async function runDoctorChecks(
     console.log(
       JSON.stringify({
         status: 'ok',
-        bun: Bun.version,
+        runtime: process.versions.bun ?? process.version,
         fts5_trigram: true,
         sharp: true,
         ffmpeg: true,

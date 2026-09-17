@@ -34,7 +34,6 @@ const OUTSIDE_PERIOD = new Date('2026-08-15T13:00:00.000Z');
 const DAY_WINDOW = { start: '09:00', end: '12:00' };
 
 afterEach(async () => {
-  Bun.gc(true);
   await Promise.all(
     directories
       .splice(0)

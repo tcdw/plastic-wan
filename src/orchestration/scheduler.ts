@@ -401,9 +401,13 @@ export class BucketScheduler {
           .at(0)?.count ?? 0n;
       const memory = process.memoryUsage();
       let gcMemory: NodeJS.MemoryUsage | null = null;
-      if (event === 'agent_invocation_end' && now.getTime() - this.#lastForcedGcAt >= 60_000) {
+      // Forced GC is a diagnostic aid, not a correctness requirement: it only
+      // runs when the runtime exposes it (Node requires --expose-gc), and the
+      // gc_* metrics simply stay null otherwise.
+      const forceGc = (globalThis as { gc?: () => void }).gc;
+      if (event === 'agent_invocation_end' && forceGc !== undefined && now.getTime() - this.#lastForcedGcAt >= 60_000) {
         this.#lastForcedGcAt = now.getTime();
-        Bun.gc(true);
+        forceGc();
         gcMemory = process.memoryUsage();
       }
       console.log(
@@ -436,7 +440,7 @@ export class BucketScheduler {
           gc_heap_total_bytes: gcMemory?.heapTotal ?? null,
           gc_external_bytes: gcMemory?.external ?? null,
           gc_array_buffers_bytes: gcMemory?.arrayBuffers ?? null,
-          bun_version: Bun.version,
+          runtime_version: process.versions.bun ?? process.version,
           at: now.toISOString(),
         }),
       );

@@ -24,7 +24,6 @@ const FIRST_CHAT_ID = 123456789;
 const SECOND_CHAT_ID = 987654321;
 
 afterAll(async () => {
-  Bun.gc(true);
   await Promise.all(
     directories.map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })),
   );

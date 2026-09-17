@@ -24,7 +24,6 @@ const CHAT_ID = 123456789;
 const SEND_MESSAGE_ID = 900;
 
 afterAll(async () => {
-  Bun.gc(true);
   await Promise.all(
     directories.map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })),
   );

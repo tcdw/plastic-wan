@@ -32,7 +32,6 @@ import { bundledSystemResources, testConfigJsonc, writeTestConfig } from './help
 const directories: string[] = [];
 
 afterAll(async () => {
-  Bun.gc(true);
   await Promise.all(
     directories.map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })),
   );

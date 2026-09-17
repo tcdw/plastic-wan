@@ -29,7 +29,6 @@ const ALICE: CommandSender = { id: 42n, name: 'Alice', username: 'alice' };
 type ConfigTransform = (config: FileConfig) => void;
 
 afterAll(async () => {
-  Bun.gc(true);
   await Promise.all(
     directories.map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })),
   );

@@ -68,20 +68,18 @@ send Tool → Telegram API → 审计
 
 代码按层组织，依赖只允许自上而下：`ingress/` → `orchestration/` → `capabilities/` → `context/` → `store/` → `platform/`；组合根（`application.ts`、`cli.ts`、`doctor.ts`、`startup-catch-up.ts`、`tui/`）位于 `src` 根，可以引用所有层。
 
-```
-src/
-├── application.ts / cli.ts / cli-options.ts / doctor.ts / startup-catch-up.ts   # 组合根
-├── tui/                    # 交互式配置向导
-├── ingress/                # telegram-ingestion、admin/（Panel 认证、审计查询、HTTP 边界）
-├── orchestration/          # scheduler、invocation-queue、agent-runtime、bot-commands
-├── capabilities/           # send-tool、read-tool、execute-tool、alarm、mcp、web-fetch、stickers、media/
-├── context/                # context-builder、memory
-├── store/                  # database、schema、migrations/、internal-context、sleep、invocation-snapshot、admins
-├── platform/               # config、secrets、concurrency、subprocess、providers、model-switch、prompt-template、invocation-context、model-request-audit、agent-protocol、system-resources、truncate
-└── system-resources/       # 随 runtime 发布的 system:/// 只读资源树（System Skills）
-```
+| 层 | 职责 |
+| --- | --- |
+| 组合根（`src/` 根文件与 `tui/`） | 进程装配、CLI、诊断、启动追赶、配置向导 |
+| `ingress/` | 外部输入边界：Telegram Update 入库、Admin Panel HTTP、认证与审计查询 |
+| `orchestration/` | Bucket → Invocation 状态转换、调度与并发、Agent 运行循环、Bot 命令 |
+| `capabilities/` | 模型可调用的 Tool 与外部能力（原语、媒体、Sticker、MCP、`web_fetch`、Alarm） |
+| `context/` | Conversation Context：canonical history 存储、GC、引用、编解码、模型输入组装、记忆 |
+| `store/` | SQLite 连接、schema 与迁移、跨层共享的持久化状态 |
+| `platform/` | 无业务依赖的基础模块：配置、Secret、Provider、并发、子进程、Prompt 模板等 |
+| `system-resources/` | 随 runtime 发布的 `system:///` 只读资源树（System Skills） |
 
-模块职责基本能从层级和文件名推出，源码是唯一事实源。只有几处放置位置和名字不直观，需要单独记住：
+逐文件导航见 [AGENTS.md 的 Project Structure](../AGENTS.md#project-structure--module-organization)，本页不维护文件清单副本；模块职责基本能从层级和文件名推出，源码是唯一事实源。只有几处放置位置和名字不直观，需要单独记住：
 
 - `application.ts` 装配的 AgentRuntime 与 Scheduler 共享一个 `ConversationRuntime`；`orchestration/conversation-runtime.ts` 拥有 Agent 实例 LRU 缓存与「已 attach 待注入的 Bucket」队列，是 runtime 与调度之间的唯一握手点。
 - `platform/agent-protocol.ts` 是代码固化的 **Core Agent Protocol**——消息分区、沉默判断、Tool 选择原则与副作用成功判定都在这里，不在人格 Prompt 文件里。它属于稳定段：改动它等于重建所有 Conversation Context。
@@ -104,7 +102,7 @@ src/
 - 进程启动时恢复未完成 Bucket/Invocation。
 - 小于 5 分钟的工作可重新排队；更旧工作标记为过期或恢复失败，避免无限重放。
 - 到期 Alarm 先原子 `pending → firing` 再创建 Invocation；进程恢复遗留 `firing` 关闭为 `fired`/`outcome_unknown`，绝不退回 `pending`。
-- 同一 Chat 最多一个 queued/running Invocation；每轮结束时该 Conversation 仍 collecting 的 Bucket 把 deadline 推到至少 `本轮结束 + bucket_window_seconds`，Invocation 结束后已到期的会被立即处理，未到期的保持自己的窗口（Scheduler 只把 deadline 往后推，不提前裁剪）。
+- 同一 Chat 最多一个 queued/running Invocation；Bucket deadline 只会被往后推、从不提前裁剪，完整节拍规则见 [会话节拍与 Bucket](telegram-agent-flow.md#会话节拍与-bucket)。
 - attach 到运行中 Invocation 但从未注入的 Bucket 在运行结束时重新排队成新 Invocation，不会被静默丢弃。
 - 一旦 Tool 产生不可逆副作用，未知结果不得盲目重试；状态进入 `outcome_unknown` 供审计处理。
 

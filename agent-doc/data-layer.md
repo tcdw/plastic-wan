@@ -6,12 +6,13 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 `SqliteStore.open` 使用 better-sqlite3，并启用：
 
-- `strict: true`
-- `safeIntegers: true`
+- `defaultSafeIntegers(true)`：整数列读成 `bigint`
 - WAL journal
 - `synchronous = FULL`
 - foreign keys
 - 5 秒 busy timeout
+
+表级的 `STRICT` 由迁移 DDL 声明，不是连接选项。
 
 迁移文件位于 `src/store/migrations/`，文件名为 `NNN_name.sql`，按编号排序。每个迁移在 IMMEDIATE transaction 中执行并记录到 `schema_migrations`。已有数据库存在待执行迁移时，先在备份目录创建 `pre-migration-*.sqlite`。
 
@@ -32,10 +33,10 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 - 只用同步方法 `.all()/.get()/.run()/.values()`；禁止 `await orm...`（better-sqlite3 事务回调是同步的）。
 - 事务：模块持有 `SqliteStore` 时用 `store.transaction(fn)`（IMMEDIATE）；仅持有 `Orm` 时用 `orm.transaction(fn, { behavior: 'immediate' })`。
 - SQLite dialect 没有 bigint 列模式：ID/计数值列用 `sqliteBigInt`（customType，读写 `bigint`），自增主键用 `sqliteBigIntId`（insert 可省略 id，新 id 用 `.returning({ id }).get()`）；0/1 标志列用 `integer(..., { mode: 'boolean' })`。
-- 该驱动把 `.run()` 的类型标为 `void`（运行时返回 `{ changes, lastInsertRowid }`）；需要 `changes` 时用 `asRunResult`（`database.ts`）。
+- `.run()` 的类型就是 better-sqlite3 的 `RunResult`，可以直接读 `changes`/`lastInsertRowid`。`database.ts` 里的 `asRunResult` 是旧驱动留下的类型转换，现有调用仍然有效，新代码不需要它。
 - 复杂 SQL（多表 JOIN、子查询、`NOT EXISTS`、`COALESCE`、FTS5 `MATCH`/`bm25()`、动态拼列）保留 `sql` 模板：`orm.all<Row>(sql\`...\`)`；`${}` 一律是绑定参数（禁止拼 SQL 字符串；受控常量片段用 `sql.raw`）。FTS5 虚拟表 `sticker_search` 不进 schema，只能走 `sql` 模板。
-- 驱动陷阱：`orm.get(sql\`...\`)` 对裸 SQL 返回列值数组而非对象——单行裸 SQL 用 `.all<Row>(sql\`...\`).at(0)` 判 `undefined`。
-- 关闭连接时使用 `Database.close(true)`，立即释放 Drizzle 通过 `.prepare()` 创建的未缓存语句及文件句柄；默认 `close()` 可能延迟到语句被 GC 回收后才释放文件，导致 Windows 上备份后的临时数据库无法删除。`SqliteStore.close()`、初始化失败清理及备份连接清理都采用严格关闭，关闭后不得继续使用已创建的 ORM 查询。
+- 单行裸 SQL 的仓库惯例是 `.all<Row>(sql\`...\`).at(0)` 再判 `undefined`；在该驱动下 `orm.get(sql\`...\`)` 同样返回行对象或 `undefined`。
+- `SqliteStore.close()` 先执行 `PRAGMA wal_checkpoint(TRUNCATE)`，再调用 `close()`；初始化失败与备份连接直接 `close()`。关闭后不得继续使用已创建的 ORM 查询。
 - 测试中的裸 SQL 审计断言保留原样：验证层独立于被验证的实现是本仓库的测试惯例。
 
 ## 表组

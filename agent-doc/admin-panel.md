@@ -27,7 +27,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 - Session Token 为 32 字节随机值，返回给 Cookie，数据库只存 SHA-256 摘要。
 - Cookie 为 `HttpOnly; SameSite=Strict; Path=/`，`Max-Age` 等于 `session_ttl_hours`。
 - 用户名不存在时仍执行一次 hash 运算，避免枚举时间差。
-- 同一 `(client, username)` 连续 10 次失败后锁定 15 分钟，返回 429 `too_many_attempts`。
+- 同一失败键连续 10 次失败后锁定 15 分钟，返回 429 `too_many_attempts`；计数只在内存中，重启 `serve` 清空。失败键是请求头 `X-Forwarded-For` 的原值（缺省为 `local`）加小写用户名，见 `server.ts` 登录分支与 `AdminAuth.login`。该请求头由客户端提供，直连时并不可信。
 - 过期 Session 在认证时删除，并在新建 Session 与服务启动时批量清理。
 - `POST /api/auth/logout` 按 Token 摘要删除 Session。
 - `POST /api/auth/credentials` 修改当前管理员用户名和密码，撤销该用户全部 Session（含当前）并签发新的 Cookie。
@@ -46,6 +46,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 | 路由 | 非显然的语义 |
 | --- | --- |
+| `POST /auth/setup` / `POST /auth/login` | 首次建号与登录，约束见「认证」 |
 | `POST /auth/logout` / `POST /auth/credentials` | 改凭据会撤销该用户**全部** Session（含当前）并签发新 Cookie |
 | `POST /wake` | 删除持久化睡眠状态并唤醒 Scheduler；幂等，重复调用保持 `awake` |
 | `POST /cancel-pending-sessions` | 取消所有 `collecting`/`queued` Bucket 及其 queued Invocation |
@@ -64,7 +65,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 输入校验在 `src/ingress/admin/audit.ts`：`state`/`set` 必须匹配 `^[A-Za-z0-9._-]{1,64}$`，`chat`/`cursor` 必须是整数，`search` 最长 100 字符且 `LIKE` 通配符经过转义。非法输入返回 400 与稳定错误码（`invalid_limit`、`invalid_state`、`invalid_cursor`…）。所有查询使用绑定参数。
 
-SQLite `bigint` ID 在 JSON 中字符串化，Token/计数等小整数转 `number`。Alarm 列表项额外把 `message_thread_id`、目标 User ID、conversation ID 与关联 Invocation ID 全部字符串化，展开详情展示完整 summary、原始 UTC 计划时间、conversation ID、Telegram Chat ID、thread ID、目标 User ID、创建/触发/取消时间、取消者、取消原因、Invocation 结果、`admin_cancelled` 标记与 `updated_at`。`DELETE /api/alarms/:id` 只能取消 `pending`；`firing` 与其它终态返回 409 `alarm_not_pending`，不存在返回 404 `not_found`，跨站与认证规则沿用现有 Admin 写端点。
+SQLite `bigint` ID 在 JSON 中字符串化，Token/计数等小整数转 `number`。Alarm 列表项额外把 `message_thread_id`、目标 User ID、conversation ID 与关联 Invocation ID 全部字符串化，展开详情展示完整 summary、原始 UTC 计划时间、conversation ID、Telegram Chat ID、thread ID、目标 User ID、创建/触发/取消时间、取消者、取消原因、Invocation 结果、`admin_cancelled` 标记与 `updated_at`。
 
 ## 静态资源
 
@@ -92,7 +93,7 @@ pnpm run admin:test:e2e  # Playwright 浏览器 E2E（真实 AdminServer + 临�
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/routes.tsx` | 认证门（setup/login gate）、Layout 与 13 条显式路由（10 个一级页面 + 3 个详情页） |
+| `src/routes.tsx` | 认证门（setup/login gate）、Layout 与显式路由表（一级页面与详情页）；新增页面在此注册 |
 | `src/lib/api.ts` | 类型化 fetch 封装与 `ApiError` |
 | `src/lib/queries.ts` | TanStack Query option 工厂（列表用 infinite query，keyset cursor 透传） |
 | `src/lib/format.ts` | 格式化与状态色映射 |
@@ -127,7 +128,7 @@ Tool session 详情默认打开 Overview 时间线：按时间合并冻结消息
 | `admin_users` | 用户名、Argon2id hash、创建/更新/最近登录时间 |
 | `admin_sessions` | Token SHA-256 摘要、所属用户、创建/过期/最近活动时间 |
 
-`admin_sessions.user_id` 级联删除；`admin_sessions_expiry_idx` 支撑过期清理。两张表不参与 `purgeExpiredData` 的 30 天在线保留窗口——管理员账号不是会话数据。
+`admin_sessions.user_id` 级联删除；`admin_sessions_expiry_idx` 支撑过期清理。两张表不参与 `purgeExpiredData` 的在线保留窗口（`retention.online_days`）——管理员账号不是会话数据。
 
 Bot 管理员列表（迁移 `src/store/migrations/008_bot_admins.sql`）：
 
@@ -135,7 +136,7 @@ Bot 管理员列表（迁移 `src/store/migrations/008_bot_admins.sql`）：
 | --- | --- |
 | `bot_admins` | Telegram 用户 ID（主键）、显示名、来源（`config`/`admin-panel`/`telegram`）、添加时间 |
 
-`telegram.admins` 配置项在启动时以 `INSERT ... ON CONFLICT DO NOTHING` 播种，只增不减，来源记为 `config`；面板添加管理员时来源记为 `admin-panel`。管理员本人执行命令时只刷新 `display_name`（`ON CONFLICT DO UPDATE`），不改写 `added_by` 来源。Bot 管理员决定谁能执行 `/pause` 与 `/resume`，与面板登录账号无关。
+`telegram.admins` 配置项在启动时以 `INSERT ... ON CONFLICT DO NOTHING` 播种，只增不减，来源记为 `config`；面板添加管理员时来源记为 `admin-panel`。管理员本人执行命令时只刷新 `display_name`（`ON CONFLICT DO UPDATE`），不改写 `added_by` 来源。Bot 管理员决定谁能执行 `/pause`、`/resume`、`/model` 与 `/cut_topic`，与面板登录账号无关。
 
 ## 验证
 

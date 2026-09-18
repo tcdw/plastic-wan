@@ -17,7 +17,7 @@ Plastic Wan 是一个运行在 Telegram 私聊、群组、Supergroup 与 Forum T
 - 审计 Invocation、模型调用（含每次请求附带的工具）、Tool Call、Telegram 发送、Context GC 与预算使用。
 - 提供 Agent 短期记忆：模型自己记、自己忘，TTL 兜底遗忘；管理面板人工审核长 TTL 记忆。
 - 提供本地 Admin Panel，审计 Tool Session、消息、Sticker 视觉缓存与 Conversation Context，并管理记忆。
-- 在线数据默认保留 30 天；长期记忆只以人工审核后的 `agents.md` 形式存在。
+- 在线数据按必填的 `retention.online_days` 保留（项目按 30 天设计，代码无默认值）；长期记忆只以人工审核后的 `agents.md` 形式存在。
 
 ## Project Structure & Module Organization
 
@@ -33,7 +33,7 @@ plasticwan/
 │   ├── orchestration/      # scheduler、invocation-queue、agent-runtime、conversation-runtime、bot-commands
 │   ├── capabilities/       # send-tool、read-tool、execute-tool、alarm、mcp、web-fetch、stickers、media/
 │   ├── context/            # context-builder、context-store、context-refs、context-gc、context-codec、memory
-│   ├── store/              # database、schema、migrations/、internal-context、sleep、admins
+│   ├── store/              # database、schema、migrations/、invocation-snapshot、internal-context、sleep、participation、admins
 │   ├── platform/           # config、secrets、providers、system-resources 等无业务依赖模块
 │   └── system-resources/   # 随 runtime 发布的 system:/// 只读资源树（System Skills）
 ├── test/                   # vitest 行为测试与 MCP fixture
@@ -66,7 +66,7 @@ Telegram Update
 
 Invocation 是运行窗口而不是一次问答：`agent.context.idle_grace_seconds > 0` 时，运行期间到期的 Bucket 会被 attach 并注入同一个 Invocation（`invocation_buckets`），Conversation Context 跨 Invocation 持久化；取 0 则退回「一次 Bucket 一次 Invocation」，但 Context 依然连续。
 
-媒体与 MCP 都在 Tool 边界内：模型只能读取当前 Conversation Context 授权且未过期的媒体引用；MCP Tool 经过 allowlist、只读策略、请求/响应大小限制、超时和审计。工具面分三层——runtime 原语（`read`/`send`/`execute`/`zzz`）直接暴露；内部能力（`web_fetch`、`search_stickers`、`read_image`、记忆与闹钟 8 个 Tool）经 `execute` 的 search/help/call 调用；MCP Tool 直接暴露。System Skills（`src/system-resources/skills/`）是只读文档包，system prompt 只注入索引，正文由模型用 `read` 按需加载。记忆按 Conversation 隔离，由模型通过 `add_memory`/`delete_memory` 能力维护，TTL 到期自动清理；`agents.md` 才是经过人工审核的长期知识。
+媒体与 MCP 都在 Tool 边界内：模型只能读取当前 Conversation Context 授权且未过期的媒体引用；MCP Tool 经过 allowlist、只读策略、请求/响应大小限制、超时和审计。工具面分三层——runtime 原语（`read`/`send`/`execute`/`zzz`）直接暴露；内部能力（`web_fetch`、`search_stickers`、`read_image`、记忆与闹钟等，注册表见 `src/application.ts` 的 `capabilityTools`）经 `execute` 的 search/help/call 调用；MCP Tool 直接暴露。System Skills（`src/system-resources/skills/`）是只读文档包，system prompt 只注入索引，正文由模型用 `read` 按需加载。记忆按 Conversation 隔离，由模型通过 `add_memory`/`delete_memory` 能力维护，TTL 到期自动清理；`agents.md` 才是经过人工审核的长期知识。
 
 架构细节见 [agent-doc/architecture.md](agent-doc/architecture.md)。
 
@@ -135,7 +135,7 @@ pnpm run admin:dev
 - Conversation Context 的 canonical history 只有一个写者（`src/context/context-store.ts` 的 `ConversationContextStore`）；Pi Agent 的 transcript 是可丢弃缓存，任何裁剪都必须同时推进 `head_seq`、loop context、`Agent.state.messages` 与 `context_refs`，否则三份历史会分叉。同一份 Context 在运行期只能有**一个** header 对象：缓存命中时把运行开始时读到的 header 赋给缓存条目，否则注入路径与引用解析用的是一份永不推进的旧快照。
 - 不新增第二套 Provider、调度、审计或进程执行约定；复用现有模块。
 - 清理式切换：迁移所有调用方并删除旧路径，不保留兼容别名或隐藏 fallback。
-- Admin Panel 后端复用 `SqliteStore`，审计查询只读；记忆增删改查与 Bot 管理员列表管理是仅有的管理写入例外。
+- Admin Panel 后端复用 `SqliteStore`，审计查询只读；管理写入只允许 [agent-doc/admin-panel.md](agent-doc/admin-panel.md#api) 写端点白名单中的端点，新增写端点须同步该表。
 
 ## Testing Guidelines
 
@@ -161,6 +161,6 @@ pnpm run admin:dev
 - 图片和 Reply 只能引用当前 Conversation Context 授权且未过期的 capability；引用按 Conversation 隔离，永不跨 Conversation 解析；禁止接受任意 file ID、Chat ID 或 Topic ID。
 - Secret 优先使用环境变量或受限 command SecretRef；错误输出必须经 `SecretStore.redact`。
 - MCP HTTP 禁止重定向和 URL 凭据；stdio 仅执行配置中的固定 argv。
-- 配置文件和 `data_dir` 在非 Windows 系统上必须满足权限检查；systemd 单元使用 `UMask=0077` 与最小写路径。
+- 非 Windows 系统上，`serve` 与 `doctor` 都要求配置文件 `0600`、其父目录 `0700`；`data_dir` 不得授予 group/other 权限只由 `doctor` 检查（`serve` 仅在目录缺失时以 `0700` 创建）。systemd 单元使用 `UMask=0077` 与最小写路径。
 - Admin Panel 密码只以 Argon2id hash 存储；Session Token 只存 SHA-256 摘要，Cookie 为 `HttpOnly` + `SameSite=Strict`。
-- Admin 审计 API 全部只读；记忆管理 API 是唯一写入例外。过滤参数经白名单校验并使用绑定参数，禁止拼接 SQL。
+- Admin 审计 API 全部只读；写入只允许 [admin-panel.md](agent-doc/admin-panel.md#api) 白名单中的控制端点，且都校验 `Origin`。过滤参数经白名单校验并使用绑定参数，禁止拼接 SQL。

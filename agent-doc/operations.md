@@ -148,9 +148,9 @@ node src/cli.ts doctor --config dev-data/config.jsonc --output-agent-prompt
 
 1. 确认 `admin.enabled = true` 且已重启 `serve`。
 2. 启动日志中应有一条 `admin_started`，`host`/`port` 与配置一致。
-3. 页面返回 503 `admin_bundle_missing`：先 `pnpm run admin:build`（产出 `apps/admin-next/dist`），或修正 `static_dir`；容器/本地排障对照启动日志里的默认目录路径。
+3. 页面返回 503 `admin_bundle_missing`：先 `pnpm run admin:build`（产出 `apps/admin-next/dist`），或修正 `static_dir`；503 响应的 `message` 里带有实际查找的目录绝对路径（`admin_started` 日志只有 host/port）。
 4. 忘记密码时没有恢复入口：删除 `admin_users` 行会重新进入首次初始化流程；这是写操作，只能在停止 `serve` 后手动执行。
-5. 登录返回 429 `too_many_attempts`：同一用户名连续 10 次失败后锁定 15 分钟，重启 `serve` 会清空内存计数。
+5. 登录返回 429 `too_many_attempts`：同一失败键连续 10 次失败后锁定 15 分钟，重启 `serve` 会清空内存计数；失败键的构成见[Admin Panel：认证](admin-panel.md#认证)。
 
 ## 备份
 

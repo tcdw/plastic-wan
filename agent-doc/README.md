@@ -42,7 +42,7 @@
 | [20260823 睡眠系统](design/20260823%20睡眠系统.md) | 预算耗尽后的 `zzz` 与全局睡眠 | 已实现，见 [telegram-agent-flow.md](telegram-agent-flow.md) |
 | [20260828 闹钟系统](design/20260828%20闹钟系统.md) | Alarm / Deferred Invocation | 已实现，见 [telegram-agent-flow.md](telegram-agent-flow.md) |
 | [20260901 Bun 到 Node 迁移 Epic](design/20260901%20Bun%20到%20Node%20迁移%20Epic.md) | 运行时迁移分阶段计划与决策记录 | 已完成（2026-09-18 全阶段收尾）；运行时与命令事实见 [operations.md](operations.md) |
-| [20260903 Skills 机制设计计划](design/20260903%20塑料碗%20Skills%20机制设计计划.md) | Skills 机制 | **Phase 1 已实现**（System Skills、`read`/`execute` 原语、8 个内部能力迁入 execute），见 [telegram-agent-flow.md](telegram-agent-flow.md)；Phase 2（Admin Skills、容器脚本）未开始 |
+| [20260903 Skills 机制设计计划](design/20260903%20塑料碗%20Skills%20机制设计计划.md) | Skills 机制 | **Phase 1 已实现**（System Skills、`read`/`execute` 原语、内部能力迁入 execute），见 [telegram-agent-flow.md](telegram-agent-flow.md)；Phase 2（Admin Skills、容器脚本）未开始 |
 | [20260911 定时活跃模式设计计划](design/20260911%20定时活跃模式设计计划.md) | 活跃时段、触发关键词与注意力窗口 | 已实现，见 [configuration.md](configuration.md)、[telegram-agent-flow.md](telegram-agent-flow.md) |
 | [20260913 连续 Context 与长活 Invocation 设计计划](design/20260913%20连续%20Context%20与长活%20Invocation%20设计计划.md) | Conversation Context、checkpoint 丢弃式 GC、Invocation 内消息热注入 | 已实现，见 [telegram-agent-flow.md](telegram-agent-flow.md#context-生命周期)、[configuration.md](configuration.md)、[data-layer.md](data-layer.md) |
 
@@ -50,7 +50,9 @@
 
 - `AGENTS.md`：稳定入口、仓库规则、命令和主题目录。
 - 本目录正文：保留源码难以表达的决策理由、跨模块契约、例外与故障处理；完整注册表、表结构和依赖版本链接到源码，不维护数量或本地运行状态的副本。
-- 工具调用契约集中在 [telegram-agent-flow.md](telegram-agent-flow.md#skills-与受控能力调用)，架构页只解释分层与信任边界。
+- 工具调用契约集中在 [telegram-agent-flow.md](telegram-agent-flow.md#skills-与受控能力调用)，架构页只解释分层与信任边界；逐文件清单只在 `AGENTS.md` 的 Project Structure 维护。
+- Bucket 节拍、system prompt 稳定段/注入段拆分等跨模块行为只在 [telegram-agent-flow.md](telegram-agent-flow.md) 维护；[configuration.md](configuration.md) 只写字段语义、覆盖关系与 `check-config` 校验，行为细节用小节链接指过去。
+- Admin 写端点白名单只在 [admin-panel.md](admin-panel.md#api) 维护，`AGENTS.md` 的相关约束链接到该表而不复述清单。
 - [operations.md](operations.md) 负责运行步骤、前置条件与排障；[verification.md](verification.md) 负责验证范围和通过标准。必要命令可以就地保留，其余重复内容用小节链接连接。
 - `design/`：历史资料，统一遵循上面的读取规则；不在各篇维护现状免责声明。
 - 测试：可执行行为契约；文档与测试冲突时，先核对源码和最近迁移，再修正文档或实现。

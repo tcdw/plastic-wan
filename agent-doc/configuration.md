@@ -65,7 +65,7 @@ command SecretRef：
 | `agent` | 对话模型、Prompt、并发与限流、上下文保留策略、全局 Token 预算 |
 | `vision` | Sticker 视觉模型、并发、Prompt 版本和预算 |
 | `mcp` | 可选的 stdio/Streamable HTTP Server |
-| `admin` | 可选的本地只读 Admin Panel |
+| `admin` | 可选的 Admin Panel（审计只读 + 受控管理写端点） |
 | `retention` | 在线保留天数与备份份数 |
 | `paths` | SQLite、媒体缓存和备份目录 |
 
@@ -93,10 +93,9 @@ command SecretRef：
 
 规则：
 
-- `bucket_window_seconds` 是全局 Agent 会话节拍，单位秒，示例值为 15。`0` 表示有新消息时不额外延迟，但不会创建空会话。每个 `collecting` Bucket 的 deadline 是 `max(第一条消息时刻, 该 Conversation 上一轮结束时刻) + 一个节拍`：Agent 空闲时就是消息自身加一个节拍，消息在上一轮运行期间到达时则从该轮结束起算，与 Invocation 的创建/结束时刻无关；同一时刻每个群最多一个 Agent 会话（按 Chat 串行），未到期的批次不会被提前消费，运行中的批次也不会在轮中途被交出。若该 Conversation 已有 running Invocation，到期且已空闲的 Bucket 会挂到这个运行中的 Invocation 上（不再新开会话）并注入其 transcript；运行结束后是否继续等待下一个 Bucket 由 `agent.context.idle_grace_seconds` 决定，见「Conversation Context」。
+- `bucket_window_seconds` 是全局 Agent 会话节拍，单位秒，示例值为 15。`0` 表示有新消息时不额外延迟，但不会创建空会话。deadline 锚点、按 Chat 串行、轮中途不交出批次与 attach 到运行中 Invocation 的规则统一见 [Telegram 与 Agent 流程：会话节拍与 Bucket](telegram-agent-flow.md#会话节拍与-bucket)；运行结束后是否继续等待下一个 Bucket 由 `agent.context.idle_grace_seconds` 决定，见「Conversation Context」。
 - `process_bot_messages` 控制是否处理其他 Bot 的消息。`false` 时其他 Bot 的新消息与编辑只保留 Update 审计，完全不入库。`true` 时它们会入库，但永远不能创建 Bucket、命中 participation 触发或刷新注意力窗口：已有 collecting Bucket 时直接加入；否则暂存，等下一条真人消息创建 Bucket 时，按 Telegram 时间顺序排在该真人消息之前一并收入（仅收未进过任何 Bucket、晚于该 Conversation 上一个 Bucket 起点、且在 `/cut_topic` 截断之后的最新 `agent.history_messages` 条）。这样两个 Bot 无法互相唤醒形成死循环。自己发送的 Update 始终忽略。
 - `sticker_trigger_enabled` 可选，默认 `false`。关闭时，单独收到的人类 Sticker 仍会持久化，但不会创建 Bucket 或触发 Invocation；已有 collecting Bucket 时仍会加入。设为 `true` 后，单独的 Sticker 可以创建 Bucket。
-- 消息收集仍按 Conversation 隔离：Forum Topic 各自收集、Context 互不混入，只是 Agent 会话在群内串行。
 - Chat ID 必须是非零安全整数且不可重复。
 - 未配置 `topic_ids`：允许该 Chat 的普通消息与所有 Topic。
 - 配置 `topic_ids`：只允许列出的正整数 Topic ID；未列出的 Topic 被审计为拒绝。
@@ -248,7 +247,7 @@ Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用
 - 前台 `read_image` 并发由 `max_concurrency` 控制。
 - `background_sticker_concurrency` 当前必须为 `1`。
 - `prompt_version` 参与视觉缓存版本；改变描述规则时递增。
-- `daily_budget` 同时限制 Token 和图片数。
+- `daily_budget` 同时限制 Token 和图片数，但只作用于后台 Sticker 索引（`daily_usage` 的 `system`/`sticker_index`）；聊天触发的 `read_image` 计入全局 `agent.daily_budget.max_tokens`。
 
 ## Conversation Context
 
@@ -298,7 +297,7 @@ Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用
 - `idle_grace_seconds` 为 `0`（关闭长生命周期运行）或不小于 `telegram.bucket_window_seconds`；比一个 Bucket 窗口还短的等待会在下一个 Bucket 到期前就结束运行，看似启用实则无效，因此在配置期直接拒绝。
 - `max_wall_clock_seconds > idle_grace_seconds`。
 
-稳定系统提示与重建：系统提示被拆成两部分。**稳定部分**（Core Agent Protocol、Skill 索引、图片与 Sticker 处理说明、人格提示、对话模式、记忆与内部上下文指引、Chat `instructions`，含模板变量渲染结果）不随运行期状态变化，它的 SHA-256 记在 `conversation_contexts.system_prompt_hash`；**每批注入部分**（当前时间、记忆列表、内部上下文、睡眠状态、闹钟任务、启动追赶说明、不可信的 Sticker 目录与本次 Telegram 快照；Sticker 目录只在与保留 transcript 里最新一份不同时才重新附带，被 GC 淘汰后会重新附带）改由每批注入的消息携带（`ContextBuilder.renderInjection`），不再进入系统提示。稳定部分的内容一变（改 Prompt 文件或 `instructions_file`、模板渲染结果变化等），该 Conversation 的整份 Context 会重建：已保留的 transcript 与能力引用全部丢弃，`head_seq`/`next_seq` 复位为 1。只改运行期状态不会触发重建。
+稳定系统提示与重建：稳定段与每批注入段各含什么，见 [Telegram 与 Agent 流程：Context 生命周期](telegram-agent-flow.md#context-生命周期)。配置侧只需记住：人格提示、Chat `instructions` 及其模板变量渲染结果都属于稳定段，其 SHA-256 记在 `conversation_contexts.system_prompt_hash`。稳定段内容一变（改 Prompt 文件或 `instructions_file`、运行时切换模型导致模板或图片说明变化等），该 Conversation 的整份 Context 会重建：已保留的 transcript 与能力引用全部丢弃，`head_seq`/`next_seq` 复位为 1。时间、记忆、睡眠状态等运行期状态随批次注入，改变它们不会触发重建。
 
 ## MCP
 

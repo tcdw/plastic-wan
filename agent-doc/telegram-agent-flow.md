@@ -140,12 +140,13 @@ T+94   若期间再没有新 Bucket 到期，空闲等待耗尽，I 结束
 - 编解码必须对 Provider 能产出的任何消息成对成立：`usage` 是原样抄写 Provider 的报告，因此宽松接受未知计数（OpenRouter 的 `reasoning`、Anthropic 的 `cacheWrite1h` 拆分）；`content` 块与消息信封是逐字段投影，仍严格校验。**一行解不开不只是坏行**：它的整段保留窗口都无法播种，该 Conversation 之后每次 Invocation 都会在第一次模型调用之前失败，直到有人手动清历史——因此解码器只在真正缺字段时报错，运行时的异常也必须落日志（见下）。
 - `agent_messages` 表继续保存摊平的文本审计，供面板阅读；`context_messages` 才是可回放的 canonical history。
 
-system prompt 拆分：
+system prompt 拆分（文档中只在此处维护；`ContextBuilder.buildSystemPrompt` 产出稳定段，`renderInjection` 产出注入段）：
 
-- **稳定段**只包含不随 Invocation 变化的内容：Core Agent Protocol、System Skill 索引、图片/Sticker 说明、人格 Prompt、私聊/群聊模式、Chat instructions、记忆与 internal context 的使用说明。它对一个 Conversation Context 保持逐字节稳定，这样每次请求的前缀能被 provider prefix cache 命中。Sticker 目录（`sticker_id:emoji`）是**不可信数据**，因此随批次注入，不进入稳定段；它只在与保留 transcript 里最新一份不同时才重新附带（被 GC 淘汰后也会重新附带），不是每批都带一份。
-- **注入段**是一条 `user` 消息，先给可信的 `<runtime_state>`（当前时间、睡眠状态、Alarm 任务、Startup catch-up 说明、`<memory_list>`、`<internal_context_history>`），再给不可信的 `<untrusted_new_messages>`（本批 Telegram 快照，格式与既有 `invocation_messages` 快照一致）与可选的 `<untrusted_sticker_catalog>`。信任边界不变：`<untrusted_*>` 内的一切仍是数据。
+- **稳定段**只包含不随 Invocation 变化的内容：Core Agent Protocol、System Skill 索引、图片/Sticker 说明、人格 Prompt、私聊/群聊模式、Chat instructions、记忆与 internal context 的使用说明。Core Protocol 规定消息分区、沉默判断、Tool 选择原则与副作用成功判定；人格 Prompt 只负责身份和表达风格。它对一个 Conversation Context 保持逐字节稳定，这样每次请求的前缀能被 provider prefix cache 命中。Sticker 目录（`sticker_id:emoji`）是**不可信数据**，因此随批次注入，不进入稳定段；它只在与保留 transcript 里最新一份不同时才重新附带（被 GC 淘汰后也会重新附带），不是每批都带一份。
+- **注入段**是一条 `user` 消息，依次为：可信的 `<runtime_state>`（当前时间、睡眠状态、Alarm 任务、Startup catch-up 说明、`<memory_list>`、`<internal_context_history>`）、可选的 `<untrusted_sticker_catalog>`、可选的 `<untrusted_telegram_history>`（见下一条）、`<untrusted_new_messages>`（本批 Telegram 快照，格式与既有 `invocation_messages` 快照一致）。信任边界不变：`<untrusted_*>` 内的一切仍是数据。
 - 历史不再被重新渲染成 `<untrusted_telegram_history>`；它由 transcript 本身承载。只有两种情况例外：该 Conversation Context 尚无历史（冷启动），以及历史区段里那些**从未进入 transcript 的消息**（例如被 participation 闸门拦下的消息）——它们仍然必须渲染，否则模型永远看不到。
-- system prompt 变化（`system_prompt_hash` 不同）意味着 Context 重建：丢弃全部 canonical history 重新开始。config 只在 `serve` 启动时加载，所以等价于「改了 Prompt 或 Chat instructions 就重开 Context」。
+- 随 Invocation 变化的内容（当前时间、记忆、internal context、睡眠状态、Alarm 任务）都必须待在注入段：放进 system prompt 会让每次请求的前缀都不同，既失去前缀缓存，又违反「Context 可以稳定保留」的前提。
+- system prompt 变化（`system_prompt_hash` 不同）意味着 Context 重建：丢弃全部 canonical history 重新开始。config 只在 `serve` 启动时加载，所以等价于「改了 Prompt 或 Chat instructions 就重开 Context」；运行时切换模型若改变了模板渲染结果或图片说明，同样会重建。
 
 垃圾回收（GC）是**只删不摘要**的 checkpoint 滑动窗口，挂点只有一个：`prepareNextTurnWithContext`（位于流式输出之后、Tool 批次闭合之后，是唯一安全的裁剪点）。
 
@@ -188,10 +189,8 @@ participation 放行 = 未配置 participation || 处于活跃时段 || 更新�
 
 ## Context
 
-一次 Invocation 的模型输入由 `ContextBuilder` 的两半拼成：稳定的 `systemPrompt` 与一批注入消息。项目里不再有「每次重新渲染全部历史」的 `userPrompt`——历史由 Conversation Context 的 transcript 承载，见 [Context 生命周期](#context-生命周期)。
+一次 Invocation 的模型输入由 `ContextBuilder` 的两半拼成：稳定的 `systemPrompt` 与一批注入消息，两者各含什么见 [Context 生命周期：system prompt 拆分](#context-生命周期)。项目里不再有「每次重新渲染全部历史」的 `userPrompt`——历史由 Conversation Context 的 transcript 承载。本节只记录拆分之外的组装产物与规则：
 
-- `systemPrompt`：代码固化的 Core Agent Protocol、System Skill 索引、图片/Sticker 能力说明、运维侧人格 Prompt、私聊/群聊模式、Chat instructions、记忆与 internal context 的使用说明。Core Protocol 规定消息分区、沉默判断、Tool 选择原则与副作用成功判定；人格 Prompt 只负责身份和表达风格。这一整段对同一个 Conversation Context 保持稳定；不可信的 Sticker 目录随批次注入，不在这里。
-- 注入消息（`user`）：`<runtime_state>` 给出当前时间、睡眠状态、Alarm 任务、Startup catch-up 说明、`<memory_list>` 与 `<internal_context_history>`；随后是可选的 `<untrusted_sticker_catalog>`（`sticker_id:emoji`），最后是 `<untrusted_new_messages>`（本批 Telegram 快照）。只有冷启动那一批、以及历史区段里从未进入 transcript 的消息，会额外带上 `<untrusted_telegram_history>`。
 - `directImages`：当 `agent` 模型支持 image 时，**本批**消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容，并按 `figure_N` 与消息 JSON 中的引用对应。
 - `visibleSenders`：本批及保留历史中可见的 Telegram user sender，供 `alarm` 校验目标。
 - `imageCapabilities`：Sticker 始终可用；Photo/图片 Document 在 `agent` 模型不支持 image 时全部可用，支持 image 时历史图片通过 `img_` 引用可用，供 `read_image` 使用。
@@ -200,8 +199,6 @@ participation 放行 = 未配置 participation || 处于活跃时段 || 更新�
 当前 Conversation 全部有效记忆按创建时间升序出现在注入块的 `<memory_list>` 内。新增记忆等价于列表末尾 append，不重排已有项；TTL 到期与 `delete_memory` 只破坏删除位置之后的缓存前缀。
 
 同一 Conversation 最近的 `internal_contexts` 也作为隐藏 `<internal_context_history>` 块出现在注入块中，而不是 system prompt。当列表为空时不注入该块，避免空提示开销。该块显式说明这些内容是历史 Tool 观察、不会发送到 Telegram、不是当前数据库权威；当前实现主要保存 `list_alarm` 结果的有序映射，让后续 invocation 能把“第二个”解析回稳定 alarm ID，并在真正 `delete_alarm` 时重新做数据库 ownership / pending 校验。
-
-随 Invocation 变化的内容（当前时间、记忆、internal context、睡眠状态、Alarm 任务）都必须待在注入块里：放进 system prompt 会让每次请求的前缀都不同，既失去前缀缓存，又违反「Context 可以稳定保留」的前提。
 
 私聊策略提示模型积极参与；群聊提示只在有明确价值时发言。它是行为偏好，不绕过 Tool 或预算授权。
 
@@ -226,7 +223,7 @@ Invocation 结束时 Agent 实例可以留在 `ConversationRuntime` 缓存里供
 
 ## Skills 与受控能力调用
 
-工具面分三层：runtime 原语直接暴露、内部能力经 `execute`、MCP Tool 直接暴露。内部能力按需发现，避免每轮请求携带全部定义；这不是放宽授权，Schema、引用和预算仍由 Tool 边界校验。修改能力时先查 [组合根的 `capabilityTools`](../src/application.ts#L128) 与 [原语装配](../src/orchestration/agent-runtime.ts)，行为验证见 [验证索引](verification.md#静态与单元验证)。
+工具面分三层：runtime 原语直接暴露、内部能力经 `execute`、MCP Tool 直接暴露。内部能力按需发现，避免每轮请求携带全部定义；这不是放宽授权，Schema、引用和预算仍由 Tool 边界校验。修改能力时先查 [组合根的 `capabilityTools`](../src/application.ts)（按符号名检索）与 [原语装配](../src/orchestration/agent-runtime.ts)，行为验证见 [验证索引](verification.md#静态与单元验证)。
 
 - **原语**：`read`、`send`、`execute`、`zzz`（条件暴露）。它们的定义、Schema 与约束完全由 runtime 提供，不依赖任何 Skill；未读取任何 Skill 也能直接调用。
 - **内部能力注册表**：由 [application.ts](../src/application.ts) 的 `capabilityTools` 装配，完整清单以此为准，不在文档维护副本。模型经 `execute` 的 search/help/call 按需发现与调用；调用前按目标能力的参数 Schema 校验，input 超 32 KiB 拒绝。
@@ -270,7 +267,7 @@ Agent 通过 `alarm` 能力（经 `execute.call` 调用）创建一个绑定当�
 
 - 文本默认按纯文本发送；显式设置 `parse_mode: "MarkdownV2"` 时由 Telegram 按 MarkdownV2 解析。只提供 `text`（以及可选的 `reply_to_message_id`）时，`kind` 默认为 `text`。
 - 配置允许且当前 Conversation Context 授权的 Sticker（`stk_` 引用）。
-- 可选 Reply，但目标 Message ID 必须仍在当前 Conversation Context 的保留段内且未过期（`reply_` 引用）。
+- 可选 Reply：模型传 `reply_to_message_id`，目标必须命中当前 Conversation Context 里仍在保留段内且未过期的 `reply:<telegram_message_id>` 引用。
 
 发送前写 pending 审计并标记副作用边界。明确失败可按策略处理；网络中断后无法确认 Telegram 是否接收时记录 `outcome_unknown`，不能盲目重发。
 
@@ -278,7 +275,7 @@ Agent 通过 `alarm` 能力（经 `execute.call` 调用）创建一个绑定当�
 
 `agent.send_disallow_blank_lines` 开启（默认关闭）时，包含任何空行的文本同样在发送前被拒绝，错误码 `send_blank_lines`。
 
-`agent.rate_limits.sends_per_window` / `window_seconds` 限制同一 Chat 在滑动窗口内的成功（或 pending/unknown）发送数；超出时 Tool Call 记为 `error`/`send_rate_limited`，不写 `telegram_sends`。这是长活 Invocation 取代 per-Invocation `max_sends` 的刹车。
+`agent.rate_limits.sends_per_window` / `window_seconds` 限制同一 Chat 在滑动窗口内的 `telegram_sends` 行数，不区分状态（失败的尝试同样消耗额度，否则失败重试的循环就没有刹车）；超出时 Tool Call 记为 `error`/`send_rate_limited`，不写 `telegram_sends`。这是长活 Invocation 取代 per-Invocation `max_sends` 的刹车。
 
 成功发送后：
 
@@ -299,7 +296,7 @@ Tool 只返回文本、JSON、XML 或 JavaScript 响应，拒绝压缩和二进�
 
 当 `agent` 模型支持 image 时，`new` 区段的 Photo 与受支持的图片 Document 随冻结 Context 直接送入主模型，不经过 `read_image` 或独立 `vision` 模型；历史区段的图片只保留 `image_ref`，模型可用 `read_image` 按需查看，避免旧图占用输入或分散注意力。Telegram Photo 只保留最高分辨率变体，避免同一照片重复占用模型输入。
 
-当 `agent` 模型只有 text 输入时，所有普通图片不附到主模型请求，而是在 Context 中保留 Invocation-scoped `image_ref`。Agent 可按需调用 `read_image`，由独立 `vision` 模型返回文字描述。普通图片继续按 `file_unique_id + analysis_version` 缓存 30 天。
+当 `agent` 模型只有 text 输入时，所有普通图片不附到主模型请求，而是在 Context 中保留按 Conversation Context 授权、带 TTL 的 `image_ref`（`img_`，见[引用生命周期](#引用capability生命周期)）。Agent 可按需调用 `read_image`，由独立 `vision` 模型返回文字描述。普通图片分析继续按 `file_unique_id + analysis_version` 缓存，随在线保留窗口（`retention.online_days`）清理。
 
 直传图片在首次 Agent 请求前下载到 `paths.media_cache` 临时目录，并执行下载大小、真实格式、像素数、EXIF 移除、最大边长与标准化输出大小限制；请求载荷完成构造后立即删除临时文件。下载或校验失败会使 Invocation 失败，不会把缺失图片伪装成成功。
 
@@ -370,7 +367,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 ## Bot 管理员列表
 
-`bot_admins`（迁移 `008_bot_admins.sql`）保存可执行 `/pause`、`/resume` 的 Telegram 用户 ID，Bot 全局共享：
+`bot_admins`（迁移 `008_bot_admins.sql`）保存可执行 `/pause`、`/resume`、`/model`、`/cut_topic` 的 Telegram 用户 ID，Bot 全局共享：
 
 - 启动时 `telegram.admins`（JSONC 数组）以 `ON CONFLICT DO NOTHING` 播种，保证运营者始终保有控制权；面板新增的条目不会被种子移除。
 - Admin Panel「Bot admins」页面（`GET/POST /api/admins`、`DELETE /api/admins/:id`）是运行时管理入口。

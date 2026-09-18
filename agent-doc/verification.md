@@ -28,7 +28,7 @@ pnpm test test/alarm.test.ts test/alarm-internal-context.test.ts
 pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-configure.test.ts
 ```
 
-上面的命令按改动范围组织；新增测试文件时同步补充对应命令与下表契约。完整测试集以 `test/*.test.ts` 为准，`pnpm test` 运行全部测试（vitest，单进程串行）。
+上面的命令按改动范围组织；新增测试文件时同步补充对应命令与下表契约。`pnpm test` 运行 `vitest.config.ts` 的 `include` 覆盖的全部测试（`test/**/*.test.ts` 与 `apps/admin-next/src/**/*.test.ts`），文件间串行（`fileParallelism: false`）。
 
 | 测试 | 主要契约 |
 | --- | --- |
@@ -62,6 +62,7 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | `prompt-template.test.ts` | Prompt 模板白名单变量渲染、未知与格式错误表达式拒绝 |
 | `prompt-markdown.test.ts` | HTML 注释剔除、纯注释行移除、跨行注释与未闭合注释保留 |
 | `tui-configure.test.ts` | `configure` 向导输出可被 `loadConfig` 接受、models.dev 能力/费用映射、Provider `/models` 拉取与去重、CLI 参数与 `--output-agent-prompt` 解析 |
+| `apps/admin-next/src/lib/*.test.ts` | Admin 前端纯函数：错误文本、记忆 TTL 边界、Invocation 时间线排序与 send 参数解析 |
 
 跨模块改动完成后运行全部测试与 TypeScript 检查。
 
@@ -128,7 +129,7 @@ node src/cli.ts serve --config dev-data/config.jsonc
 9. Alarms 页面按 state/Chat/Target 过滤，pending 优先置顶，展开显示完整诊断并链接到对应 Tool session；取消只对 pending 开放且需二次确认，对非 pending 给出 409 冲突提示。
 10. Bot admins 页面能添加/移除管理员，`telegram.admins` 的种子项来源显示为 `config`。
 11. Model 页面显示当前/默认模型；切换后 Telegram `/status` 立即反映新模型，恢复默认后回到 `config.jsonc` 的值。
-12. Conversation Contexts 页面按 chat/conversation/search 过滤，列表按最近活跃倒序并可用 Load more 翻页；详情显示 head/next seq、保留消息数与 capability refs，展开消息看到 `payload_preview` 与截断标记，且不出现已 GC 的行。
+12. Conversation Contexts 页面按 chat 过滤，列表按最近活跃倒序并可用 Load more 翻页；详情显示 head/next seq、保留消息数与 capability refs，展开消息看到 `payload_preview` 与截断标记，且不出现已 GC 的行。
 13. 登出后访问深链接回落登录页；重新登录恢复访问。
 14. `admin_users.password_hash` 以 `$argon2id$` 开头，`admin_sessions` 只有 64 位十六进制摘要。
 
@@ -156,16 +157,11 @@ pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.t
 - 覆盖契约（全部断言真实 UI 状态，非仅文案）：
   1. 认证：setup → shell；错误密码表单内显示 `invalid_credentials` 且 URL 不变；
      登出回登录页；会话撤销后受保护请求 401 → 登录页且无错误屏。
-  2. 13 条路由与深链接（`/`、`/invocations[/:id]`、`/contexts[/:conversationId]`、
-     `/messages[/:id]`、`/alarms`、`/memories`、`/admins`、`/model`、`/stickers`、
-     `/settings`）直接访问渲染真实内容（非错误边界、非空白）。
-  3. 列表过滤与游标分页：Invocations（state/chat）、Messages（search/chat）、
-     Contexts（search/chat/conversation）、Alarms（state/target）、Memories
-     （state/chat）、Stickers（set/state/search）真正改变结果集；六张列表的种子
-     行数（Invocations 30、Messages 30、Contexts 27、Alarms 28、Memories 30、
-     Stickers 30）都超过每页 25 行，因此都会出现 `Load more` 并加载下一页
-     （E2E 实测 Invocations/Messages/Memories/Stickers 25→30、Contexts 25→27）；
-     无跳页/总页数控件。
+  2. `src/routes.tsx` 注册的全部路由与深链接直接访问渲染真实内容（非错误边界、非空白）。
+  3. 列表过滤与游标分页：Invocations、Messages、Contexts、Alarms、Memories、Stickers
+     的过滤器真正改变结果集（各页可用过滤器以页面与 `02-lists-filters.e2e.ts` 为准）；
+     `seedAdminBulkRows`（`test/fixtures/admin-seed.ts`）让每张列表的种子行数都超过
+     默认每页 25 行，因此都会出现 `Load more` 并加载下一页；无跳页/总页数控件。
   4. Invocation 详情六个 Tab（Overview / Tool calls / Model calls / Telegram sends /
      Agent transcript / Frozen context）切换并渲染期望字段；失败调用显示稳定错误码
      （`provider_timeout`）且可展开脱敏详情（`sk-***`，无活密钥模式）；assistant 文本
@@ -179,6 +175,9 @@ pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.t
   7. 安全：生产静态托管（非 dev server）下断言 CSP 头（`default-src 'none'` /
      `script-src 'self'` / `connect-src 'self'`）、无 console error / pageerror /
      CSP violation，且全部请求同源（有外部请求即失败）。
+  8. 信任边界（直接发 API 请求）：无 Session 访问受保护路由返回 401
+     `unauthenticated`；对只读审计路由发 POST/PUT 返回 405 `method_not_allowed`；
+     跨站 Origin 的写请求返回 403 `bad_origin`。
 
 - 首次运行 E2E 前需要 `pnpm --filter plasticwan-admin-next exec playwright install chromium`；浏览器安装失败时套件无法
   执行，属于环境前置问题而非代码缺陷。

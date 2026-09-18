@@ -283,9 +283,7 @@ export class ContextBuilder {
       timezone: identity.timezone,
     };
     const conversationMode =
-      identity.chatType === 'private'
-        ? 'Conversation mode: private chat.'
-        : 'Conversation mode: group chat. Silence is preferred unless the new messages warrant a useful response.';
+      identity.chatType === 'private' ? 'Conversation mode: private chat.' : 'Conversation mode: group chat.';
     const imageHandling = supportsImages
       ? 'Photos and supported image Documents from the newest injected messages are attached directly to the multimodal Agent input, in the same order as the figure_N image_ref entries inside the message JSON. Treat each attached image as the media of the message whose JSON references the matching figure_N. Older images are not attached; inspect them on demand with the read_image capability (called via execute) using their img_ refs. read_image never accepts figure_N refs.'
       : 'Telegram images and Stickers are available through the read_image capability (called via execute). Call it when visual details are needed.';

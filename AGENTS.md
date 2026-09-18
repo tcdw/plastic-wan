@@ -9,7 +9,7 @@ Plastic Wan 是一个运行在 Telegram 私聊、群组、Supergroup 与 Forum T
 - 仅处理配置允许的 Chat 与 Topic。
 - 以全局可配置的固定长度 Bucket 聚合连续消息，并保留编辑修订。
 - 每个 Conversation 维护一份跨 Invocation 存活的连续 Agent Context；Context 不做摘要，只按 checkpoint 丢弃旧历史。
-- 私聊积极、群聊克制；模型可以选择不回复。
+- 是否发言由模型自行决定；runtime 不规定参与倾向，性格与表达只由人格 Prompt 承担。
 - Assistant 普通文本永不直接发布，必须调用 `send`。
 - 支持图片理解、Sticker 视觉索引与受限 MCP Tool。
 - 提供只读 System Skills：模型沿「索引 → `read` SKILL.md → `execute.call`」链路使用 runtime 内部能力，Skill 对模型永远只读。

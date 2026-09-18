@@ -82,7 +82,7 @@ send Tool → Telegram API → 审计
 逐文件导航见 [AGENTS.md 的 Project Structure](../AGENTS.md#project-structure--module-organization)，本页不维护文件清单副本；模块职责基本能从层级和文件名推出，源码是唯一事实源。只有几处放置位置和名字不直观，需要单独记住：
 
 - `application.ts` 装配的 AgentRuntime 与 Scheduler 共享一个 `ConversationRuntime`；`orchestration/conversation-runtime.ts` 拥有 Agent 实例 LRU 缓存与「已 attach 待注入的 Bucket」队列，是 runtime 与调度之间的唯一握手点。
-- `platform/agent-protocol.ts` 是代码固化的 **Core Agent Protocol**——消息分区、沉默判断、Tool 选择原则与副作用成功判定都在这里，不在人格 Prompt 文件里。它属于稳定段：改动它等于重建所有 Conversation Context。
+- `platform/agent-protocol.ts` 是代码固化的 **Core Agent Protocol**——消息分区、Tool 选择原则与副作用成功判定都在这里，不在人格 Prompt 文件里。它属于稳定段：改动它等于重建所有 Conversation Context。稳定段不写参与时机：是否发言由模型按当前批次自行判断；群聊的消息准入由运行期 participation 闸门决定（配置了才生效）。
 - [platform/system-resources.ts](../src/platform/system-resources.ts) 加载只读 **System Skills**；索引注入、按需读取和调用契约统一见 [Skills 与受控能力调用](telegram-agent-flow.md#skills-与受控能力调用)。Skill 提供操作知识而不授予权限，能力是否注册仍由组合根决定。
 - 不是所有 Agent Tool 都在 `capabilities/`：`zzz` 定义在 `store/sleep.ts`，`add_memory`/`delete_memory` 定义在 `context/memory.ts`，各自与所属状态放在一起。找某个 Tool 的实现时按名字 grep，别只翻 `capabilities/`。
 - `store/invocation-snapshot.ts` 是 Invocation 消息快照的冻结边界；`orchestration/invocation-queue.ts` 负责 Bucket/Alarm → Invocation 的同步状态转换、attach、恢复与 Startup Catch-up。这两个名字容易和 `scheduler.ts` 混淆——Scheduler 只管事件循环与并发。

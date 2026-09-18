@@ -142,7 +142,7 @@ T+94   若期间再没有新 Bucket 到期，空闲等待耗尽，I 结束
 
 system prompt 拆分（文档中只在此处维护；`ContextBuilder.buildSystemPrompt` 产出稳定段，`renderInjection` 产出注入段）：
 
-- **稳定段**只包含不随 Invocation 变化的内容：Core Agent Protocol、System Skill 索引、图片/Sticker 说明、人格 Prompt、私聊/群聊模式、Chat instructions、记忆与 internal context 的使用说明。Core Protocol 规定消息分区、沉默判断、Tool 选择原则与副作用成功判定；人格 Prompt 只负责身份和表达风格。它对一个 Conversation Context 保持逐字节稳定，这样每次请求的前缀能被 provider prefix cache 命中。Sticker 目录（`sticker_id:emoji`）是**不可信数据**，因此随批次注入，不进入稳定段；它只在与保留 transcript 里最新一份不同时才重新附带（被 GC 淘汰后也会重新附带），不是每批都带一份。
+- **稳定段**只包含不随 Invocation 变化的内容：Core Agent Protocol、System Skill 索引、图片/Sticker 说明、人格 Prompt、私聊/群聊模式、Chat instructions、记忆与 internal context 的使用说明。Core Protocol 规定消息分区、Tool 选择原则与副作用成功判定；人格 Prompt 只负责身份和表达风格；稳定段不写「什么时候该参与」——是否发言由模型按当前批次判断；群聊的消息准入由运行期 participation 闸门决定（配置了才生效）。它对一个 Conversation Context 保持逐字节稳定，这样每次请求的前缀能被 provider prefix cache 命中。Sticker 目录（`sticker_id:emoji`）是**不可信数据**，因此随批次注入，不进入稳定段；它只在与保留 transcript 里最新一份不同时才重新附带（被 GC 淘汰后也会重新附带），不是每批都带一份。
 - **注入段**是一条 `user` 消息，依次为：可信的 `<runtime_state>`（当前时间、睡眠状态、Alarm 任务、Startup catch-up 说明、`<memory_list>`、`<internal_context_history>`）、可选的 `<untrusted_sticker_catalog>`、可选的 `<untrusted_telegram_history>`（见下一条）、`<untrusted_new_messages>`（本批 Telegram 快照，格式与既有 `invocation_messages` 快照一致）。信任边界不变：`<untrusted_*>` 内的一切仍是数据。
 - 历史不再被重新渲染成 `<untrusted_telegram_history>`；它由 transcript 本身承载。只有两种情况例外：该 Conversation Context 尚无历史（冷启动），以及历史区段里那些**从未进入 transcript 的消息**（例如被 participation 闸门拦下的消息）——它们仍然必须渲染，否则模型永远看不到。
 - 随 Invocation 变化的内容（当前时间、记忆、internal context、睡眠状态、Alarm 任务）都必须待在注入段：放进 system prompt 会让每次请求的前缀都不同，既失去前缀缓存，又违反「Context 可以稳定保留」的前提。
@@ -200,8 +200,6 @@ participation 放行 = 未配置 participation || 处于活跃时段 || 更新�
 
 同一 Conversation 最近的 `internal_contexts` 也作为隐藏 `<internal_context_history>` 块出现在注入块中，而不是 system prompt。当列表为空时不注入该块，避免空提示开销。该块显式说明这些内容是历史 Tool 观察、不会发送到 Telegram、不是当前数据库权威；当前实现主要保存 `list_alarm` 结果的有序映射，让后续 invocation 能把“第二个”解析回稳定 alarm ID，并在真正 `delete_alarm` 时重新做数据库 ownership / pending 校验。
 
-私聊策略提示模型积极参与；群聊提示只在有明确价值时发言。它是行为偏好，不绕过 Tool 或预算授权。
-
 Context 受模型窗口限制：为系统提示、完整 Tool 定义（名称、描述与参数 Schema）、历史、新消息和输出保留空间。Tool description 不只是能力清单，还应说明何时使用、何时不用、必要调用顺序和成功判定。估算输入达到 `context_window × context_stop_ratio` 后进入收尾模式：下一次模型调用只带 `send` 和当时可用的 `zzz`，模型用这一轮把话说完，这一轮结束后运行以 `context_limit` 结束。Pi 在同一个 turn 边界先调 `prepareNextTurnWithContext` 再调 `shouldStopAfterTurn`，所以「进入收尾」和「停止」必须隔开一轮，否则收尾轮根本不会发生。
 
 ## Agent 循环
@@ -235,7 +233,7 @@ System Skills 是随 runtime 发布的只读文档包，位于 `src/system-resou
 
 每次模型请求都会附带完整的工具注册表（名称、label、描述与参数 Schema）。请求发出前把该请求实际附带的工具名写入 `model_calls.tools_json`，Invocation 的可用注册表快照（`name`/`label`/`description`）写入 `invocations.tool_registry_json`——因此可以审计“模型在某一轮到底看到了哪些工具”。context 接近上限时，Agent 循环只保留 `send` 和已经可用的 `zzz` 继续收尾。
 
-普通 Assistant Message 永不自动发布。模型不调用 `send` 即表示保持沉默，这在群聊中是正常成功结果。`agent.send_nudge_enabled` 开启时，若本轮没有 Tool Call、私有文本去除首尾空白后非空，且**本批注入**以来尚未调用 `send`，harness 会在会话自然结束前至多注入一次 `steer` 提醒；提醒后仍不调用则静默放行，文本不出 Telegram。提醒的判定必须**早于**注入下一个批次与空闲等待：后两者都会延长这次运行，而草稿只有在自己那批仍是最新批次时才可挽回——排在它们后面会让整段运行期间每个「有草稿又被下一批接上」的批次都静默丢回复（只有真正静默满一个 grace 才会被提醒）。
+普通 Assistant Message 永不自动发布。模型不调用 `send` 即表示保持沉默，这是正常成功结果。`agent.send_nudge_enabled` 开启时，若本轮没有 Tool Call、私有文本去除首尾空白后非空，且**本批注入**以来尚未调用 `send`，harness 会在会话自然结束前至多注入一次 `steer` 提醒；提醒后仍不调用则静默放行，文本不出 Telegram。提醒的判定必须**早于**注入下一个批次与空闲等待：后两者都会延长这次运行，而草稿只有在自己那批仍是最新批次时才可挽回——排在它们后面会让整段运行期间每个「有草稿又被下一批接上」的批次都静默丢回复（只有真正静默满一个 grace 才会被提醒）。
 
 ## 睡眠
 

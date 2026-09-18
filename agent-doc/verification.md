@@ -186,8 +186,8 @@ pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.t
 
 ### Chat 与参与策略
 
-- 私聊发送普通消息：无需 mention，Bot 可积极回复。
-- 群聊发送普通消息：无需 mention，Bot 能观察但允许保持沉默。
+- 私聊发送普通消息：无需 mention，Bot 能观察到该消息。
+- 群聊发送普通消息：无需 mention，Bot 能观察到该消息。
 - 群聊 mention Bot：仍通过相同配置窗口的 Bucket，不走特殊旁路。
 - 未允许 Chat：`telegram_updates.allowed = 0`，原因是 `chat_not_allowed`。
 - 新增 Chat 后未重启：旧进程仍拒绝；重启且哈希变化后允许。

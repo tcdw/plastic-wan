@@ -71,7 +71,11 @@
 - [x] 记录基线：全量 `bun test`、`bun run check`、`check-config`、`doctor` 输出。
   - 2026-09-04：`bun test`（176/176，23 个文件）与 `bun run check` 全绿，可作为基线；`check-config` 与 `doctor` 输出待正式记录（生产试运行的 doctor 输出可直接归档为基线）。
   - 2026-09-17 Phase 3 开工时基线：`pnpm test` 304/304（33 文件）、`pnpm run check` 全绿、`check-config` config_hash `8339d3f5…`；`doctor` 依赖探针通过、model probe 因外部 Provider 环境失败（与本迁移无关）。
-  - 2026-09-18 Phase 6 收口：各时点基线以上述注记为准，Phase 5 验收记录为迁移后最终基线（305/305 → 后续 308/308，含 `.env` 与 MCP 错误报告回归测试）。
+  - 2026-09-18 正式基线（迁移完成后实测，补上 2026-09-04 遗留的 check-config/doctor 输出记录）：
+    - `pnpm test`：34 文件 / 310 用例全过；`pnpm run check`：root + admin 两段 tsc 零错误。
+    - `check-config`：`{"status":"ok","config_hash":"0db106574d6cb2e033774254b4cf72f3fdba4aa809b51950d6dc4cce24fb05d5"}`。
+    - `doctor`：`{"status":"ok","runtime":"v24.18.0","fts5_trigram":true,"sharp":true,"ffmpeg":true,"ffprobe":true,"lottie":true,"providers":4,"required_mcp":2,"telegram_bot_id":"8352063552","config_hash":"0db10657…"}`（采集时 getMe 有一次瞬时网络失败，重试通过，其余探针一次通过）。
+    - `config_hash` 绑定本地 `dev-data/config.jsonc` 与 Prompt 文件内容，配置改动后以重新执行输出为准；305 → 310 的增量包含本 Epic 收尾后的 `.env.local`/dotenv 与 MCP 错误报告修复。
 - [x] 安装并锁定版本：`drizzle-orm`、`vitest`、`@node-rs/argon2`、`hono`、`@hono/node-server`。
   - 2026-09-01：`drizzle-orm@^0.45.2` 已安装锁定（随 Phase 2 提前完成）。
   - 2026-09-17：其余四项 + `jsonc-parser`（Phase 0 清单遗漏，Phase 3.2 需要）已安装锁定（提交 7b19b4f）：hono 4.13.8、@hono/node-server 2.1.1、@node-rs/argon2 2.2.1、jsonc-parser 3.3.1、vitest 5.0.1。

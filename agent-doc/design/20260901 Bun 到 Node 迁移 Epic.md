@@ -32,6 +32,8 @@
 >
 > 2026-09-18 再补记：上面的原生方案随即推翻，改用 **dotenv**——本地密钥实际放在 `.env.local`（Bun 会自动加载整个 `.env*` 家族，原生方案只覆盖了 `.env`），且该路径暴露了 `mcp.ts` 的 `safeErrorName` 只输出错误构造器名、把 `Secret environment variable is not set` 吞成 `failed to initialize: Error` 的诊断缺陷。dotenv 一次对齐 Bun 的多文件语义与解析边界（BOM/CRLF）：加载顺序 `.env.local` → `.env`，真实环境变量优先；`safeErrorName` 移除，required MCP 初始化失败改为输出经 `SecretStore.redactError` 的完整错误（message/stack/cause 链）。回归测试在 `test/mcp.test.ts`（未设 Secret 变量的完整错误文本）与 `test/load-env.test.ts`（多文件优先级 + BOM）。
 >
+> 2026-09-18 收尾更新：**Phase 6 已完成，本 Epic 全部收尾**。残留清理结论见 Phase 6 章节（唯一修复项 `apps/admin-next/env.example.txt` 的命令引用；`pnpm-lock.yaml` 的 `bun-types` 为 drizzle optional peer，inert 保留）。迁移后的运行时与命令事实以 [operations.md](../operations.md) 与根 [AGENTS.md](../../../AGENTS.md) 为准。
+>
 > 2026-09-04 状态速览：Phase 0 部分完成（drizzle-orm 已锁定）、**Phase 2 已完成**、Phase 1/3–6 未开始。下一步是 Phase 1（pnpm monorepo）或直接进入 Phase 3（运行时无关化，每项独立提交）。
 
 | 类别 | 位置 |
@@ -66,13 +68,15 @@
 
 ### Phase 0 — 基线与依赖锁定（部分完成）
 
-- [ ] 记录基线：全量 `bun test`、`bun run check`、`check-config`、`doctor` 输出。
+- [x] 记录基线：全量 `bun test`、`bun run check`、`check-config`、`doctor` 输出。
   - 2026-09-04：`bun test`（176/176，23 个文件）与 `bun run check` 全绿，可作为基线；`check-config` 与 `doctor` 输出待正式记录（生产试运行的 doctor 输出可直接归档为基线）。
   - 2026-09-17 Phase 3 开工时基线：`pnpm test` 304/304（33 文件）、`pnpm run check` 全绿、`check-config` config_hash `8339d3f5…`；`doctor` 依赖探针通过、model probe 因外部 Provider 环境失败（与本迁移无关）。
+  - 2026-09-18 Phase 6 收口：各时点基线以上述注记为准，Phase 5 验收记录为迁移后最终基线（305/305 → 后续 308/308，含 `.env` 与 MCP 错误报告回归测试）。
 - [x] 安装并锁定版本：`drizzle-orm`、`vitest`、`@node-rs/argon2`、`hono`、`@hono/node-server`。
   - 2026-09-01：`drizzle-orm@^0.45.2` 已安装锁定（随 Phase 2 提前完成）。
   - 2026-09-17：其余四项 + `jsonc-parser`（Phase 0 清单遗漏，Phase 3.2 需要）已安装锁定（提交 7b19b4f）：hono 4.13.8、@hono/node-server 2.1.1、@node-rs/argon2 2.2.1、jsonc-parser 3.3.1、vitest 5.0.1。
-- [ ] 确认目标 Node 版本下限（type stripping 默认开启的版本）写入 `engines`。
+- [x] 确认目标 Node 版本下限（type stripping 默认开启的版本）写入 `engines`。
+  - Phase 5 已写入 `engines.node >= 24.0.0`。
 
 ### Phase 1 — pnpm monorepo（运行时仍为 Bun）✅（2026-09-17 完成）
 
@@ -143,11 +147,18 @@
   - `backup` 在 Node 下执行保留清理 + `VACUUM INTO`：备份文件 0600、`integrity_check = ok`、42 张表，轮换正常。
   - **未执行（需生产凭据/真实消息，留人工验收）**：真实 Telegram 私聊全链路、图片与 Sticker 视觉链路、存量管理员密码的真实浏览器登录。
 
-### Phase 6 — 清理与文档收尾
+### Phase 6 — 清理与文档收尾 ✅（2026-09-18 完成）
 
-- [ ] `AGENTS.md` 命令区更新（`bun install/test/run` → pnpm/node）；`operations.md`、`verification.md`、`data-layer.md` 同步运行时事实。
-- [ ] 删除残留 Bun 工件；确认 `grep -rn "bun"` 仅剩历史性描述。
-- [ ] 本文档更新各阶段状态；全部完成后按文档边界惯例归档或精简。
+- [x] `AGENTS.md` 命令区更新（`bun install/test/run` → pnpm/node）；`operations.md`、`verification.md`、`data-layer.md` 同步运行时事实。
+  - Phase 5 已随运行时切换同步全部主题文档；本次全量复核 `AGENTS.md` 与 agent-doc 正文（`design/` 归档除外），零 bun 命令残留。
+- [x] 删除残留 Bun 工件；确认 `grep -rn "bun"` 仅剩历史性描述。
+  - 无 `bun.lock`/`@types/bun`/bun shebang 等工件残留；唯一修复项是 `apps/admin-next/env.example.txt` 仍写着 `bun run admin:dev`（已改 `pnpm run admin:dev`）。
+  - 剩余匹配逐项归类，均属可保留：src/test 的历史性注释（BOM 行为对齐、`@hono/node-server` 异步绑定差异、Argon2 强度来源、`node:sqlite` 句柄释放差异——各自解释了现有代码为何如此）；`test/admin.test.ts` 的 Bun.password 存量 hash 互验 fixture（跨库登录回归，必须保留）；`apps/admin-next/tsconfig.json` 的 `moduleResolution: "bundler"`（TypeScript 合法取值，与 Bun 无关）；`ubuntu-latest`/`bundle(d)` 字样误命中；`agent-doc/design/` 历史归档原文。
+  - `pnpm-lock.yaml` 中的 `bun-types@1.3.14` 是 drizzle-orm 声明的 **optional peer**，由 pnpm auto-install-peers 带入：types-only、无任何 import 路径。`ignoredOptionalDependencies` 实测不覆盖 auto-install 的 peer；全局关 `autoInstallPeers` 波及面更大（会顺带移除同为 optional peer 的 `@opentelemetry/api`），故保留此 inert 条目并在此记录。
+  - `docs/plan/` 内的 bun 命令输出是 `.gitignore` 排除的本地草稿（0 个被跟踪文件），不属于仓库工件，不处理。
+- [x] 本文档更新各阶段状态；全部完成后按文档边界惯例归档或精简。
+  - Phase 0 两个未勾项一并收口（基线记录见各时点注记；`engines.node >= 24.0.0` 已在 Phase 5 写入）。
+  - 本文档留在 `design/` 作为历史决策记录，符合 [agent-doc/README.md](../README.md) 的归档边界；索引状态同步为已完成。
 
 ## 风险登记
 

@@ -164,10 +164,9 @@ node src/cli.ts backup --config dev-data/config.jsonc
 
 ## 部署方式
 
-仓库提供两条部署路径，二选一：
+推荐使用 Docker 部署：`Dockerfile` + `docker-compose.yml`，镜像由 CI 推到 GHCR，媒体依赖已打进镜像。
 
-- **Docker**：`Dockerfile` + `docker-compose.yml`，镜像由 CI 推到 GHCR。媒体依赖已打进镜像。
-- **systemd**：`deploy/` 下的三个单元，直接在宿主机跑 Node.js。需要自己保证 FFmpeg/python-lottie 在服务 PATH 中。
+也可以像本地开发一样直接在宿主机运行 `node src/cli.ts serve`。仓库不提供对应的服务单元；进程监督、FFmpeg/python-lottie 依赖和定期备份都需要自行准备。
 
 ## Docker 部署
 
@@ -177,7 +176,7 @@ node src/cli.ts backup --config dev-data/config.jsonc
 
 - builder 阶段 `pnpm install --frozen-lockfile` → `pnpm run admin:build` → 再以 `pnpm install --prod --frozen-lockfile` 剪掉 devDependencies。
 - runtime 阶段用 apt 装 `ffmpeg`（含 `ffprobe`）、`python3` 与 `gosu`，再 pip 装 `lottie`；因此**不需要**在宿主机准备任何媒体依赖。
-- 只复制 `src/`、`node_modules/`、`apps/admin-next/dist/`、`apps/admin-next/LICENSE`、`apps/admin-next/NOTICE` 和 `package.json`。`deploy/`、`test/`、`agent-doc/`、`dev-data/` 被 `.dockerignore` 排除，镜像里没有这些目录。
+- 只复制 `src/`、`node_modules/`、`apps/admin-next/dist/`、`apps/admin-next/LICENSE`、`apps/admin-next/NOTICE` 和 `package.json`。`test/`、`agent-doc/`、`dev-data/` 被 `.dockerignore` 排除，镜像里没有这些目录。
 - Admin 前端已经构建进 `/app/apps/admin-next/dist`，与 `static_dir` 默认值一致，无需额外配置。前端模板许可（MIT，© Kiranism）随 `LICENSE` 保留，字体（@fontsource，SIL OFL 1.1）说明在 `NOTICE`。
 - CI（`.github/workflows/docker.yml`）在构建镜像前先跑 `verify` job：`pnpm install --frozen-lockfile` → `pnpm run lint` → `pnpm run check` → `pnpm test` → `pnpm run admin:build` → `pnpm --filter plasticwan-admin-next exec playwright install --with-deps chromium` → `pnpm run admin:test:e2e`，通过后 `build` job 才推送 `linux/amd64` 与 `linux/arm64`。
 
@@ -229,40 +228,11 @@ docker compose run --rm plasticwan backup --config /config/config.jsonc
 
 注意：`serve` 是长期进程且受 `ServeLock` 约束，同一 `data_dir` 只能有一个实例。上面的一次性命令都不启动 `serve`，可以与运行中的容器共存；但**不要**用 `docker compose run` 再起一个 `serve`。
 
+镜像不自带定时备份。需要定期备份时，用宿主机 cron 等调度器定期执行上面的 `backup` 命令，例如每天一次。
+
 `admin.host` 不再限制回环。容器内绑定 `127.0.0.1` 时，Docker 的端口发布转发到容器在 bridge 网络上的地址、够不到 loopback，所以 `docker-compose.yml` 里的 `ports:` 默认是注释掉的；要在容器外直接访问面板，需把 `admin.host` 显式改为 `0.0.0.0` 再取消 `ports:` 注释——这会把面板暴露给宿主网络，TLS 与访问控制由运维承担。更稳妥的访问方式：
 
 - `docker compose exec plasticwan <客户端> http://127.0.0.1:8787/...`（镜像未显式安装 curl，先确认基础镜像里有没有）；
 - 让反向代理与容器共享网络命名空间（`network_mode: "service:plasticwan"`），由它承担 TLS 与对外暴露。
 
 配置变更同样不热重载，改完 `./config/config.jsonc` 后 `docker compose restart`，并比对新日志里的 `config_hash`。
-
-## systemd 部署
-
-仓库提供：
-
-- `deploy/plasticwan.service`
-- `deploy/plasticwan-backup.service`
-- `deploy/plasticwan-backup.timer`
-
-约定：
-
-| 路径 | 用途 |
-| --- | --- |
-| `/opt/plasticwan` | 只读应用工作目录 |
-| `/etc/plasticwan/config.jsonc` | `0600` 配置 |
-| `/var/lib/plasticwan` | SQLite、媒体和备份唯一写目录 |
-| `/usr/local/bin/node` | Node.js 可执行文件 |
-
-服务用户/组为 `plasticwan`。主服务 `Restart=on-failure`、`UMask=0077`，systemd sandbox 只开放 `/var/lib/plasticwan` 写权限。备份 timer 每天 UTC 00:00 运行并带 `Persistent=true`。Secret 通过 `Environment=` 注入；工作目录（`/opt/plasticwan`）下若存在 `.env` 也会被加载，但真实环境变量优先，见[配置：`.env` 加载](configuration.md#secretref)。
-
-部署前要保证 systemd 的服务 PATH 能找到 `ffmpeg`、`ffprobe`、`lottie_convert.py` 及其 Python。安装单元后验证：
-
-```bash
-systemctl daemon-reload
-systemctl enable --now plasticwan.service
-systemctl enable --now plasticwan-backup.timer
-systemctl status plasticwan.service
-systemctl list-timers plasticwan-backup.timer
-```
-
-修改配置后使用受控 restart，并确认新日志中的配置哈希。

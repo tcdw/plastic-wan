@@ -4,7 +4,6 @@ dev-data
 test
 test-tmp
 coverage
-deploy
 agent-doc
 node_modules
 apps/admin-next/node_modules

@@ -39,7 +39,6 @@ plasticwan/
 ├── test/                   # vitest 行为测试与 MCP fixture
 ├── scripts/                # 一次性维护脚本（直连 better-sqlite3，不属于业务层）
 ├── apps/admin-next/        # Vite + React + Tailwind + shadcn Admin Panel 前端（纯静态 SPA）
-├── deploy/                 # systemd service 与 backup timer
 ├── Dockerfile              # 两阶段镜像；媒体依赖打包在内
 ├── docker-compose.yml      # Docker 部署模板（/config 与 /data 两个卷）
 ├── agent-doc/              # 面向 agent 的按主题文档
@@ -81,7 +80,7 @@ Invocation 是运行窗口而不是一次问答：`agent.context.idle_grace_seco
 | Telegram 入库、Bucket、Context、发送与媒体流程 | [agent-doc/telegram-agent-flow.md](agent-doc/telegram-agent-flow.md) |
 | Conversation Context 生命周期、GC、热注入与引用 TTL | [agent-doc/telegram-agent-flow.md](agent-doc/telegram-agent-flow.md#context-生命周期) |
 | Skills、`read`/`execute` 原语与内部能力注册表 | [agent-doc/telegram-agent-flow.md](agent-doc/telegram-agent-flow.md) |
-| 本地运行、依赖、Docker/systemd 部署、诊断和故障处理 | [agent-doc/operations.md](agent-doc/operations.md) |
+| 本地运行、依赖、Docker 部署、诊断和故障处理 | [agent-doc/operations.md](agent-doc/operations.md) |
 | Admin Panel 认证、审计 API 与前端 | [agent-doc/admin-panel.md](agent-doc/admin-panel.md) |
 | 测试命令与真实验收矩阵 | [agent-doc/verification.md](agent-doc/verification.md) |
 | 审计某次 Invocation、排查 bot 为什么不回复 | [.agents/skills/plastic-wan-audit/SKILL.md](.agents/skills/plastic-wan-audit/SKILL.md)、[scripts/audit.ts](scripts/audit.ts) |
@@ -162,6 +161,6 @@ pnpm run admin:dev
 - 图片和 Reply 只能引用当前 Conversation Context 授权且未过期的 capability；引用按 Conversation 隔离，永不跨 Conversation 解析；禁止接受任意 file ID、Chat ID 或 Topic ID。
 - Secret 优先使用环境变量或受限 command SecretRef；错误输出必须经 `SecretStore.redact`。
 - MCP HTTP 禁止重定向和 URL 凭据；stdio 仅执行配置中的固定 argv。
-- 非 Windows 系统上，`serve` 与 `doctor` 都要求配置文件 `0600`、其父目录 `0700`；`data_dir` 不得授予 group/other 权限只由 `doctor` 检查（`serve` 仅在目录缺失时以 `0700` 创建）。systemd 单元使用 `UMask=0077` 与最小写路径。
+- 非 Windows 系统上，`serve` 与 `doctor` 都要求配置文件 `0600`、其父目录 `0700`；`data_dir` 不得授予 group/other 权限只由 `doctor` 检查（`serve` 仅在目录缺失时以 `0700` 创建）。
 - Admin Panel 密码只以 Argon2id hash 存储；Session Token 只存 SHA-256 摘要，Cookie 为 `HttpOnly` + `SameSite=Strict`。
 - Admin 审计 API 全部只读；写入只允许 [admin-panel.md](agent-doc/admin-panel.md#api) 白名单中的控制端点，且都校验 `Origin`。过滤参数经白名单校验并使用绑定参数，禁止拼接 SQL。

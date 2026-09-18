@@ -10,7 +10,7 @@ Plastic Wan 使用严格 JSONC 配置。Schema 位于 `src/platform/config.ts`�
 - 配置在 `serve` 启动时读取一次，不支持热重载。
 - 配置哈希是原始 JSONC 文本与所有 Prompt 文件内容的 SHA-256，写入 Invocation 并打印在 `serve_started` 日志中。
 - 修改 allowlist、Bucket 窗口、Provider、Prompt、Sticker Set 或 MCP 后必须重启。
-- 相对 `data_dir`/`paths` 按服务当前工作目录解释；systemd 固定在 `/opt/plasticwan`。
+- 相对 `data_dir`/`paths` 按服务当前工作目录解释；Docker 镜像的工作目录是 `/app`。
 - Prompt 文件路径（`system_prompt_file`、`instructions_file`）相对于配置文件所在目录解释；修改文件内容同样会改变 `config_hash`。
 - Prompt 文件按原始字节参与哈希：剔除 HTML 注释只影响进入模型上下文的文本，纯注释改动仍然改变 `config_hash`。
 - 非 Windows 系统要求配置文件 `0600`、父目录 `0700`。
@@ -48,7 +48,7 @@ command SecretRef：
 
 - 所有 CLI 子命令（`serve`/`check-config`/`doctor`/`backup`/`configure`）启动时用 dotenv 加载当前工作目录下的 `.env.local` 与 `.env`；文件缺失时静默跳过。
 - 只按 CWD 解析，不向上递归查找目录。
-- 优先级：真实环境变量 > `.env.local` > `.env`；systemd `Environment=`、compose `environment:`/`env_file:` 注入的值不会被覆盖。
+- 优先级：真实环境变量 > `.env.local` > `.env`；compose `environment:`/`env_file:` 等方式注入的值不会被覆盖。
 - 两份文件均已被 `.gitignore` 排除，用于本地开发便利；生产部署仍应使用环境注入。
 
 不要把真实 Token/API key 写进文档、测试、日志或提交。

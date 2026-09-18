@@ -165,7 +165,7 @@ node src/cli.ts backup --config dev-data/config.jsonc
 5. 原子 rename 为 `plasticwan-<timestamp>-<uuid>.sqlite`。
 6. 按修改时间保留 `retention.backup_copies` 份。
 
-systemd timer 每天 UTC 00:00 调用该命令。恢复或复制前应额外运行 `PRAGMA integrity_check`；当前备份命令不替代恢复演练。
+仓库不自带定时调度；定期备份由宿主机 cron 等外部调度运行，见[运维：Docker 部署](operations.md#docker-部署)。恢复或复制前应额外运行 `PRAGMA integrity_check`；当前备份命令不替代恢复演练。
 
 ## 本地路径
 

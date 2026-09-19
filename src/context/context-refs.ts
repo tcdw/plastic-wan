@@ -242,6 +242,8 @@ export function createCapabilityResolver(
       }
       return { conversationId, threadId };
     },
+    // Sticker refs are minted during a tool call, not during injection, so there
+    // is no batch seq to hang them off: they attach to the newest written row.
     registerStickerRef: (fileId) =>
       refs.stickerRef(header, fileId, header.nextSeq > header.headSeq ? header.nextSeq - 1n : header.headSeq, now()),
   };

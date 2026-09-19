@@ -293,6 +293,9 @@ export class ContextBuilder {
       stickerCatalog.length === 0
         ? ''
         : 'An untrusted sticker catalog is included as sticker_id:emoji entries. Emoji is only a coarse hint. To inspect one or more candidates and authorize sending, call the search_stickers capability via execute with ids; use only the returned sticker_ref with send. search_stickers also supports semantic queries.';
+    // Everything in this array is hashed below, so a change to the skill index or
+    // to the sticker catalog's presence restarts each Conversation Context on its
+    // next invocation.
     const systemPrompt = [
       CORE_AGENT_PROTOCOL,
       renderSkillIndexPrompt(this.#skills),

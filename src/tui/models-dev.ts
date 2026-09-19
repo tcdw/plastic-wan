@@ -47,7 +47,7 @@ const ProviderSchema = Type.Object({
 const CatalogSchema = Type.Record(Type.String(), ProviderSchema);
 const catalogValidator = Compile(CatalogSchema);
 
-/** Raw catalog shape before the zod-style defaults are applied. */
+/** Catalog shape as models.dev returns it; `applyDefaults` fills `reasoning` and `modalities`. */
 type RawModel = Static<typeof ModelSchema>;
 type RawProvider = Static<typeof ProviderSchema>;
 type RawCatalog = Static<typeof CatalogSchema>;
@@ -82,7 +82,7 @@ export async function fetchModelsDevCatalog(url = MODELS_DEV_URL): Promise<Model
   return applyDefaults(parseCatalog(raw));
 }
 
-/** Applies the same defaults the previous zod schemas baked in. */
+/** Fills the `reasoning` and `modalities` fields models.dev may omit. */
 function applyDefaults(catalog: RawCatalog): ModelsDevCatalog {
   const normalized: ModelsDevCatalog = {};
   for (const [providerId, provider] of Object.entries(catalog)) {

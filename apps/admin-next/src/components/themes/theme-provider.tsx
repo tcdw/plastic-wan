@@ -40,7 +40,7 @@ export function ThemeProvider({ children }: { readonly children: ReactNode }) {
     return 'system';
   });
 
-  const resolved = resolveTheme(mode);
+  const [resolved, setResolved] = useState<'light' | 'dark'>(() => resolveTheme(mode));
 
   const setMode = useCallback((next: ThemeMode) => {
     setModeState(next);
@@ -49,22 +49,29 @@ export function ThemeProvider({ children }: { readonly children: ReactNode }) {
     } catch {
       // localStorage unavailable
     }
-    applyThemeClass(resolveTheme(next));
+    const nextResolved = resolveTheme(next);
+    setResolved(nextResolved);
+    applyThemeClass(nextResolved);
   }, []);
 
-  // Keep class in sync when mode changes
+  // Keep the class in sync with `resolved`: it changes with the mode and, in
+  // "system" mode, with the OS scheme.
   useEffect(() => {
     applyThemeClass(resolved);
   }, [resolved]);
 
-  // Listen for system theme changes when in "system" mode
+  // Listen for system theme changes when in "system" mode. The context value has
+  // to follow, not just the DOM class: consumers such as the JSON viewer and
+  // Sonner read `resolved` and would otherwise keep the previous scheme.
   useEffect(() => {
     if (mode !== 'system') {
       return;
     }
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     const handler = () => {
-      applyThemeClass(mq.matches ? 'dark' : 'light');
+      const next = mq.matches ? 'dark' : 'light';
+      applyThemeClass(next);
+      setResolved(next);
     };
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);

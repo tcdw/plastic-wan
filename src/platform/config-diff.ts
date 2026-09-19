@@ -129,8 +129,14 @@ class ChangeRecorder {
   }
 }
 
+/**
+ * The models a candidate may not redefine: those in use now that the candidate
+ * keeps using. A model the agent is switching to is not in use yet, so editing
+ * it in the same change is hot.
+ */
 interface InUseModels {
-  readonly agent: { readonly provider: string; readonly model: string };
+  /** The active agent model, or `null` when the candidate points the agent elsewhere. */
+  readonly agent: { readonly provider: string; readonly model: string } | null;
   /** Vision stays on the active configuration: it is a restart-only field. */
   readonly vision: { readonly provider: string; readonly model: string };
 }
@@ -269,11 +275,12 @@ function mergeChat(
 
 function mergeProviders(active: ConfigSource, file: ConfigSource, recorder: ChangeRecorder): FileConfig['providers'] {
   const result: Record<string, ProviderFileConfig> = {};
+  const activeAgent = active.file.agent;
+  const keepsAgent =
+    candidateAgentProvider(active, file) === activeAgent.provider &&
+    candidateAgentModel(active, file) === activeAgent.model;
   const inUse: InUseModels = {
-    agent: {
-      provider: candidateAgentProvider(active, file),
-      model: candidateAgentModel(active, file),
-    },
+    agent: keepsAgent ? { provider: activeAgent.provider, model: activeAgent.model } : null,
     vision: { provider: active.file.vision.provider, model: active.file.vision.model },
   };
   for (const [alias, activeProvider] of Object.entries(active.file.providers)) {
@@ -337,7 +344,7 @@ function mergeModels(
       continue;
     }
     if (isInUse(inUse, alias, model.id)) {
-      // Editing a model the candidate still points at would change a live
+      // Editing a model that is in use and stays in use would change a live
       // model's definition; the candidate keeps the active one instead.
       recorder.add(path, 'restart');
       result.push(structuredClone(activeModel));
@@ -363,7 +370,7 @@ function mergeModels(
 
 function isInUse(inUse: InUseModels, alias: string, model: string): boolean {
   return (
-    (inUse.agent.provider === alias && inUse.agent.model === model) ||
+    (inUse.agent !== null && inUse.agent.provider === alias && inUse.agent.model === model) ||
     (inUse.vision.provider === alias && inUse.vision.model === model)
   );
 }

@@ -44,12 +44,13 @@ node src/cli.ts check-config --config dev-data/config.jsonc
 - 每次应用做两遍校验：先 `loadConfig` 校验文件本身（保证下次启动可用），再把文件的热字段与当前进程仍然生效的 restart 字段组合成 candidate，用 `validateSemantics` 校验 candidate（保证当前进程可用）。两遍都通过才发布。
 - candidate 的 restart 字段保留当前进程的值，热字段与 outside_serve 字段取文件的值。因此组合可能不合法：文件本身合法但与待重启字段冲突时返回 `candidate_invalid`，错误信息会列出待重启路径；文件仍然留在磁盘上，重启后与那些字段一起生效。
 - 待重启字段记录在 `ConfigReloader.status().restartRequired`；之后只改热字段再应用也不会清空它。
-- 在用模型保护：修改或删除运行中进程仍在使用的模型（agent 模型，或 `vision` 模型——`vision.*` 本身是 restart 字段）时，这一项按 restart 处理，candidate 沿用旧定义；只有 candidate 不再引用它（例如 agent 已切到别的模型且它不是 vision 模型）才按 hot 处理。
+- 在用模型保护：修改或删除运行中进程仍在使用的模型（agent 模型，或 `vision` 模型——`vision.*` 本身是 restart 字段）时，这一项按 restart 处理，candidate 沿用旧定义；只有 candidate 不再引用它（例如 agent 已切到别的模型且它不是 vision 模型）才按 hot 处理。agent 要切换过去的目标模型还没有在用，在同一次修改里改它的参数会随切换一起生效。
 - 自定义 Provider 的 `models[]` 热更新会按新定义重建 Provider 对象；`base_url`、`headers`、`api_key` 沿用启动时解析好的凭据，不重新解析 SecretRef。因此这类改动只影响模型列表，连接字段仍要重启。
 - 发布是原子的：Provider 替换与配置发布之间没有 `await`。已经开始的 Invocation 与运行中 attach 的 Bucket 继续用运行开始时冻结的快照，下一次 Invocation 才用新配置；`invocations.config_hash` 在 `queued → running` 时写入该快照的 active hash。
 - Prompt 变化（`agent.system_prompt_file` 或 `instructions_file`）改变稳定系统提示的哈希，该 Conversation 的 Context 在下一次运行时重建，见「Conversation Context」。
 - 每次成功应用输出 `config_reloaded` 日志事件，带 `generation`、`active_hash`、`file_hash`、`applied`、`restart_required`、`outside_serve`；失败输出 `config_reload_failed`（`code` 与脱敏后的 `error`），active 配置与文件哈希都不变，错误记录在 `ConfigReloader.status().lastError`。
-- 没有任何待重启字段时 `active_hash` 等于文件哈希，可以直接与 `check-config` 的输出比对；有待重启字段时它是 candidate 规范化序列化的 SHA-256。
+- `/model` 在写入文件之前就被拒绝时（模型不存在、不可用，或文件无法写入），没有发生 reload：只输出 `model_switch_failed` 日志并把错误返回给调用方，不改变 `lastError`。写入之后应用失败才按上一条处理。
+- 没有任何待重启字段时 `active_hash` 等于文件哈希，可以直接与 `check-config` 的输出比对。只改注释或格式、或者把待重启字段改回原值后应用，都会发布一次内容相同的配置，让 `active_hash` 跟上新的文件哈希。有待重启字段时，`active_hash` 是 candidate RawConfig 的 JSON 序列化的 SHA-256；只有 restart 字段变化时它保持不变。
 - 写入配置文件（`/model`）由 `src/platform/config-file.ts` 完成：只替换 JSONC 的值，保留注释与格式；先写同目录临时文件并完整校验，再 rename 覆盖，因此读者只会看到旧文件或完整合法的新文件。配置文件是符号链接时拒绝写入（`config_symlink`）。
 - 端点、状态码与响应体见 [admin-panel.md](admin-panel.md#api)。
 

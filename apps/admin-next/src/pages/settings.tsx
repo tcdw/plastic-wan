@@ -65,7 +65,8 @@ export default function SettingsPage(): React.ReactElement {
     },
     onError: async (error) => {
       // Show the real error next to the button, then refresh: a failed reload
-      // still moves the file hash and the recorded last error.
+      // keeps the active configuration and the file hash, but records the error
+      // as the last error.
       setApplyResult(null);
       setApplyFailure(errorMessage(error));
       await queryClient.invalidateQueries({ queryKey: configStatusQuery.queryKey });

@@ -141,18 +141,18 @@ export class ConfigReloader {
         selected = this.#modelSwitcher.option(provider, model);
       } catch (error) {
         if (error instanceof ModelSwitchError) {
-          return this.#failure(error.code, error.message, false);
+          return this.#rejected(error.code, error.message);
         }
         throw error;
       }
       const resolved = this.#models.getModel(selected.provider, selected.model);
       if (resolved === undefined) {
-        return this.#failure('model_unusable', `Model ${selected.provider}/${selected.model} is not registered`, false);
+        return this.#rejected('model_unusable', `Model ${selected.provider}/${selected.model} is not registered`);
       }
       try {
         this.#validateAgentModel(resolved);
       } catch (error) {
-        return this.#failure('model_unusable', messageOf(error), false);
+        return this.#rejected('model_unusable', messageOf(error));
       }
       try {
         await writeConfigEdits(this.#configPath, [
@@ -161,8 +161,8 @@ export class ConfigReloader {
         ]);
       } catch (error) {
         return error instanceof ConfigWriteError
-          ? this.#failure(error.code, error.message, false)
-          : this.#failure('config_write_failed', messageOf(error), false);
+          ? this.#rejected(error.code, error.message)
+          : this.#rejected('config_write_failed', messageOf(error));
       }
       const result = await this.#applyFile();
       return result.ok ? result : { ...result, fileWritten: true };
@@ -213,21 +213,30 @@ export class ConfigReloader {
     }
     const applied = pathsOf(diff.changes, 'hot');
     const outsideServe = pathsOf(diff.changes, 'outside_serve');
-    if (applied.length === 0 && outsideServe.length === 0) {
-      // Only restart-only fields changed: nothing to publish, but the file hash
-      // and the pending list still move.
+    const changed = applied.length > 0 || outsideServe.length > 0;
+    const currentHash = this.#store.current().hash;
+    // With nothing pending, the candidate is exactly the file, so its hash is the
+    // file hash and stays comparable with `check-config` output. With fields
+    // pending, a changed candidate matches no file version and gets a hash of its
+    // own, while an unchanged one keeps the identity it already has.
+    const activeHash =
+      restartRequired.length === 0
+        ? file.hash
+        : changed
+          ? createHash('sha256').update(JSON.stringify(diff.candidate.raw)).digest('hex')
+          : currentHash;
+    if (!changed && activeHash === currentHash) {
+      // Nothing to publish, but the file hash and the pending list still move.
       this.#fileHash = file.hash;
       this.#restartRequired = restartRequired;
       this.#lastError = null;
       this.#logReloaded(applied, restartRequired, outsideServe);
       return this.#applied(applied, restartRequired, outsideServe);
     }
-    // With nothing pending, the candidate is exactly the file, so the hash can
-    // stay comparable with `check-config` output.
-    const activeHash =
-      restartRequired.length === 0
-        ? file.hash
-        : createHash('sha256').update(JSON.stringify(diff.candidate.raw)).digest('hex');
+    // Reaching here without a changed field means only the hash moved: the active
+    // configuration now equals a different file version, e.g. after a pending
+    // field was reverted or only a comment was edited. Publishing the equal
+    // candidate adopts that identity.
     // Synchronous from here on: the provider swap and the publication must not be
     // separated by an await, or a run could start against a half-applied state.
     for (const entry of rebuilt.providers) {
@@ -289,6 +298,18 @@ export class ConfigReloader {
     return { ok: true, applied, restartRequired, outsideServe, status: this.status() };
   }
 
+  /**
+   * A model switch refused before the file was written. No reload ran, so the
+   * status keeps describing the last apply: the caller gets the error, and the
+   * log records it under its own event.
+   */
+  #rejected(code: ConfigErrorCode, message: string): ConfigApplyResult {
+    const redacted = this.#secrets.redact(message);
+    console.log(JSON.stringify({ event: 'model_switch_failed', code, error: redacted, at: new Date().toISOString() }));
+    return { ok: false, code, message: redacted, fileWritten: false, status: this.status() };
+  }
+
+  /** A failed apply: the active configuration stays, and the status records why. */
   #failure(code: ConfigErrorCode, message: string, fileWritten: boolean): ConfigApplyResult {
     const redacted = this.#secrets.redact(message);
     this.#lastError = { code, message: redacted, at: new Date().toISOString() };

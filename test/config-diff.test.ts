@@ -226,6 +226,35 @@ test('a model is hot once the agent points at another one', async () => {
   ]);
 });
 
+test('editing the model the agent switches to in the same change is hot', async () => {
+  // The target is not in use yet, so its new definition applies together with
+  // the switch instead of waiting for a restart.
+  const { active, file } = await loadBoth(
+    (config) => {
+      const provider = config.providers.agent;
+      if (provider?.kind !== 'custom') {
+        throw new Error('Expected a custom provider fixture');
+      }
+      provider.models = [provider.models[0]!, { ...provider.models[0]!, id: 'agent-model-2' }];
+    },
+    (config) => {
+      const provider = config.providers.agent;
+      if (provider?.kind !== 'custom') {
+        throw new Error('Expected a custom provider fixture');
+      }
+      provider.models[1]!.context_window = 100_000;
+      config.agent.model = 'agent-model-2';
+    },
+  );
+  const diff = diffConfig({ file: active.fileConfig, raw: active.config }, { file: file.fileConfig, raw: file.config });
+  expect(paths(diff.changes, 'hot')).toEqual(['agent.model', 'providers.agent.models[agent-model-2]']);
+  expect(paths(diff.changes, 'restart')).toEqual([]);
+  expect(customModels(diff.candidate.file, 'agent').map((model) => [model.id, model.context_window])).toEqual([
+    ['agent-model', 200_000],
+    ['agent-model-2', 100_000],
+  ]);
+});
+
 test('an agent pointing at a new provider waits for a restart', async () => {
   const { active, file } = await loadBoth(undefined, (config) => {
     config.providers.extra = {

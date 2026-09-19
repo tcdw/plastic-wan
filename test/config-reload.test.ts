@@ -508,6 +508,70 @@ test('applies hot fields while restart-only fields wait, and keeps waiting after
   }
 });
 
+test('reverting a pending restart field brings the active hash back to the file hash', async () => {
+  const fixture = await setup();
+  try {
+    await fixture.patch((config) => {
+      config.agent.thinking_level = 'high';
+      config.telegram.bucket_window_seconds = 30;
+    });
+    const pending = await fixture.reloader.reloadFromFile();
+    expect(pending.ok).toBe(true);
+    if (!pending.ok) {
+      throw new Error(pending.message);
+    }
+    expect(pending.status.activeHash).not.toBe(pending.status.fileHash);
+
+    // The active configuration already equals this file: only its identity moves.
+    await fixture.patch((config) => {
+      config.telegram.bucket_window_seconds = 15;
+    });
+    const reverted = await fixture.reloader.reloadFromFile();
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) {
+      throw new Error(reverted.message);
+    }
+    expect(reverted.applied).toEqual([]);
+    expect(reverted.restartRequired).toEqual([]);
+    expect(reverted.status.activeHash).toBe(reverted.status.fileHash);
+    expect(reverted.status.generation).toBe(3);
+    expect(fixture.configStore.current().config.agent.thinking_level).toBe('high');
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('a comment-only edit moves the active hash to the new file hash', async () => {
+  const fixture = await setup();
+  try {
+    await fixture.writeText(`// operator note\n${await fixture.readText()}`);
+    const result = await fixture.reloader.reloadFromFile();
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.message);
+    }
+    expect(result.applied).toEqual([]);
+    expect(result.status.fileHash).not.toBe(fixture.loaded.hash);
+    expect(result.status.activeHash).toBe(result.status.fileHash);
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('a model switch refused before writing leaves the apply status alone', async () => {
+  const fixture = await setup();
+  try {
+    const result = await fixture.reloader.setAgentModel('agent', 'ghost-model');
+    expect(result).toMatchObject({ ok: false, code: 'unknown_model', fileWritten: false });
+    // No reload ran, so the status keeps describing the last apply.
+    expect(fixture.reloader.status().lastError).toBeNull();
+    expect(logEvents('model_switch_failed').at(-1)).toMatchObject({ code: 'unknown_model' });
+    expect(logEvents('config_reload_failed')).toEqual([]);
+  } finally {
+    fixture.store.close();
+  }
+});
+
 test('treats a new chat as restart-only and an instructions edit as hot', async () => {
   const fixture = await setup();
   try {
@@ -1369,7 +1433,7 @@ test('an agent pointing at a brand new provider waits for a restart', async () =
   }
 });
 
-test('reports retention fields as outside serve without publishing', async () => {
+test('reports retention fields as outside serve, not as pending a restart', async () => {
   const fixture = await setup();
   try {
     await fixture.patch((config) => {

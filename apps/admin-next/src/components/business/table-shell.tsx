@@ -30,7 +30,6 @@ export interface TableShellProps<T> {
   readonly data: readonly T[];
   readonly rowKey: (row: T) => string;
   readonly expandedRender?: (row: T) => React.ReactNode;
-  /** Rows that may expand; defaults to all rows when expandedRender is set. */
   readonly isExpandable?: (row: T) => boolean;
   readonly emptyText?: React.ReactNode;
   readonly className?: string;

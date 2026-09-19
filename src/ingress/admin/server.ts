@@ -122,18 +122,18 @@ export class AdminServer {
       hostname: this.#admin.host,
       port: this.#admin.port,
       serverOptions: {
-        // Bun.serve's idleTimeout (seconds) mapped to the Node equivalents:
-        // idle header waiting and idle keep-alive sockets are cut at 30s,
-        // while slow but actively streaming responses are not interrupted.
+        // Idle header waiting and idle keep-alive sockets are cut at 30s, while
+        // slow but actively streaming responses are not interrupted.
         headersTimeout: 30_000,
         keepAliveTimeout: 30_000,
       },
     });
     this.#server = server;
     try {
-      // @hono/node-server binds asynchronously (Bun.serve was listening on
-      // return). The error listener surfaces bind failures such as EADDRINUSE
-      // instead of leaving only an unhandled 'error' event on stderr.
+      // @hono/node-server binds asynchronously, so wait for the event before
+      // treating the panel as listening. The error listener surfaces bind
+      // failures such as EADDRINUSE instead of leaving only an unhandled
+      // 'error' event on stderr.
       await new Promise<void>((resolve, reject) => {
         server.once('listening', resolve);
         server.once('error', reject);

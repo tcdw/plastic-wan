@@ -363,7 +363,6 @@ export interface ModelSwitchRequest {
   readonly model: string;
 }
 
-/** What a model switch or a config apply changed in the running process. */
 export interface ModelApplySummary {
   readonly applied: readonly string[];
   readonly restart_required: readonly string[];

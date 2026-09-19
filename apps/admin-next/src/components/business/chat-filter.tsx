@@ -31,7 +31,6 @@ export function ChatFilter({
   onChange,
   className,
 }: {
-  /** The applied Telegram chat ID (undefined = not filtered). */
   readonly value: string | undefined;
   readonly onChange: (value: string | undefined) => void;
   readonly className?: string;

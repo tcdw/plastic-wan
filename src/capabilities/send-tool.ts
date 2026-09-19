@@ -83,7 +83,6 @@ export interface SendToolEnvironment {
   readonly store: SqliteStore;
   readonly api: TelegramSendApi;
   readonly context: InvocationContext;
-  /** Context-scoped reference resolver for reply targets and sticker refs. */
   readonly capabilities: CapabilityRefResolver;
   /**
    * Sliding-window send rate limit, applied per Telegram chat: a long-lived

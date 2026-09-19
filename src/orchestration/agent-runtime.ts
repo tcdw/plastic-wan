@@ -1144,7 +1144,7 @@ export class AgentRuntime {
         .where(and(eq(modelCalls.id, callId), isNull(modelCalls.responseJson)))
         .run();
     } catch {
-      // Snapshotting is best-effort auditing; never break the model call itself.
+      // Same best-effort audit write as the request snapshot above.
     }
   }
 

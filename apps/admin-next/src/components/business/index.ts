@@ -1,10 +1,8 @@
 /**
- * Shared business component contract (M2). Pages import from this barrel:
- *
- *   import { CursorList, StateBadge, TableShell, ... } from '@/components/business';
- *
- * These components are intentionally free of page-specific business fields;
- * pages compose them with their own column specs and render functions.
+ * Shared business component contract: pages import the shared components from
+ * this barrel, and these components are intentionally free of page-specific
+ * business fields. Pages compose them with their own column specs and render
+ * functions.
  */
 export {
   CursorList,

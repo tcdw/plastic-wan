@@ -64,8 +64,7 @@ export async function serve(configPath: string): Promise<void> {
     // Unblock bot.start() so the finally block below runs the full cleanup.
     // grammY's stop() also fires a best-effort offset-confirming getUpdates;
     // swallow its rejection so it can never become an unhandled promise
-    // rejection and crash the process mid-shutdown (Bun exits non-zero on
-    // unhandled rejections).
+    // rejection and crash the process mid-shutdown.
     void bot?.stop().catch(() => undefined);
   };
   process.once('SIGTERM', shutdown);

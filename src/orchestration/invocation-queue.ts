@@ -399,8 +399,8 @@ export class InvocationQueueService {
   /**
    * Re-queues buckets that were attached mid-run but never injected, so a batch
    * that arrived while the model was working is not silently dropped. The
-   * opening bucket is excluded: it is the trigger of the run and follows the
-   * invocation's terminal state, exactly like before.
+   * opening bucket is excluded: it is the trigger of the run, so its state
+   * follows the invocation's terminal transition instead.
    */
   releaseUninjectedBuckets(invocationId: bigint, now: Date): void {
     const rows = this.#store.orm

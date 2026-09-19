@@ -93,7 +93,6 @@ import {
 export type Icon = React.ComponentType<IconProps>;
 
 export const Icons = {
-  // General
   alertCircle: IconAlertCircle,
   warning: IconAlertTriangle,
   arrowRight: IconArrowRight,
@@ -113,7 +112,6 @@ export const Icons = {
   settings: IconSettings,
   trash: IconTrash,
 
-  // Navigation / Chevrons
   chevronDown: IconChevronDown,
   chevronLeft: IconChevronLeft,
   chevronRight: IconChevronRight,
@@ -123,12 +121,10 @@ export const Icons = {
   chevronsRight: IconChevronsRight,
   chevronsUpDown: IconSelector,
 
-  // Layout
   dashboard: IconLayoutDashboard,
   kanban: IconLayoutKanban,
   panelLeft: IconLayoutSidebar,
 
-  // User
   user: IconUser,
   user2: IconUserCircle,
   account: IconUserCircle,
@@ -137,12 +133,10 @@ export const Icons = {
   userPen: IconUserEdit,
   teams: IconUsers,
 
-  // Brand
   github: IconBrandGithub,
   twitter: IconBrandTwitter,
   logo: IconCommand,
 
-  // Communication
   chat: IconMessage,
   notification: IconBell,
   phone: IconPhone,
@@ -150,7 +144,6 @@ export const Icons = {
   send: IconSend,
   paperclip: IconPaperclip,
 
-  // Files
   page: IconFile,
   post: IconFileText,
   fileTypePdf: IconFileTypePdf,
@@ -160,7 +153,6 @@ export const Icons = {
   media: IconPhoto,
   music: IconMusic,
 
-  // Actions
   add: IconPlus,
   edit: IconEdit,
   upload: IconUpload,
@@ -169,21 +161,18 @@ export const Icons = {
   logout: IconLogout,
   gripVertical: IconGripVertical,
 
-  // Shapes / Indicators
   circle: IconCircle,
   circleX: IconCircleX,
   plusCircle: IconCirclePlus,
   xCircle: IconCircleX,
   minus: IconMinus,
 
-  // Theme
   sun: IconSun,
   moon: IconMoon,
   brightness: IconBrightness,
   laptop: IconDeviceLaptop,
   palette: IconPalette,
 
-  // Commerce / Plans
   billing: IconCreditCard,
   creditCard: IconCreditCard,
   product: IconBox,
@@ -193,26 +182,22 @@ export const Icons = {
   badgeCheck: IconRosetteDiscountCheck,
   lock: IconLock,
 
-  // Data / Charts
   trendingDown: IconTrendingDown,
   trendingUp: IconTrendingUp,
   eyeOff: IconEyeOff,
   adjustments: IconAdjustmentsHorizontal,
 
-  // Text formatting
   bold: IconBold,
   italic: IconItalic,
   underline: IconUnderline,
   text: IconTypography,
 
-  // Toast
   toastSuccess: IconCircleCheck,
   toastInfo: IconInfoCircle,
   toastWarning: IconAlertTriangle,
   toastError: IconCircleX,
   toastLoading: IconLoader2,
 
-  // Misc
   pizza: IconPizza,
   workspace: IconFolder,
   forms: IconClipboardText,

@@ -19,12 +19,11 @@ export function daysToTtlSeconds(days: number | null | undefined): number | unde
   return days * DAY_SECONDS;
 }
 
-/** True when the TTL days value is an integer inside the backend's 1..1825 range. */
 export function isTtlDaysValid(days: number | null | undefined): boolean {
   return days !== null && days !== undefined && Number.isInteger(days) && days >= TTL_MIN_DAYS && days <= TTL_MAX_DAYS;
 }
 
-/** Human-readable TTL, matching the old panel: exact whole days, else hours, else raw seconds. */
+/** Human-readable TTL: whole days when exact, else rounded hours (>= 1h), else raw seconds. */
 export function formatTtl(seconds: number): string {
   if (seconds % DAY_SECONDS === 0) {
     return `${seconds / DAY_SECONDS} d`;

@@ -672,8 +672,8 @@ test('admin config accepts a non-loopback bind host', async () => {
       };
     }),
   );
-  // The loopback restriction was deliberately removed: the operator owns the bind
-  // address, so a non-loopback host must load for LAN/desktop deployments.
+  // The operator owns the bind address, so a non-loopback host must load for
+  // LAN/desktop deployments.
   await expect(loadConfig(configPath)).resolves.toMatchObject({
     config: { admin: { host: '0.0.0.0', port: 8899 } },
   });

@@ -13,9 +13,9 @@ import { formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 /**
- * Time-series chart panel for Overview / Usage (M4). A thin recharts wrapper:
- * one x-axis (`date`), one line per series, compact y-axis tick labels.
- * It does not invent totals or aggregate endpoints the API does not provide.
+ * Time-series chart panel for Overview / Usage. A thin recharts wrapper: one
+ * x-axis (`date`), one line per series, compact y-axis tick labels. It does not
+ * invent totals or aggregate endpoints the API does not provide.
  */
 
 export interface ChartSeries {

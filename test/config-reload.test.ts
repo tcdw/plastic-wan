@@ -140,7 +140,6 @@ interface Fixture {
   readonly scheduler: BucketScheduler;
   readonly sendApi: TelegramSendApi;
   readonly sends: string[];
-  /** The configuration the file currently holds. */
   file(): FileConfig;
   /** Rewrites the file from the current one with `transform` applied. */
   patch(transform: (config: FileConfig) => void): Promise<void>;

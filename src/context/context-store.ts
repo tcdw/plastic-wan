@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, gte, isNull, lt, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { SqliteStore } from '../store/database.ts';
 import { conversationContexts, contextMessages, contextRefs, invocations } from '../store/schema.ts';
@@ -289,18 +289,6 @@ export class ConversationContextStore {
     };
   }
 
-  /** Retention cleanup: drop soft-evicted rows and expired references. */
-  purge(now = new Date(), evictedBefore?: string): void {
-    const timestamp = now.toISOString();
-    this.#store.orm.delete(contextRefs).where(lt(contextRefs.expiresAt, timestamp)).run();
-    if (evictedBefore !== undefined) {
-      this.#store.orm
-        .delete(contextMessages)
-        .where(and(lt(contextMessages.evictedAt, evictedBefore)))
-        .run();
-    }
-  }
-
   #selectHeader(conversationId: bigint): ContextHeader | undefined {
     const row = this.#store.orm
       .select({
@@ -394,8 +382,8 @@ export function listConversationContexts(
 }
 
 /**
- * The invocation currently ownering a Conversation Context, if any. The attach
- * path uses this to find the run a due bucket should be injected into.
+ * The running invocation of a Conversation, if any. The attach path injects a
+ * due bucket into it; at most one can exist (one_running_invocation_per_conversation).
  */
 export function runningInvocationForConversation(store: SqliteStore, conversationId: bigint): bigint | undefined {
   const row = store.orm
@@ -406,21 +394,4 @@ export function runningInvocationForConversation(store: SqliteStore, conversatio
     .limit(1)
     .get();
   return row?.id;
-}
-
-/** Helper for callers that need the newest checkpoint above the current head. */
-export function retainedCheckpoints(store: SqliteStore, contextId: bigint, headSeq: bigint): bigint[] {
-  return store.orm
-    .select({ seq: contextMessages.seq })
-    .from(contextMessages)
-    .where(
-      and(
-        eq(contextMessages.contextId, contextId),
-        eq(contextMessages.isCheckpoint, true),
-        gt(contextMessages.seq, headSeq),
-      ),
-    )
-    .orderBy(contextMessages.seq)
-    .all()
-    .map((row) => row.seq);
 }

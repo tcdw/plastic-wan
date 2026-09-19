@@ -287,8 +287,8 @@ function describeOffset(source: string, offset: number): string {
 export async function loadConfig(path: string): Promise<LoadedConfig> {
   const configPath = resolve(path);
   const text = await readFile(configPath, 'utf8');
-  // Bun.JSONC.parse accepted a UTF-8 BOM; jsonc-parser records it as an invalid
-  // symbol, so strip it before parsing. The hash below still covers the raw text.
+  // jsonc-parser records a UTF-8 BOM as an invalid symbol, so strip it before
+  // parsing. The hash below still covers the raw text.
   const source = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   const parseErrors: ParseError[] = [];
   const parsed = parseJsonc(source, parseErrors, { allowTrailingComma: true }) as unknown;
@@ -397,8 +397,8 @@ async function readPromptFile(path: string, label: string, sink: PromptFile[]): 
   } catch (error) {
     throw new Error(`Cannot read ${label} file ${path}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  // Bun.file().text() silently stripped a UTF-8 BOM; keep that behaviour so
-  // prompts and their hashes stay identical across the runtime switch.
+  // A UTF-8 BOM must not reach the prompt text; the hash still covers the raw
+  // bytes.
   if (raw.charCodeAt(0) === 0xfeff) {
     raw = raw.slice(1);
   }

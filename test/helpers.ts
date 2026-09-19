@@ -134,7 +134,6 @@ export function renderInvocationContext(
   };
 }
 
-/** Reply refs registered for a context, resolved back into their targets. */
 function refsReplyTargets(
   store: SqliteStore,
   header: ContextHeader,
@@ -265,12 +264,12 @@ export async function pathExists(path: string): Promise<boolean> {
   );
 }
 
-/** Local loopback fixture server on a random port, replacing the former Bun.serve test fixtures. */
+/** Local loopback fixture server; port 0 lets the OS pick a free port. */
 export async function startFixtureServer(
   fetch: (request: Request) => Response | Promise<Response>,
 ): Promise<{ server: ServerType; port: number }> {
   const server = serve({ hostname: '127.0.0.1', port: 0, fetch });
-  // @hono/node-server binds asynchronously; Bun.serve was listening on return.
+  // @hono/node-server binds asynchronously, so wait for the listening event.
   await new Promise<void>((resolve, reject) => {
     server.once('listening', resolve);
     server.once('error', reject);

@@ -14,11 +14,8 @@ import { writeTestConfig, pathExists } from './helpers.ts';
 const directories: string[] = [];
 
 afterAll(async () => {
-  // The node:sqlite integrity probe keeps the Windows file handle alive on
-  // Bun until GC collects it, so cleanup may lose the race. A leaked temp
-  // directory is acceptable here; failing the suite over it is not. Node
-  // releases the handle on close, so this fallback is a no-op after the
-  // runtime switch.
+  // Cleanup must not fail the suite: on Windows an open SQLite handle can make
+  // `rm` lose the race, and a leaked temp directory is acceptable here.
   await Promise.all(
     directories.map((directory) =>
       rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }).catch(() => undefined),

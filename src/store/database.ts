@@ -7,7 +7,6 @@ import type { RawConfig } from '../platform/config.ts';
 import * as schema from './schema.ts';
 import { chatMigrations, chatPause, toolCalls } from './schema.ts';
 
-/** Typed query layer over the raw better-sqlite3 connection. */
 export type Orm = BetterSQLite3Database<typeof schema>;
 
 /**

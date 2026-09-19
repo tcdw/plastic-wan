@@ -7,10 +7,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cn } from '@/lib/utils';
 
 /**
- * Filter toolbar building blocks. Semantics match the previous panel per field
- * type: text filters are explicit (type → press Search / Enter, or the X to
- * clear the *applied* filter), select filters apply immediately on change.
- * Layout wraps automatically on narrow screens.
+ * Filter toolbar building blocks. Semantics per field type: text filters are
+ * explicit (type → press Search / Enter, or the X to clear the *applied*
+ * filter), select filters apply immediately on change. Layout wraps
+ * automatically on narrow screens.
  */
 
 export interface FilterOption {
@@ -29,7 +29,6 @@ export function FilterToolbar({
 }
 
 export interface TextFilterProps {
-  /** The currently applied filter (undefined = not filtered). */
   readonly value: string | undefined;
   readonly placeholder: string;
   /** Called with the trimmed draft when the user submits (Enter or search button). */

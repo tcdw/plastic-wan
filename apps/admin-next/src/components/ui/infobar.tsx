@@ -147,7 +147,6 @@ function InfobarProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setOpen is a stable React state setter
   }, [pathname, contentPathname, setOpen]);
 
-  // Update setContent to also track pathname
   const handleSetContent = React.useCallback(
     (newContent: InfobarContent | null) => {
       setContent(newContent);
@@ -160,7 +159,6 @@ function InfobarProvider({
   // This makes it easier to style the infobar with Tailwind classes.
   const state = open ? 'expanded' : 'collapsed';
 
-  // Update context to use handleSetContent instead of setContent
   const contextValue = React.useMemo<InfobarContextProps>(
     () => ({
       state,

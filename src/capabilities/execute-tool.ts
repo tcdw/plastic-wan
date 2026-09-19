@@ -30,7 +30,6 @@ const ExecuteInputSchema = Type.Union([
 export const EXECUTE_PRIMITIVES: ReadonlySet<string> = new Set(['read', 'send', 'execute', 'zzz']);
 const SIDE_EFFECTING_PRIMITIVES: ReadonlySet<string> = new Set(['send', 'zzz']);
 
-/** Optional structured extras a capability may attach to its AgentToolResult details. */
 export interface CapabilityToolDetails {
   readonly refs?: Readonly<Record<string, readonly string[]>>;
 }

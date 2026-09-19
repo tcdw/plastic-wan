@@ -144,8 +144,3 @@ export function isRenderable(messages: readonly AgentMessage[]): boolean {
   }
   return true;
 }
-
-/** Convenience for callers that only need the retained slice. */
-export function retainedMessages(messages: readonly AgentMessage[], retainedIndex: number): AgentMessage[] {
-  return messages.slice(retainedIndex);
-}

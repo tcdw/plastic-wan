@@ -30,8 +30,6 @@ import OverviewPage from '@/pages/overview';
 import SettingsPage from '@/pages/settings';
 import StickersPage from '@/pages/stickers';
 
-// --- Auth Gate ---
-
 const UNAUTHENTICATED_SESSION: SessionState = {
   setup_required: false,
   authenticated: false,
@@ -88,8 +86,6 @@ function AuthGate(): React.ReactNode {
   );
 }
 
-// --- Admin Shell ---
-
 function isSessionQueryKey(queryKey: readonly unknown[]): boolean {
   return queryKey[0] === sessionQuery.queryKey[0];
 }
@@ -138,8 +134,6 @@ function AdminShell({ username }: { readonly username: string }): React.ReactEle
     </>
   );
 }
-
-// --- Route Tree ---
 
 /**
  * Fallback for errors that escape into the router. API failures are handled

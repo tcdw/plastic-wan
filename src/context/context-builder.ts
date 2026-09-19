@@ -219,7 +219,6 @@ export class ContextBuilder {
     this.#skills = skills;
   }
 
-  /** Resolves the Conversation identity and alarm context of one invocation. */
   identity(config: RawConfig, invocationId: bigint): ContextIdentity {
     const identity = this.#store.db
       .prepare<[bigint], InvocationIdentityRow>(

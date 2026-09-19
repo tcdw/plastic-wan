@@ -3,9 +3,9 @@ import { stateColor } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 /**
- * State badge: maps the previous panel's color names onto semantic variants
- * for the new UI. The state → color table stays in `lib/format.ts`
- * (`stateColor`); this component only translates colors to Tailwind classes.
+ * State badge: maps the Ant Design color names emitted by `stateColor`
+ * (`lib/format.ts`) onto semantic variants. The state → color table stays in
+ * `lib/format.ts`; this component only translates colors to Tailwind classes.
  * Unknown states and unknown colors fall back to the neutral variant.
  */
 
@@ -33,7 +33,6 @@ const SEMANTIC_CLASSES: Record<BadgeSemantic, string> = {
   neutral: 'border-border bg-muted text-muted-foreground',
 };
 
-/** Semantic variant for a state string (unknown state → 'default' color → neutral). */
 export function stateBadgeSemantic(state: string): BadgeSemantic {
   return LEGACY_COLOR_TO_SEMANTIC[stateColor(state)] ?? 'neutral';
 }

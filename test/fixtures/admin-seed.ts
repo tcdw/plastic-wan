@@ -26,9 +26,9 @@ import {
 } from '../../src/store/schema.ts';
 
 /**
- * Synthetic admin-panel fixture data (backend only, no React). M2 verification
- * and the M5 E2E suite write this into a fresh SqliteStore so every list and
- * detail page has representative rows:
+ * Synthetic admin-panel fixture data (backend only, no React). The Playwright
+ * E2E server (`apps/admin-next/e2e/server.ts`) writes this into a fresh
+ * SqliteStore so every list and detail page has representative rows:
  *
  * - two invocations: one completed (with a `send` tool call + linked
  *   telegram_sends row, retained/new context messages, an oversized request
@@ -839,7 +839,7 @@ export function seedAdminFixture(store: SqliteStore): AdminSeedResult {
     })
     .run();
   // Seq 4 carries a payload above the admin API preview cap so the detail
-  // page's `payload_truncated` marker is exercised by the M3 verification.
+  // page's `payload_truncated` marker is exercised by test/admin.test.ts.
   orm
     .insert(contextMessages)
     .values({
@@ -912,7 +912,7 @@ export function seedAdminFixture(store: SqliteStore): AdminSeedResult {
 }
 
 /**
- * Bulk rows for the M5b Playwright E2E suite. Every cursor list needs more
+ * Bulk rows for the Playwright E2E suite. Every cursor list needs more
  * than `PAGE_SIZE` (25) rows so "Load more" appears and actually fetches the
  * next page against the real backend:
  *

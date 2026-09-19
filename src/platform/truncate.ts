@@ -5,7 +5,6 @@
  */
 export const TRUNCATION_MARKER = '\n[content truncated]';
 
-/** Truncates a UTF-8 string to at most maxBytes and appends marker when cut. */
 export function truncateUtf8(value: string, maxBytes: number, marker: string = TRUNCATION_MARKER): string {
   const encoded = new TextEncoder().encode(value);
   if (encoded.byteLength <= maxBytes) {

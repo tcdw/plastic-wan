@@ -5,11 +5,10 @@ import { errorMessage } from '@/lib/errors';
 import { Skeleton } from '@/components/ui/skeleton';
 
 /**
- * Shared detail-page state contract (M5a). The three detail pages
- * (invocation-detail, context-detail, message-detail) previously each carried
- * their own ~30-line copy of the loading skeleton and error state; this module
- * is the single place for those two states. The third state (data) stays with
- * each page, which renders its own fields once the query resolves.
+ * Shared detail-page state contract. The three detail pages
+ * (invocation-detail, context-detail, message-detail) share the loading
+ * skeleton and error state from here; the third state (data) stays with each
+ * page, which renders its own fields once the query resolves.
  *
  * The state machine each detail page keeps using is unchanged:
  *
@@ -30,13 +29,9 @@ export function DetailSkeleton(): React.ReactElement {
 
 export interface DetailErrorProps {
   readonly error: unknown;
-  /** Title shown when the API answered 404 (the record does not exist). */
   readonly notFoundTitle: string;
-  /** Title shown for every other failure (network, 5xx, missing data…). */
   readonly failedTitle: string;
-  /** List route the back link points to (e.g. "/invocations"). */
   readonly backTo: string;
-  /** Back link label (e.g. "Back to tool sessions"). */
   readonly backLabel: string;
 }
 

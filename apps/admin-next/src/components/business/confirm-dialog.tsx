@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/alert-dialog';
 
 /**
- * Confirmation dialog for destructive / control operations (M4). The dialog
+ * Confirmation dialog for destructive / control operations. The dialog
  * never auto-closes on confirm: the action button uses `onClick` with
  * `preventDefault()` so Radix AlertDialog's implicit close (Action renders a
  * `Dialog.Close`) is suppressed, the mutation runs, and the caller closes it

@@ -325,7 +325,7 @@ describe('alarm tool', () => {
     expect(tool.description).toContain('call delete_alarm directly');
     expect(tool.description).toContain('never expose internal alarm IDs');
 
-    // Regression for invocation 9542: `Invalid schema for function 'list_alarm':
+    // Regression: `Invalid schema for function 'list_alarm':
     // schema must be a JSON Schema of type object, got type null`.
     const schema = tool.parameters as unknown as Record<string, unknown>;
     expect(schema.type).toBe('object');

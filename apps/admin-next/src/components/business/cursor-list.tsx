@@ -35,7 +35,6 @@ export type CursorQueryOptions<T, TQueryKey extends QueryKey = QueryKey> = Undef
 
 export type CursorQueryFactory<T> = (filters: ListFilters) => CursorQueryOptions<T>;
 
-/** Flattens the items of an infinite-query page collection into a plain list. */
 export function flatPages<T>(
   data: { readonly pages: ReadonlyArray<{ readonly items: readonly T[] }> } | undefined,
 ): T[] {

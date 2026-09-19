@@ -187,7 +187,6 @@ export class SystemResources {
     return { uri: `${SYSTEM_URI_PREFIX}${stack.join('/')}`, segments: stack };
   }
 
-  /** Reads one markdown document, bounded to SYSTEM_RESOURCE_MAX_BYTES. */
   async readText(reference: string, base?: string): Promise<SystemResourceText> {
     if (this.#root === null) {
       throw new SystemResourceError('resource_not_found', 'No system resources are available');

@@ -30,7 +30,6 @@ const TgsMetadataSchema = Type.Object({ ip: Type.Number(), op: Type.Number() }, 
 export const stickerTelegramValidator = Compile(StickerTelegramSchema);
 const tgsMetadataValidator = Compile(TgsMetadataSchema);
 
-/** Media row shape shared by the vision service and the image pipeline. */
 export interface MediaRow {
   readonly id: bigint;
   readonly kind: string;

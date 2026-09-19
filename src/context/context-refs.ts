@@ -1,4 +1,4 @@
-import { and, eq, gt, lt, sql } from 'drizzle-orm';
+import { and, eq, gt, sql } from 'drizzle-orm';
 import type { SqliteStore } from '../store/database.ts';
 import { contextRefs } from '../store/schema.ts';
 import type { CapabilityRefResolver } from '../platform/invocation-context.ts';
@@ -168,11 +168,6 @@ export class ContextRefStore {
       targetConversationId: row.targetConversationId,
       targetThreadId: row.targetThreadId,
     };
-  }
-
-  /** Drops expired references; called from retention cleanup and GC. */
-  purge(now = new Date()): void {
-    this.#store.orm.delete(contextRefs).where(lt(contextRefs.expiresAt, now.toISOString())).run();
   }
 
   count(header: ContextHeader): number {

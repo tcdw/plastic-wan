@@ -2,10 +2,6 @@ import * as React from 'react';
 
 type PossibleRef<T> = React.Ref<T> | undefined;
 
-/**
- * Set a given ref to a given value
- * This utility takes care of different types of refs: callback refs and RefObject(s)
- */
 function setRef<T>(ref: PossibleRef<T>, value: T) {
   if (typeof ref === 'function') {
     return ref(value);
@@ -16,10 +12,6 @@ function setRef<T>(ref: PossibleRef<T>, value: T) {
   }
 }
 
-/**
- * A utility to compose multiple refs together
- * Accepts callback refs and RefObject(s)
- */
 function composeRefs<T>(...refs: PossibleRef<T>[]): React.RefCallback<T> {
   return (node) => {
     let hasCleanup = false;
@@ -54,10 +46,6 @@ function composeRefs<T>(...refs: PossibleRef<T>[]): React.RefCallback<T> {
   };
 }
 
-/**
- * A custom hook that composes multiple refs
- * Accepts callback refs and RefObject(s)
- */
 function useComposedRefs<T>(...refs: PossibleRef<T>[]): React.RefCallback<T> {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: memoize by all ref values
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — memoize by all ref values (Radix utility)

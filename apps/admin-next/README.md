@@ -67,12 +67,12 @@ SQLite + `test/fixtures/admin-seed.ts` 合成数据 + 真实 `AdminServer`
 
 ## 共享业务组件契约
 
-M3/M4 页面必须复用 `src/components/business/` 下的公共层，不要复制各自的
+页面必须复用 `src/components/business/` 下的公共层，不要复制各自的
 加载/错误/空态实现，也不要发明跳页或全量排序。统一从 barrel 导入：
 
 ```ts
 import {
-  ChartCard, ConfirmDialog, CursorList, FilterToolbar, JsonViewer, KvList,
+  ChartPanel, ConfirmDialog, CursorList, FilterToolbar, JsonViewer, KvList,
   LazyDetails, MonoValue, PrivateReasoningNote, PrivateReasoningTag,
   SelectFilter, StateBadge, TableShell, TextValue, TimeSeriesChart, flatPages,
   type ColumnSpec, type CursorQueryFactory, type CursorQueryOptions,
@@ -139,12 +139,12 @@ import {
 ### 二次确认弹窗 `confirm-dialog.tsx`
 
 - `ConfirmDialog({ open, onOpenChange, title, description?, confirmText,
-  cancelText?, destructive?, pending, error, onConfirm })`，供 M4 的破坏性/
-  控制操作使用。
+  cancelText?, destructive?, pending, error, onConfirm })`，供破坏性/控制
+  操作使用。
 - **确认按钮必须用 `onClick`（内部会 `preventDefault()`）**：Radix 的
   `AlertDialogAction` 按 `Dialog.Close` 语义渲染，点击默认关闭弹窗；
   `onSelect` 是 Select/DropdownMenu 的 API，AlertDialog Action 不消费它——
-  挂 `onSelect` 会导致点击只关弹窗、`onConfirm` 永不执行（M4 踩过的坑）。
+  挂 `onSelect` 会导致点击只关弹窗、`onConfirm` 永不执行。
   `preventDefault()` 抑制 Radix 隐式关闭，让 mutation 真正跑起来。
 - **弹窗不自动关闭契约**：确认后由调用方在 mutation 成功/取消时设置
   `open=false`；`pending` 期间两个按钮禁用防重复提交，失败时弹窗保持打开
@@ -167,9 +167,9 @@ import {
 
 ### 图表卡片 `chart-card.tsx`
 
-- `ChartCard({ title, description?, children })` + `TimeSeriesChart({ data,
-  series, height? })`：基于 recharts 的时间序列折线封装，M4 的
-  Overview/Usage 使用。`ChartSeries = { dataKey, label, color }`，
+- `ChartPanel({ title, children, className? })` + `TimeSeriesChart({ data,
+  series, height? })`：基于 recharts 的时间序列折线封装，Overview/Usage
+  使用。`ChartSeries = { dataKey, label, color }`，
   `ChartDatum` 的 `date` 字段作 x 轴。只画 API 真实返回的序列，不合成指标。
 
 ### 私有推理标记 `private-reasoning.tsx`

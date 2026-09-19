@@ -70,8 +70,6 @@ function TabContent({
   return <>{children}</>;
 }
 
-// --- Small shared renderers -------------------------------------------------
-
 const ROLE_BADGE_TONES: Record<string, BadgeSemantic> = {
   assistant: 'warning',
   tool_result: 'info',
@@ -89,8 +87,6 @@ function SectionBadge({ section }: { readonly section: string }): React.ReactEle
 function YesNoBadge({ value }: { readonly value: boolean }): React.ReactElement {
   return value ? <ToneBadge tone="warning">yes</ToneBadge> : <ToneBadge tone="neutral">no</ToneBadge>;
 }
-
-// --- Header card + tool registry --------------------------------------------
 
 function ToolRegistryTable({ registry }: { readonly registry: readonly ToolRegistryEntry[] }): React.ReactElement {
   const columns: readonly ColumnSpec<ToolRegistryEntry>[] = [
@@ -159,8 +155,6 @@ function DetailHeader({ invocation }: { readonly invocation: InvocationDetail })
     </Card>
   );
 }
-
-// --- Overview timeline --------------------------------------------------------
 
 function TimelineCard({
   header,
@@ -454,8 +448,6 @@ function OverviewTab({ invocation }: { readonly invocation: InvocationDetail }):
   );
 }
 
-// --- Tabs ---------------------------------------------------------------------
-
 const TOOL_CALL_COLUMNS: readonly ColumnSpec<ToolCallEntry>[] = [
   {
     key: 'tool',
@@ -681,8 +673,6 @@ function FrozenContextTab({ invocation }: { readonly invocation: InvocationDetai
     </TabContent>
   );
 }
-
-// --- Page -----------------------------------------------------------------------
 
 export function InvocationDetailView({ id }: { readonly id: string }): React.ReactElement {
   const { data, isPending, isError, error } = useQuery(invocationQuery(id));

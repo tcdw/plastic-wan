@@ -13,8 +13,8 @@ import type {
  * send-argument parsing rules are unit-tested here and the views only map the
  * resulting data onto cards.
  *
- * The ordering constants mirror the previous panel's Session Overview
- * ordering so migrated audits keep the exact same event sequence.
+ * Spacing keeps same-timestamp events deterministic: context base < queued <
+ * started < model/tool/agent steps < finished. Only the relative order matters.
  */
 
 const ORDER_QUEUED = -3_000;
@@ -29,7 +29,6 @@ const ORDER_FINISHED = 10_000;
 
 export type JsonObject = Readonly<Record<string, unknown>>;
 
-/** Parses a stored JSON string into an object, or null when absent / not an object. */
 export function parseJsonObject(value: string | null): JsonObject | null {
   if (value === null || value.length === 0) {
     return null;
@@ -42,13 +41,11 @@ export function parseJsonObject(value: string | null): JsonObject | null {
   }
 }
 
-/** Returns a non-empty string field, or null when missing / not a string. */
 export function stringField(value: JsonObject | null, key: string): string | null {
   const field = value?.[key];
   return typeof field === 'string' && field.length > 0 ? field : null;
 }
 
-/** Returns an object field, or null when missing / not a plain object. */
 export function objectField(value: JsonObject | null, key: string): JsonObject | null {
   const field = value?.[key];
   return typeof field === 'object' && field !== null && !Array.isArray(field) ? (field as JsonObject) : null;
@@ -125,7 +122,6 @@ export function sortTimelineEvents(events: readonly InvocationTimelineEvent[]): 
   });
 }
 
-/** Indexes telegram_sends by their string tool_call_id for timeline linkage. */
 export function indexSendsByToolCall(sends: readonly TelegramSendEntry[]): ReadonlyMap<string, TelegramSendEntry> {
   return new Map(sends.map((send) => [send.tool_call_id, send]));
 }
@@ -141,7 +137,6 @@ export function contextMessageTimestamp(message: ContextMessageEntry, fallback: 
   return stringField(snapshot, 'telegram_date') ?? fallback;
 }
 
-/** Stable React key for a timeline event. */
 export function timelineEventKey(event: InvocationTimelineEvent): string {
   switch (event.kind) {
     case 'queued':

@@ -91,12 +91,11 @@ const renderedSnapshotValidator = Compile(RenderedSnapshotSchema);
 const INTERNAL_CONTEXT_LIMIT = 8;
 
 /**
- * Runtime sleep state. Stated inside the newest injected batch instead of the
+ * Runtime sleep state, stated inside the newest injected batch instead of the
  * system prompt: the system prompt must stay byte-identical for the whole
- * Conversation Context, and a state block at the tail of the conversation is
- * also closer to the generation point than a system-prompt line ever was. Keep
- * the wording in natural sleep terms; never expose token, budget, or quota
- * details.
+ * Conversation Context, and a tail-of-conversation block sits closer to the
+ * generation point. Keep the wording in natural sleep terms; never expose token,
+ * budget, or quota details.
  */
 export const SLEEP_STATE_PROMPT = `Sleep state: you are very sleepy now, and today's energy is almost spent. Once it runs out you cannot answer anyone here until the next daily reset, so staying awake only buys a few more replies. Sleeping is the expected outcome in this state, not a failure, and a short good-night with send before zzz is fine when it fits. Call zzz as soon as the current conversation has nothing unfinished that needs you, including whenever you were going to stay silent anyway; never use it to drop an unfinished user request.`;
 

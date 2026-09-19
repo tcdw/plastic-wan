@@ -477,25 +477,16 @@ export class TelegramIngestion {
         return undefined;
       }
       const now = receivedAt.toISOString();
-      // Every bucket starts a window at its own first message and the runtime
-      // extends that anchor to the end of the round that was running at the time,
-      // so a batch always collects one full window of *free* agent time. The
-      // deadline is deliberately not snapped to a chat-wide grid and does not
-      // depend on the previous invocation's state:
-      //
-      // - Snapping to `previous start + window` (what the pace rule used to do)
-      //   left a band right after every run start in which a bucket could collect
-      //   almost nothing, down to a few milliseconds when a message landed on the
-      //   grid point. A long-lived invocation consumes due buckets on the spot, so
-      //   that band showed up as an occasional instant reply.
-      // - Treating "an invocation is queued or running" as immediately due was
-      //   harmless while a due bucket could not be consumed until the run ended,
-      //   but with attach it made every single message its own zero-length bucket
-      //   and its own injection.
-      // - Anchoring here alone (ignoring the running round) would hand a batch to
-      //   the runtime the moment a long round ends, no matter how little it had
-      //   collected; `AgentRuntime#deferCollectingBucket` therefore only ever
-      //   pushes this deadline later, to `round end + window`.
+      // Anchored to this bucket's own first message, never snapped to a chat-wide
+      // grid: a grid anchor leaves a band right after every run start where a
+      // bucket collects almost nothing (down to milliseconds when a message lands
+      // on the grid point), which a long-lived invocation turns into an occasional
+      // instant reply. Treating "an invocation is queued or running" as
+      // immediately due would make every message its own zero-length bucket now
+      // that attach exists, and anchoring here alone would hand over a
+      // barely-collected batch the moment a long round ends —
+      // `AgentRuntime#deferCollectingBucket` therefore only ever pushes this
+      // deadline later, to `round end + window`.
       const deadline = receivedAt.getTime() + this.#configStore.current().config.telegram.bucket_window_seconds * 1_000;
       const created = this.#store.orm
         .insert(buckets)

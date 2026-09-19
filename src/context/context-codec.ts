@@ -7,25 +7,18 @@ import Compile from 'typebox/compile';
  * Codec between the Pi `AgentMessage` union and the `context_messages`
  * `payload_json` column.
  *
- * The canonical history must replay exactly, so tool call IDs, arguments,
- * thinking signatures, and model identity are all preserved. Two things are
- * deliberately dropped:
+ * The canonical history must replay exactly (tool call IDs, arguments, thinking
+ * signatures, model identity), so one row that will not decode makes the whole
+ * retained window it belongs to unseedable and every later invocation of that
+ * conversation fails before its first model call. Encode and decode therefore
+ * agree for every message a provider can produce: structures copied verbatim
+ * from the provider (`usage`) validate tolerantly, structures projected field by
+ * field (`content` blocks, the message envelope) stay strict, where extra keys
+ * really do mean corruption.
  *
- * - Inline image blocks. Attachments belong to the batch that introduced them;
- *   replaying base64 payloads on every later request would both blow up the
- *   context and contradict "history images are only read on demand". The
- *   message JSON keeps its `img_` / `figure_N` references, so nothing points at
- *   a block that no longer exists.
- * - Run-scoped handles (`deferred`, `diagnostics`), which are not serializable
- *   and are meaningless for a replayed transcript.
- *
- * Encode and decode have to agree for every message the provider can produce,
- * because a row that will not decode is not just a bad row: the whole retained
- * window it belongs to becomes unseedable, and every later invocation of that
- * conversation fails before its first model call. Structures the encoder copies
- * verbatim from the provider (currently `usage`) therefore validate tolerantly;
- * structures the encoder projects field by field (`content` blocks, the message
- * envelope) stay strict, where extra keys really do mean corruption.
+ * Two things are deliberately dropped: inline image blocks — attachments belong
+ * to the batch that introduced them, and the JSON keeps the `img_` / `figure_N`
+ * references instead — and run-scoped handles (`deferred`, `diagnostics`).
  */
 
 const Strict = { additionalProperties: false } as const;

@@ -32,16 +32,11 @@ export interface ParsedCommand {
  *
  * Telegram sets `message_thread_id` on more than forum topics: a private chat
  * with thread mode enabled carries one on its messages, and so does a reply
- * inside a plain supergroup (the id of the thread's root message). Ingestion
- * has always ignored every one of those and filed the message under thread 0,
- * so this rule is the only one that agrees with `conversations`.
- *
- * `parseBotCommand` used the raw field instead. `/cut_topic` carrying any such
- * id therefore looked for a Conversation with a thread id that ingestion never
- * wrote, found nothing, and cleared no Context — while still writing the
- * per-Chat cutoff and replying that the Context was cleared. That is the exact
- * failure the cut is supposed to prevent: the rendered history is truncated and
- * the model keeps the whole transcript.
+ * inside a plain supergroup. Ingestion files all of those under thread 0, so this
+ * rule is the only one that agrees with `conversations`; reading the raw field
+ * instead (as `parseBotCommand` once did) makes `/cut_topic` look for a
+ * Conversation that was never written, clear no Context, and still reply that it
+ * did — the exact failure the cut exists to prevent.
  */
 export function conversationThreadId(message: Message | undefined): bigint {
   return message?.chat.type === 'supergroup' &&

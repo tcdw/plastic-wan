@@ -2,16 +2,12 @@ import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { ContextWindowRow } from './context-store.ts';
 
 /**
- * Discard-only Context GC.
- *
- * Retention is expressed as "how many `send` calls should stay visible":
- * checkpoints mark the start of an injected batch, and collection jumps to an
- * older checkpoint so one GC crosses several sends instead of trimming message
- * by message — the sliding-window shape the design asks for. Nothing is ever
- * summarized; dropped history is simply gone.
- *
- * A token ratio is the safety valve for transcripts that grow without many
- * sends (long tool chains).
+ * Discard-only Context GC. Retention is expressed as "how many `send` calls stay
+ * visible": collection jumps to an older checkpoint — the start of an injected
+ * batch — so one GC crosses several sends instead of trimming message by
+ * message. Nothing is ever summarized; dropped history is simply gone. The token
+ * ratio is the safety valve for transcripts that grow without many sends (long
+ * tool chains).
  */
 
 export type { ContextWindowRow } from './context-store.ts';

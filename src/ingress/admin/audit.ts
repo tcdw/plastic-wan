@@ -1041,8 +1041,8 @@ export function usage(orm: Orm, days: number, now = new Date()): UsageSeries {
   for (const row of tokenRows) {
     apply(row.utc_date, row.metric === 'vision_tokens' ? 'vision_tokens' : 'model_tokens', row.total);
   }
-  // Invocation and tool-call counts come straight from the audit tables: there
-  // is no daily reservation counter to read them off any more.
+  // Counted from the audit tables: daily_usage only records budget metrics
+  // (tokens, images), so it cannot be the source for these counts.
   const invocationRows = orm.all<{ utc_date: string; total: bigint }>(
     sql`SELECT substr(created_at, 1, 10) AS utc_date, COUNT(*) AS total
        FROM invocations

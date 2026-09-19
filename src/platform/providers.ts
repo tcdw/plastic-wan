@@ -4,6 +4,7 @@ import {
   createProvider,
   type Model,
   type Models,
+  type MutableModels,
   type Provider,
   type ProviderAuth,
   type ProviderStreams,
@@ -15,6 +16,8 @@ import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import type { RawConfig } from './config.ts';
 import type { SecretStore } from './secrets.ts';
 
+export type CustomProviderConfig = Extract<RawConfig['providers'][string], { kind: 'custom' }>;
+
 const CUSTOM_ADAPTERS: Record<string, () => ProviderStreams> = {
   'openai-responses': openAIResponsesApi,
   'openai-completions': openAICompletionsApi,
@@ -22,8 +25,8 @@ const CUSTOM_ADAPTERS: Record<string, () => ProviderStreams> = {
 };
 
 export interface ModelRegistry {
-  readonly models: Models;
-  readonly agentModel: Model<Api>;
+  /** Shared, mutable registry: a reload replaces a custom provider in place. */
+  readonly models: MutableModels;
   readonly visionModel: Model<Api>;
 }
 
@@ -57,35 +60,69 @@ export async function createModelRegistry(config: RawConfig, secrets: SecretStor
         headers,
         auth: fixedAuth(alias, apiKey),
         api: adapter(),
-        models: configured.models.map((model) => ({
-          id: model.id,
-          name: model.name ?? model.id,
-          api: configured.api,
-          provider: alias,
-          baseUrl,
-          reasoning: model.reasoning,
-          ...(model.compat === undefined
-            ? {}
-            : { compat: { supportsDeveloperRole: model.compat.supports_developer_role } }),
-          input: [...model.input],
-          contextWindow: model.context_window,
-          maxTokens: model.max_tokens,
-          cost: {
-            input: model.cost.input,
-            output: model.cost.output,
-            cacheRead: model.cost.cache_read,
-            cacheWrite: model.cost.cache_write,
-          },
-        })),
+        models: customProviderModels(alias, baseUrl, configured),
       }),
     );
   }
-  const agentModel = requireModel(models, config.agent.provider, config.agent.model, ['text']);
   const visionModel = requireModel(models, config.vision.provider, config.vision.model, ['image']);
   if (config.vision.max_output_tokens > visionModel.maxTokens) {
     throw new Error('Vision max_output_tokens exceeds registered model limit');
   }
-  return { models, agentModel, visionModel };
+  return { models, visionModel };
+}
+
+/**
+ * Rebuilds one custom provider from a new model list, reusing the connection
+ * fields the registry resolved at startup.
+ *
+ * Credentials are never re-resolved: a `command` SecretRef runs a process, and a
+ * reload must not have that side effect. `createProvider` stores `baseUrl`,
+ * `headers` and `auth` on the provider object as given, so the ones already
+ * there are the resolved ones. The `api` adapter comes from the configuration,
+ * which is a restart-only field and therefore identical to the startup value.
+ */
+export function rebuildCustomProvider(models: Models, alias: string, configured: CustomProviderConfig): Provider {
+  const existing = models.getProvider(alias);
+  if (existing === undefined) {
+    throw new Error(`Provider ${alias} is not registered`);
+  }
+  if (existing.baseUrl === undefined) {
+    throw new Error(`Provider ${alias} has no base URL to preserve`);
+  }
+  const adapter = CUSTOM_ADAPTERS[configured.api];
+  if (adapter === undefined) {
+    throw new Error(`Unsupported custom API adapter: ${configured.api}`);
+  }
+  return createProvider({
+    id: alias,
+    name: alias,
+    baseUrl: existing.baseUrl,
+    headers: existing.headers ?? {},
+    auth: existing.auth,
+    api: adapter(),
+    models: customProviderModels(alias, existing.baseUrl, configured),
+  });
+}
+
+function customProviderModels(alias: string, baseUrl: string, configured: CustomProviderConfig): Model<Api>[] {
+  return configured.models.map((model) => ({
+    id: model.id,
+    name: model.name ?? model.id,
+    api: configured.api,
+    provider: alias,
+    baseUrl,
+    reasoning: model.reasoning,
+    ...(model.compat === undefined ? {} : { compat: { supportsDeveloperRole: model.compat.supports_developer_role } }),
+    input: [...model.input],
+    contextWindow: model.context_window,
+    maxTokens: model.max_tokens,
+    cost: {
+      input: model.cost.input,
+      output: model.cost.output,
+      cacheRead: model.cost.cache_read,
+      cacheWrite: model.cost.cache_write,
+    },
+  }));
 }
 
 function aliasBuiltinProvider(alias: string, source: Provider, auth: ProviderAuth): Provider {
@@ -126,7 +163,7 @@ function fixedAuth(alias: string, apiKey: string): ProviderAuth {
   };
 }
 
-function requireModel(
+export function requireModel(
   models: Models,
   provider: string,
   modelId: string,

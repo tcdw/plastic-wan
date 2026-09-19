@@ -9,7 +9,6 @@ import { ConversationRuntime } from '../src/orchestration/conversation-runtime.t
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { loadConfig, type FileConfig, type RawConfig } from '../src/platform/config.ts';
 import { previewContext } from '../src/platform/invocation-context.ts';
-import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import type { ModelRegistry } from '../src/platform/providers.ts';
 import { RuntimeConfigurationStore, type InvocationConfigSnapshot } from '../src/platform/runtime-config.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
@@ -55,10 +54,7 @@ interface Fixture {
   readonly ingestion: TelegramIngestion;
   readonly scheduler: BucketScheduler;
   readonly sends: string[];
-  runtimeWith(
-    faux: ReturnType<typeof fauxProvider>,
-    config?: RawConfig,
-  ): { readonly runtime: AgentRuntime; readonly modelSwitcher: AgentModelSwitcher };
+  runtimeWith(faux: ReturnType<typeof fauxProvider>, config?: RawConfig): { readonly runtime: AgentRuntime };
 }
 
 async function setup(): Promise<Fixture> {
@@ -98,18 +94,14 @@ async function setup(): Promise<Fixture> {
     runtimeWith: (faux, config = loaded.config) => {
       const models = createModels();
       models.setProvider(faux.provider);
-      const model = faux.getModel();
-      const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+      const registry: ModelRegistry = { models, visionModel: faux.getModel() };
       const runtimeStore = new RuntimeConfigurationStore({ config, hash: 'runtime' });
-      const modelSwitcher = new AgentModelSwitcher(runtimeStore, registry.models);
       return {
-        modelSwitcher,
         runtime: new AgentRuntime({
           store,
           configStore: runtimeStore,
           secrets: new SecretStore(),
           registry,
-          modelSwitcher,
           telegramApi: sendApi,
           bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
           systemResources: SystemResources.empty(),
@@ -329,7 +321,7 @@ describe('configuration snapshots', () => {
     }
   }, 30_000);
 
-  test('validateAdditionalTools uses the model currently in use', async () => {
+  test('validateAdditionalTools validates against the model it is given', async () => {
     const fixture = await setup();
     const faux = fauxProvider({
       provider: 'agent',
@@ -338,11 +330,17 @@ describe('configuration snapshots', () => {
         { id: 'small-model', input: ['text'], contextWindow: 1_000, maxTokens: 512 },
       ],
     });
-    const { runtime, modelSwitcher } = fixture.runtimeWith(faux);
+    const { runtime } = fixture.runtimeWith(faux);
+    const large = faux.getModel('agent-model');
+    const small = faux.getModel('small-model');
+    if (large === undefined || small === undefined) {
+      throw new Error('Expected both faux models to be registered');
+    }
     try {
-      expect(() => runtime.validateAdditionalTools(previewContext(), [])).not.toThrow();
-      modelSwitcher.switch('agent', 'small-model');
-      expect(() => runtime.validateAdditionalTools(previewContext(), [])).toThrow(/10% of the model context window/);
+      expect(() => runtime.validateAdditionalTools(previewContext(), [], large)).not.toThrow();
+      expect(() => runtime.validateAdditionalTools(previewContext(), [], small)).toThrow(
+        /10% of the model context window/,
+      );
     } finally {
       fixture.store.close();
     }

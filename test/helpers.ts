@@ -1,4 +1,4 @@
-import { access, writeFile } from 'node:fs/promises';
+import { access, chmod, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serve, type ServerType } from '@hono/node-server';
 import type { FileConfig, RawConfig } from '../src/platform/config.ts';
@@ -300,4 +300,9 @@ export async function writeTestConfig(
   await writeFile(join(directory, 'agent-system-prompt.md'), systemPrompt);
   await writeFile(join(directory, 'chat-instructions.md'), chatInstructions);
   await writeFile(configPath, jsonc);
+  if (process.platform !== 'win32') {
+    // Reload and the config writer demand mode 0600, like `serve` does. Tests
+    // that exercise the permission check change this themselves.
+    await chmod(configPath, 0o600);
+  }
 }

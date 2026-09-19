@@ -348,7 +348,7 @@ async function resolvePrompts(
     );
   }
   validatePromptTemplate(systemPrompt, 'agent.system_prompt_file');
-  const chats: Array<Omit<FileChat, 'instructions_file'> & { instructions: string }> = [];
+  const instructionsByChatId = new Map<number, string>();
   for (const chat of fileConfig.telegram.chats) {
     const instructions =
       chat.instructions_file === undefined
@@ -359,17 +359,34 @@ async function resolvePrompts(
             promptFiles,
           );
     validatePromptTemplate(instructions, `chat ${chat.id} instructions_file`);
-    const { instructions_file, ...rest } = chat;
-    chats.push({ ...rest, instructions });
+    instructionsByChatId.set(chat.id, instructions);
   }
+  return { promptFiles, config: assembleRawConfig(fileConfig, systemPrompt, instructionsByChatId) };
+}
+
+/**
+ * Combines a validated `FileConfig` with already-read prompt texts.
+ *
+ * The result shares every nested object it is not asked to replace with
+ * `fileConfig`; callers that keep a `FileConfig` and a `RawConfig` of the same
+ * configuration (as `LoadedConfig` does) therefore hold aliases, not copies, and
+ * must never mutate either side. The reload path builds both layers from a
+ * `structuredClone` for exactly that reason.
+ */
+export function assembleRawConfig(
+  fileConfig: FileConfig,
+  systemPrompt: string,
+  instructionsByChatId: ReadonlyMap<number, string>,
+): RawConfig {
   const { system_prompt_file, ...agent } = fileConfig.agent;
+  const chats = fileConfig.telegram.chats.map((chat) => {
+    const { instructions_file, ...rest } = chat;
+    return { ...rest, instructions: instructionsByChatId.get(chat.id) ?? '' };
+  });
   return {
-    promptFiles,
-    config: {
-      ...fileConfig,
-      agent: { ...agent, system_prompt: systemPrompt },
-      telegram: { ...fileConfig.telegram, chats },
-    },
+    ...fileConfig,
+    agent: { ...agent, system_prompt: systemPrompt },
+    telegram: { ...fileConfig.telegram, chats },
   };
 }
 
@@ -408,7 +425,7 @@ export async function assertConfigPermissions(configPath: string): Promise<void>
   }
 }
 
-function validateSemantics(config: FileConfig): void {
+export function validateSemantics(config: FileConfig): void {
   validateTimezone(config.timezone, 'timezone');
   validateParticipation(config.telegram.participation, 'telegram.participation');
   validateContextConfig(config);

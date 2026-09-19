@@ -17,9 +17,8 @@ import { McpManager } from './capabilities/mcp.ts';
 import { createLottieCommand } from './capabilities/media/media-image.ts';
 import { TelegramMediaClient } from './capabilities/media/media-download.ts';
 import { MediaService } from './capabilities/media/media.ts';
-import { AgentModelSwitcher } from './platform/model-switch.ts';
 import { type PromptTemplateValues, renderPromptTemplate } from './platform/prompt-template.ts';
-import { createModelRegistry, type ModelRegistry } from './platform/providers.ts';
+import { createModelRegistry, type ModelRegistry, requireModel } from './platform/providers.ts';
 import { RuntimeConfigurationStore } from './platform/runtime-config.ts';
 import { SecretStore } from './platform/secrets.ts';
 import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from './platform/system-resources.ts';
@@ -98,10 +97,11 @@ async function runDoctorChecks(
       );
     }
     const probeSchema = Type.Object({}, { additionalProperties: false });
+    const agentModel = requireModel(registry.models, config.agent.provider, config.agent.model, ['text']);
     const agentResponse = await completeDoctorCall(
       store,
       registry,
-      registry.agentModel,
+      agentModel,
       {
         systemPrompt: 'Call doctor_probe exactly once with an empty object. Do not answer with text.',
         messages: [
@@ -115,7 +115,7 @@ async function runDoctorChecks(
           },
         ],
       },
-      doctorReasoning(registry.agentModel, config.agent.thinking_level),
+      doctorReasoning(agentModel, config.agent.thinking_level),
     );
     if (!agentResponse.content.some((entry) => entry.type === 'toolCall' && entry.name === 'doctor_probe')) {
       throw new Error('Agent model did not produce the required strict Tool Call');
@@ -166,7 +166,6 @@ async function runDoctorChecks(
       configStore,
       secrets,
       registry,
-      modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
       telegramApi: bot.api,
       bot: {
         id: BigInt(me.id),
@@ -179,7 +178,7 @@ async function runDoctorChecks(
       additionalTools: (context, deadline) => [...manager.createTools(context, deadline)],
     });
     const preview = previewContext();
-    manager.setRegistryValidator((mcpTools) => runtime.validateAdditionalTools(preview, mcpTools));
+    manager.setRegistryValidator((mcpTools) => runtime.validateAdditionalTools(preview, mcpTools, agentModel));
     await manager.start();
     console.log(
       JSON.stringify({

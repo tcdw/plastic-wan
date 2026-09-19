@@ -16,12 +16,12 @@ Config + SecretStore
         ├─ McpManager
         ├─ AgentRuntime
         ├─ BucketScheduler
-        ├─ BotCommandService / AgentModelSwitcher
+        ├─ BotCommandService / AgentModelSwitcher / ConfigReloader
         ├─ AdminServer（仅 admin.enabled = true）
         └─ Alarm persistence (alarms table / alarm tool)
 ```
 
-启动顺序有语义：先加载并校验配置与权限，再取得单实例锁、迁移数据库、连接 Telegram、同步 Sticker Set；随后排空 Telegram pending updates，按 Chat 创建 startup catch-up Invocation；最后启动 MCP、Scheduler、Admin Panel 和常规 long polling。关闭时停止 Bot，先停 Admin Panel 再等待 Scheduler（最多 30 秒），停止 Sticker/MCP 服务，关闭数据库并释放锁。
+启动顺序有语义：先加载并校验配置与权限，再取得单实例锁、迁移数据库、连接 Telegram、同步 Sticker Set；随后排空 Telegram pending updates，按 Chat 创建 startup catch-up Invocation；最后启动 MCP、Scheduler、Admin Panel 和常规 long polling。启动时加载的配置是 active 配置的起点：运行期只有白名单字段可以被 `ConfigReloader` 应用到当前进程，其余字段仍要重启，见 [配置：运行时配置热更新](configuration.md#运行时配置热更新)。关闭时停止 Bot，先停 Admin Panel 再等待 Scheduler（最多 30 秒），停止 Sticker/MCP 服务，关闭数据库并释放锁。
 
 ## 主数据流
 
@@ -87,6 +87,7 @@ send Tool → Telegram API → 审计
 - 不是所有 Agent Tool 都在 `capabilities/`：`zzz` 定义在 `store/sleep.ts`，`add_memory`/`delete_memory` 定义在 `context/memory.ts`，各自与所属状态放在一起。找某个 Tool 的实现时按名字 grep，别只翻 `capabilities/`。
 - `store/invocation-snapshot.ts` 是 Invocation 消息快照的冻结边界；`orchestration/invocation-queue.ts` 负责 Bucket/Alarm → Invocation 的同步状态转换、attach、恢复与 Startup Catch-up。这两个名字容易和 `scheduler.ts` 混淆——Scheduler 只管事件循环与并发。
 - `platform/invocation-context.ts` 是无依赖的叶子类型模块，存在的唯一目的是打断 import 环，不要往里加逻辑；它同时定义 `CapabilityRefResolver`（引用解析边界）与 `InvocationContextState`（一次运行中可被新批次刷新的可变上下文）。
+- `platform/config-reload.ts` 的 `ConfigReloader` 是配置热更新的唯一入口：`reloadFromFile()` 与 `setAgentModel()` 把 `config.jsonc` 中白名单字段的变化发布到 `RuntimeConfigurationStore`（generation + 1），其余字段只报告为待重启。白名单只定义在 `platform/config-diff.ts`；写配置文件走 `platform/config-file.ts`（保留注释，先写同目录临时文件并校验再 rename）。语义见 [配置：运行时配置热更新](configuration.md#运行时配置热更新)。
 
 ## 并发模型
 

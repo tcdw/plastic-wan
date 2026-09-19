@@ -16,7 +16,6 @@ import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
 import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { purgeExpiredData, SqliteStore } from '../src/store/database.ts';
-import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { createSendTool, type TelegramSendApi } from '../src/capabilities/send-tool.ts';
@@ -409,13 +408,12 @@ describe('alarm tool', () => {
     const models = createModels();
     models.setProvider(faux.provider);
     const model = faux.getModel();
-    const registry = { models, agentModel: model, visionModel: model };
+    const registry = { models, visionModel: model };
     const runtime = new AgentRuntime({
       store,
       configStore,
       secrets: new SecretStore(),
       registry,
-      modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
       telegramApi: {
         sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
         sendSticker: async () => ({ message_id: 501, date: 1_700_000_101, chat: { id: 123456789 } }),
@@ -620,13 +618,12 @@ describe('alarm runtime budget bypass', () => {
     const models = createModels();
     models.setProvider(faux.provider);
     const model = faux.getModel();
-    const registry = { models, agentModel: model, visionModel: model };
+    const registry = { models, visionModel: model };
     const runtime = new AgentRuntime({
       store,
       configStore,
       secrets: new SecretStore(),
       registry,
-      modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
       telegramApi: {
         sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
         sendSticker: async () => ({ message_id: 501, date: 1_700_000_101, chat: { id: 123456789 } }),
@@ -924,7 +921,7 @@ describe('alarm scheduling behavior', () => {
       .run(now, now);
     const commands = new BotCommandService(store, configStore, scheduler);
     expect(
-      commands.run(
+      await commands.run(
         { name: 'pause' },
         123456789n,
         { id: 42n, name: 'Alice', username: null },

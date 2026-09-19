@@ -183,7 +183,7 @@ describe('cut_topic', () => {
     ingestion.ingest(groupUpdate(2, 11, 'still old', FIRST_CHAT), new Date(start.getTime() + 1_000));
     const command = ingestion.ingest(commandUpdate(3, 12, FIRST_CHAT), new Date(start.getTime() + 2_000)).command;
     expect(command).toEqual({ name: 'cut_topic', messageId: 12n });
-    expect(commands.run(command!, FIRST_CHAT, ALICE)).toContain('已切掉');
+    expect(await commands.run(command!, FIRST_CHAT, ALICE)).toContain('已切掉');
     expect(
       store.db
         .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM chat_context_cutoffs')
@@ -231,7 +231,7 @@ describe('cut_topic', () => {
     expect(contexts.retained(header)).toHaveLength(1);
 
     const command = ingestion.ingest(commandUpdate(3, 12, FIRST_CHAT), new Date(start.getTime() + 2_000)).command;
-    expect(commands.run(command!, FIRST_CHAT, ALICE)).toContain('清空');
+    expect(await commands.run(command!, FIRST_CHAT, ALICE)).toContain('清空');
 
     // The truncation has to reach the transcript too: otherwise the command
     // would only trim the rendered history while the model kept its memory.
@@ -311,7 +311,7 @@ describe('cut_topic', () => {
         new Date(start.getTime() + 2_000),
       ).command;
       expect(command?.threadId).toBeUndefined();
-      expect(commands.run(command!, FIRST_CHAT, ALICE)).toContain('清空');
+      expect(await commands.run(command!, FIRST_CHAT, ALICE)).toContain('清空');
 
       const reopened = contexts.header(conversationId);
       expect(reopened?.headSeq).toBe(reopened?.nextSeq);
@@ -356,7 +356,7 @@ describe('cut_topic', () => {
       ).not.toBeUndefined();
 
       const command = ingestion.ingest(commandUpdate(3, 12, FIRST_CHAT), new Date()).command;
-      expect(commands.run(command!, FIRST_CHAT, ALICE)).toContain('清空');
+      expect(await commands.run(command!, FIRST_CHAT, ALICE)).toContain('清空');
       expect(abortReason).toBe('context_cut');
     } finally {
       release();
@@ -372,14 +372,14 @@ describe('cut_topic', () => {
 
     ingestion.ingest(groupUpdate(1, 10, 'polluted', FIRST_CHAT), at(0));
     const first = ingestion.ingest(commandUpdate(2, 11, FIRST_CHAT), at(1)).command;
-    commands.run(first!, FIRST_CHAT, ALICE);
+    await commands.run(first!, FIRST_CHAT, ALICE);
 
     // After the first cut, the trigger itself is the only eligible message and
     // sits in its own bucket, so the frozen history is empty.
     expect(invocationHistory(store, ingestion, scheduler, FIRST_CHAT, 3, 12, 'fresh start', at(17))).toEqual([]);
 
     const second = ingestion.ingest(commandUpdate(4, 13, FIRST_CHAT), at(34)).command;
-    commands.run(second!, FIRST_CHAT, ALICE);
+    await commands.run(second!, FIRST_CHAT, ALICE);
     expect(
       store.db
         .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM chat_context_cutoffs')
@@ -398,7 +398,7 @@ describe('cut_topic', () => {
     ingestion.ingest(groupUpdate(1, 10, `polluted ${FIRST_CHAT}`, FIRST_CHAT), start);
     ingestion.ingest(groupUpdate(2, 10, `polluted ${SECOND_CHAT}`, SECOND_CHAT), start);
     const command = ingestion.ingest(commandUpdate(3, 11, FIRST_CHAT), new Date(start.getTime() + 1_000)).command;
-    commands.run(command!, FIRST_CHAT, ALICE);
+    await commands.run(command!, FIRST_CHAT, ALICE);
     expect(
       store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM chat_context_cutoffs').get()?.count,
     ).toBe(1n);
@@ -434,7 +434,7 @@ describe('cut_topic', () => {
     const { store, ingestion, commands } = await setup();
     const command = ingestion.ingest(commandUpdate(1, 10, FIRST_CHAT), new Date()).command;
     expect(command).toEqual({ name: 'cut_topic', messageId: 10n });
-    expect(commands.run(command!, FIRST_CHAT, { id: 99n, name: 'Mallory', username: 'mallory' })).toBe(
+    expect(await commands.run(command!, FIRST_CHAT, { id: 99n, name: 'Mallory', username: 'mallory' })).toBe(
       '该命令仅对本 Bot 的管理员可用。',
     );
     expect(
@@ -448,7 +448,7 @@ describe('cut_topic', () => {
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(groupUpdate(1, 10, 'polluted', FIRST_CHAT), start);
     const command = ingestion.ingest(commandUpdate(2, 11, FIRST_CHAT), new Date(start.getTime() + 1_000)).command;
-    commands.run(command!, FIRST_CHAT, ALICE);
+    await commands.run(command!, FIRST_CHAT, ALICE);
     await scheduler.stop();
 
     const reopened = new BucketScheduler(store, configStore, async () => ({

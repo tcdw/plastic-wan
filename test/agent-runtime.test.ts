@@ -16,7 +16,6 @@ import { SqliteStore } from '../src/store/database.ts';
 import { previewContext } from '../src/platform/invocation-context.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
 import { MediaService } from '../src/capabilities/media/media.ts';
-import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import type { ModelRegistry } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
@@ -80,8 +79,7 @@ test('a fresh Agent publishes only through send and audits model usage', async (
   ]);
   const models = createModels();
   models.setProvider(faux.provider);
-  const model = faux.getModel();
-  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
   let messageId = 500;
   const api: TelegramSendApi = {
     sendMessage: async () => ({ message_id: ++messageId, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -92,7 +90,6 @@ test('a fresh Agent publishes only through send and audits model usage', async (
     configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),
@@ -199,14 +196,12 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
   ]);
   const models = createModels();
   models.setProvider(faux.provider);
-  const model = faux.getModel();
-  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
   const runtime = new AgentRuntime({
     store,
     configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
@@ -235,19 +230,17 @@ test('counts tool descriptions in registry limits', async () => {
   const models = createModels();
   const faux = fauxProvider({
     provider: 'agent',
-    // The id must match `agent.model`: the registry is now validated against the
-    // model the switcher resolves, not the one handed to the runtime.
+    // The id must match `agent.model`: the registry is validated against the
+    // model the run's configuration snapshot names.
     models: [{ id: 'agent-model', input: ['text'], contextWindow: 1_000, maxTokens: 100 }],
   });
   models.setProvider(faux.provider);
-  const model = faux.getModel();
-  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
   const runtime = new AgentRuntime({
     store,
     configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
@@ -263,9 +256,9 @@ test('counts tool descriptions in registry limits', async () => {
     execute: async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} }),
   };
 
-  expect(() => runtime.validateAdditionalTools(previewContext(), [oversizedDescriptionTool])).toThrow(
-    'Tool registry exceeds 10%',
-  );
+  expect(() =>
+    runtime.validateAdditionalTools(previewContext(), [oversizedDescriptionTool], registry.visionModel),
+  ).toThrow('Tool registry exceeds 10%');
   store.close();
 });
 
@@ -309,8 +302,7 @@ test('audits complete redacted model error details', async () => {
   faux.setResponses([fauxAssistantMessage('', { stopReason: 'error', errorMessage: errorDetail })]);
   const models = createModels();
   models.setProvider(faux.provider);
-  const model = faux.getModel();
-  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
   const secrets = new SecretStore();
   await secrets.resolve(loaded.config.telegram.token);
   const runtime = new AgentRuntime({
@@ -318,7 +310,6 @@ test('audits complete redacted model error details', async () => {
     configStore,
     secrets,
     registry,
-    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -424,8 +415,7 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
   ]);
   const models = createModels();
   models.setProvider(faux.provider);
-  const model = faux.getModel();
-  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
   const downloader: MediaDownloader = {
     download: async (fileId, destination, signal) => {
       signal.throwIfAborted();
@@ -450,7 +440,6 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
     configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),
@@ -600,7 +589,7 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
   const models = createModels();
   models.setProvider(agentFaux.provider);
   models.setProvider(visionFaux.provider);
-  const registry: ModelRegistry = { models, agentModel: agentFaux.getModel(), visionModel: visionFaux.getModel() };
+  const registry: ModelRegistry = { models, visionModel: visionFaux.getModel() };
   const media = new MediaService({
     store,
     configStore,
@@ -620,7 +609,6 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
     configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 601, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 602, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -728,9 +716,8 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
   const models = createModels();
   models.setProvider(agentFaux.provider);
   models.setProvider(visionFaux.provider);
-  const agentModel = agentFaux.getModel();
   const visionModel = visionFaux.getModel();
-  const registry: ModelRegistry = { models, agentModel, visionModel };
+  const registry: ModelRegistry = { models, visionModel };
   const media = new MediaService({
     store,
     configStore,
@@ -750,7 +737,6 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
     configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 601, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 602, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -842,8 +828,7 @@ test('nudges the model once to use send when it drafts a private reply and never
   ]);
   const models = createModels();
   models.setProvider(faux.provider);
-  const model = faux.getModel();
-  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
   const api: TelegramSendApi = {
     sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
     sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -853,7 +838,6 @@ test('nudges the model once to use send when it drafts a private reply and never
     configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),
@@ -909,14 +893,12 @@ test('does not nudge when the model ends without any draft text', async () => {
   faux.setResponses([fauxAssistantMessage('   ')]);
   const models = createModels();
   models.setProvider(faux.provider);
-  const model = faux.getModel();
-  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
   const runtime = new AgentRuntime({
     store,
     configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),

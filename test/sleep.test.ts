@@ -14,7 +14,6 @@ import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
 import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
-import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import type { ModelRegistry } from '../src/platform/providers.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
@@ -92,7 +91,7 @@ async function runtimeSetup(
   const models = createModels();
   models.setProvider(faux.provider);
   const model = faux.getModel();
-  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, visionModel: model };
   let messageId = 500;
   const api: TelegramSendApi = {
     sendMessage: async () => ({ message_id: ++messageId, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -103,7 +102,6 @@ async function runtimeSetup(
     configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),

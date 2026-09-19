@@ -78,28 +78,59 @@ test.describe('bot admins', () => {
 });
 
 test.describe('model hot-switch', () => {
-  test('switch to vision and restore the config default', async ({ page }) => {
+  test('switch to vision and back to the agent model', async ({ page }) => {
     await page.goto(await adminUrl('/model'));
-    await expect(page.getByText('config default', { exact: true })).toBeVisible();
+    await expect(page.getByText('Current model')).toBeVisible();
+    await expect(page.getByText('agent-model').first()).toBeVisible();
 
     await page.getByRole('combobox', { name: 'Provider and model' }).click();
     await page.getByRole('option', { name: /vision \/ vision-model/ }).click();
     await page.getByRole('button', { name: 'Switch', exact: true }).click();
-    await expect(page.getByText('runtime switch')).toBeVisible();
+    // The toast only appears once the write and the reload succeeded.
+    await expect(page.getByText('Model switched — applies to subsequent invocations')).toBeVisible();
 
     const switched = (await (await page.request.get(await adminUrl('/api/model'))).json()) as {
       current: { model: string };
     };
     expect(switched.current.model).toBe('vision-model');
 
-    await page.getByRole('button', { name: 'Restore default' }).click();
-    await expect(page.getByText('config default', { exact: true })).toBeVisible();
-    await expect(page.getByText('agent-model').first()).toBeVisible();
+    // There is no default to restore: the way back is another switch.
+    await page.getByRole('combobox', { name: 'Provider and model' }).click();
+    await page.getByRole('option', { name: /agent \/ agent-model/ }).click();
+    await page.getByRole('button', { name: 'Switch', exact: true }).click();
+    await expect(page.getByText('Model switched — applies to subsequent invocations').nth(1)).toBeVisible();
 
     const restored = (await (await page.request.get(await adminUrl('/api/model'))).json()) as {
       current: { model: string };
     };
     expect(restored.current.model).toBe('agent-model');
+  });
+});
+
+test.describe('configuration file', () => {
+  test('applies the config file from the settings page', async ({ page }) => {
+    await page.goto(await adminUrl('/settings'));
+    await expect(page.getByText('Configuration file')).toBeVisible();
+
+    const before = (await (await page.request.get(await adminUrl('/api/config/status'))).json()) as {
+      generation: number;
+    };
+
+    await page.getByRole('button', { name: 'Apply config file' }).click();
+    // The result lists only render after a successful apply.
+    await expect(page.getByText('Restart required')).toBeVisible();
+    await expect(page.getByText('Outside serve')).toBeVisible();
+
+    const after = (await (await page.request.get(await adminUrl('/api/config/status'))).json()) as {
+      generation: number;
+      restart_required: string[];
+      last_error: unknown;
+    };
+    expect(after.last_error).toBeNull();
+    expect(after.generation).toBeGreaterThanOrEqual(before.generation);
+    // The fixture overrides the admin port in memory only, so the file's port
+    // shows up as waiting for a restart.
+    expect(after.restart_required).toContain('admin.port');
   });
 });
 

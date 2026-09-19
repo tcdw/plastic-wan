@@ -244,12 +244,14 @@ export class BucketScheduler {
         }
         // The snapshot is taken in the same synchronous block as the state
         // transition: a configuration published after this point can never
-        // reach the run that is starting here.
+        // reach the run that is starting here. `config_hash` is written here
+        // rather than at queue time so it names the configuration the run
+        // actually used.
         const snapshot = this.#configStore.beginInvocation();
         const now = new Date().toISOString();
         this.#store.orm
           .update(invocations)
-          .set({ state: 'running', startedAt: now })
+          .set({ state: 'running', startedAt: now, configHash: snapshot.hash })
           .where(eq(invocations.id, candidate.id))
           .run();
         this.#store.orm

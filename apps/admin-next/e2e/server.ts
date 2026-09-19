@@ -20,6 +20,7 @@ import { serve, type ServerType } from '@hono/node-server';
 import { and, eq, sql } from 'drizzle-orm';
 import { AdminServer } from '../../../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../../../src/platform/config.ts';
+import { ConfigReloader } from '../../../src/platform/config-reload.ts';
 import { AgentModelSwitcher } from '../../../src/platform/model-switch.ts';
 import { RuntimeConfigurationStore } from '../../../src/platform/runtime-config.ts';
 import { createModelRegistry } from '../../../src/platform/providers.ts';
@@ -170,7 +171,18 @@ async function main(): Promise<void> {
   const registry = await createModelRegistry(loaded.config, new SecretStore());
   const configStore = new RuntimeConfigurationStore(loaded);
   const modelSwitcher = new AgentModelSwitcher(configStore, registry.models);
-  const admin = new AdminServer({ store, configStore, modelSwitcher });
+  const configReloader = new ConfigReloader({
+    loaded,
+    store: configStore,
+    models: registry.models,
+    modelSwitcher,
+    secrets: new SecretStore(),
+    // This fixture runs no agent runtime, so there is no tool registry to fit
+    // into the model's context window; production wires the real validator.
+    validateAgentModel: () => undefined,
+    onPublished: () => undefined,
+  });
+  const admin = new AdminServer({ store, configStore, modelSwitcher, configReloader });
 
   const started = serve({
     hostname: '127.0.0.1',

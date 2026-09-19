@@ -19,10 +19,17 @@ export interface AgentModelOption {
   readonly maxTokens: number;
 }
 
+/**
+ * Reads and validates agent model references against the live configuration and
+ * model registry.
+ *
+ * There is no in-memory override: the model in use is always the one the active
+ * configuration names, so a switch has to reach the configuration file to mean
+ * anything (`ConfigReloader.setAgentModel`).
+ */
 export class AgentModelSwitcher {
   readonly #configStore: RuntimeConfigurationStore;
   readonly #models: Models;
-  #override: { readonly provider: string; readonly model: string } | null = null;
 
   constructor(configStore: RuntimeConfigurationStore, models: Models) {
     this.#configStore = configStore;
@@ -30,14 +37,15 @@ export class AgentModelSwitcher {
   }
 
   current(): AgentModelOption {
-    return this.#option(this.#reference().provider, this.#reference().model);
+    const config = this.#configStore.current().config;
+    return this.option(config.agent.provider, config.agent.model);
   }
 
   model(): Model<Api> {
-    const reference = this.#reference();
-    const found = this.#models.getModel(reference.provider, reference.model);
+    const config = this.#configStore.current().config;
+    const found = this.#models.getModel(config.agent.provider, config.agent.model);
     if (found === undefined) {
-      throw new Error(`Agent model ${reference.provider}/${reference.model} is not registered`);
+      throw new Error(`Agent model ${config.agent.provider}/${config.agent.model} is not registered`);
     }
     return found;
   }
@@ -61,23 +69,8 @@ export class AgentModelSwitcher {
     return options;
   }
 
-  switch(provider: string, modelId: string): AgentModelOption {
-    const option = this.#option(provider, modelId);
-    this.#override = { provider, model: modelId };
-    return option;
-  }
-
-  reset(): AgentModelOption {
-    this.#override = null;
-    return this.current();
-  }
-
-  #reference(): { readonly provider: string; readonly model: string } {
-    const config = this.#configStore.current().config;
-    return this.#override ?? { provider: config.agent.provider, model: config.agent.model };
-  }
-
-  #option(provider: string, modelId: string): AgentModelOption {
+  /** Validates a target without applying it. */
+  option(provider: string, modelId: string): AgentModelOption {
     if (this.#configStore.current().config.providers[provider] === undefined) {
       throw new ModelSwitchError('unknown_provider', `Provider ${provider} is not configured`);
     }

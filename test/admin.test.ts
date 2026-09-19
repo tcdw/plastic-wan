@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { Update } from 'grammy/types';
 import { AdminServer } from '../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { ConfigReloader } from '../src/platform/config-reload.ts';
 import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
@@ -768,11 +769,20 @@ test('admins API lists, adds and removes bot admins', async () => {
   }
 });
 
-test('model API lists, switches and resets the agent model', async () => {
+test('model API lists and switches the agent model through the config file', async () => {
   const { store, loaded, configStore } = await fixture();
   const registry = await createModelRegistry(loaded.config, new SecretStore());
   const switcher = new AgentModelSwitcher(configStore, registry.models);
-  const server = new AdminServer({ store, configStore, modelSwitcher: switcher });
+  const configReloader = new ConfigReloader({
+    loaded,
+    store: configStore,
+    models: registry.models,
+    modelSwitcher: switcher,
+    secrets: new SecretStore(),
+    validateAgentModel: () => undefined,
+    onPublished: () => undefined,
+  });
+  const server = new AdminServer({ store, configStore, modelSwitcher: switcher, configReloader });
   try {
     const unauthenticated = await server.handle(request('/api/model'));
     expect(unauthenticated.status).toBe(401);
@@ -790,7 +800,7 @@ test('model API lists, switches and resets the agent model', async () => {
       context_window: 200_000,
       max_tokens: 32_768,
     });
-    expect(initial.default).toEqual({ provider: 'agent', model: 'agent-model' });
+    expect(initial.default).toBeUndefined();
     expect(initial.options).toEqual([
       { provider: 'agent', model: 'agent-model', name: 'Agent Model' },
       { provider: 'vision', model: 'vision-model', name: 'Vision Model' },
@@ -806,7 +816,7 @@ test('model API lists, switches and resets the agent model', async () => {
       ),
     );
     expect(switched.current).toMatchObject({ provider: 'vision', model: 'vision-model', max_tokens: 8_192 });
-    expect(switched.default).toEqual({ provider: 'agent', model: 'agent-model' });
+    expect(switched.apply).toEqual({ applied: ['agent.model', 'agent.provider'], restart_required: [] });
 
     const malformed = await server.handle(
       call({
@@ -841,10 +851,11 @@ test('model API lists, switches and resets the agent model', async () => {
     // The failed switches must not change the effective model.
     const afterFailures = await readJson(await server.handle(call()));
     expect(afterFailures.current).toMatchObject({ provider: 'vision', model: 'vision-model' });
+    expect(switcher.current()).toMatchObject({ provider: 'vision', model: 'vision-model' });
 
-    const reset = await readJson(await server.handle(call({ method: 'DELETE' })));
-    expect(reset.current).toMatchObject({ provider: 'agent', model: 'agent-model' });
-    expect(switcher.current()).toMatchObject({ provider: 'agent', model: 'agent-model' });
+    // There is no default to restore: the request falls through to the read-only 405.
+    const removed = await server.handle(call({ method: 'DELETE' }));
+    expect(removed.status).toBe(405);
   } finally {
     store.close();
   }

@@ -2,13 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Info } from 'lucide-react';
 import { toast } from 'sonner';
-import { KvList, MonoValue, ToneBadge } from '@/components/business';
+import { KvList, MonoValue } from '@/components/business';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { type ModelOption, resetAgentModel, switchAgentModel } from '@/lib/api';
+import { type ModelOption, switchAgentModel } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 import { modelQuery } from '@/lib/queries';
 
@@ -28,22 +28,11 @@ export default function ModelPage(): React.ReactElement {
       setSelectedKey(null);
       toast.success('Model switched — applies to subsequent invocations');
       void queryClient.invalidateQueries({ queryKey: ['model'] });
+      void queryClient.invalidateQueries({ queryKey: ['config-status'] });
     },
     onError: () => {
       // Selection is kept so the user sees the failing target next to the
       // inline error message.
-    },
-  });
-
-  const reset = useMutation({
-    mutationFn: resetAgentModel,
-    onSuccess: () => {
-      setSelectedKey(null);
-      toast.success('Restored the config default model');
-      void queryClient.invalidateQueries({ queryKey: ['model'] });
-    },
-    onError: () => {
-      // Keep the state as-is and show the inline error.
     },
   });
 
@@ -67,19 +56,17 @@ export default function ModelPage(): React.ReactElement {
 
   const state = model.data;
   const current = state.current;
-  const defaultModel = state.default;
   const selectedOption = state.options.find((option) => optionKey(option) === selectedKey) ?? null;
-  const switched = current.provider !== defaultModel.provider || current.model !== defaultModel.model;
-  const busy = apply.isPending || reset.isPending;
 
   return (
     <div className="space-y-4">
       <Alert>
         <Info className="text-foreground" />
-        <AlertTitle>Hot-switch the agent model</AlertTitle>
+        <AlertTitle>Switch the agent model</AlertTitle>
         <AlertDescription>
-          Switching only affects subsequent invocations; a running session keeps its model and a restart returns to the
-          config default. Only models that accept text input can be selected as the agent model.
+          Switching writes <MonoValue value="agent.provider" /> and <MonoValue value="agent.model" /> into config.jsonc
+          and applies the file to the running process, so subsequent invocations use the new model while a running
+          session keeps its own. The change survives a restart. Only models that accept text input can be selected.
         </AlertDescription>
       </Alert>
 
@@ -95,14 +82,6 @@ export default function ModelPage(): React.ReactElement {
               { label: 'Name', value: current.name },
               { label: 'Context window', value: `${current.context_window.toLocaleString()} tokens` },
               { label: 'Max output', value: `${current.max_tokens.toLocaleString()} tokens` },
-              {
-                label: 'Source',
-                value: switched ? (
-                  <ToneBadge tone="warning">runtime switch</ToneBadge>
-                ) : (
-                  <ToneBadge tone="success">config default</ToneBadge>
-                ),
-              },
             ]}
           />
         </CardContent>
@@ -111,9 +90,6 @@ export default function ModelPage(): React.ReactElement {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">Switch model</CardTitle>
-          <CardDescription>
-            Default: {defaultModel.provider} / {defaultModel.model}
-          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -122,7 +98,6 @@ export default function ModelPage(): React.ReactElement {
               onValueChange={(value) => {
                 setSelectedKey(value);
                 apply.reset();
-                reset.reset();
               }}
             >
               <SelectTrigger className="min-w-64" aria-label="Provider and model">
@@ -138,7 +113,7 @@ export default function ModelPage(): React.ReactElement {
             </Select>
             <Button
               type="button"
-              disabled={selectedOption === null || busy}
+              disabled={selectedOption === null || apply.isPending}
               onClick={() => {
                 if (selectedOption !== null) {
                   apply.mutate(selectedOption);
@@ -147,15 +122,11 @@ export default function ModelPage(): React.ReactElement {
             >
               {apply.isPending ? 'Switching…' : 'Switch'}
             </Button>
-            <Button type="button" variant="outline" disabled={!switched || busy} onClick={() => reset.mutate()}>
-              {reset.isPending ? 'Restoring…' : 'Restore default'}
-            </Button>
           </div>
           {state.options.length === 0 ? (
             <p className="text-muted-foreground text-sm">No switchable text-capable models are configured.</p>
           ) : null}
           {apply.isError ? <p className="text-destructive text-sm break-words">{errorMessage(apply.error)}</p> : null}
-          {reset.isError ? <p className="text-destructive text-sm break-words">{errorMessage(reset.error)}</p> : null}
         </CardContent>
       </Card>
     </div>

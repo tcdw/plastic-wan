@@ -101,11 +101,11 @@ test.describe('13 routes and deep links', () => {
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
   });
 
-  test('/model shows the current and default model', async ({ page }) => {
+  test('/model shows the current model and the switch card', async ({ page }) => {
     await page.goto(await adminUrl('/model'));
     await expect(page.getByText('Current model')).toBeVisible();
     await expect(page.getByText('agent-model').first()).toBeVisible();
-    await expect(page.getByText('config default', { exact: true })).toBeVisible();
+    await expect(page.getByText('Switch model')).toBeVisible();
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
   });
 
@@ -117,10 +117,12 @@ test.describe('13 routes and deep links', () => {
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
   });
 
-  test('/settings renders the credentials form', async ({ page }) => {
+  test('/settings renders the credentials form and the config card', async ({ page }) => {
     await page.goto(await adminUrl('/settings'));
     await expect(page.getByText('Admin credentials')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Update credentials' })).toBeVisible();
+    await expect(page.getByText('Configuration file')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Apply config file' })).toBeVisible();
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
   });
 });

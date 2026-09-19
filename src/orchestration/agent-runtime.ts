@@ -27,7 +27,6 @@ import {
   type VisibleSender,
 } from '../platform/invocation-context.ts';
 import { serializeModelRequestForAudit } from '../platform/model-request-audit.ts';
-import type { AgentModelSwitcher } from '../platform/model-switch.ts';
 import type { ModelRegistry } from '../platform/providers.ts';
 import type { InvocationConfigSnapshot, RuntimeConfigurationStore } from '../platform/runtime-config.ts';
 import type { InvocationOutcome } from './scheduler.ts';
@@ -69,7 +68,6 @@ export interface AgentRuntimeOptions {
   readonly configStore: RuntimeConfigurationStore;
   readonly secrets: SecretStore;
   readonly registry: ModelRegistry;
-  readonly modelSwitcher: AgentModelSwitcher;
   readonly telegramApi: TelegramSendApi;
   readonly bot: { readonly id: bigint; readonly displayName: string; readonly username: string | null };
   /** The bundled system:/// resource tree: read primitive backend plus skill index. */
@@ -124,7 +122,6 @@ export class AgentRuntime {
   readonly #configStore: RuntimeConfigurationStore;
   readonly #secrets: SecretStore;
   readonly #models: Models;
-  readonly #modelSwitcher: AgentModelSwitcher;
   readonly #telegramApi: TelegramSendApi;
   readonly #bot: AgentRuntimeOptions['bot'];
   readonly #systemResources: SystemResources;
@@ -142,7 +139,6 @@ export class AgentRuntime {
     this.#secrets = options.secrets;
     this.#configStore = options.configStore;
     this.#models = options.registry.models;
-    this.#modelSwitcher = options.modelSwitcher;
     this.#telegramApi = options.telegramApi;
     this.#bot = options.bot;
     this.#systemResources = options.systemResources;
@@ -162,7 +158,13 @@ export class AgentRuntime {
     return this.#conversationRuntime;
   }
 
-  validateAdditionalTools(context: InvocationContext, additionalTools: readonly AgentTool[]): void {
+  /**
+   * Checks the per-invocation tool registry against a model's context window.
+   * The model is passed in because the caller resolves it: `/model` switches and
+   * reloads validate against the model the run will actually get, which is not
+   * the one this runtime was constructed with.
+   */
+  validateAdditionalTools(context: InvocationContext, additionalTools: readonly AgentTool[], model: Model<Api>): void {
     const config = this.#configStore.current().config;
     const send = createSendTool({
       store: this.#store,
@@ -182,9 +184,7 @@ export class AgentRuntime {
         createExecuteTool({ store: this.#store, context, capabilities: [] }),
         ...additionalTools,
       ],
-      // The model in use now, not the startup default: after a `/model` switch
-      // the registry is validated against the window the run will actually get.
-      this.#modelSwitcher.model().contextWindow,
+      model.contextWindow,
     );
   }
 
@@ -216,9 +216,13 @@ export class AgentRuntime {
     // Every runtime-policy read below comes from the snapshot this run was
     // started with; only the global daily budget is re-read live.
     const config = snapshot.config;
-    // Resolved at run start: a runtime model switch applies from here on, never
-    // to an invocation already in flight.
-    const model = this.#modelSwitcher.model();
+    // Resolved at run start, from the snapshot: a configuration published while
+    // this run is in flight never reaches it, and a model that is no longer
+    // registered fails the run instead of silently falling back.
+    const model = this.#models.getModel(config.agent.provider, config.agent.model);
+    if (model === undefined) {
+      throw new Error(`Agent model ${config.agent.provider}/${config.agent.model} is not registered`);
+    }
     const identity = this.#contextBuilder.identity(config, invocationId);
     const supportsImages = model.input.includes('image');
     const stable = this.#contextBuilder.buildSystemPrompt(config, identity, supportsImages, {

@@ -1,6 +1,7 @@
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import {
   getAgentModel,
+  getConfigStatus,
   getConversationContext,
   getInvocation,
   getMessage,
@@ -98,6 +99,11 @@ export const adminsQuery = queryOptions({
 export const modelQuery = queryOptions({
   queryKey: ['model'],
   queryFn: getAgentModel,
+});
+
+export const configStatusQuery = queryOptions({
+  queryKey: ['config-status'],
+  queryFn: getConfigStatus,
 });
 
 export function invocationQuery(id: string) {

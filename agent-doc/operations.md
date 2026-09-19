@@ -71,7 +71,7 @@ node src/cli.ts serve --config dev-data/config.jsonc
 
 ## 配置变更
 
-配置不热重载。变更后：
+白名单字段可以热应用，其余字段不热重载。白名单（agent 模型、Prompt、预算与并发等）在改完文件后，用 Admin Panel 的「Apply config file」或 Telegram 的 `/model` 触发一次应用，不必重启；清单与语义见 [configuration.md](configuration.md#运行时配置热更新)。其它字段（allowlist、Provider 连接字段、MCP、`admin.*` 等）变更后：
 
 ```bash
 node src/cli.ts check-config --config dev-data/config.jsonc
@@ -79,7 +79,7 @@ node src/cli.ts check-config --config dev-data/config.jsonc
 node src/cli.ts serve --config dev-data/config.jsonc
 ```
 
-必须确认新 `serve_started.config_hash` 与 `check-config.config_hash` 一致。Chat 已写入文件但仍出现 `chat_not_allowed` 时，首先检查旧进程是否仍使用旧哈希。
+必须确认新 `serve_started.config_hash` 与 `check-config.config_hash` 一致；热应用后则看 `config_reloaded` 日志事件里的 `active_hash` / `file_hash`。Chat 已写入文件但仍出现 `chat_not_allowed` 时，首先检查旧进程是否仍使用旧哈希。
 
 ## Doctor
 
@@ -235,4 +235,4 @@ docker compose run --rm plasticwan backup --config /config/config.jsonc
 - `docker compose exec plasticwan <客户端> http://127.0.0.1:8787/...`（镜像未显式安装 curl，先确认基础镜像里有没有）；
 - 让反向代理与容器共享网络命名空间（`network_mode: "service:plasticwan"`），由它承担 TLS 与对外暴露。
 
-配置变更同样不热重载，改完 `./config/config.jsonc` 后 `docker compose restart`，并比对新日志里的 `config_hash`。
+配置变更同样按白名单区分：白名单字段可在面板上应用，其余字段改完 `./config/config.jsonc` 后 `docker compose restart`，并比对新日志里的 `config_hash`（热应用则比对 `config_reloaded` 的 `active_hash`）。

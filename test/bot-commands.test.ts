@@ -13,6 +13,7 @@ import {
   registerBotCommands,
 } from '../src/orchestration/bot-commands.ts';
 import { type FileConfig, type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { ConfigReloader } from '../src/platform/config-reload.ts';
 import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
@@ -47,6 +48,7 @@ async function setup(
   ingestion: TelegramIngestion;
   scheduler: BucketScheduler;
   commands: BotCommandService;
+  configPath: string;
 }> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-commands-'));
   directories.push(directory);
@@ -64,6 +66,7 @@ async function setup(
     ingestion: new TelegramIngestion(store, configStore, { id: 999, username: BOT_USERNAME }),
     scheduler,
     commands: new BotCommandService(store, configStore, scheduler),
+    configPath,
   };
 }
 
@@ -250,7 +253,7 @@ describe('bot command service', () => {
     }
     expect(store.db.prepare<[], { state: string }>('SELECT state FROM invocations').get()?.state).toBe('queued');
 
-    const reply = commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
+    const reply = await commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
     expect(reply).toContain('/resume');
     expect(store.db.prepare<[], { paused_at: string }>('SELECT paused_at FROM chat_pause').get()?.paused_at).toBe(
       FIXED_NOW.toISOString(),
@@ -274,8 +277,8 @@ describe('bot command service', () => {
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'hello'), start);
     scheduler.processDue(new Date(start.getTime() + 15_000));
-    commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
-    commands.run({ name: 'resume' }, 123456789n, ALICE, FIXED_NOW);
+    await commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
+    await commands.run({ name: 'resume' }, 123456789n, ALICE, FIXED_NOW);
     expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM chat_pause').get()?.count).toBe(0n);
     ingestion.ingest(textUpdate(2, 11, 'after resume'), new Date(start.getTime() + 30_000));
     expect(scheduler.processDue(new Date(start.getTime() + 45_000))).toHaveLength(1);
@@ -304,15 +307,15 @@ describe('bot command service', () => {
         "INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens, created_at, finished_at) VALUES (?, 'agent', 'agent', 'agent-model', 1, 'success', 500, 200, 400, 134, 1234, ?, ?)",
       )
       .run(invocationId, FIXED_NOW.toISOString(), FIXED_NOW.toISOString());
-    const status = commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW);
+    const status = await commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW);
     expect(status).toContain('agent / agent-model');
     expect(status).toContain('思考强度: low');
     expect(status).toContain(
       '本群今日 token 用量: 1,234\n全局今日 token 用量: 1,300 / 300,000 (0.43%)\n读取: 500\n写入: 200\n缓存读取: 400\n缓存写入: 134',
     );
     expect(status).not.toContain('已暂停');
-    commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
-    expect(commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain('已暂停');
+    await commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
+    expect(await commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain('已暂停');
     store.close();
   });
 
@@ -339,19 +342,22 @@ describe('bot command service', () => {
       role: 'user',
     });
 
-    const status = commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW);
+    const status = await commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW);
     expect(status).toContain(`Context 消息 1，保留 send 0，head_seq ${header.headSeq}`);
     expect(status).toContain('未 GC');
     store.close();
   });
 
-  test('status reflects a runtime model switch', async () => {
+  test('status reflects a published agent model', async () => {
     const { store, loaded, scheduler, configStore } = await setup();
     const registry = await createModelRegistry(loaded.config, new SecretStore());
     const switcher = new AgentModelSwitcher(configStore, registry.models);
     const commands = new BotCommandService(store, configStore, scheduler, switcher);
-    switcher.switch('vision', 'vision-model');
-    expect(commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain('vision / vision-model');
+    configStore.publish({
+      config: { ...loaded.config, agent: { ...loaded.config.agent, provider: 'vision', model: 'vision-model' } },
+      hash: 'published',
+    });
+    expect(await commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain('vision / vision-model');
     store.close();
   });
 
@@ -385,15 +391,26 @@ describe('bot command service', () => {
       const { store, loaded, scheduler, configStore } = await setup(transform);
       const registry = await createModelRegistry(loaded.config, new SecretStore());
       const switcher = new AgentModelSwitcher(configStore, registry.models);
-      const commands = new BotCommandService(store, configStore, scheduler, switcher);
+      const configReloader = new ConfigReloader({
+        loaded,
+        store: configStore,
+        models: registry.models,
+        modelSwitcher: switcher,
+        secrets: new SecretStore(),
+        validateAgentModel: () => undefined,
+        onPublished: () => undefined,
+      });
+      const commands = new BotCommandService(store, configStore, scheduler, switcher, undefined, configReloader);
       return { store, commands, switcher };
     }
 
     test('is denied for non-admins without changing the model', async () => {
       const { store, commands, switcher } = await commandSetup();
       const stranger: CommandSender = { id: 99n, name: 'Mallory', username: 'mallory' };
-      expect(commands.run({ name: 'model' }, 123456789n, stranger, FIXED_NOW)).toBe('该命令仅对本 Bot 的管理员可用。');
-      expect(commands.run({ name: 'model', argument: '2' }, 123456789n, stranger, FIXED_NOW)).toBe(
+      expect(await commands.run({ name: 'model' }, 123456789n, stranger, FIXED_NOW)).toBe(
+        '该命令仅对本 Bot 的管理员可用。',
+      );
+      expect(await commands.run({ name: 'model', argument: '2' }, 123456789n, stranger, FIXED_NOW)).toBe(
         '该命令仅对本 Bot 的管理员可用。',
       );
       expect(switcher.current()).toMatchObject({ provider: 'agent', model: 'agent-model' });
@@ -402,41 +419,45 @@ describe('bot command service', () => {
 
     test('without an argument lists the first page of switchable options', async () => {
       const { store, commands } = await commandSetup();
-      const reply = commands.run({ name: 'model' }, 123456789n, ALICE, FIXED_NOW);
+      const reply = await commands.run({ name: 'model' }, 123456789n, ALICE, FIXED_NOW);
       expect(reply).toContain('当前模型: agent / agent-model');
       expect(reply).toContain('可用模型（第 1/1 页，共 2 条）:');
       expect(reply).toContain('1. agent / agent-model（Agent Model）');
       expect(reply).toContain('2. vision / vision-model（Vision Model）');
-      expect(reply).toContain('使用 /model 序号 切换，/model page 页码 翻页，/model reset 恢复默认');
+      expect(reply).toContain('使用 /model 序号 切换，/model page 页码 翻页');
       store.close();
     });
 
     test('paginates model options by global index in pages of 20', async () => {
       const { store, commands } = await commandSetup(manyModelTransform(40));
-      const firstPage = commands.run({ name: 'model' }, 123456789n, ALICE, FIXED_NOW).split('\n');
+      const firstPage = (await commands.run({ name: 'model' }, 123456789n, ALICE, FIXED_NOW)).split('\n');
       expect(firstPage).toContain('可用模型（第 1/3 页，共 42 条）:');
       expect(firstPage).toContain('1. agent / agent-model（Agent Model）');
       expect(firstPage).toContain('20. agent / agent-extra-19（Agent Extra 19）');
-      expect(firstPage.some((line) => line.startsWith('21. '))).toBe(false);
+      expect(firstPage.some((line: string) => line.startsWith('21. '))).toBe(false);
 
-      const secondPage = commands.run({ name: 'model', argument: 'page 2' }, 123456789n, ALICE, FIXED_NOW).split('\n');
+      const secondPage = (
+        await commands.run({ name: 'model', argument: 'page 2' }, 123456789n, ALICE, FIXED_NOW)
+      ).split('\n');
       expect(secondPage).toContain('可用模型（第 2/3 页，共 42 条）:');
       expect(secondPage).toContain('21. agent / agent-extra-20（Agent Extra 20）');
       expect(secondPage).toContain('40. agent / agent-extra-39（Agent Extra 39）');
-      expect(secondPage.filter((line) => /^\d+\. /.test(line))).toHaveLength(20);
+      expect(secondPage.filter((line: string) => /^\d+\. /.test(line))).toHaveLength(20);
 
-      const thirdPage = commands.run({ name: 'model', argument: 'page 3' }, 123456789n, ALICE, FIXED_NOW).split('\n');
+      const thirdPage = (await commands.run({ name: 'model', argument: 'page 3' }, 123456789n, ALICE, FIXED_NOW)).split(
+        '\n',
+      );
       expect(thirdPage).toContain('可用模型（第 3/3 页，共 42 条）:');
       expect(thirdPage).toContain('41. agent / agent-extra-40（Agent Extra 40）');
       expect(thirdPage).toContain('42. vision / vision-model（Vision Model）');
-      expect(thirdPage.filter((line) => /^\d+\. /.test(line))).toHaveLength(2);
+      expect(thirdPage.filter((line: string) => /^\d+\. /.test(line))).toHaveLength(2);
       store.close();
     });
 
     test('keeps a numeric argument as a global model selection', async () => {
       const { store, commands, switcher } = await commandSetup(manyModelTransform(40));
-      expect(commands.run({ name: 'model', argument: '21' }, 123456789n, ALICE, FIXED_NOW)).toBe(
-        '已切换: agent / agent-extra-20，将在下一次 agent session 生效。',
+      expect(await commands.run({ name: 'model', argument: '21' }, 123456789n, ALICE, FIXED_NOW)).toBe(
+        '已切换: agent / agent-extra-20，已写入 config.jsonc，将在下一次 agent session 生效。',
       );
       expect(switcher.current()).toMatchObject({ provider: 'agent', model: 'agent-extra-20' });
       store.close();
@@ -445,7 +466,7 @@ describe('bot command service', () => {
     test('rejects pages outside the available range without changing the model', async () => {
       const { store, commands, switcher } = await commandSetup(manyModelTransform(40));
       for (const argument of ['page 0', 'page 4', 'page 999999999999999999999999999999999999999']) {
-        const reply = commands.run({ name: 'model', argument }, 123456789n, ALICE, FIXED_NOW);
+        const reply = await commands.run({ name: 'model', argument }, 123456789n, ALICE, FIXED_NOW);
         expect(reply.startsWith('无效页码。')).toBe(true);
         expect(reply).toContain('可用模型（第 1/3 页，共 42 条）:');
         expect(switcher.current()).toMatchObject({ provider: 'agent', model: 'agent-model' });
@@ -455,18 +476,17 @@ describe('bot command service', () => {
 
     test('switches by index and the status command reflects it', async () => {
       const { store, commands, switcher } = await commandSetup();
-      const reply = commands.run({ name: 'model', argument: '2' }, 123456789n, ALICE, FIXED_NOW);
-      expect(reply).toBe('已切换: vision / vision-model，将在下一次 agent session 生效。');
+      const reply = await commands.run({ name: 'model', argument: '2' }, 123456789n, ALICE, FIXED_NOW);
+      expect(reply).toBe('已切换: vision / vision-model，已写入 config.jsonc，将在下一次 agent session 生效。');
       expect(switcher.current()).toMatchObject({ provider: 'vision', model: 'vision-model' });
-      expect(commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain('vision / vision-model');
+      expect(await commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain('vision / vision-model');
       store.close();
     });
 
-    test('reset reverts to the config default', async () => {
+    test('treats /model reset as an invalid index', async () => {
       const { store, commands, switcher } = await commandSetup();
-      switcher.switch('vision', 'vision-model');
-      const reply = commands.run({ name: 'model', argument: 'reset' }, 123456789n, ALICE, FIXED_NOW);
-      expect(reply).toBe('已恢复 config.jsonc 默认模型: agent / agent-model。');
+      const reply = await commands.run({ name: 'model', argument: 'reset' }, 123456789n, ALICE, FIXED_NOW);
+      expect(reply).toContain('无效序号');
       expect(switcher.current()).toMatchObject({ provider: 'agent', model: 'agent-model' });
       store.close();
     });
@@ -474,7 +494,7 @@ describe('bot command service', () => {
     test('rejects invalid arguments without changing the model', async () => {
       const { store, commands, switcher } = await commandSetup();
       for (const argument of ['0', '3', 'abc', '1x']) {
-        const reply = commands.run({ name: 'model', argument }, 123456789n, ALICE, FIXED_NOW);
+        const reply = await commands.run({ name: 'model', argument }, 123456789n, ALICE, FIXED_NOW);
         expect(reply).toContain('无效序号');
         expect(switcher.current()).toMatchObject({ provider: 'agent', model: 'agent-model' });
       }
@@ -494,7 +514,7 @@ describe('bot command service', () => {
         "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', 888, ?)",
       )
       .run(FIXED_NOW.toISOString().slice(0, 10), '987654321', FIXED_NOW.toISOString());
-    expect(commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain(
+    expect(await commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain(
       '本群今日 token 用量: 0\n全局今日 token 用量: 888 / 300,000 (0.30%)',
     );
     store.close();
@@ -509,20 +529,26 @@ describe('bot command service', () => {
       throw new Error('Expected queued invocation');
     }
     const mallory: CommandSender = { id: 99n, name: 'Mallory', username: 'mallory' };
-    expect(commands.run({ name: 'pause' }, 123456789n, mallory, FIXED_NOW)).toBe('该命令仅对本 Bot 的管理员可用。');
+    expect(await commands.run({ name: 'pause' }, 123456789n, mallory, FIXED_NOW)).toBe(
+      '该命令仅对本 Bot 的管理员可用。',
+    );
     expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM chat_pause').get()?.count).toBe(0n);
     expect(store.db.prepare<[], { state: string }>('SELECT state FROM buckets').get()?.state).toBe('queued');
     expect(store.db.prepare<[], { state: string }>('SELECT state FROM invocations').get()?.state).toBe('queued');
-    expect(commands.run({ name: 'resume' }, 123456789n, mallory, FIXED_NOW)).toBe('该命令仅对本 Bot 的管理员可用。');
+    expect(await commands.run({ name: 'resume' }, 123456789n, mallory, FIXED_NOW)).toBe(
+      '该命令仅对本 Bot 的管理员可用。',
+    );
     store.close();
   });
 
   test('anonymous senders and absent admins are denied', async () => {
     const { store, commands } = await setup(() => {});
-    expect(commands.run({ name: 'pause' }, 123456789n, null, FIXED_NOW)).toBe('该命令仅对本 Bot 的管理员可用。');
+    expect(await commands.run({ name: 'pause' }, 123456789n, null, FIXED_NOW)).toBe('该命令仅对本 Bot 的管理员可用。');
     const stranger: CommandSender = { id: 42n, name: 'Alice', username: 'alice' };
-    expect(commands.run({ name: 'pause' }, 123456789n, stranger, FIXED_NOW)).toBe('该命令仅对本 Bot 的管理员可用。');
-    expect(commands.run({ name: 'status' }, 123456789n, stranger, FIXED_NOW)).toContain('当前模型');
+    expect(await commands.run({ name: 'pause' }, 123456789n, stranger, FIXED_NOW)).toBe(
+      '该命令仅对本 Bot 的管理员可用。',
+    );
+    expect(await commands.run({ name: 'status' }, 123456789n, stranger, FIXED_NOW)).toContain('当前模型');
     expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM chat_pause').get()?.count).toBe(0n);
     store.close();
   });
@@ -530,7 +556,7 @@ describe('bot command service', () => {
   test('acting admins refresh their display name in the admin list', async () => {
     const { store, ingestion, commands } = await setup();
     ingestion.ingest(textUpdate(1, 10, 'hello'), FIXED_NOW);
-    commands.run({ name: 'pause' }, 123456789n, { id: 42n, name: 'Alice Liddell', username: 'alice' }, FIXED_NOW);
+    await commands.run({ name: 'pause' }, 123456789n, { id: 42n, name: 'Alice Liddell', username: 'alice' }, FIXED_NOW);
     const row = store.db
       .prepare<[], { display_name: string; added_by: string }>('SELECT display_name, added_by FROM bot_admins')
       .get();
@@ -588,7 +614,7 @@ describe('scheduler pause enforcement', () => {
     const { store, ingestion, scheduler, commands } = await setup();
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'hello'), start);
-    commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
+    await commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
     const chatId = store.db
       .prepare<[], { chat_id: bigint }>('SELECT chat_id FROM conversations LIMIT 1')
       .get()!.chat_id;
@@ -616,7 +642,7 @@ describe('scheduler pause enforcement', () => {
       .prepare('INSERT INTO app_state(key, value, updated_at) VALUES (?, ?, ?)')
       .run(STARTUP_CATCH_UP_STATE_KEY, start.toISOString(), start.toISOString());
     ingestion.ingestCatchUp(textUpdate(1, 10, 'pending'), start);
-    commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
+    await commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
     expect(scheduler.finishStartupCatchUp(start)).toEqual([]);
     const bucket = store.db
       .prepare<[], { state: string; error_code: string | null }>('SELECT state, error_code FROM buckets')

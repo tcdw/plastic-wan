@@ -103,7 +103,7 @@ test('read_image normalizes once and reuses the 30-day description cache', async
   const models = createModels();
   models.setProvider(faux.provider);
   const model = faux.getModel();
-  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, visionModel: model };
   let downloads = 0;
   const downloader: MediaDownloader = {
     download: async (_fileId, destination, signal) => {

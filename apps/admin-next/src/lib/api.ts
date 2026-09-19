@@ -355,13 +355,46 @@ export interface CurrentModel extends ModelOption {
 
 export interface ModelState {
   readonly current: CurrentModel;
-  readonly default: ModelOption;
   readonly options: readonly ModelOption[];
 }
 
 export interface ModelSwitchRequest {
   readonly provider: string;
   readonly model: string;
+}
+
+/** What a model switch or a config apply changed in the running process. */
+export interface ModelApplySummary {
+  readonly applied: readonly string[];
+  readonly restart_required: readonly string[];
+}
+
+export interface ModelSwitchResponse extends ModelState {
+  readonly apply: ModelApplySummary;
+}
+
+export interface ConfigErrorDetail {
+  readonly code: string;
+  readonly message: string;
+  readonly at: string;
+}
+
+export interface ConfigStatus {
+  readonly generation: number;
+  readonly active_hash: string;
+  readonly file_hash: string;
+  readonly restart_required: readonly string[];
+  readonly last_error: ConfigErrorDetail | null;
+}
+
+export interface ConfigApplyResponse {
+  readonly status: string;
+  readonly applied: readonly string[];
+  readonly restart_required: readonly string[];
+  readonly outside_serve: readonly string[];
+  readonly generation: number;
+  readonly active_hash: string;
+  readonly file_hash: string;
 }
 
 export interface StickerEntry {
@@ -608,16 +641,20 @@ export function getAgentModel(): Promise<ModelState> {
   return call<ModelState>('/model');
 }
 
-export function switchAgentModel(request: ModelSwitchRequest): Promise<ModelState> {
-  return call<ModelState>('/model', {
+export function switchAgentModel(request: ModelSwitchRequest): Promise<ModelSwitchResponse> {
+  return call<ModelSwitchResponse>('/model', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(request),
   });
 }
 
-export function resetAgentModel(): Promise<ModelState> {
-  return call<ModelState>('/model', { method: 'DELETE' });
+export function getConfigStatus(): Promise<ConfigStatus> {
+  return call<ConfigStatus>('/config/status');
+}
+
+export function applyConfigFile(): Promise<ConfigApplyResponse> {
+  return call<ConfigApplyResponse>('/config/apply', { method: 'POST' });
 }
 
 export function cancelPendingSessions(): Promise<CancelPendingResult> {

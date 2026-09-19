@@ -2,10 +2,11 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { serve, type ServerType } from '@hono/node-server';
 import type { RawConfig } from '../../platform/config.ts';
+import type { ConfigErrorCode, ConfigReloader } from '../../platform/config-reload.ts';
 import type { RuntimeConfigurationStore } from '../../platform/runtime-config.ts';
 import type { SqliteStore } from '../../store/database.ts';
 import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from '../../context/memory.ts';
-import { type AgentModelOption, type AgentModelSwitcher, ModelSwitchError } from '../../platform/model-switch.ts';
+import type { AgentModelOption, AgentModelSwitcher } from '../../platform/model-switch.ts';
 import type { BucketScheduler } from '../../orchestration/scheduler.ts';
 import { wakeFromSleep } from '../../store/sleep.ts';
 import { addBotAdmin, listBotAdmins, parseAdminUserId, removeBotAdmin } from '../../store/admins.ts';
@@ -71,15 +72,24 @@ export interface AdminServerOptions {
   readonly configStore: RuntimeConfigurationStore;
   readonly scheduler?: BucketScheduler;
   readonly modelSwitcher?: AgentModelSwitcher;
+  readonly configReloader?: ConfigReloader;
 }
+
+/** Model reference problems are user errors; everything else is a conflict. */
+const MODEL_ERROR_STATUS: Partial<Record<ConfigErrorCode, number>> = {
+  unknown_provider: 400,
+  unknown_model: 400,
+  not_text_capable: 400,
+  model_unusable: 400,
+};
 
 export class AdminServer {
   readonly #store: SqliteStore;
-  readonly #configStore: RuntimeConfigurationStore;
   readonly #admin: AdminConfig;
   readonly #auth: AdminAuth;
   readonly #scheduler: BucketScheduler | undefined;
   readonly #modelSwitcher: AgentModelSwitcher | undefined;
+  readonly #configReloader: ConfigReloader | undefined;
   readonly #staticDir: string;
   readonly #memoryWarningDays: number;
   #server: ServerType | undefined;
@@ -91,11 +101,11 @@ export class AdminServer {
       throw new Error('Admin panel is not configured');
     }
     this.#store = options.store;
-    this.#configStore = options.configStore;
     this.#admin = admin;
     this.#auth = new AdminAuth(options.store.orm, admin.session_ttl_hours);
     this.#scheduler = options.scheduler;
     this.#modelSwitcher = options.modelSwitcher;
+    this.#configReloader = options.configReloader;
     this.#staticDir = resolve(
       admin.static_dir ?? join(import.meta.dirname, '..', '..', '..', 'apps', 'admin-next', 'dist'),
     );
@@ -157,9 +167,8 @@ export class AdminServer {
       }
       return await this.#staticAsset(request, segments);
     } catch (error) {
-      if (error instanceof AdminAuthError || error instanceof AdminQueryError || error instanceof ModelSwitchError) {
-        const status = error instanceof ModelSwitchError ? 400 : error.status;
-        return json({ error: error.code, message: error.message }, status);
+      if (error instanceof AdminAuthError || error instanceof AdminQueryError) {
+        return json({ error: error.code, message: error.message }, error.status);
       }
       console.error(
         JSON.stringify({
@@ -283,7 +292,8 @@ export class AdminServer {
     }
     if (route === 'model') {
       const switcher = this.#modelSwitcher;
-      if (switcher === undefined) {
+      const reloader = this.#configReloader;
+      if (switcher === undefined || reloader === undefined) {
         return json({ error: 'model_switch_unavailable', message: 'Runtime model switching is not wired' }, 503);
       }
       if (request.method === 'GET') {
@@ -294,11 +304,52 @@ export class AdminServer {
         if (typeof body.provider !== 'string' || typeof body.model !== 'string') {
           return json({ error: 'invalid_model_reference', message: 'provider and model must be strings' }, 400);
         }
-        return json(this.#modelState(switcher, switcher.switch(body.provider, body.model)));
+        const result = await reloader.setAgentModel(body.provider, body.model);
+        if (!result.ok) {
+          const status = MODEL_ERROR_STATUS[result.code] ?? 409;
+          const message = result.fileWritten
+            ? `config.jsonc was updated but not applied: ${result.message}`
+            : result.message;
+          return json({ error: result.code, message }, status);
+        }
+        return json({
+          ...this.#modelState(switcher, switcher.current()),
+          apply: { applied: result.applied, restart_required: result.restartRequired },
+        });
       }
-      if (request.method === 'DELETE') {
-        return json(this.#modelState(switcher, switcher.reset()));
+    }
+    if (route === 'config/apply' && request.method === 'POST') {
+      const reloader = this.#configReloader;
+      if (reloader === undefined) {
+        return json({ error: 'config_reload_unavailable', message: 'Configuration reloading is not wired' }, 503);
       }
+      const result = await reloader.reloadFromFile();
+      if (!result.ok) {
+        return json({ error: result.code, message: result.message }, 422);
+      }
+      return json({
+        status: 'applied',
+        applied: result.applied,
+        restart_required: result.restartRequired,
+        outside_serve: result.outsideServe,
+        generation: result.status.generation,
+        active_hash: result.status.activeHash,
+        file_hash: result.status.fileHash,
+      });
+    }
+    if (route === 'config/status' && request.method === 'GET') {
+      const reloader = this.#configReloader;
+      if (reloader === undefined) {
+        return json({ error: 'config_reload_unavailable', message: 'Configuration reloading is not wired' }, 503);
+      }
+      const status = reloader.status();
+      return json({
+        generation: status.generation,
+        active_hash: status.activeHash,
+        file_hash: status.fileHash,
+        restart_required: status.restartRequired,
+        last_error: status.lastError,
+      });
     }
     if (request.method !== 'GET') {
       return json({ error: 'method_not_allowed', message: 'Audit routes are read-only' }, 405);
@@ -360,7 +411,6 @@ export class AdminServer {
       readonly context_window: number;
       readonly max_tokens: number;
     };
-    readonly default: { readonly provider: string; readonly model: string };
     readonly options: readonly { readonly provider: string; readonly model: string; readonly name: string }[];
   } {
     return {
@@ -370,10 +420,6 @@ export class AdminServer {
         name: current.name,
         context_window: current.contextWindow,
         max_tokens: current.maxTokens,
-      },
-      default: {
-        provider: this.#configStore.current().config.agent.provider,
-        model: this.#configStore.current().config.agent.model,
       },
       options: switcher.list().map((option) => ({
         provider: option.provider,

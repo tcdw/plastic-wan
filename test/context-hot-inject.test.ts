@@ -12,7 +12,6 @@ import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { ConversationRuntime } from '../src/orchestration/conversation-runtime.ts';
 import { ConversationContextStore } from '../src/context/context-store.ts';
 import { InvocationQueueService } from '../src/orchestration/invocation-queue.ts';
-import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import type { ModelRegistry } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { SystemResources } from '../src/platform/system-resources.ts';
@@ -85,7 +84,7 @@ async function fixture(transform?: (config: FileConfig) => void): Promise<Fixtur
     if (model === undefined) {
       throw new Error(`Faux model ${overrides.registryModelId} is not registered`);
     }
-    const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+    const registry: ModelRegistry = { models, visionModel: model };
     const config: RawConfig =
       overrides.systemPrompt === undefined
         ? loaded.config
@@ -97,7 +96,6 @@ async function fixture(transform?: (config: FileConfig) => void): Promise<Fixtur
       configStore: runtimeConfigStore,
       secrets: new SecretStore(),
       registry,
-      modelSwitcher: new AgentModelSwitcher(runtimeConfigStore, registry.models),
       telegramApi: sendApi,
       bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
       systemResources: SystemResources.empty(),

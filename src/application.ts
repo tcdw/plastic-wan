@@ -17,8 +17,9 @@ import {
 } from './orchestration/bot-commands.ts';
 import { KeyedSemaphore } from './platform/concurrency.ts';
 import { assertConfigPermissions, loadConfig } from './platform/config.ts';
+import { ConfigReloader } from './platform/config-reload.ts';
 import { ServeLock, SqliteStore } from './store/database.ts';
-import { previewContext } from './platform/invocation-context.ts';
+import { previewContext, unavailableCapabilities } from './platform/invocation-context.ts';
 import { McpManager } from './capabilities/mcp.ts';
 import { TelegramMediaClient } from './capabilities/media/media-download.ts';
 import { MediaService } from './capabilities/media/media.ts';
@@ -147,7 +148,6 @@ export async function serve(configPath: string): Promise<void> {
       configStore,
       secrets,
       registry,
-      modelSwitcher,
       telegramApi: bot.api,
       bot: {
         id: BigInt(me.id),
@@ -168,9 +168,33 @@ export async function serve(configPath: string): Promise<void> {
       conversationRuntime,
     );
     scheduler = startedScheduler;
-    const commands = new BotCommandService(store, configStore, startedScheduler, modelSwitcher, conversationRuntime);
     const preview = previewContext();
-    mcpManager.setRegistryValidator((mcpTools) => runtime.validateAdditionalTools(preview, mcpTools));
+    const configReloader = new ConfigReloader({
+      loaded,
+      store: configStore,
+      models: registry.models,
+      modelSwitcher,
+      secrets,
+      validateAgentModel: (model) =>
+        runtime.validateAdditionalTools(
+          preview,
+          additionalTools(preview, Number.MAX_SAFE_INTEGER, unavailableCapabilities()),
+          model,
+        ),
+      // A raised max_concurrency only takes effect on the next scheduler tick.
+      onPublished: () => startedScheduler.wake(),
+    });
+    const commands = new BotCommandService(
+      store,
+      configStore,
+      startedScheduler,
+      modelSwitcher,
+      conversationRuntime,
+      configReloader,
+    );
+    mcpManager.setRegistryValidator((mcpTools) =>
+      runtime.validateAdditionalTools(preview, mcpTools, modelSwitcher.model()),
+    );
     const catchUpController = new AbortController();
     startupCatchUpController = catchUpController;
     const catchUp = await runStartupCatchUp({
@@ -190,7 +214,13 @@ export async function serve(configPath: string): Promise<void> {
     await mcpManager.start();
     startedScheduler.start();
     if (loaded.config.admin?.enabled === true) {
-      const adminServer = new AdminServer({ store, configStore, scheduler: startedScheduler, modelSwitcher });
+      const adminServer = new AdminServer({
+        store,
+        configStore,
+        scheduler: startedScheduler,
+        modelSwitcher,
+        configReloader,
+      });
       admin = adminServer;
       const listening = await adminServer.start();
       logEvent('admin_started', { host: listening.hostname, port: listening.port });
@@ -239,7 +269,7 @@ async function replyToCommand(context: Context, commands: BotCommandService, com
         };
   let text: string;
   try {
-    text = commands.run(command, BigInt(chatId), sender);
+    text = await commands.run(command, BigInt(chatId), sender);
   } catch (error) {
     logEvent('command_failed', {
       command: command.name,

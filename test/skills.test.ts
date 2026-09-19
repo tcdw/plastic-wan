@@ -22,7 +22,6 @@ import type { MediaDownloader } from '../src/capabilities/media/media-download.t
 import { MediaService } from '../src/capabilities/media/media.ts';
 import { createMemoryTools, MemoryStore } from '../src/context/memory.ts';
 import { createWebFetchTool } from '../src/capabilities/web-fetch.ts';
-import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import type { ModelRegistry } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
@@ -120,7 +119,7 @@ async function indexOneSticker(setup: InvocationSetup): Promise<{ stickers: Stic
     store,
     configStore,
     secrets: new SecretStore(),
-    registry: { models, agentModel: visionFaux.getModel(), visionModel: visionFaux.getModel() },
+    registry: { models, visionModel: visionFaux.getModel() },
     mediaClient: downloader,
     modelGate: new KeyedSemaphore(),
   });
@@ -213,14 +212,13 @@ test('the skill index reaches the system prompt and primitives stay directly cal
   const models = createModels();
   models.setProvider(agentFaux.provider);
   const model = agentFaux.getModel();
-  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, visionModel: model };
   const memoryStore = new MemoryStore(store.orm);
   const runtime = new AgentRuntime({
     store,
     configStore: setup.configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(setup.configStore, models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 500, date: 1, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),
@@ -293,14 +291,13 @@ test('search_stickers runs through execute and its refs authorize a sticker send
   const models = createModels();
   models.setProvider(agentFaux.provider);
   const model = agentFaux.getModel();
-  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, visionModel: model };
   let sentSticker: string | undefined;
   const runtime = new AgentRuntime({
     store,
     configStore: setup.configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(setup.configStore, models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),
       sendSticker: async (_chatId, sticker) => {
@@ -380,14 +377,13 @@ test('execute refuses primitives and unknown capabilities while memory calls sti
   const models = createModels();
   models.setProvider(agentFaux.provider);
   const model = agentFaux.getModel();
-  const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+  const registry: ModelRegistry = { models, visionModel: model };
   const memoryStore = new MemoryStore(store.orm);
   const runtime = new AgentRuntime({
     store,
     configStore: setup.configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(setup.configStore, models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 500, date: 1, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),

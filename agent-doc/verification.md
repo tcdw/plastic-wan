@@ -23,6 +23,7 @@ pnpm test test/mcp.test.ts test/web-fetch.test.ts
 pnpm test test/operations.test.ts test/foundation.test.ts test/schema.test.ts test/load-env.test.ts
 pnpm test test/admin.test.ts test/model-switch.test.ts
 pnpm test test/bot-commands.test.ts
+pnpm test test/config-diff.test.ts test/config-reload.test.ts
 pnpm test test/memory.test.ts
 pnpm test test/alarm.test.ts test/alarm-internal-context.test.ts
 pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-configure.test.ts
@@ -55,8 +56,10 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | `web-fetch.test.ts` | 有界不可信文本结果与审计、私网/合成地址拒绝（含跳转目标） |
 | `operations.test.ts` | Retention、备份轮换、Scheduler 关闭 |
 | `admin.test.ts` | Admin 首次设置、登录、Session、只读审计 API（含 Conversation Context 列表/详情与写入尝试被拒）、静态托管 |
-| `model-switch.test.ts` | 可切换模型仅列 text 能力、默认取配置值、切换只对下次会话生效、未知 provider/model 与 image-only 拒绝 |
-| `bot-commands.test.ts` | 命令解析与 mention 匹配、`setMyCommands` 注册一致性、`/pause` 中止与阻断、`/resume` 恢复、`/status` 用量与 Context 行口径、`/model` 分页与切换、管理员鉴权与匿名拒绝、命令只审计不入库 |
+| `model-switch.test.ts` | 可切换模型仅列 text 能力、当前模型取配置值、`option()` 只校验不应用（未知 provider/model 与 image-only 拒绝）、`current()` 跟随 `store.publish` 变化 |
+| `bot-commands.test.ts` | 命令解析与 mention 匹配、`setMyCommands` 注册一致性、`/pause` 中止与阻断、`/resume` 恢复、`/status` 用量与 Context 行口径、`/model` 分页与切换（写配置文件并 reload）、管理员鉴权与匿名拒绝、命令只审计不入库 |
+| `config-diff.test.ts` | 热更新白名单分类（hot/restart/outside_serve）、candidate 构造、在用模型保护、custom Provider `models[]` 对齐、新增 Chat 与 Prompt 内容比较 |
+| `config-reload.test.ts` | `ConfigReloader` 外部契约：generation 与两个 hash、`config_reloaded`/`config_reload_failed` 日志、两遍校验与 `candidate_invalid`、待重启列表、`/model` 写入文件（保留注释、`0600`、符号链接拒绝）、`invocations.config_hash` 在 `queued → running` 写入、Admin `POST /config/apply` 与 `PUT /model` 的响应体 |
 | `memory.test.ts` | 记忆持久化与 TTL、Conversation 隔离、Tool 审计、注入批次内 `<memory_list>` 的顺序与作用域、Admin 记忆 CRUD |
 | `alarm.test.ts` / `alarm-internal-context.test.ts` | Alarm 创建/触发/取消、creator-vs-target ownership、latest-new caller 解析、跨 invocation hidden mapping、状态变化安全失败、send 不泄漏、重启后 durable internal context |
 | `prompt-template.test.ts` | Prompt 模板白名单变量渲染、未知与格式错误表达式拒绝 |
@@ -79,6 +82,7 @@ node src/cli.ts check-config --config dev-data/config.jsonc
 - Chat ID、Topic、Provider alias、Model ID 和 MCP Tool policy 未被错误引用。
 - `agent.context` 与 `agent.rate_limits` 的越界值被拒绝；已删除的 `agent.max_turns`/`agent.max_sends`/`agent.timeout_seconds` 会被严格对象模式拒绝，旧配置必须一起改。
 - 配置改变后，不要继续使用旧进程的哈希。
+- 热更新白名单字段改完后，用 Admin「Apply config file」（或 `/model`）应用：日志出现 `config_reloaded`，`active_hash` 反映新配置；没有待重启字段时它与 `check-config` 的文件哈希一致，有待重启字段时两者不同，且这些路径出现在 `restart_required` 里。
 
 ## Doctor
 
@@ -128,7 +132,7 @@ node src/cli.ts serve --config dev-data/config.jsonc
 8. Overview 的 Bot status 卡片显示 `sleeping`/`awake` 与 `sleep_until`，睡眠时 `Wake now` 带二次确认；同时列出所有 `chat_pause` Chat 与暂停时间。
 9. Alarms 页面按 state/Chat/Target 过滤，pending 优先置顶，展开显示完整诊断并链接到对应 Tool session；取消只对 pending 开放且需二次确认，对非 pending 给出 409 冲突提示。
 10. Bot admins 页面能添加/移除管理员，`telegram.admins` 的种子项来源显示为 `config`。
-11. Model 页面显示当前/默认模型；切换后 Telegram `/status` 立即反映新模型，恢复默认后回到 `config.jsonc` 的值。
+11. Model 页面显示当前模型与可切换模型；切换后 `config.jsonc` 的 `agent.provider` / `agent.model` 被改写，Telegram `/status` 与页面立即反映新模型，重启 `serve` 后仍是新模型。Settings 页的 `Configuration file` 卡片显示 generation、active hash 与 file hash；改一个白名单字段后点 `Apply config file`，应用列表出现该路径，改一个 restart 字段则出现在待重启列表。
 12. Conversation Contexts 页面按 chat 过滤，列表按最近活跃倒序并可用 Load more 翻页；详情显示 head/next seq、保留消息数与 capability refs，展开消息看到 `payload_preview` 与截断标记，且不出现已 GC 的行。
 13. 登出后访问深链接回落登录页；重新登录恢复访问。
 14. `admin_users.password_hash` 以 `$argon2id$` 开头，`admin_sessions` 只有 64 位十六进制摘要。
@@ -146,7 +150,8 @@ pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.t
 - **真实后端夹具**：`globalSetup` 派生一个 Node 子进程运行 `apps/admin-next/e2e/server.ts`，
   它创建临时目录 + 临时 SQLite，加载 `test/fixtures/admin-seed.ts`（基础行 +
   `seedAdminBulkRows` 的批量分页数据），构造 `SqliteStore` / `AgentModelSwitcher` /
-  `AdminServer`，在回环地址随机端口启动，并同端口暴露只读的 `/__e2e/**` 状态钩子；
+  `ConfigReloader` / `AdminServer`，在回环地址随机端口启动，并同端口暴露只读的
+  `/__e2e/**` 状态钩子；
   `globalTeardown` 优雅关闭并清理临时目录。**不读 `dev-data/`、不启动 `serve`、
   不触碰 8787 或任何用户进程。**
 - 每轮运行是全新数据库：认证从真实 `setup_required` 首次创建管理员开始，后续用例
@@ -167,9 +172,9 @@ pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.t
      （`provider_timeout`）且可展开脱敏详情（`sk-***`，无活密钥模式）；assistant 文本
      带 `Private reasoning` 标记。
   5. 写操作（请求真实发出 + UI/数据变化）：记忆新建与删除（含 API 复核）、Bot admin
-     添加与移除、模型切换与恢复默认、Alarm 取消成功与 409 冲突路径
-     （`alarm_not_pending` + 列表刷新到新状态）、Overview 的 Cancel pending 与睡眠态
-     Wake now。
+     添加与移除、模型切换（写回 `config.jsonc`）、Settings 页的 `Apply config file`、
+     Alarm 取消成功与 409 冲突路径（`alarm_not_pending` + 列表刷新到新状态）、
+     Overview 的 Cancel pending 与睡眠态 Wake now。
   6. 只读保证：浏览全部审计页面时记录网络请求，断言没有任何 POST/PUT/DELETE 打到
      `/api/**`。
   7. 安全：生产静态托管（非 dev server）下断言 CSP 头（`default-src 'none'` /

@@ -107,7 +107,7 @@ pnpm run admin:dev
 - `pnpm test`：运行全部行为测试。
 - `check-config`：只验证 JSONC Schema、语义与引用，输出配置哈希。
 - `doctor`：执行 SQLite/Sharp/FFmpeg/Lottie、Provider、Vision、Telegram 与 required MCP 的真实探针。
-- `serve`：启动 Telegram long polling；配置只在启动时加载，不支持热重载。
+- `serve`：启动 Telegram long polling；白名单字段（agent 模型、Prompt、预算与并发等，见 [agent-doc/configuration.md](agent-doc/configuration.md#运行时配置热更新)）可在运行中通过 Admin 的「应用配置文件」或 `/model` 应用，其余字段仍需重启。
 - `backup`：执行保留清理、SQLite `VACUUM INTO` 备份与轮换；完整性检查属于独立恢复验证。
 - `configure`：`src/tui/` 的交互式配置向导，编辑既有配置的 Provider 与 thinking level，可从 Provider `/models` 拉取可路由模型 ID 后写回原文件。要求已存在可加载的配置且 stdin 是 TTY，非交互环境直接报错退出——agent 不要调用它。
 - `admin:build`：构建 `apps/admin-next` 生产 bundle（`apps/admin-next/dist`），供 `serve` 静态托管。
@@ -117,7 +117,7 @@ pnpm run admin:dev
 
 - `serve` 是长期进程。Agent 必须使用进程监督器启动，等待 `serve_started`，并通过日志或真实消息验证。
 - 同一 `data_dir` 只能有一个实例；`ServeLock` 使用 `serve.lock` 防止双实例和 Telegram long polling 竞争。
-- 修改 `config.jsonc` 后必须重启。用启动日志中的 `config_hash` 与 `check-config` 输出对比，避免误判白名单或模型配置。
+- 修改 `config.jsonc` 后：白名单字段可用 Admin 的「应用配置文件」或 `/model` 热应用，其余字段必须重启。用 `config_reloaded` 日志事件（同时带 `active_hash` 与 `file_hash`）或 `check-config` 输出对比哈希，避免误判白名单或模型配置。没有文件系统 watcher，文件只有在调用这两个入口时才生效。
 - 本地人工运行使用 `Ctrl+C` 停止；不要用未验证 PID 的强制终止命令。
 - Admin Panel 随 `serve` 在同一进程内启动，仅在 `admin.enabled = true` 时监听；`admin.host` 不限制回环，非回环绑定的暴露风险由运维承担。
 

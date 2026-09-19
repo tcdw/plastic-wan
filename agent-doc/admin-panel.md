@@ -2,9 +2,9 @@
 
 Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析、已配置 Sticker Set 的可搜索索引、Agent 短期记忆（`memories`）以及 Alarm（闹钟 / 延迟调用）。后端在 `src/ingress/admin/`，前端在 `apps/admin-next/`（Vite + React + Tailwind 4 + shadcn/Base UI + TanStack Query + TanStack Router），构建产物是**纯静态 SPA**，由 `AdminServer` 同源托管，不依赖任何 Node/Nitro 运行时。
 
-审计数据只读；记忆管理、Bot 管理员列表管理、模型热切换、解除睡眠、取消挂起会话与取消 pending Alarm 是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume`、`/cut_topic` 等 Bot 管理员命令的 Telegram 用户，热切换 agent 模型，唤醒/取消挂起会话，或取消尚未触发的 Alarm。面板不能改写配置文件、不能重跑 Invocation 或删除审计记录。
+审计数据只读；记忆管理、Bot 管理员列表管理、模型热切换、配置文件应用、解除睡眠、取消挂起会话与取消 pending Alarm 是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume`、`/cut_topic` 等 Bot 管理员命令的 Telegram 用户，热切换 agent 模型（写回 `config.jsonc` 并重新加载），唤醒/取消挂起会话，取消尚未触发的 Alarm，或把配置文件中的热更新白名单字段应用到运行中的进程。除 `PUT /model` 写入的 `agent.provider` / `agent.model` 之外，面板不能改写配置文件、不能重跑 Invocation 或删除审计记录。
 
-`admin` section 的字段语义见 [configuration.md](configuration.md#admin-panel)；`admin.host` 不限制取值，绑定地址与暴露风险由运维负责（推荐回环 + 反向代理），配置整体参与 `config_hash`，改动后必须重启 `serve`。
+`admin` section 的字段语义见 [configuration.md](configuration.md#admin-panel)；`admin.host` 不限制取值，绑定地址与暴露风险由运维负责（推荐回环 + 反向代理）。`admin.*` 不在热更新白名单里：改动后进入待重启列表，重启 `serve` 才生效。热更新白名单与语义见 [configuration.md](configuration.md#运行时配置热更新)。
 
 ## 生命周期
 
@@ -40,7 +40,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 完整路由表以 `src/ingress/admin/server.ts` 的分发为准。这里只记录路由签名看不出来的约束。
 
-**审计读端点**（`GET /auth/session`、`/overview`、`/usage`、`/invocations[/:id]`、`/contexts[/:conversation_id]`、`/messages[/:id]`、`/sticker-sets`、`/stickers`、`/alarms`、`/memories`、`/memories/chats`、`/admins`、`/model`）一律只读；落到审计分支的非 `GET` 请求返回 405 `method_not_allowed`。`/usage` 额外接受 `days`（1–90，默认 7），越界返回 400 `invalid_days`；Token 序列来自 `daily_usage`，Invocation 与 Tool call 序列直接按 UTC 日期 `COUNT` `invocations` 与 `tool_calls`。`/contexts` 是按 Conversation（chat + Forum Topic）维度只读投影 Conversation Context；`:conversation_id` 是 `conversations.id` 而不是 `conversation_contexts.id`，不存在返回 404。
+**审计读端点**（`GET /auth/session`、`/overview`、`/usage`、`/invocations[/:id]`、`/contexts[/:conversation_id]`、`/messages[/:id]`、`/sticker-sets`、`/stickers`、`/alarms`、`/memories`、`/memories/chats`、`/admins`、`/model`、`/config/status`）一律只读；落到审计分支的非 `GET` 请求返回 405 `method_not_allowed`。`/usage` 额外接受 `days`（1–90，默认 7），越界返回 400 `invalid_days`；Token 序列来自 `daily_usage`，Invocation 与 Tool call 序列直接按 UTC 日期 `COUNT` `invocations` 与 `tool_calls`。`/contexts` 是按 Conversation（chat + Forum Topic）维度只读投影 Conversation Context；`:conversation_id` 是 `conversations.id` 而不是 `conversation_contexts.id`，不存在返回 404。`GET /model` 返回当前生效模型与可切换模型列表，不再有 `default` 字段；`GET /config/status` 返回 `generation`、`active_hash`、`file_hash`、`restart_required` 与 `last_error`（`{ code, message, at }` 或 `null`）。两个端点在 `ConfigReloader` 未接线时分别返回 503 `model_switch_unavailable` / `config_reload_unavailable`。
 
 **写端点是白名单例外**，只有这些：
 
@@ -52,7 +52,8 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 | `POST /cancel-pending-sessions` | 取消所有 `collecting`/`queued` Bucket 及其 queued Invocation |
 | `POST` / `PUT` / `DELETE /memories[/:id]` | 创建时若 `(chat_id, message_thread_id)` 的 Conversation 不存在会自动建；`PUT` 至少要提供 `content` 或 `ttl_seconds` 之一 |
 | `POST` / `DELETE /admins[/:id]` | `:id` 是 Telegram 用户 ID 不是行 ID；添加幂等；删掉配置种子项后重启会重新出现 |
-| `PUT` / `DELETE /model` | 内存态热切换，只影响后续 Invocation；未知 provider/model 或模型无 text 能力返回 400（`unknown_provider`/`unknown_model`/`not_text_capable`） |
+| `PUT /model` | 切换 agent 模型：把 `agent.provider` / `agent.model` 写入 `config.jsonc` 并重新加载，重启后仍然生效，只影响后续 Invocation。未知 provider/model、模型无 text 能力或模型不可用返回 400（`unknown_provider`/`unknown_model`/`not_text_capable`/`model_unusable`），其它失败（配置权限、文件校验、candidate 校验等）返回 409；body 为 `{ error, message }`，文件已写入但应用失败时 message 以 `config.jsonc was updated but not applied: ` 开头。`DELETE /model` 已删除，落到 405 `method_not_allowed` |
+| `POST /config/apply` | 重新读取 `config.jsonc` 并把热更新白名单字段应用到运行中的进程。成功返回 200 `{ status: 'applied', applied, restart_required, outside_serve, generation, active_hash, file_hash }`；失败返回 422 `{ error, message }`，此时 active 配置不变，错误记录在 `GET /config/status` 的 `last_error` |
 | `DELETE /alarms/:id` | **只能**取消 `pending`：`firing` 与其它终态返回 409 `alarm_not_pending`，不存在返回 404 `not_found`。取消记录当前面板管理员与 `admin_cancelled` 原因并唤醒 Scheduler |
 
 列表过滤同样只在少数端点上有效：`/alarms` 按 `state`(`pending`/`firing`/`fired`/`cancelled`)/`chat`/`target`，`/memories` 按 `chat`/`state`(`active`/`expired`/`long_ttl`)，`/stickers` 按 `set`/`state`，`/contexts` 只按 `chat`。记忆列表项带 `expired` 与 `long_ttl` 布尔标记，`long_ttl` 表示剩余寿命超过 `agent.memory_ttl_warning_days`。Alarm 列表把 `pending` 按 `scheduled_at, id` 升序置顶，非 pending 历史按最近状态时间/id 倒序。
@@ -116,6 +117,8 @@ pnpm run admin:test:e2e  # Playwright 浏览器 E2E（真实 AdminServer + 临�
   `DetailSkeleton` / `DetailError`，错误行显示 `ApiError.code: message`。
 
 Overview 的 Bot status 卡片显示当前 `sleeping`/`awake`、`sleep_until`，睡眠时提供带确认的 `Wake now` 操作，并显示所有 `chat_pause` Chat 的名称或 Telegram ID 与暂停时间。
+
+Settings 页有一张 `Configuration file` 卡片：显示 generation、active hash 与 file hash、待重启字段列表与 last error，并提供 `Apply config file` 按钮（调用 `POST /config/apply`），成功或失败后都刷新配置状态。Model 页不再有 `Restore default` 按钮与 `Source`/`Default` 行。
 
 Tool session 详情默认打开 Overview 时间线：按时间合并冻结消息、Invocation 生命周期、Model Call、Tool Call 与 Agent transcript；消息正文和 `send` 参数中的发送内容直接展示，Tool 结果与完整参数按需展开。失败的 Model Call 同时展示稳定错误码，并可展开查看经密钥脱敏的完整 Provider 错误详情。Assistant 文本显式标注为私有推理，只有 `send` Tool 会发往 Telegram。
 

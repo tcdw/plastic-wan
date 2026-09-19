@@ -2,6 +2,7 @@ import type { Message } from 'grammy/types';
 import { and, eq, sql } from 'drizzle-orm';
 import { isBotAdmin } from '../store/admins.ts';
 import type { RawConfig } from '../platform/config.ts';
+import type { ConfigReloader } from '../platform/config-reload.ts';
 import type { RuntimeConfigurationStore } from '../platform/runtime-config.ts';
 import { isWithinActiveWindows } from '../platform/participation.ts';
 import { type SqliteStore, isChatPaused, resolveChatConfig } from '../store/database.ts';
@@ -132,6 +133,7 @@ export class BotCommandService {
   readonly #configStore: RuntimeConfigurationStore;
   readonly #scheduler: BucketScheduler;
   readonly #modelSwitcher: AgentModelSwitcher | undefined;
+  readonly #configReloader: ConfigReloader | undefined;
   readonly #participation: ParticipationRegistry;
   readonly #contexts: ConversationContextStore;
   readonly #conversationRuntime: ConversationRuntime | undefined;
@@ -142,17 +144,24 @@ export class BotCommandService {
     scheduler: BucketScheduler,
     modelSwitcher?: AgentModelSwitcher,
     conversationRuntime?: ConversationRuntime,
+    configReloader?: ConfigReloader,
   ) {
     this.#store = store;
     this.#configStore = configStore;
     this.#scheduler = scheduler;
     this.#modelSwitcher = modelSwitcher;
+    this.#configReloader = configReloader;
     this.#participation = new ParticipationRegistry(configStore.current().config);
     this.#contexts = new ConversationContextStore(store);
     this.#conversationRuntime = conversationRuntime;
   }
 
-  run(command: ParsedCommand, telegramChatId: bigint, sender: CommandSender | null, now = new Date()): string {
+  async run(
+    command: ParsedCommand,
+    telegramChatId: bigint,
+    sender: CommandSender | null,
+    now = new Date(),
+  ): Promise<string> {
     switch (command.name) {
       case 'pause':
         return this.#adminGate(sender) ? this.#pause(telegramChatId, now) : DENIED_REPLY;
@@ -161,7 +170,7 @@ export class BotCommandService {
       case 'status':
         return this.#status(telegramChatId, now);
       case 'model':
-        return this.#adminGate(sender) ? this.#modelSwitch(command.argument) : DENIED_REPLY;
+        return this.#adminGate(sender) ? await this.#modelSwitch(command.argument) : DENIED_REPLY;
       case 'cut_topic':
         return this.#adminGate(sender)
           ? this.#cutTopic(telegramChatId, command.messageId, command.threadId, now)
@@ -287,17 +296,14 @@ export class BotCommandService {
     return '已切掉此消息及更早的历史，并清空该话题的连续 Context。';
   }
 
-  #modelSwitch(argument: string | undefined): string {
+  async #modelSwitch(argument: string | undefined): Promise<string> {
     const switcher = this.#modelSwitcher;
-    if (switcher === undefined) {
+    const reloader = this.#configReloader;
+    if (switcher === undefined || reloader === undefined) {
       return '运行时模型切换不可用。';
     }
     if (argument === undefined) {
       return this.#modelMenu(switcher, 1, switcher.list());
-    }
-    if (argument === 'reset') {
-      const current = switcher.reset();
-      return `已恢复 config.jsonc 默认模型: ${current.provider} / ${current.model}。`;
     }
     const options = switcher.list();
     const pageMatch = /^page\s+(\d+)$/.exec(argument);
@@ -317,8 +323,21 @@ export class BotCommandService {
     if (option === undefined) {
       return `无效序号。${this.#modelMenu(switcher, 1, options)}`;
     }
-    const current = switcher.switch(option.provider, option.model);
-    return `已切换: ${current.provider} / ${current.model}，将在下一次 agent session 生效。`;
+    const result = await reloader.setAgentModel(option.provider, option.model);
+    if (!result.ok) {
+      return result.fileWritten ? `已写入 config.jsonc，但应用失败: ${result.message}` : `切换失败: ${result.message}`;
+    }
+    const lines = [
+      `已切换: ${option.provider} / ${option.model}，已写入 config.jsonc，将在下一次 agent session 生效。`,
+    ];
+    const other = result.applied.filter((path) => path !== 'agent.provider' && path !== 'agent.model');
+    if (other.length > 0) {
+      lines.push(`同时应用了配置文件中的其它修改: ${other.join(', ')}`);
+    }
+    if (result.restartRequired.length > 0) {
+      lines.push(`另有 ${result.restartRequired.length} 项配置需要重启后生效。`);
+    }
+    return lines.join('\n');
   }
 
   #modelMenu(switcher: AgentModelSwitcher, page: number, options: readonly AgentModelOption[]): string {
@@ -337,7 +356,7 @@ export class BotCommandService {
       }
       lines.push(`${index + 1}. ${option.provider} / ${option.model}（${option.name}）`);
     }
-    lines.push('使用 /model 序号 切换，/model page 页码 翻页，/model reset 恢复默认');
+    lines.push('使用 /model 序号 切换，/model page 页码 翻页');
     return lines.join('\n');
   }
 

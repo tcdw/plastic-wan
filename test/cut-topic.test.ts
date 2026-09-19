@@ -6,6 +6,7 @@ import type { Update } from 'grammy/types';
 import { seedConfigAdmins } from '../src/store/admins.ts';
 import { BotCommandService } from '../src/orchestration/bot-commands.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
@@ -53,6 +54,7 @@ function commandUpdate(updateId: number, messageId: number, chatId: bigint): Upd
 
 async function setup(): Promise<{
   loaded: LoadedConfig;
+  configStore: RuntimeConfigurationStore;
   store: SqliteStore;
   ingestion: TelegramIngestion;
   scheduler: BucketScheduler;
@@ -78,18 +80,20 @@ async function setup(): Promise<{
     }),
   );
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? []);
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));
   return {
     loaded,
+    configStore,
     store,
-    ingestion: new TelegramIngestion(store, loaded.config, { id: 999, username: 'plasticwan_test_bot' }),
+    ingestion: new TelegramIngestion(store, configStore, { id: 999, username: 'plasticwan_test_bot' }),
     scheduler,
-    commands: new BotCommandService(store, loaded.config, scheduler),
+    commands: new BotCommandService(store, configStore, scheduler),
   };
 }
 
@@ -320,20 +324,20 @@ describe('cut_topic', () => {
     // A run in flight keeps the pre-cut transcript in memory and a header snapshot
     // taken at its start, so leaving it alive let it answer from the history the
     // admin had just cut and write its stale, lower `head_seq` back over the cut.
-    const { store, loaded, ingestion } = await setup();
+    const { store, ingestion, configStore } = await setup();
     let abortReason: string | undefined;
     let release = (): void => undefined;
     const gate = new Promise<void>((resolve) => {
       release = () => resolve();
     });
-    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async (_invocationId, signal) => {
+    const scheduler = new BucketScheduler(store, configStore, async (_invocationId, _snapshot, signal) => {
       signal.addEventListener('abort', () => {
         abortReason = (signal.reason as Error | undefined)?.message;
       });
       await gate;
       return { state: 'completed', reason: 'done' };
     });
-    const commands = new BotCommandService(store, loaded.config, scheduler);
+    const commands = new BotCommandService(store, configStore, scheduler);
     try {
       scheduler.start();
       // Backdated so the bucket is already past its window and launches at once.
@@ -440,18 +444,18 @@ describe('cut_topic', () => {
   });
 
   test('the cutoff survives scheduler and command service recreation', async () => {
-    const { store, loaded, ingestion, scheduler, commands } = await setup();
+    const { store, ingestion, scheduler, commands, configStore } = await setup();
     const start = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(groupUpdate(1, 10, 'polluted', FIRST_CHAT), start);
     const command = ingestion.ingest(commandUpdate(2, 11, FIRST_CHAT), new Date(start.getTime() + 1_000)).command;
     commands.run(command!, FIRST_CHAT, ALICE);
     await scheduler.stop();
 
-    const reopened = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    const reopened = new BucketScheduler(store, configStore, async () => ({
       state: 'completed',
       reason: 'done',
     }));
-    const recreatedCommands = new BotCommandService(store, loaded.config, reopened);
+    const recreatedCommands = new BotCommandService(store, configStore, reopened);
     expect(
       store.db
         .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM chat_context_cutoffs')

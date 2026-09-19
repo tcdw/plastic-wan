@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { Update } from 'grammy/types';
 import { AdminServer } from '../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import { createModelRegistry } from '../src/platform/providers.ts';
@@ -27,6 +28,7 @@ interface Fixture {
   readonly store: SqliteStore;
   readonly server: AdminServer;
   readonly loaded: LoadedConfig;
+  readonly configStore: RuntimeConfigurationStore;
   readonly directory: string;
 }
 
@@ -52,8 +54,9 @@ async function fixture(): Promise<Fixture> {
     }),
   );
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
-  return { store, server: new AdminServer({ store, config: loaded.config }), loaded, directory };
+  return { store, server: new AdminServer({ store, configStore }), loaded, configStore, directory };
 }
 
 function request(path: string, init: RequestInit = {}): Request {
@@ -239,10 +242,10 @@ test('admin can change username and password from an authenticated session', asy
 });
 
 test('audit routes expose tool sessions, messages and sticker cache', async () => {
-  const { store, server, loaded } = await fixture();
+  const { store, server, configStore } = await fixture();
   try {
-    const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
-    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
+    const scheduler = new BucketScheduler(store, configStore, async () => ({
       state: 'completed',
       reason: 'done',
     }));
@@ -462,9 +465,9 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
 });
 
 test('context API exposes conversation contexts read-only', async () => {
-  const { store, server, loaded } = await fixture();
+  const { store, server, configStore } = await fixture();
   try {
-    const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+    const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
     const received = new Date('2026-03-02T00:00:00.000Z');
     ingestion.ingest(textUpdate(1, 10, 'context audit'), received);
 
@@ -676,10 +679,10 @@ test('admin config accepts a non-loopback bind host', async () => {
 });
 
 test('admin can cancel all pending sessions', async () => {
-  const { store, server, loaded } = await fixture();
+  const { store, server, configStore } = await fixture();
   try {
-    const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
-    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
+    const scheduler = new BucketScheduler(store, configStore, async () => ({
       state: 'completed',
       reason: 'done',
     }));
@@ -766,10 +769,10 @@ test('admins API lists, adds and removes bot admins', async () => {
 });
 
 test('model API lists, switches and resets the agent model', async () => {
-  const { store, loaded } = await fixture();
+  const { store, loaded, configStore } = await fixture();
   const registry = await createModelRegistry(loaded.config, new SecretStore());
-  const switcher = new AgentModelSwitcher(loaded.config, registry.models);
-  const server = new AdminServer({ store, config: loaded.config, modelSwitcher: switcher });
+  const switcher = new AgentModelSwitcher(configStore, registry.models);
+  const server = new AdminServer({ store, configStore, modelSwitcher: switcher });
   try {
     const unauthenticated = await server.handle(request('/api/model'));
     expect(unauthenticated.status).toBe(401);

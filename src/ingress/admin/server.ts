@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { serve, type ServerType } from '@hono/node-server';
 import type { RawConfig } from '../../platform/config.ts';
+import type { RuntimeConfigurationStore } from '../../platform/runtime-config.ts';
 import type { SqliteStore } from '../../store/database.ts';
 import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from '../../context/memory.ts';
 import { type AgentModelOption, type AgentModelSwitcher, ModelSwitchError } from '../../platform/model-switch.ts';
@@ -67,14 +68,14 @@ export type AdminConfig = NonNullable<RawConfig['admin']>;
 
 export interface AdminServerOptions {
   readonly store: SqliteStore;
-  readonly config: RawConfig;
+  readonly configStore: RuntimeConfigurationStore;
   readonly scheduler?: BucketScheduler;
   readonly modelSwitcher?: AgentModelSwitcher;
 }
 
 export class AdminServer {
   readonly #store: SqliteStore;
-  readonly #config: RawConfig;
+  readonly #configStore: RuntimeConfigurationStore;
   readonly #admin: AdminConfig;
   readonly #auth: AdminAuth;
   readonly #scheduler: BucketScheduler | undefined;
@@ -84,12 +85,13 @@ export class AdminServer {
   #server: ServerType | undefined;
 
   constructor(options: AdminServerOptions) {
-    const admin = options.config.admin;
+    const config = options.configStore.current().config;
+    const admin = config.admin;
     if (admin === undefined) {
       throw new Error('Admin panel is not configured');
     }
     this.#store = options.store;
-    this.#config = options.config;
+    this.#configStore = options.configStore;
     this.#admin = admin;
     this.#auth = new AdminAuth(options.store.orm, admin.session_ttl_hours);
     this.#scheduler = options.scheduler;
@@ -97,7 +99,7 @@ export class AdminServer {
     this.#staticDir = resolve(
       admin.static_dir ?? join(import.meta.dirname, '..', '..', '..', 'apps', 'admin-next', 'dist'),
     );
-    this.#memoryWarningDays = options.config.agent.memory_ttl_warning_days ?? DEFAULT_MEMORY_TTL_WARNING_DAYS;
+    this.#memoryWarningDays = config.agent.memory_ttl_warning_days ?? DEFAULT_MEMORY_TTL_WARNING_DAYS;
   }
 
   async start(): Promise<{ readonly hostname: string; readonly port: number }> {
@@ -369,7 +371,10 @@ export class AdminServer {
         context_window: current.contextWindow,
         max_tokens: current.maxTokens,
       },
-      default: { provider: this.#config.agent.provider, model: this.#config.agent.model },
+      default: {
+        provider: this.#configStore.current().config.agent.provider,
+        model: this.#configStore.current().config.agent.model,
+      },
       options: switcher.list().map((option) => ({
         provider: option.provider,
         model: option.model,

@@ -6,7 +6,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import { AsyncSemaphore, type KeyedSemaphore } from '../../platform/concurrency.ts';
-import type { RawConfig } from '../../platform/config.ts';
+import type { RuntimeConfigurationStore } from '../../platform/runtime-config.ts';
 import { finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from '../../store/database.ts';
 import type { CapabilityRefResolver, DirectImage, InvocationContext } from '../../platform/invocation-context.ts';
 import { MAX_DOWNLOAD_BYTES, type MediaRow, prepareMediaImage, stickerTelegramValidator } from './media-image.ts';
@@ -44,7 +44,7 @@ export interface StickerIndexAnalysis {
 
 export interface MediaServiceOptions {
   readonly store: SqliteStore;
-  readonly config: RawConfig;
+  readonly configStore: RuntimeConfigurationStore;
   readonly secrets: SecretStore;
   readonly registry: ModelRegistry;
   readonly mediaClient: MediaDownloader;
@@ -53,32 +53,42 @@ export interface MediaServiceOptions {
 
 export class MediaService {
   readonly #store: SqliteStore;
-  readonly #config: RawConfig;
+  readonly #configStore: RuntimeConfigurationStore;
   readonly #secrets: SecretStore;
   readonly #models: Models;
   readonly #model: Model<Api>;
   readonly #mediaClient: MediaDownloader;
   readonly #modelGate: KeyedSemaphore;
   readonly #visionSemaphore: AsyncSemaphore;
+  /**
+   * Cache identity of the vision model and prompt. Derived at construction: a
+   * media analysis is keyed by it, so it must not drift mid-process.
+   */
+  readonly #visionPromptVersion: number;
+  readonly #analysisVersion: string;
   readonly #inflight = new Map<string, Promise<string>>();
 
   constructor(options: MediaServiceOptions) {
     this.#store = options.store;
     this.#secrets = options.secrets;
-    this.#config = options.config;
+    this.#configStore = options.configStore;
     this.#models = options.registry.models;
     this.#model = options.registry.visionModel;
     this.#mediaClient = options.mediaClient;
     this.#modelGate = options.modelGate;
-    this.#visionSemaphore = new AsyncSemaphore(options.config.vision.max_concurrency);
+    const vision = options.configStore.current().config.vision;
+    this.#visionSemaphore = new AsyncSemaphore(vision.max_concurrency);
+    this.#visionPromptVersion = vision.prompt_version;
+    this.#analysisVersion = `${this.#model.provider}/${this.#model.id}/prompt-${vision.prompt_version}`;
   }
 
   async loadDirectImages(images: readonly DirectImage[], signal: AbortSignal): Promise<ImageContent[]> {
     if (images.length === 0) {
       return [];
     }
-    await mkdir(this.#config.paths.media_cache, { recursive: true, mode: 0o700 });
-    const temporaryDirectory = await mkdtemp(join(this.#config.paths.media_cache, 'direct-'));
+    const mediaCache = this.#configStore.current().config.paths.media_cache;
+    await mkdir(mediaCache, { recursive: true, mode: 0o700 });
+    const temporaryDirectory = await mkdtemp(join(mediaCache, 'direct-'));
     if (process.platform !== 'win32') {
       await chmod(temporaryDirectory, 0o700);
     }
@@ -177,7 +187,7 @@ export class MediaService {
           if (media === undefined) {
             throw new Error('Referenced media no longer exists');
           }
-          const version = `${this.#model.provider}/${this.#model.id}/prompt-${this.#config.vision.prompt_version}`;
+          const version = this.#analysisVersion;
           const cached = this.#store.orm
             .all<{ description: string }>(
               sql`SELECT description FROM media_analyses WHERE file_unique_id = ${media.fileUniqueId} AND analysis_version = ${version} AND state = 'success' AND (expires_at IS NULL OR expires_at >= ${new Date().toISOString()})`,
@@ -256,7 +266,7 @@ export class MediaService {
       fileSize: null,
       telegramJson: JSON.stringify(telegram),
     };
-    const version = `${this.#model.provider}/${this.#model.id}/prompt-${this.#config.vision.prompt_version}`;
+    const version = this.#analysisVersion;
     let analysis = this.#store.orm
       .all<{ id: bigint; description: string; metadata_json: string }>(
         sql`SELECT id, description, metadata_json FROM media_analyses WHERE file_unique_id = ${media.fileUniqueId} AND analysis_version = ${version} AND state = 'success'`,
@@ -315,12 +325,15 @@ export class MediaService {
     }
     if (
       scope.kind === 'chat' &&
-      isDailyTokenBudgetReached(readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens))
+      isDailyTokenBudgetReached(
+        readDailyTokenBudget(this.#store.orm, this.#configStore.current().config.agent.daily_budget.max_tokens),
+      )
     ) {
       throw new Error('Daily token budget reached');
     }
-    await mkdir(this.#config.paths.media_cache, { recursive: true, mode: 0o700 });
-    const temporaryDirectory = await mkdtemp(join(this.#config.paths.media_cache, 'analysis-'));
+    const mediaCache = this.#configStore.current().config.paths.media_cache;
+    await mkdir(mediaCache, { recursive: true, mode: 0o700 });
+    const temporaryDirectory = await mkdtemp(join(mediaCache, 'analysis-'));
     if (process.platform !== 'win32') {
       await chmod(temporaryDirectory, 0o700);
     }
@@ -335,7 +348,7 @@ export class MediaService {
           analysisVersion: version,
           provider: this.#model.provider,
           model: this.#model.id,
-          promptVersion: BigInt(this.#config.vision.prompt_version),
+          promptVersion: BigInt(this.#visionPromptVersion),
           kind: media.kind === 'sticker' ? 'sticker' : 'image',
           state: 'pending',
           createdAt: now,
@@ -397,7 +410,7 @@ export class MediaService {
             {
               ...(this.#model.reasoning ? { reasoning: 'low' as const } : {}),
               signal,
-              maxTokens: this.#config.vision.max_output_tokens,
+              maxTokens: this.#configStore.current().config.vision.max_output_tokens,
               maxRetries: 2,
               maxRetryDelayMs: 30_000,
             },
@@ -578,9 +591,10 @@ export class MediaService {
       for (const row of rows) {
         usage[row.metric] = row.amount;
       }
+      const visionBudget = this.#configStore.current().config.vision.daily_budget;
       if (
-        (usage.vision_images ?? 0n) >= BigInt(this.#config.vision.daily_budget.max_images) ||
-        (usage.vision_tokens ?? 0n) >= BigInt(this.#config.vision.daily_budget.max_tokens)
+        (usage.vision_images ?? 0n) >= BigInt(visionBudget.max_images) ||
+        (usage.vision_tokens ?? 0n) >= BigInt(visionBudget.max_tokens)
       ) {
         return false;
       }

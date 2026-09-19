@@ -6,6 +6,7 @@ import type { Update } from 'grammy/types';
 import Compile from 'typebox/compile';
 import { AdminServer } from '../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { purgeExpiredData, SqliteStore } from '../src/store/database.ts';
 import {
   AddMemoryInputSchema,
@@ -28,6 +29,7 @@ afterAll(async () => {
 interface Fixture {
   readonly store: SqliteStore;
   readonly loaded: LoadedConfig;
+  readonly configStore: RuntimeConfigurationStore;
   readonly conversationId: bigint;
   readonly invocationId: bigint;
 }
@@ -38,9 +40,10 @@ async function fixture(): Promise<Fixture> {
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));
@@ -68,7 +71,7 @@ async function fixture(): Promise<Fixture> {
   if (conversation === undefined) {
     throw new Error('Expected the invocation conversation');
   }
-  return { store, loaded, conversationId: conversation.conversation_id, invocationId };
+  return { store, loaded, configStore, conversationId: conversation.conversation_id, invocationId };
 }
 
 test('memories persist per conversation, expire by TTL, and purge expired rows', async () => {
@@ -272,11 +275,12 @@ test('admin panel manages memories with chat filter and long-TTL warnings', asyn
     }),
   );
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
-  const server = new AdminServer({ store, config: loaded.config });
+  const server = new AdminServer({ store, configStore });
   const PASSWORD = 'correct-horse-battery';
   try {
-    const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+    const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(
       {

@@ -15,6 +15,7 @@ import sharp from 'sharp';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { capability } from '../src/capabilities/execute-tool.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
@@ -40,6 +41,7 @@ afterAll(async () => {
 interface InvocationSetup {
   readonly store: SqliteStore;
   readonly loaded: Awaited<ReturnType<typeof loadConfig>>;
+  readonly configStore: RuntimeConfigurationStore;
   readonly invocationId: bigint;
 }
 
@@ -57,8 +59,9 @@ async function setupInvocation(
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const update: Update = {
     update_id: 1,
     message: {
@@ -71,7 +74,7 @@ async function setupInvocation(
   };
   const received = new Date('2026-08-15T00:00:00.000Z');
   ingestion.ingest(update, received);
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));
@@ -79,11 +82,11 @@ async function setupInvocation(
   if (invocationId === undefined) {
     throw new Error('Expected a due invocation');
   }
-  return { store, loaded, invocationId };
+  return { store, loaded, configStore, invocationId };
 }
 
 async function indexOneSticker(setup: InvocationSetup): Promise<{ stickers: StickerService; stickerId: bigint }> {
-  const { store, loaded } = setup;
+  const { store, loaded, configStore } = setup;
   const fixturePath = join(tmpdir(), `plasticwan-skills-sticker-${crypto.randomUUID()}.webp`);
   await sharp({ create: { width: 64, height: 64, channels: 4, background: { r: 0, g: 0, b: 255, alpha: 1 } } })
     .webp()
@@ -115,7 +118,7 @@ async function indexOneSticker(setup: InvocationSetup): Promise<{ stickers: Stic
   };
   const media = new MediaService({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry: { models, agentModel: visionFaux.getModel(), visionModel: visionFaux.getModel() },
     mediaClient: downloader,
@@ -214,10 +217,10 @@ test('the skill index reaches the system prompt and primitives stay directly cal
   const memoryStore = new MemoryStore(store.orm);
   const runtime = new AgentRuntime({
     store,
-    config: setup.loaded.config,
+    configStore: setup.configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(setup.loaded.config, models),
+    modelSwitcher: new AgentModelSwitcher(setup.configStore, models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 500, date: 1, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),
@@ -229,7 +232,9 @@ test('the skill index reaches the system prompt and primitives stay directly cal
       capability(createWebFetchTool({ store, context, invocationDeadline: deadline }), false),
     ],
   });
-  expect(await runtime.run(setup.invocationId, new AbortController().signal)).toEqual({
+  expect(
+    await runtime.run(setup.invocationId, setup.configStore.beginInvocation(), new AbortController().signal),
+  ).toEqual({
     state: 'completed',
     reason: 'completed',
   });
@@ -292,10 +297,10 @@ test('search_stickers runs through execute and its refs authorize a sticker send
   let sentSticker: string | undefined;
   const runtime = new AgentRuntime({
     store,
-    config: setup.loaded.config,
+    configStore: setup.configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(setup.loaded.config, models),
+    modelSwitcher: new AgentModelSwitcher(setup.configStore, models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),
       sendSticker: async (_chatId, sticker) => {
@@ -309,7 +314,9 @@ test('search_stickers runs through execute and its refs authorize a sticker send
       capability(stickers.createSearchTool(context, capabilities), false),
     ],
   });
-  expect(await runtime.run(setup.invocationId, new AbortController().signal)).toEqual({
+  expect(
+    await runtime.run(setup.invocationId, setup.configStore.beginInvocation(), new AbortController().signal),
+  ).toEqual({
     state: 'completed',
     reason: 'completed',
   });
@@ -377,10 +384,10 @@ test('execute refuses primitives and unknown capabilities while memory calls sti
   const memoryStore = new MemoryStore(store.orm);
   const runtime = new AgentRuntime({
     store,
-    config: setup.loaded.config,
+    configStore: setup.configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(setup.loaded.config, models),
+    modelSwitcher: new AgentModelSwitcher(setup.configStore, models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 500, date: 1, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),
@@ -389,7 +396,9 @@ test('execute refuses primitives and unknown capabilities while memory calls sti
     systemResources: await bundledSystemResources(),
     capabilityTools: (context) => [...createMemoryTools(memoryStore, context).map((tool) => capability(tool, true))],
   });
-  expect(await runtime.run(setup.invocationId, new AbortController().signal)).toEqual({
+  expect(
+    await runtime.run(setup.invocationId, setup.configStore.beginInvocation(), new AbortController().signal),
+  ).toEqual({
     state: 'completed',
     reason: 'completed',
   });

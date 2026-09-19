@@ -7,6 +7,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { Update } from 'grammy/types';
 import { z } from 'zod';
 import { loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { McpManager } from '../src/capabilities/mcp.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
@@ -57,6 +58,7 @@ test('stdio MCP discovery, result bounds, audit, and unmetered repeat calls', as
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const manager = new McpManager(store, loaded.config, new SecretStore());
   try {
@@ -70,7 +72,7 @@ test('stdio MCP discovery, result bounds, audit, and unmetered repeat calls', as
       store.db.prepare<[], { state: string }>("SELECT state FROM mcp_server_state WHERE alias = 'local'").get()?.state,
     ).toBe('ready');
 
-    const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+    const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
     const received = new Date('2026-08-15T00:00:00.000Z');
     const update: Update = {
       update_id: 1,
@@ -83,7 +85,7 @@ test('stdio MCP discovery, result bounds, audit, and unmetered repeat calls', as
       },
     };
     ingestion.ingest(update, received);
-    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    const scheduler = new BucketScheduler(store, configStore, async () => ({
       state: 'completed',
       reason: 'done',
     }));
@@ -184,11 +186,12 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const manager = new McpManager(store, loaded.config, new SecretStore());
   try {
     await manager.start();
-    const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+    const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(
       {
@@ -203,7 +206,7 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
       },
       received,
     );
-    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    const scheduler = new BucketScheduler(store, configStore, async () => ({
       state: 'completed',
       reason: 'done',
     }));

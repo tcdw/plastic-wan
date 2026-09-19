@@ -7,6 +7,7 @@ import type { Update } from 'grammy/types';
 import sharp from 'sharp';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
 import { MediaService } from '../src/capabilities/media/media.ts';
@@ -35,6 +36,7 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const fixturePath = join(directory, 'sticker.webp');
   await sharp({ create: { width: 64, height: 64, channels: 4, background: { r: 0, g: 0, b: 255, alpha: 1 } } })
@@ -72,7 +74,7 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
   };
   const media = new MediaService({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
     mediaClient: downloader,
@@ -114,7 +116,7 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
     'success',
   );
 
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const update: Update = {
     update_id: 1,
     message: {
@@ -127,7 +129,7 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
   };
   const received = new Date('2026-08-15T00:00:00.000Z');
   ingestion.ingest(update, received);
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));

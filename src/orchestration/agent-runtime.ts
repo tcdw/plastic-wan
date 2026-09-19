@@ -29,6 +29,7 @@ import {
 import { serializeModelRequestForAudit } from '../platform/model-request-audit.ts';
 import type { AgentModelSwitcher } from '../platform/model-switch.ts';
 import type { ModelRegistry } from '../platform/providers.ts';
+import type { InvocationConfigSnapshot, RuntimeConfigurationStore } from '../platform/runtime-config.ts';
 import type { InvocationOutcome } from './scheduler.ts';
 import { agentMessages, dailyUsage, invocations, modelCalls, toolCalls as toolCallsTable } from '../store/schema.ts';
 import type { SecretStore } from '../platform/secrets.ts';
@@ -65,7 +66,7 @@ export type DirectImageLoader = (context: InvocationContext, signal: AbortSignal
 
 export interface AgentRuntimeOptions {
   readonly store: SqliteStore;
-  readonly config: RawConfig;
+  readonly configStore: RuntimeConfigurationStore;
   readonly secrets: SecretStore;
   readonly registry: ModelRegistry;
   readonly modelSwitcher: AgentModelSwitcher;
@@ -120,10 +121,9 @@ interface RunState {
 
 export class AgentRuntime {
   readonly #store: SqliteStore;
-  readonly #config: RawConfig;
+  readonly #configStore: RuntimeConfigurationStore;
   readonly #secrets: SecretStore;
   readonly #models: Models;
-  readonly #model: Model<Api>;
   readonly #modelSwitcher: AgentModelSwitcher;
   readonly #telegramApi: TelegramSendApi;
   readonly #bot: AgentRuntimeOptions['bot'];
@@ -140,9 +140,8 @@ export class AgentRuntime {
   constructor(options: AgentRuntimeOptions) {
     this.#store = options.store;
     this.#secrets = options.secrets;
-    this.#config = options.config;
+    this.#configStore = options.configStore;
     this.#models = options.registry.models;
-    this.#model = options.registry.agentModel;
     this.#modelSwitcher = options.modelSwitcher;
     this.#telegramApi = options.telegramApi;
     this.#bot = options.bot;
@@ -151,17 +150,12 @@ export class AgentRuntime {
     this.#additionalTools = options.additionalTools;
     this.#directImageLoader = options.directImageLoader;
     this.#modelGate = options.modelGate ?? new KeyedSemaphore();
+    const config = options.configStore.current().config;
     this.#contexts = new ConversationContextStore(options.store);
-    this.#refs = new ContextRefStore(options.store, { ttlHours: options.config.agent.context.ref_ttl_hours });
+    this.#refs = new ContextRefStore(options.store, { ttlHours: config.agent.context.ref_ttl_hours });
     this.#conversationRuntime =
-      options.conversationRuntime ??
-      new ConversationRuntime({ agentCacheSize: options.config.agent.context.agent_cache_size });
-    this.#contextBuilder = new ContextBuilder(
-      options.store,
-      options.config,
-      this.#refs,
-      options.systemResources.skills,
-    );
+      options.conversationRuntime ?? new ConversationRuntime({ agentCacheSize: config.agent.context.agent_cache_size });
+    this.#contextBuilder = new ContextBuilder(options.store, this.#refs, options.systemResources.skills);
   }
 
   get conversationRuntime(): ConversationRuntime {
@@ -169,14 +163,15 @@ export class AgentRuntime {
   }
 
   validateAdditionalTools(context: InvocationContext, additionalTools: readonly AgentTool[]): void {
+    const config = this.#configStore.current().config;
     const send = createSendTool({
       store: this.#store,
       api: this.#telegramApi,
       context,
       capabilities: this.#staticCapabilities,
-      sendRateLimit: this.#sendRateLimit(),
-      maxTextLength: this.#config.agent.send_max_text_length,
-      disallowBlankLines: this.#config.agent.send_disallow_blank_lines === true,
+      sendRateLimit: this.#sendRateLimit(config),
+      maxTextLength: config.agent.send_max_text_length,
+      disallowBlankLines: config.agent.send_disallow_blank_lines === true,
       deadline: Number.MAX_SAFE_INTEGER,
       bot: this.#bot,
     });
@@ -187,13 +182,19 @@ export class AgentRuntime {
         createExecuteTool({ store: this.#store, context, capabilities: [] }),
         ...additionalTools,
       ],
-      this.#model.contextWindow,
+      // The model in use now, not the startup default: after a `/model` switch
+      // the registry is validated against the window the run will actually get.
+      this.#modelSwitcher.model().contextWindow,
     );
   }
 
-  async run(invocationId: bigint, schedulerSignal: AbortSignal): Promise<InvocationOutcome> {
+  async run(
+    invocationId: bigint,
+    snapshot: InvocationConfigSnapshot,
+    schedulerSignal: AbortSignal,
+  ): Promise<InvocationOutcome> {
     try {
-      return await this.#runInvocation(invocationId, schedulerSignal);
+      return await this.#runInvocation(invocationId, snapshot, schedulerSignal);
     } catch (error) {
       // The scheduler persists an outcome vocabulary, not a message, so an error
       // that escapes the run would leave `completion_reason: 'invocation_error'`
@@ -207,13 +208,20 @@ export class AgentRuntime {
     }
   }
 
-  async #runInvocation(invocationId: bigint, schedulerSignal: AbortSignal): Promise<InvocationOutcome> {
+  async #runInvocation(
+    invocationId: bigint,
+    snapshot: InvocationConfigSnapshot,
+    schedulerSignal: AbortSignal,
+  ): Promise<InvocationOutcome> {
+    // Every runtime-policy read below comes from the snapshot this run was
+    // started with; only the global daily budget is re-read live.
+    const config = snapshot.config;
     // Resolved at run start: a runtime model switch applies from here on, never
     // to an invocation already in flight.
     const model = this.#modelSwitcher.model();
-    const identity = this.#contextBuilder.identity(invocationId);
+    const identity = this.#contextBuilder.identity(config, invocationId);
     const supportsImages = model.input.includes('image');
-    const stable = this.#contextBuilder.buildSystemPrompt(identity, supportsImages, {
+    const stable = this.#contextBuilder.buildSystemPrompt(config, identity, supportsImages, {
       provider: model.provider,
       model: model.id,
     });
@@ -227,7 +235,7 @@ export class AgentRuntime {
     }
     const isAlarm = identity.alarm !== null;
     const startedAt = Date.now();
-    const deadline = startedAt + this.#config.agent.context.max_wall_clock_seconds * 1_000;
+    const deadline = startedAt + config.agent.context.max_wall_clock_seconds * 1_000;
     const contextState = new InvocationContextState({
       invocationId,
       conversationId: identity.conversationId,
@@ -258,7 +266,10 @@ export class AgentRuntime {
         state.sleepRequested = true;
       },
     });
-    const initialBudget = readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens);
+    const initialBudget = readDailyTokenBudget(
+      this.#store.orm,
+      this.#configStore.current().config.agent.daily_budget.max_tokens,
+    );
     let zzzExposed = !isAlarm && isLowDailyTokenBudget(initialBudget);
     if (zzzExposed) {
       this.#logZzzExposure(invocationId, identity.chatId, initialBudget);
@@ -270,9 +281,9 @@ export class AgentRuntime {
         api: this.#telegramApi,
         context: target,
         capabilities,
-        sendRateLimit: this.#sendRateLimit(),
-        maxTextLength: this.#config.agent.send_max_text_length,
-        disallowBlankLines: this.#config.agent.send_disallow_blank_lines === true,
+        sendRateLimit: this.#sendRateLimit(config),
+        maxTextLength: config.agent.send_max_text_length,
+        disallowBlankLines: config.agent.send_disallow_blank_lines === true,
         deadline,
         bot: this.#bot,
       }),
@@ -297,7 +308,7 @@ export class AgentRuntime {
       entry = undefined;
     }
     if (entry === undefined) {
-      entry = this.#createCachedAgent(identity, header, stable, model, tools);
+      entry = this.#createCachedAgent(config, identity, header, stable, model, tools);
       runtime.remember(entry);
     } else {
       // One Context, one header object. A cached entry carries the header of the
@@ -353,6 +364,9 @@ export class AgentRuntime {
     // invocation instead of being rebuilt from the canonical history.
     agent.state.systemPrompt = stable.systemPrompt;
     agent.state.model = model;
+    // The cached agent keeps the thinking level of the run that built it, so a
+    // reused entry has to be re-bound here like the prompt and the model.
+    agent.state.thinkingLevel = config.agent.thinking_level;
     agent.state.tools = [...tools];
     agent.maxRetryDelayMs = Math.max(0, deadline - Date.now());
     state.estimatedInputTokens = this.#estimateInputTokens(cached, toolDefinitionCharacters);
@@ -360,7 +374,7 @@ export class AgentRuntime {
     const signal = AbortSignal.any([schedulerSignal, timeoutSignal]);
     const pendingUserTags: ('checkpoint' | 'harness')[] = [];
     const injectBatch = async (bucketId: bigint): Promise<AgentMessage> => {
-      const injection = this.#contextBuilder.renderInjection({
+      const injection = this.#contextBuilder.renderInjection(config, {
         header,
         identity,
         bucketId,
@@ -417,7 +431,7 @@ export class AgentRuntime {
      */
     const freeAgent = (): void => {
       runtime.endRound(conversationId);
-      this.#deferCollectingBucket(conversationId, Date.now());
+      this.#deferCollectingBucket(config, conversationId, Date.now());
     };
     const stop = (reason: StopReason): true => {
       // A run that ends frees the agent just like the end of a round does.
@@ -431,7 +445,9 @@ export class AgentRuntime {
     agent.streamFunction = async (streamModel, modelContext, options) => {
       if (
         !isAlarm &&
-        isDailyTokenBudgetReached(readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens))
+        isDailyTokenBudgetReached(
+          readDailyTokenBudget(this.#store.orm, this.#configStore.current().config.agent.daily_budget.max_tokens),
+        )
       ) {
         state.modelBudgetBlocked = true;
         return errorStream(streamModel, 'daily_token_budget');
@@ -493,7 +509,9 @@ export class AgentRuntime {
       }
       if (
         toolCall.name === 'zzz' &&
-        !isLowDailyTokenBudget(readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens))
+        !isLowDailyTokenBudget(
+          readDailyTokenBudget(this.#store.orm, this.#configStore.current().config.agent.daily_budget.max_tokens),
+        )
       ) {
         return { block: true, reason: 'You are no longer sleepy' };
       }
@@ -511,7 +529,10 @@ export class AgentRuntime {
     agent.prepareNextTurnWithContext = async (turn) => {
       let nextTools = turn.context.tools;
       let registryChanged = false;
-      const budget = readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens);
+      const budget = readDailyTokenBudget(
+        this.#store.orm,
+        this.#configStore.current().config.agent.daily_budget.max_tokens,
+      );
       const shouldExposeZzz = !isAlarm && isLowDailyTokenBudget(budget);
       if (shouldExposeZzz !== zzzExposed) {
         zzzExposed = shouldExposeZzz;
@@ -529,6 +550,7 @@ export class AgentRuntime {
       // The only safe collection point: after the tool batch closed, before the
       // next model call. Never during streaming.
       const collected = this.#maybeCollect(
+        config,
         cached,
         model,
         turn.context.messages,
@@ -537,7 +559,7 @@ export class AgentRuntime {
         rebuildVisibleState,
       );
       const messages = collected === undefined ? undefined : turn.context.messages.slice(collected.retainedIndex);
-      const stopThreshold = Math.floor(model.contextWindow * this.#config.agent.context_stop_ratio);
+      const stopThreshold = Math.floor(model.contextWindow * config.agent.context_stop_ratio);
       if (state.estimatedInputTokens >= stopThreshold) {
         state.contextClosing = true;
         state.stopReason = 'context_limit';
@@ -567,7 +589,9 @@ export class AgentRuntime {
       }
       if (
         !isAlarm &&
-        isDailyTokenBudgetReached(readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens))
+        isDailyTokenBudgetReached(
+          readDailyTokenBudget(this.#store.orm, this.#configStore.current().config.agent.daily_budget.max_tokens),
+        )
       ) {
         return stop('budget');
       }
@@ -584,7 +608,7 @@ export class AgentRuntime {
         runtime.beginClosing(conversationId);
         return false;
       }
-      if (state.turnsSinceInjection >= this.#config.agent.rate_limits.turns_per_injection) {
+      if (state.turnsSinceInjection >= config.agent.rate_limits.turns_per_injection) {
         return stop('turn_budget');
       }
       // Safety net first, before anything that can extend the run: a newer batch
@@ -593,7 +617,7 @@ export class AgentRuntime {
       // we never interrupt an in-progress workflow. The round is deliberately not
       // treated as over here: the agent still owes a published answer.
       const hasToolCalls = turn.message.content.some((entry) => entry.type === 'toolCall');
-      if (this.#config.agent.send_nudge_enabled === true && !state.sendUsed && !state.nudged) {
+      if (config.agent.send_nudge_enabled === true && !state.sendUsed && !state.nudged) {
         const text = turn.message.content
           .filter((entry) => entry.type === 'text')
           .map((entry) => entry.text)
@@ -611,7 +635,7 @@ export class AgentRuntime {
       if (await injectPending()) {
         return false;
       }
-      const idleGraceMilliseconds = this.#config.agent.context.idle_grace_seconds * 1_000;
+      const idleGraceMilliseconds = config.agent.context.idle_grace_seconds * 1_000;
       // The grace belongs to the end of a round, not to every turn. A turn that
       // ended with tool calls, or one with a batch already queued to inject, is
       // followed by another turn regardless, so waiting here would only delay it:
@@ -743,10 +767,10 @@ export class AgentRuntime {
     return outcome;
   }
 
-  #sendRateLimit(): { sendsPerWindow: number; windowSeconds: number } {
+  #sendRateLimit(config: RawConfig): { sendsPerWindow: number; windowSeconds: number } {
     return {
-      sendsPerWindow: this.#config.agent.rate_limits.sends_per_window,
-      windowSeconds: this.#config.agent.rate_limits.window_seconds,
+      sendsPerWindow: config.agent.rate_limits.sends_per_window,
+      windowSeconds: config.agent.rate_limits.window_seconds,
     };
   }
 
@@ -760,8 +784,8 @@ export class AgentRuntime {
    * message arrived after this round ended — keeps it. The write is what also
    * re-schedules the scheduler, which recomputes its next wake from deadlines.
    */
-  #deferCollectingBucket(conversationId: bigint, freeSince: number): void {
-    const atLeast = new Date(freeSince + this.#config.telegram.bucket_window_seconds * 1_000).toISOString();
+  #deferCollectingBucket(config: RawConfig, conversationId: bigint, freeSince: number): void {
+    const atLeast = new Date(freeSince + config.telegram.bucket_window_seconds * 1_000).toISOString();
     this.#store.orm.run(
       sql`UPDATE buckets SET deadline_at = ${atLeast}, updated_at = ${new Date(freeSince).toISOString()}
          WHERE conversation_id = ${conversationId} AND state = 'collecting' AND deadline_at < ${atLeast}`,
@@ -816,6 +840,7 @@ export class AgentRuntime {
    * identically after an eviction or a process restart.
    */
   #createCachedAgent(
+    config: RawConfig,
     identity: ContextIdentity,
     header: ContextHeader,
     stable: StablePrompt,
@@ -827,7 +852,7 @@ export class AgentRuntime {
       initialState: {
         systemPrompt: stable.systemPrompt,
         model,
-        thinkingLevel: this.#config.agent.thinking_level,
+        thinkingLevel: config.agent.thinking_level,
         tools: [...tools],
         messages: retained.map((row) => row.message),
       },
@@ -901,6 +926,7 @@ export class AgentRuntime {
    * cached `Agent.state.messages`, and the references carried by evicted rows.
    */
   #maybeCollect(
+    config: RawConfig,
     entry: CachedConversationAgent,
     // The model this run actually talks to. The constructor-time default is wrong
     // after a runtime `/model` switch: GC then judged token pressure against one
@@ -914,9 +940,9 @@ export class AgentRuntime {
   ): ContextGcPlan | undefined {
     const header = entry.header;
     const plan = planContextGc({
-      retainedSendsTarget: this.#config.agent.context.retained_sends_target,
-      retainedSendsMax: this.#config.agent.context.retained_sends_max,
-      hardTokenRatio: this.#config.agent.context.hard_token_ratio,
+      retainedSendsTarget: config.agent.context.retained_sends_target,
+      retainedSendsMax: config.agent.context.retained_sends_max,
+      hardTokenRatio: config.agent.context.hard_token_ratio,
       contextWindow: model.contextWindow,
       maxOutputTokens: model.maxTokens,
       estimatedInputTokens,

@@ -14,6 +14,7 @@ import { AlarmInputSchema, createAlarmTool, createListAlarmTool } from '../src/c
 import { BotCommandService } from '../src/orchestration/bot-commands.ts';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { purgeExpiredData, SqliteStore } from '../src/store/database.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
@@ -45,14 +46,16 @@ async function setup() {
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   return {
     directory,
     configPath,
     loaded,
+    configStore,
     store,
-    ingestion: new TelegramIngestion(store, loaded.config, { id: 999 }),
-    scheduler: new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    ingestion: new TelegramIngestion(store, configStore, { id: 999 }),
+    scheduler: new BucketScheduler(store, configStore, async () => ({
       state: 'completed',
       reason: 'done',
     })),
@@ -61,7 +64,11 @@ async function setup() {
   };
 }
 
-async function setupAdmin(): Promise<{ store: SqliteStore; loaded: Awaited<ReturnType<typeof loadConfig>> }> {
+async function setupAdmin(): Promise<{
+  store: SqliteStore;
+  loaded: Awaited<ReturnType<typeof loadConfig>>;
+  configStore: RuntimeConfigurationStore;
+}> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-alarm-admin-'));
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
@@ -78,8 +85,9 @@ async function setupAdmin(): Promise<{ store: SqliteStore; loaded: Awaited<Retur
     }),
   );
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
-  return { store, loaded };
+  return { store, loaded, configStore };
 }
 
 function update(updateId: number, messageId: number, text: string, userId = 42): Update {
@@ -351,7 +359,7 @@ describe('alarm tool', () => {
   });
 
   test('the agent runtime presents list_alarm with an object schema to the model', async () => {
-    const { store, loaded, ingestion, scheduler } = await setup();
+    const { store, ingestion, scheduler, configStore } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, '我有哪些闹钟'), received);
     const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
@@ -404,10 +412,10 @@ describe('alarm tool', () => {
     const registry = { models, agentModel: model, visionModel: model };
     const runtime = new AgentRuntime({
       store,
-      config: loaded.config,
+      configStore,
       secrets: new SecretStore(),
       registry,
-      modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+      modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
       telegramApi: {
         sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
         sendSticker: async () => ({ message_id: 501, date: 1_700_000_101, chat: { id: 123456789 } }),
@@ -441,7 +449,7 @@ describe('alarm tool', () => {
         ),
       ],
     });
-    expect(await runtime.run(invocationId, new AbortController().signal)).toEqual({
+    expect(await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal)).toEqual({
       state: 'completed',
       reason: 'completed',
     });
@@ -575,7 +583,7 @@ describe('alarm scheduler', () => {
 
 describe('alarm runtime budget bypass', () => {
   test('an alarm invocation bypasses the daily token gate while an ordinary invocation still blocks', async () => {
-    const { store, ingestion, scheduler, loaded } = await setup();
+    const { store, ingestion, scheduler, loaded, configStore } = await setup();
     // Real-clock-relative dates: the runtime anchors a batch's collection window
     // to the instant the agent becomes free, so a test that drives ingestion with
     // frozen dates in the past would compare fake instants against real ones.
@@ -615,10 +623,10 @@ describe('alarm runtime budget bypass', () => {
     const registry = { models, agentModel: model, visionModel: model };
     const runtime = new AgentRuntime({
       store,
-      config: loaded.config,
+      configStore,
       secrets: new SecretStore(),
       registry,
-      modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+      modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
       telegramApi: {
         sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
         sendSticker: async () => ({ message_id: 501, date: 1_700_000_101, chat: { id: 123456789 } }),
@@ -627,7 +635,7 @@ describe('alarm runtime budget bypass', () => {
       modelGate: new KeyedSemaphore(),
       systemResources: SystemResources.empty(),
     });
-    expect(await runtime.run(alarmInvocation, new AbortController().signal)).toEqual({
+    expect(await runtime.run(alarmInvocation, configStore.beginInvocation(), new AbortController().signal)).toEqual({
       state: 'completed',
       reason: 'completed',
     });
@@ -650,7 +658,7 @@ describe('alarm runtime budget bypass', () => {
     if (normalInvocation === undefined) {
       throw new Error('Expected normal invocation');
     }
-    expect(await runtime.run(normalInvocation, new AbortController().signal)).toEqual({
+    expect(await runtime.run(normalInvocation, configStore.beginInvocation(), new AbortController().signal)).toEqual({
       state: 'failed',
       reason: 'daily_token_budget',
     });
@@ -775,7 +783,7 @@ describe('alarm admin', () => {
 
 describe('alarm scheduling behavior', () => {
   test('launches a claimed alarm before an already-queued normal invocation, then the queued normal runs', async () => {
-    const { store, loaded, ingestion, scheduler } = await setup();
+    const { store, ingestion, scheduler, configStore } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const normalInvocation = processDue(scheduler, new Date(received.getTime() + 15_000));
@@ -794,7 +802,7 @@ describe('alarm scheduling behavior', () => {
     const gate = new Promise<void>((resolve) => {
       releaseGate = resolve;
     });
-    const recording = new BucketScheduler(store, loaded.config, loaded.hash, async (id) => {
+    const recording = new BucketScheduler(store, configStore, async (id) => {
       launched.push(id);
       if (launched.length === 1) {
         firstLaunched();
@@ -825,7 +833,7 @@ describe('alarm scheduling behavior', () => {
   });
 
   test('a claimed alarm still launches while the bot is sleeping', async () => {
-    const { store, loaded, ingestion, scheduler } = await setup();
+    const { store, ingestion, scheduler, configStore } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const normalInvocation = processDue(scheduler, new Date(received.getTime() + 15_000));
@@ -837,7 +845,7 @@ describe('alarm scheduling behavior', () => {
     enterSleep(store.orm);
 
     const launched: bigint[] = [];
-    const recording = new BucketScheduler(store, loaded.config, loaded.hash, async (id) => {
+    const recording = new BucketScheduler(store, configStore, async (id) => {
       launched.push(id);
       return { state: 'completed', reason: 'done' };
     });
@@ -900,7 +908,7 @@ describe('alarm scheduling behavior', () => {
   });
 
   test('pause after claim closes the firing alarm as cancelled/chat_paused', async () => {
-    const { store, loaded, scheduler } = await setup();
+    const { store, scheduler, configStore } = await setup();
     const conversation = ensureConversation(store);
     const alarmId = insertAlarm(store, conversation, '2026-08-14T23:59:00.000Z');
     const [invocationId] = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
@@ -914,7 +922,7 @@ describe('alarm scheduling behavior', () => {
         "INSERT INTO bot_admins(telegram_user_id, display_name, added_by, created_at, updated_at) VALUES (42, 'Alice', 'config', ?, ?)",
       )
       .run(now, now);
-    const commands = new BotCommandService(store, loaded.config, scheduler);
+    const commands = new BotCommandService(store, configStore, scheduler);
     expect(
       commands.run(
         { name: 'pause' },
@@ -941,7 +949,7 @@ describe('alarm scheduling behavior', () => {
   });
 
   test('every terminal invocation outcome closes the alarm without retry', async () => {
-    const { store, loaded } = await setup();
+    const { store, configStore } = await setup();
     const outcomes: Array<{ state: 'completed' | 'failed' | 'aborted' | 'outcome_unknown'; reason: string }> = [
       { state: 'completed', reason: 'completed' },
       { state: 'failed', reason: 'model_error' },
@@ -951,7 +959,7 @@ describe('alarm scheduling behavior', () => {
     for (const outcome of outcomes) {
       const conversation = ensureConversation(store);
       const alarmId = insertAlarm(store, conversation, '2026-08-14T23:59:00.000Z');
-      const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => outcome);
+      const scheduler = new BucketScheduler(store, configStore, async () => outcome);
       scheduler.start(new Date('2026-08-15T00:00:00.000Z'));
       await scheduler.stop(30_000);
       const row = store.db
@@ -1149,7 +1157,7 @@ describe('alarm send mention', () => {
 
 describe('alarm admin HTTP', () => {
   test('enforces auth/Origin/method and 404/409/wake semantics for alarm routes', async () => {
-    const { store, loaded } = await setupAdmin();
+    const { store, configStore } = await setupAdmin();
     const conversation = ensureConversation(store);
     const pending = insertAlarm(store, conversation, '2026-08-15T01:00:00.000Z');
     let wakeCalls = 0;
@@ -1160,7 +1168,7 @@ describe('alarm admin HTTP', () => {
     };
     const server = new AdminServer({
       store,
-      config: loaded.config,
+      configStore,
       scheduler: fakeScheduler as unknown as BucketScheduler,
     });
     try {

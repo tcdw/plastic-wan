@@ -1,5 +1,5 @@
 import { and, eq, sql } from 'drizzle-orm';
-import type { RawConfig } from '../platform/config.ts';
+import type { InvocationConfigSnapshot, RuntimeConfigurationStore } from '../platform/runtime-config.ts';
 import type { SqliteStore } from '../store/database.ts';
 import { InvocationQueueService, type BucketAttachmentTarget } from './invocation-queue.ts';
 import { activeSleepUntil } from '../store/sleep.ts';
@@ -10,7 +10,11 @@ export interface InvocationOutcome {
   readonly reason: string;
 }
 
-export type InvocationHandler = (invocationId: bigint, signal: AbortSignal) => Promise<InvocationOutcome>;
+export type InvocationHandler = (
+  invocationId: bigint,
+  snapshot: InvocationConfigSnapshot,
+  signal: AbortSignal,
+) => Promise<InvocationOutcome>;
 
 interface ActiveInvocation {
   readonly controller: AbortController;
@@ -40,7 +44,7 @@ export { STARTUP_CATCH_UP_STATE_KEY } from './invocation-queue.ts';
  */
 export class BucketScheduler {
   readonly #store: SqliteStore;
-  readonly #config: RawConfig;
+  readonly #configStore: RuntimeConfigurationStore;
   readonly #queue: InvocationQueueService;
   readonly #handler: InvocationHandler;
   readonly #active = new Map<string, ActiveInvocation>();
@@ -51,14 +55,13 @@ export class BucketScheduler {
 
   constructor(
     store: SqliteStore,
-    config: RawConfig,
-    configHash: string,
+    configStore: RuntimeConfigurationStore,
     handler: InvocationHandler,
     attachment?: BucketAttachmentTarget,
   ) {
     this.#store = store;
-    this.#config = config;
-    this.#queue = new InvocationQueueService(store, config, configHash, attachment);
+    this.#configStore = configStore;
+    this.#queue = new InvocationQueueService(store, configStore, attachment);
     this.#handler = handler;
   }
 
@@ -218,8 +221,8 @@ export class BucketScheduler {
     if (sleepUntil !== null) {
       this.#queue.skipQueuedInvocations(sleepUntil, new Date());
     }
-    while (this.#running && this.#active.size < this.#config.agent.max_concurrency) {
-      const invocation = this.#store.transaction(() => {
+    while (this.#running && this.#active.size < this.#configStore.current().config.agent.max_concurrency) {
+      const launched = this.#store.transaction(() => {
         const candidate = this.#store.orm
           .all<InvocationRow>(
             sql`SELECT i.id, i.bucket_id, i.conversation_id FROM invocations i
@@ -239,6 +242,10 @@ export class BucketScheduler {
         if (candidate === undefined) {
           return null;
         }
+        // The snapshot is taken in the same synchronous block as the state
+        // transition: a configuration published after this point can never
+        // reach the run that is starting here.
+        const snapshot = this.#configStore.beginInvocation();
         const now = new Date().toISOString();
         this.#store.orm
           .update(invocations)
@@ -250,23 +257,27 @@ export class BucketScheduler {
           .set({ state: 'running', startedAt: now, updatedAt: now })
           .where(eq(buckets.id, candidate.bucket_id))
           .run();
-        return candidate;
+        return { invocation: candidate, snapshot };
       });
-      if (invocation === null) {
+      if (launched === null) {
         return;
       }
       const controller = new AbortController();
-      const promise = this.#execute(invocation, controller);
-      this.#active.set(invocation.id.toString(), { controller, promise });
+      const promise = this.#execute(launched.invocation, launched.snapshot, controller);
+      this.#active.set(launched.invocation.id.toString(), { controller, promise });
     }
   }
 
-  async #execute(invocation: InvocationRow, controller: AbortController): Promise<void> {
+  async #execute(
+    invocation: InvocationRow,
+    snapshot: InvocationConfigSnapshot,
+    controller: AbortController,
+  ): Promise<void> {
     const executionStartedAt = performance.now();
     this.#logInvocationDiagnostic('agent_invocation_start', invocation, this.#active.size + 1, null, null, null);
     let outcome: InvocationOutcome;
     try {
-      outcome = await this.#handler(invocation.id, controller.signal);
+      outcome = await this.#handler(invocation.id, snapshot, controller.signal);
     } catch {
       // A handler that throws is a runtime fault: persist an outcome code rather
       // than `error.name`, which reads as "Error" for a plain Error and told
@@ -314,7 +325,7 @@ export class BucketScheduler {
         const nextDeadline = new Date(
           Math.max(
             finishedAt.getTime(),
-            Date.parse(started.started_at) + this.#config.telegram.bucket_window_seconds * 1_000,
+            Date.parse(started.started_at) + this.#configStore.current().config.telegram.bucket_window_seconds * 1_000,
           ),
         ).toISOString();
         const chat = this.#store.orm

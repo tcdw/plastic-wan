@@ -7,6 +7,7 @@ import type { Update } from 'grammy/types';
 import sharp from 'sharp';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
 import { createLottieCommand } from '../src/capabilities/media/media-image.ts';
@@ -40,12 +41,13 @@ test('read_image normalizes once and reuses the 30-day description cache', async
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const fixturePath = join(directory, 'fixture.png');
   await sharp({ create: { width: 32, height: 16, channels: 4, background: { r: 255, g: 0, b: 0, alpha: 0.5 } } })
     .png()
     .toFile(fixturePath);
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const update: Update = {
     update_id: 1,
     message: {
@@ -66,7 +68,7 @@ test('read_image normalizes once and reuses the 30-day description cache', async
   };
   const received = new Date('2026-08-15T00:00:00.000Z');
   ingestion.ingest(update, received);
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));
@@ -112,7 +114,7 @@ test('read_image normalizes once and reuses the 30-day description cache', async
   };
   const media = new MediaService({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
     mediaClient: downloader,

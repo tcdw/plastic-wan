@@ -21,6 +21,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { AdminServer } from '../../../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../../../src/platform/config.ts';
 import { AgentModelSwitcher } from '../../../src/platform/model-switch.ts';
+import { RuntimeConfigurationStore } from '../../../src/platform/runtime-config.ts';
 import { createModelRegistry } from '../../../src/platform/providers.ts';
 import { SecretStore } from '../../../src/platform/secrets.ts';
 import { asRunResult, SqliteStore } from '../../../src/store/database.ts';
@@ -167,8 +168,9 @@ async function main(): Promise<void> {
   seedAdminBulkRows(store);
 
   const registry = await createModelRegistry(loaded.config, new SecretStore());
-  const modelSwitcher = new AgentModelSwitcher(loaded.config, registry.models);
-  const admin = new AdminServer({ store, config: loaded.config, modelSwitcher });
+  const configStore = new RuntimeConfigurationStore(loaded);
+  const modelSwitcher = new AgentModelSwitcher(configStore, registry.models);
+  const admin = new AdminServer({ store, configStore, modelSwitcher });
 
   const started = serve({
     hostname: '127.0.0.1',

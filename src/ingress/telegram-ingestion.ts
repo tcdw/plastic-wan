@@ -1,7 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { Message, Update } from 'grammy/types';
 import { conversationThreadId, type ParsedCommand, parseBotCommand } from '../orchestration/bot-commands.ts';
-import type { RawConfig } from '../platform/config.ts';
+import type { RuntimeConfigurationStore } from '../platform/runtime-config.ts';
 import { asRunResult, isChatPaused, resolveChatConfig, type SqliteStore } from '../store/database.ts';
 import { ParticipationRegistry, evaluateParticipation } from '../store/participation.ts';
 import {
@@ -64,17 +64,22 @@ export interface IngestResult {
 
 export class TelegramIngestion {
   readonly #store: SqliteStore;
-  readonly #config: RawConfig;
+  readonly #configStore: RuntimeConfigurationStore;
   readonly #participation: ParticipationRegistry;
   readonly #allowedChats = new Map<string, ReadonlySet<bigint> | undefined>();
   readonly #botId: bigint;
   readonly #botUsername: string | null;
 
-  constructor(store: SqliteStore, config: RawConfig, bot: { readonly id: number; readonly username?: string | null }) {
+  constructor(
+    store: SqliteStore,
+    configStore: RuntimeConfigurationStore,
+    bot: { readonly id: number; readonly username?: string | null },
+  ) {
     this.#store = store;
-    this.#config = config;
+    this.#configStore = configStore;
     this.#botId = BigInt(bot.id);
     this.#botUsername = bot.username ?? null;
+    const config = configStore.current().config;
     this.#participation = new ParticipationRegistry(config);
     for (const chat of config.telegram.chats) {
       this.#allowedChats.set(
@@ -139,7 +144,7 @@ export class TelegramIngestion {
       this.#upsertChat(chat, chatId, receivedAt);
       return {};
     }
-    const chatConfig = resolveChatConfig(this.#config, this.#store.orm, chatId);
+    const chatConfig = resolveChatConfig(this.#configStore.current().config, this.#store.orm, chatId);
     const ignoredUserIds = chatConfig?.ignored_user_ids ?? [];
     if (isIgnoredUser(message, ignoredUserIds)) {
       return {};
@@ -265,7 +270,7 @@ export class TelegramIngestion {
     const fromBot = message.from?.is_bot === true;
     const ownMessage = message.from !== undefined && BigInt(message.from.id) === this.#botId;
     const service = isServiceMessage(message);
-    if (ownMessage || (fromBot && !this.#config.telegram.process_bot_messages)) {
+    if (ownMessage || (fromBot && !this.#configStore.current().config.telegram.process_bot_messages)) {
       return undefined;
     }
     const conversationId = this.#upsertConversation(internalChatId, threadId, receivedAt);
@@ -309,7 +314,9 @@ export class TelegramIngestion {
       normalized.media.length === 1 &&
       normalized.media[0]?.kind === 'sticker';
     const eligibleHuman =
-      !fromBot && !service && (!stickerOnly || this.#config.telegram.sticker_trigger_enabled === true);
+      !fromBot &&
+      !service &&
+      (!stickerOnly || this.#configStore.current().config.telegram.sticker_trigger_enabled === true);
     const revision = this.#store.orm
       .insert(messageRevisions)
       .values({
@@ -489,7 +496,7 @@ export class TelegramIngestion {
       //   the runtime the moment a long round ends, no matter how little it had
       //   collected; `AgentRuntime#deferCollectingBucket` therefore only ever
       //   pushes this deadline later, to `round end + window`.
-      const deadline = receivedAt.getTime() + this.#config.telegram.bucket_window_seconds * 1_000;
+      const deadline = receivedAt.getTime() + this.#configStore.current().config.telegram.bucket_window_seconds * 1_000;
       const created = this.#store.orm
         .insert(buckets)
         .values({
@@ -550,7 +557,7 @@ export class TelegramIngestion {
            AND (v.chat_id NOT IN (SELECT chat_id FROM chat_context_cutoffs)
                 OR m.telegram_message_id > (SELECT telegram_message_id FROM chat_context_cutoffs WHERE chat_id = v.chat_id))
          ORDER BY m.telegram_date DESC, m.telegram_message_id DESC
-         LIMIT ${BigInt(this.#config.agent.history_messages)}`,
+         LIMIT ${BigInt(this.#configStore.current().config.agent.history_messages)}`,
       )
       .reverse();
     for (const [index, row] of pending.entries()) {

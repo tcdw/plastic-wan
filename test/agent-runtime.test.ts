@@ -11,6 +11,7 @@ import sharp from 'sharp';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { previewContext } from '../src/platform/invocation-context.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
@@ -39,8 +40,9 @@ test('a fresh Agent publishes only through send and audits model usage', async (
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const update: Update = {
     update_id: 1,
     message: {
@@ -53,7 +55,7 @@ test('a fresh Agent publishes only through send and audits model usage', async (
   };
   const received = new Date('2026-08-15T00:00:00.000Z');
   ingestion.ingest(update, received);
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));
@@ -87,15 +89,15 @@ test('a fresh Agent publishes only through send and audits model usage', async (
   };
   const runtime = new AgentRuntime({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),
   });
-  const outcome = await runtime.run(invocationId, new AbortController().signal);
+  const outcome = await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
   expect(
     store.db
@@ -148,8 +150,9 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const update: Update = {
     update_id: 3,
     message: {
@@ -162,7 +165,7 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
   };
   const received = new Date('2026-08-15T00:00:00.000Z');
   ingestion.ingest(update, received);
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));
@@ -200,10 +203,10 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
   const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
   const runtime = new AgentRuntime({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
@@ -212,7 +215,7 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
     systemResources: SystemResources.empty(),
     additionalTools: () => [noop],
   });
-  const outcome = await runtime.run(invocationId, new AbortController().signal);
+  const outcome = await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'turn_budget' });
   const audited = store.db
     .prepare<[bigint], { tool_calls_used: bigint }>('SELECT tool_calls_used FROM invocations WHERE id = ?')
@@ -227,21 +230,24 @@ test('counts tool descriptions in registry limits', async () => {
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const models = createModels();
   const faux = fauxProvider({
     provider: 'agent',
-    models: [{ id: 'tiny-context', input: ['text'], contextWindow: 1_000, maxTokens: 100 }],
+    // The id must match `agent.model`: the registry is now validated against the
+    // model the switcher resolves, not the one handed to the runtime.
+    models: [{ id: 'agent-model', input: ['text'], contextWindow: 1_000, maxTokens: 100 }],
   });
   models.setProvider(faux.provider);
   const model = faux.getModel();
   const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
   const runtime = new AgentRuntime({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
@@ -269,8 +275,9 @@ test('audits complete redacted model error details', async () => {
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const received = new Date('2026-08-15T00:00:00.000Z');
   ingestion.ingest(
     {
@@ -285,7 +292,7 @@ test('audits complete redacted model error details', async () => {
     },
     received,
   );
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));
@@ -308,10 +315,10 @@ test('audits complete redacted model error details', async () => {
   await secrets.resolve(loaded.config.telegram.token);
   const runtime = new AgentRuntime({
     store,
-    config: loaded.config,
+    configStore,
     secrets,
     registry,
-    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -320,7 +327,7 @@ test('audits complete redacted model error details', async () => {
     systemResources: SystemResources.empty(),
   });
 
-  expect(await runtime.run(invocationId, new AbortController().signal)).toEqual({
+  expect(await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal)).toEqual({
     state: 'failed',
     reason: 'model_error',
   });
@@ -344,6 +351,7 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const fixturePath = join(directory, 'fixture.png');
   await sharp({
@@ -351,7 +359,7 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
   })
     .png()
     .toFile(fixturePath);
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const received = new Date('2026-08-15T00:00:00.000Z');
   const update: Update = {
     update_id: 2,
@@ -376,7 +384,7 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
     },
   };
   ingestion.ingest(update, received);
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));
@@ -427,7 +435,7 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
   };
   const media = new MediaService({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
     mediaClient: downloader,
@@ -439,16 +447,16 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
   };
   const runtime = new AgentRuntime({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),
     directImageLoader: (context, signal) => media.loadDirectImages(context.directImages, signal),
   });
-  const outcome = await runtime.run(invocationId, new AbortController().signal);
+  const outcome = await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
   expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM media').get()?.count).toBe(2n);
   expect(
@@ -496,13 +504,14 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const fixturePath = join(directory, 'fixture.png');
   await sharp({ create: { width: 16, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } } })
     .png()
     .toFile(fixturePath);
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));
@@ -594,7 +603,7 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
   const registry: ModelRegistry = { models, agentModel: agentFaux.getModel(), visionModel: visionFaux.getModel() };
   const media = new MediaService({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
     mediaClient: {
@@ -608,10 +617,10 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
   });
   const runtime = new AgentRuntime({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 601, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 602, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -622,7 +631,7 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
       capability(media.createReadImageTool(context, capabilities, deadline), false),
     ],
   });
-  const outcome = await runtime.run(secondInvocation, new AbortController().signal);
+  const outcome = await runtime.run(secondInvocation, configStore.beginInvocation(), new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
   expect(agentFaux.state.callCount).toBe(3);
   expect(visionFaux.state.callCount).toBe(1);
@@ -656,12 +665,13 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const fixturePath = join(directory, 'fixture.png');
   await sharp({ create: { width: 16, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } } })
     .png()
     .toFile(fixturePath);
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const received = new Date('2026-08-15T00:00:00.000Z');
   ingestion.ingest(
     {
@@ -676,7 +686,7 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
     },
     received,
   );
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));
@@ -723,7 +733,7 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
   const registry: ModelRegistry = { models, agentModel, visionModel };
   const media = new MediaService({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
     mediaClient: {
@@ -737,10 +747,10 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
   });
   const runtime = new AgentRuntime({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 601, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 602, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -751,7 +761,7 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
       capability(media.createReadImageTool(context, capabilities, deadline), false),
     ],
   });
-  const outcome = await runtime.run(invocationId, new AbortController().signal);
+  const outcome = await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
   expect(agentFaux.state.callCount).toBe(3);
   expect(visionFaux.state.callCount).toBe(1);
@@ -785,8 +795,9 @@ test('nudges the model once to use send when it drafts a private reply and never
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const update: Update = {
     update_id: 1,
     message: {
@@ -799,7 +810,7 @@ test('nudges the model once to use send when it drafts a private reply and never
   };
   const received = new Date('2026-08-15T00:00:00.000Z');
   ingestion.ingest(update, received);
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));
@@ -839,15 +850,15 @@ test('nudges the model once to use send when it drafts a private reply and never
   };
   const runtime = new AgentRuntime({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),
   });
-  const outcome = await runtime.run(invocationId, new AbortController().signal);
+  const outcome = await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
   expect(sawNudge).toBe(true);
   expect(
@@ -866,8 +877,9 @@ test('does not nudge when the model ends without any draft text', async () => {
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const update: Update = {
     update_id: 5,
     message: {
@@ -880,7 +892,7 @@ test('does not nudge when the model ends without any draft text', async () => {
   };
   const received = new Date('2026-08-15T00:00:00.000Z');
   ingestion.ingest(update, received);
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));
@@ -901,10 +913,10 @@ test('does not nudge when the model ends without any draft text', async () => {
   const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
   const runtime = new AgentRuntime({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: {
       sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -912,7 +924,7 @@ test('does not nudge when the model ends without any draft text', async () => {
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),
   });
-  const outcome = await runtime.run(invocationId, new AbortController().signal);
+  const outcome = await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
   expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
   expect(
     store.db

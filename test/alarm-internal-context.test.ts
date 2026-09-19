@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { Update } from 'grammy/types';
 import { createAlarmTool, createDeleteAlarmTool, createListAlarmTool } from '../src/capabilities/alarm.ts';
 import { loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
@@ -36,13 +37,15 @@ async function setup() {
     }),
   );
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   return {
     directory,
     loaded,
+    configStore,
     store,
-    ingestion: new TelegramIngestion(store, loaded.config, { id: 999 }),
-    scheduler: new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    ingestion: new TelegramIngestion(store, configStore, { id: 999 }),
+    scheduler: new BucketScheduler(store, configStore, async () => ({
       state: 'completed',
       reason: 'done',
     })),
@@ -432,7 +435,7 @@ describe('alarm internal context and ownership', () => {
   });
 
   test('internal context survives close and reopen and retention removes it with online window', async () => {
-    const { directory, loaded, store, ingestion, scheduler, build } = await setup();
+    const { directory, loaded, configStore, store, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, '列出闹钟'), received);
     const invocationId = processOne(scheduler, new Date(received.getTime() + 15_000));
@@ -457,9 +460,9 @@ describe('alarm internal context and ownership', () => {
     store.close();
 
     const reopened = await SqliteStore.open(loaded.config, false);
-    const reopenedIngestion = new TelegramIngestion(reopened, loaded.config, { id: 999 });
+    const reopenedIngestion = new TelegramIngestion(reopened, configStore, { id: 999 });
     reopenedIngestion.ingest(update(2, 11, '第二个'), new Date(received.getTime() + 20_000));
-    const secondScheduler = new BucketScheduler(reopened, loaded.config, loaded.hash, async () => ({
+    const secondScheduler = new BucketScheduler(reopened, configStore, async () => ({
       state: 'completed',
       reason: 'done',
     }));

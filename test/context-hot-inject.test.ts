@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai';
 import type { Update } from 'grammy/types';
 import { loadConfig, type FileConfig, type RawConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore, type InvocationConfigSnapshot } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
@@ -32,6 +33,7 @@ afterAll(async () => {
 interface Fixture {
   readonly store: SqliteStore;
   readonly config: RawConfig;
+  readonly configStore: RuntimeConfigurationStore;
   readonly fileConfig: FileConfig;
   readonly conversationRuntime: ConversationRuntime;
   readonly ingestion: TelegramIngestion;
@@ -41,6 +43,11 @@ interface Fixture {
     faux: ReturnType<typeof fauxProvider>,
     overrides?: { readonly systemPrompt?: string; readonly registryModelId?: string },
   ): AgentRuntime;
+  /** The same runtime plus the invocation snapshot that carries its config overrides. */
+  runtimeAndSnapshot(
+    faux: ReturnType<typeof fauxProvider>,
+    overrides?: { readonly systemPrompt?: string; readonly registryModelId?: string },
+  ): { readonly runtime: AgentRuntime; readonly snapshot: InvocationConfigSnapshot };
 }
 
 async function fixture(transform?: (config: FileConfig) => void): Promise<Fixture> {
@@ -59,6 +66,7 @@ async function fixture(transform?: (config: FileConfig) => void): Promise<Fixtur
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const sendApi: TelegramSendApi = {
     sendMessage: async () => ({ message_id: SEND_MESSAGE_ID, date: 1_700_000_100, chat: { id: CHAT_ID } }),
@@ -67,38 +75,46 @@ async function fixture(transform?: (config: FileConfig) => void): Promise<Fixtur
   const conversationRuntime = new ConversationRuntime({
     agentCacheSize: loaded.config.agent.context.agent_cache_size,
   });
+  const build = (
+    faux: ReturnType<typeof fauxProvider>,
+    overrides: { readonly systemPrompt?: string; readonly registryModelId?: string } = {},
+  ): { readonly runtime: AgentRuntime; readonly snapshot: InvocationConfigSnapshot } => {
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const model = overrides.registryModelId === undefined ? faux.getModel() : faux.getModel(overrides.registryModelId);
+    if (model === undefined) {
+      throw new Error(`Faux model ${overrides.registryModelId} is not registered`);
+    }
+    const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
+    const config: RawConfig =
+      overrides.systemPrompt === undefined
+        ? loaded.config
+        : { ...loaded.config, agent: { ...loaded.config.agent, system_prompt: overrides.systemPrompt } };
+    const runtimeConfigStore =
+      overrides.systemPrompt === undefined ? configStore : new RuntimeConfigurationStore({ config, hash: loaded.hash });
+    const runtime = new AgentRuntime({
+      store,
+      configStore: runtimeConfigStore,
+      secrets: new SecretStore(),
+      registry,
+      modelSwitcher: new AgentModelSwitcher(runtimeConfigStore, registry.models),
+      telegramApi: sendApi,
+      bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+      systemResources: SystemResources.empty(),
+      conversationRuntime,
+    });
+    return { runtime, snapshot: runtimeConfigStore.beginInvocation() };
+  };
   return {
     store,
     config: loaded.config,
+    configStore,
     fileConfig: loaded.fileConfig,
     conversationRuntime,
-    ingestion: new TelegramIngestion(store, loaded.config, { id: 999 }),
+    ingestion: new TelegramIngestion(store, configStore, { id: 999 }),
     sendApi,
-    runtimeWith: (faux, overrides = {}) => {
-      const models = createModels();
-      models.setProvider(faux.provider);
-      const model =
-        overrides.registryModelId === undefined ? faux.getModel() : faux.getModel(overrides.registryModelId);
-      if (model === undefined) {
-        throw new Error(`Faux model ${overrides.registryModelId} is not registered`);
-      }
-      const registry: ModelRegistry = { models, agentModel: model, visionModel: model };
-      const config: RawConfig =
-        overrides.systemPrompt === undefined
-          ? loaded.config
-          : { ...loaded.config, agent: { ...loaded.config.agent, system_prompt: overrides.systemPrompt } };
-      return new AgentRuntime({
-        store,
-        config,
-        secrets: new SecretStore(),
-        registry,
-        modelSwitcher: new AgentModelSwitcher(config, registry.models),
-        telegramApi: sendApi,
-        bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
-        systemResources: SystemResources.empty(),
-        conversationRuntime,
-      });
-    },
+    runtimeWith: (faux, overrides = {}) => build(faux, overrides).runtime,
+    runtimeAndSnapshot: (faux, overrides = {}) => build(faux, overrides),
   };
 }
 
@@ -175,9 +191,8 @@ describe('long-lived invocation', () => {
     const runtime = fixtureSetup.runtimeWith(faux);
     const scheduler = new BucketScheduler(
       fixtureSetup.store,
-      fixtureSetup.config,
-      'hash',
-      async (invocationId, signal) => runtime.run(invocationId, signal),
+      fixtureSetup.configStore,
+      async (invocationId, snapshot, signal) => runtime.run(invocationId, snapshot, signal),
       fixtureSetup.conversationRuntime,
     );
     try {
@@ -275,11 +290,10 @@ describe('long-lived invocation', () => {
     });
     const scheduler = new BucketScheduler(
       fixtureSetup.store,
-      fixtureSetup.config,
-      'hash',
-      async (invocationId, signal) => {
+      fixtureSetup.configStore,
+      async (invocationId, snapshot, signal) => {
         started.push(invocationId);
-        const outcome = await runtime.run(invocationId, signal);
+        const outcome = await runtime.run(invocationId, snapshot, signal);
         finished();
         return outcome;
       },
@@ -373,12 +387,11 @@ describe('long-lived invocation', () => {
     });
     const scheduler = new BucketScheduler(
       fixtureSetup.store,
-      fixtureSetup.config,
-      'hash',
-      async (invocationId, signal) => {
+      fixtureSetup.configStore,
+      async (invocationId, snapshot, signal) => {
         const poll = setInterval(recordInjection, 25);
         try {
-          const outcome = await runtime.run(invocationId, signal);
+          const outcome = await runtime.run(invocationId, snapshot, signal);
           finished();
           return outcome;
         } finally {
@@ -448,9 +461,8 @@ describe('long-lived invocation', () => {
     const runtime = fixtureSetup.runtimeWith(faux);
     const scheduler = new BucketScheduler(
       fixtureSetup.store,
-      fixtureSetup.config,
-      'hash',
-      async (invocationId, signal) => runtime.run(invocationId, signal),
+      fixtureSetup.configStore,
+      async (invocationId, snapshot, signal) => runtime.run(invocationId, snapshot, signal),
       fixtureSetup.conversationRuntime,
     );
     try {
@@ -490,11 +502,10 @@ describe('long-lived invocation', () => {
     });
     const scheduler = new BucketScheduler(
       fixtureSetup.store,
-      fixtureSetup.config,
-      'hash',
-      async (invocationId, signal) => {
+      fixtureSetup.configStore,
+      async (invocationId, snapshot, signal) => {
         started.push(invocationId);
-        const outcome = await runtime.run(invocationId, signal);
+        const outcome = await runtime.run(invocationId, snapshot, signal);
         finished();
         return outcome;
       },
@@ -549,11 +560,10 @@ describe('long-lived invocation', () => {
     });
     const scheduler = new BucketScheduler(
       fixtureSetup.store,
-      fixtureSetup.config,
-      'hash',
-      async (invocationId, signal) => {
+      fixtureSetup.configStore,
+      async (invocationId, snapshot, signal) => {
         started.push(invocationId);
-        const outcome = await runtime.run(invocationId, signal);
+        const outcome = await runtime.run(invocationId, snapshot, signal);
         if (started.length === 2) {
           secondFinished();
         }
@@ -635,9 +645,8 @@ describe('long-lived invocation', () => {
     const runtime = fixtureSetup.runtimeWith(faux);
     const scheduler = new BucketScheduler(
       fixtureSetup.store,
-      fixtureSetup.config,
-      'hash',
-      async (invocationId, signal) => runtime.run(invocationId, signal),
+      fixtureSetup.configStore,
+      async (invocationId, snapshot, signal) => runtime.run(invocationId, snapshot, signal),
       fixtureSetup.conversationRuntime,
     );
     try {
@@ -690,7 +699,7 @@ describe('long-lived invocation', () => {
       // another topic of the same chat must wait for the chat to go idle instead
       // of being injected into a context it does not belong to.
       fixtureSetup.ingestion.ingest(update(1, 10, 'main thread'), new Date());
-      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', {
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.configStore, {
         isClosing: () => false,
         isRoundInProgress: () => false,
         queueInjection: () => {
@@ -729,7 +738,7 @@ describe('long-lived invocation', () => {
     const fixtureSetup = await fixture();
     try {
       fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
-      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', {
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.configStore, {
         isClosing: () => false,
         isRoundInProgress: () => false,
         queueInjection: () => undefined,
@@ -771,7 +780,7 @@ describe('long-lived invocation', () => {
     try {
       fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
       const injected: bigint[] = [];
-      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', {
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.configStore, {
         isClosing: () => true,
         isRoundInProgress: () => false,
         queueInjection: (_conversationId, bucketId) => injected.push(bucketId),
@@ -828,7 +837,7 @@ describe('long-lived invocation', () => {
     const runtime = fixtureSetup.runtimeWith(faux);
     try {
       fixtureSetup.ingestion.ingest(update(1, 10, 'hello'), new Date());
-      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', {
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.configStore, {
         isClosing: () => false,
         isRoundInProgress: () => false,
         queueInjection: () => undefined,
@@ -839,7 +848,11 @@ describe('long-lived invocation', () => {
       }
       fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
 
-      const outcome = await runtime.run(invocationId, new AbortController().signal);
+      const outcome = await runtime.run(
+        invocationId,
+        fixtureSetup.configStore.beginInvocation(),
+        new AbortController().signal,
+      );
       expect(outcome).toEqual({ state: 'completed', reason: 'context_limit' });
       // Exactly one closing turn, and it only carried the send tool.
       expect(closingTools).toEqual([['send']]);
@@ -881,7 +894,7 @@ describe('long-lived invocation', () => {
     const runtime = fixtureSetup.runtimeWith(faux);
     try {
       fixtureSetup.ingestion.ingest(update(1, 10, 'hello'), new Date());
-      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', {
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.configStore, {
         isClosing: () => false,
         isRoundInProgress: () => false,
         queueInjection: () => undefined,
@@ -892,7 +905,11 @@ describe('long-lived invocation', () => {
       }
       fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
 
-      const outcome = await runtime.run(invocationId, new AbortController().signal);
+      const outcome = await runtime.run(
+        invocationId,
+        fixtureSetup.configStore.beginInvocation(),
+        new AbortController().signal,
+      );
       // The run ends because the model stopped calling tools, not because the
       // estimate said the window was full.
       expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
@@ -930,8 +947,7 @@ describe('long-lived invocation', () => {
     };
     const scheduler = new BucketScheduler(
       fixtureSetup.store,
-      fixtureSetup.config,
-      'hash',
+      fixtureSetup.configStore,
       async () => {
         await gate;
         return { state: 'completed', reason: 'completed' };
@@ -953,7 +969,7 @@ describe('long-lived invocation', () => {
         .prepare<[], { id: bigint }>("SELECT id FROM invocations WHERE state = 'running' LIMIT 1")
         .get();
       fixtureSetup.ingestion.ingest(update(2, 11, 'attached but never injected'), new Date());
-      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', attachment);
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.configStore, attachment);
       expect(service.processDue(new Date())).toHaveLength(0);
       expect(
         fixtureSetup.store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM invocation_buckets').get()
@@ -1002,7 +1018,7 @@ describe('long-lived invocation', () => {
     const runtime = fixtureSetup.runtimeWith(faux);
     try {
       fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
-      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.config, 'hash', {
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.configStore, {
         isClosing: () => false,
         isRoundInProgress: () => false,
         queueInjection: () => undefined,
@@ -1024,7 +1040,11 @@ describe('long-lived invocation', () => {
       fixtureSetup.ingestion.ingest(update(2, 11, 'attached before the opening injection'), new Date());
       fixtureSetup.conversationRuntime.queueInjection(conversationId, 2n);
 
-      const outcome = await runtime.run(invocationId, new AbortController().signal);
+      const outcome = await runtime.run(
+        invocationId,
+        fixtureSetup.configStore.beginInvocation(),
+        new AbortController().signal,
+      );
       expect(outcome).toEqual({ state: 'completed', reason: 'turn_budget' });
       expect(fixtureSetup.conversationRuntime.hasPendingInjections(conversationId)).toBe(false);
       // Only the opening batch reached the transcript.
@@ -1062,7 +1082,7 @@ describe('conversation continuity', () => {
     });
     faux.setResponses([() => fauxAssistantMessage('first answer'), () => fauxAssistantMessage('second answer')]);
     const runtime = fixtureSetup.runtimeWith(faux, { registryModelId: 'tiny-model' });
-    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.config, 'hash', async () => ({
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.configStore, async () => ({
       state: 'completed',
       reason: 'done',
     }));
@@ -1073,7 +1093,7 @@ describe('conversation continuity', () => {
         if (invocationId === undefined) {
           throw new Error(`Expected invocation ${index + 1}`);
         }
-        await runtime.run(invocationId, new AbortController().signal);
+        await runtime.run(invocationId, fixtureSetup.configStore.beginInvocation(), new AbortController().signal);
         fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(invocationId);
         fixtureSetup.store.db
           .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
@@ -1113,8 +1133,7 @@ describe('conversation continuity', () => {
     // run through the same path production uses.
     const service = new InvocationQueueService(
       fixtureSetup.store,
-      fixtureSetup.config,
-      'hash',
+      fixtureSetup.configStore,
       fixtureSetup.conversationRuntime,
     );
     try {
@@ -1125,7 +1144,7 @@ describe('conversation continuity', () => {
         throw new Error('Expected the first invocation');
       }
       fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'running' WHERE id = ?").run(first);
-      await runtime.run(first, new AbortController().signal);
+      await runtime.run(first, fixtureSetup.configStore.beginInvocation(), new AbortController().signal);
       fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
       fixtureSetup.store.db
         .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
@@ -1148,7 +1167,11 @@ describe('conversation continuity', () => {
       }
       expect(fixtureSetup.conversationRuntime.hasPendingInjections(conversationId)).toBe(true);
 
-      const outcome = await runtime.run(second, new AbortController().signal);
+      const outcome = await runtime.run(
+        second,
+        fixtureSetup.configStore.beginInvocation(),
+        new AbortController().signal,
+      );
       expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
 
       // Each batch's reply reference points at the row that batch occupies, so the
@@ -1208,7 +1231,7 @@ describe('conversation continuity', () => {
       },
     ]);
     const runtime = fixtureSetup.runtimeWith(faux);
-    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.config, 'hash', async () => ({
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.configStore, async () => ({
       state: 'completed',
       reason: 'done',
     }));
@@ -1219,7 +1242,11 @@ describe('conversation continuity', () => {
         if (invocationId === undefined) {
           throw new Error(`Expected invocation ${index + 1}`);
         }
-        const outcome = await runtime.run(invocationId, new AbortController().signal);
+        const outcome = await runtime.run(
+          invocationId,
+          fixtureSetup.configStore.beginInvocation(),
+          new AbortController().signal,
+        );
         expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
         fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(invocationId);
         fixtureSetup.store.db
@@ -1290,7 +1317,7 @@ describe('conversation continuity', () => {
       },
     ]);
     const runtime = fixtureSetup.runtimeWith(faux);
-    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.config, 'hash', async () => ({
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.configStore, async () => ({
       state: 'completed',
       reason: 'done',
     }));
@@ -1300,7 +1327,7 @@ describe('conversation continuity', () => {
       if (first === undefined) {
         throw new Error('Expected the first invocation');
       }
-      await runtime.run(first, new AbortController().signal);
+      await runtime.run(first, fixtureSetup.configStore.beginInvocation(), new AbortController().signal);
       fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
       fixtureSetup.store.db
         .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
@@ -1337,7 +1364,11 @@ describe('conversation continuity', () => {
       if (second === undefined) {
         throw new Error('Expected the second invocation');
       }
-      const outcome = await runtime.run(second, new AbortController().signal);
+      const outcome = await runtime.run(
+        second,
+        fixtureSetup.configStore.beginInvocation(),
+        new AbortController().signal,
+      );
       expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
       const carried = JSON.parse(requests[0] ?? '[]') as { role: string; content: unknown }[];
       // The stored assistant turn was replayed from SQLite, not lost.
@@ -1377,7 +1408,7 @@ describe('conversation continuity', () => {
       },
     ]);
     const runtime = fixtureSetup.runtimeWith(faux);
-    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.config, 'hash', async () => ({
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.configStore, async () => ({
       state: 'completed',
       reason: 'done',
     }));
@@ -1387,7 +1418,7 @@ describe('conversation continuity', () => {
       if (first === undefined) {
         throw new Error('Expected the first invocation');
       }
-      await runtime.run(first, new AbortController().signal);
+      await runtime.run(first, fixtureSetup.configStore.beginInvocation(), new AbortController().signal);
       fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
       fixtureSetup.store.db
         .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
@@ -1418,7 +1449,11 @@ describe('conversation continuity', () => {
       if (second === undefined) {
         throw new Error('Expected the second invocation');
       }
-      const outcome = await runtime.run(second, new AbortController().signal);
+      const outcome = await runtime.run(
+        second,
+        fixtureSetup.configStore.beginInvocation(),
+        new AbortController().signal,
+      );
       expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
       // The window had no turn boundary to cut forward to, so it was dropped: the
       // request carries the new batch alone and no orphaned tool result.
@@ -1453,7 +1488,7 @@ describe('conversation continuity', () => {
       },
     ]);
     const runtime = fixtureSetup.runtimeWith(faux);
-    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.config, 'hash', async () => ({
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.configStore, async () => ({
       state: 'completed',
       reason: 'done',
     }));
@@ -1463,7 +1498,7 @@ describe('conversation continuity', () => {
       if (first === undefined) {
         throw new Error('Expected the first invocation');
       }
-      await runtime.run(first, new AbortController().signal);
+      await runtime.run(first, fixtureSetup.configStore.beginInvocation(), new AbortController().signal);
       fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
       fixtureSetup.store.db
         .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
@@ -1505,7 +1540,11 @@ describe('conversation continuity', () => {
       if (second === undefined) {
         throw new Error('Expected the second invocation');
       }
-      const outcome = await runtime.run(second, new AbortController().signal);
+      const outcome = await runtime.run(
+        second,
+        fixtureSetup.configStore.beginInvocation(),
+        new AbortController().signal,
+      );
       expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
       // Head moved forward to the boundary, not to the end: the retained batch is
       // still replayed alongside the new one, and the orphan is gone.
@@ -1526,7 +1565,7 @@ describe('conversation continuity', () => {
     const fixtureSetup = await fixture(withoutIdleWait);
     const faux = fauxAgent();
     faux.setResponses([() => fauxAssistantMessage('')]);
-    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.config, 'hash', async () => ({
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.configStore, async () => ({
       state: 'completed',
       reason: 'done',
     }));
@@ -1536,7 +1575,8 @@ describe('conversation continuity', () => {
       if (first === undefined) {
         throw new Error('Expected the first invocation');
       }
-      await fixtureSetup.runtimeWith(faux, { systemPrompt: 'prompt A' }).run(first, new AbortController().signal);
+      const firstRun = fixtureSetup.runtimeAndSnapshot(faux, { systemPrompt: 'prompt A' });
+      await firstRun.runtime.run(first, firstRun.snapshot, new AbortController().signal);
       fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
       fixtureSetup.store.db
         .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
@@ -1551,7 +1591,8 @@ describe('conversation continuity', () => {
       if (second === undefined) {
         throw new Error('Expected the second invocation');
       }
-      await fixtureSetup.runtimeWith(faux, { systemPrompt: 'prompt B' }).run(second, new AbortController().signal);
+      const secondRun = fixtureSetup.runtimeAndSnapshot(faux, { systemPrompt: 'prompt B' });
+      await secondRun.runtime.run(second, secondRun.snapshot, new AbortController().signal);
 
       // The old rows were dropped, so every row left in the canonical history
       // belongs to the new run and the retained window starts fresh.

@@ -7,6 +7,7 @@ import { createSendTool, type TelegramSendApi } from '../src/capabilities/send-t
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from '../src/orchestration/scheduler.ts';
 import { type FileConfig, loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { runStartupCatchUp, type StartupCatchUpApi } from '../src/startup-catch-up.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import {
@@ -112,12 +113,13 @@ async function setup(
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   return {
     store,
     loaded,
-    ingestion: new TelegramIngestion(store, loaded.config, { id: 999 }),
-    scheduler: new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    ingestion: new TelegramIngestion(store, configStore, { id: 999 }),
+    scheduler: new BucketScheduler(store, configStore, async () => ({
       state: 'completed',
       reason: 'done',
     })),

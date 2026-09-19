@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
 import { AGENT_PROMPT_VERSION } from '../platform/agent-protocol.ts';
-import type { RawConfig } from '../platform/config.ts';
+import type { RuntimeConfigurationStore } from '../platform/runtime-config.ts';
 import { type SqliteStore, asRunResult, isChatPaused, resolveChatConfig } from '../store/database.ts';
 import { snapshotInvocation } from '../store/invocation-snapshot.ts';
 import { ParticipationRegistry, isConversationActive } from '../store/participation.ts';
@@ -68,16 +68,14 @@ interface AlarmDueRow {
  */
 export class InvocationQueueService {
   readonly #store: SqliteStore;
-  readonly #config: RawConfig;
-  readonly #configHash: string;
+  readonly #configStore: RuntimeConfigurationStore;
   readonly #participation: ParticipationRegistry;
   readonly #attachment: BucketAttachmentTarget | undefined;
 
-  constructor(store: SqliteStore, config: RawConfig, configHash: string, attachment?: BucketAttachmentTarget) {
+  constructor(store: SqliteStore, configStore: RuntimeConfigurationStore, attachment?: BucketAttachmentTarget) {
     this.#store = store;
-    this.#config = config;
-    this.#configHash = configHash;
-    this.#participation = new ParticipationRegistry(config);
+    this.#configStore = configStore;
+    this.#participation = new ParticipationRegistry(configStore.current().config);
     this.#attachment = attachment;
   }
 
@@ -163,7 +161,7 @@ export class InvocationQueueService {
                   CASE WHEN r.kind <> 'service' AND COALESCE(s.is_bot, 0) = 0
                             AND (r.kind <> 'sticker' OR r.text IS NOT NULL OR r.caption IS NOT NULL
                                  OR EXISTS (SELECT 1 FROM media WHERE revision_id = r.id AND kind <> 'sticker')
-                                 OR ${this.#config.telegram.sticker_trigger_enabled === true ? 1n : 0n} = 1) THEN 1 ELSE 0 END AS eligible_human
+                                 OR ${this.#configStore.current().config.telegram.sticker_trigger_enabled === true ? 1n : 0n} = 1) THEN 1 ELSE 0 END AS eligible_human
            FROM messages m
            JOIN message_revisions r ON r.id = m.current_revision_id
            LEFT JOIN senders s ON s.id = r.sender_id
@@ -179,7 +177,7 @@ export class InvocationQueueService {
          )
          SELECT id, conversation_id, chat_id, telegram_chat_id, chat_type, telegram_message_id, telegram_date
          FROM ranked
-         WHERE message_rank <= ${BigInt(this.#config.agent.history_messages)}
+         WHERE message_rank <= ${BigInt(this.#configStore.current().config.agent.history_messages)}
          ORDER BY chat_id, telegram_date, telegram_message_id`,
       );
       const grouped = new Map<string, StartupMessageRow[]>();
@@ -200,7 +198,7 @@ export class InvocationQueueService {
           continue;
         }
         const skipReason =
-          resolveChatConfig(this.#config, this.#store.orm, latest.telegram_chat_id) === undefined
+          resolveChatConfig(this.#configStore.current().config, this.#store.orm, latest.telegram_chat_id) === undefined
             ? 'chat_removed'
             : isChatPaused(this.#store.orm, latest.chat_id)
               ? 'chat_paused'
@@ -356,7 +354,7 @@ export class InvocationQueueService {
       .run();
     snapshotInvocation(
       this.#store,
-      this.#config.agent.history_messages,
+      this.#configStore.current().config.agent.history_messages,
       invocationId,
       bucket.id,
       bucket.conversation_id,
@@ -387,7 +385,10 @@ export class InvocationQueueService {
    * keeps the scheduler from waking on an already-passed deadline over and over.
    */
   #deferBucket(bucket: BucketRow, now: Date): void {
-    const deferMilliseconds = Math.max(this.#config.telegram.bucket_window_seconds * 1_000, MINIMUM_DEFER_MS);
+    const deferMilliseconds = Math.max(
+      this.#configStore.current().config.telegram.bucket_window_seconds * 1_000,
+      MINIMUM_DEFER_MS,
+    );
     const atLeast = new Date(now.getTime() + deferMilliseconds).toISOString();
     this.#store.orm.run(
       sql`UPDATE buckets SET deadline_at = ${atLeast}, updated_at = ${now.toISOString()}
@@ -525,7 +526,7 @@ export class InvocationQueueService {
   }
 
   #alarmCancelReason(alarm: AlarmDueRow): string | undefined {
-    const chatConfig = resolveChatConfig(this.#config, this.#store.orm, alarm.telegram_chat_id);
+    const chatConfig = resolveChatConfig(this.#configStore.current().config, this.#store.orm, alarm.telegram_chat_id);
     if (chatConfig === undefined) {
       return 'chat_removed';
     }
@@ -609,7 +610,7 @@ export class InvocationQueueService {
       this.#markBucketSkipped(bucket.id, now, 'chat_paused');
       return undefined;
     }
-    if (resolveChatConfig(this.#config, this.#store.orm, chat.telegram_chat_id) === undefined) {
+    if (resolveChatConfig(this.#configStore.current().config, this.#store.orm, chat.telegram_chat_id) === undefined) {
       this.#markBucketSkipped(bucket.id, now, 'chat_removed');
       return undefined;
     }
@@ -627,13 +628,14 @@ export class InvocationQueueService {
   }
 
   #insertInvocation(bucketId: bigint, conversationId: bigint, now: Date, includeHistory: boolean): bigint {
+    const current = this.#configStore.current();
     const created = this.#store.orm
       .insert(invocations)
       .values({
         bucketId,
         conversationId,
         state: 'queued',
-        configHash: this.#configHash,
+        configHash: current.hash,
         promptVersion: AGENT_PROMPT_VERSION,
         createdAt: now.toISOString(),
       })
@@ -648,7 +650,7 @@ export class InvocationQueueService {
     this.#store.orm.insert(invocationBuckets).values({ invocationId, bucketId, attachedAt: now.toISOString() }).run();
     snapshotInvocation(
       this.#store,
-      this.#config.agent.history_messages,
+      current.config.agent.history_messages,
       invocationId,
       bucketId,
       conversationId,

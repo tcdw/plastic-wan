@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
 import { type FileConfig, type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
@@ -19,7 +20,7 @@ afterAll(async () => {
 
 async function setup(
   transform?: (config: FileConfig) => void,
-  handler: ConstructorParameters<typeof BucketScheduler>[3] = async () => ({ state: 'completed', reason: 'done' }),
+  handler: ConstructorParameters<typeof BucketScheduler>[2] = async () => ({ state: 'completed', reason: 'done' }),
 ): Promise<{
   loaded: LoadedConfig;
   store: SqliteStore;
@@ -32,12 +33,13 @@ async function setup(
   const jsonc = testConfigJsonc(directory, transform);
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   return {
     loaded,
     store,
-    ingestion: new TelegramIngestion(store, loaded.config, { id: 999 }),
-    scheduler: new BucketScheduler(store, loaded.config, loaded.hash, handler),
+    ingestion: new TelegramIngestion(store, configStore, { id: 999 }),
+    scheduler: new BucketScheduler(store, configStore, handler),
   };
 }
 

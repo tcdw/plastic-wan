@@ -12,6 +12,7 @@ import {
 import type { Update } from 'grammy/types';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import type { ModelRegistry } from '../src/platform/providers.ts';
@@ -43,13 +44,16 @@ afterAll(async () => {
   );
 });
 
-async function openStore(prefix = 'plasticwan-sleep-'): Promise<{ loaded: LoadedConfig; store: SqliteStore }> {
+async function openStore(
+  prefix = 'plasticwan-sleep-',
+): Promise<{ loaded: LoadedConfig; configStore: RuntimeConfigurationStore; store: SqliteStore }> {
   const directory = await mkdtemp(join(tmpdir(), prefix));
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
-  return { loaded, store: await SqliteStore.open(loaded.config) };
+  const configStore = new RuntimeConfigurationStore(loaded);
+  return { loaded, configStore, store: await SqliteStore.open(loaded.config) };
 }
 
 async function runtimeSetup(
@@ -57,15 +61,16 @@ async function runtimeSetup(
   usageResource = '123456789',
 ): Promise<{
   store: SqliteStore;
+  configStore: RuntimeConfigurationStore;
   runtime: AgentRuntime;
   invocationId: bigint;
   faux: FauxProviderHandle;
 }> {
-  const { loaded, store } = await openStore();
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
+  const { configStore, store } = await openStore();
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const received = new Date('2026-08-15T00:00:00.000Z');
   ingestion.ingest(update, received);
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));
@@ -95,15 +100,15 @@ async function runtimeSetup(
   };
   const runtime = new AgentRuntime({
     store,
-    config: loaded.config,
+    configStore,
     secrets: new SecretStore(),
     registry,
-    modelSwitcher: new AgentModelSwitcher(loaded.config, registry.models),
+    modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),
   });
-  return { store, runtime, invocationId, faux };
+  return { store, configStore, runtime, invocationId, faux };
 }
 
 function modelToolLists(store: SqliteStore): string[][] {
@@ -114,26 +119,26 @@ function modelToolLists(store: SqliteStore): string[][] {
 }
 
 test('does not expose zzz while more than five percent remains', async () => {
-  const { store, runtime, invocationId, faux } = await runtimeSetup(284_999n);
+  const { store, configStore, runtime, invocationId, faux } = await runtimeSetup(284_999n);
   // The model deliberately stays silent with a blank draft so the send nudge
   // cannot add a second turn whose usage would push the budget over the line.
   faux.setResponses([fauxAssistantMessage('   ')]);
-  await runtime.run(invocationId, new AbortController().signal);
+  await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
   expect(modelToolLists(store)).toEqual([['read', 'send', 'execute']]);
   store.close();
 });
 
 test('exposes zzz after global remaining budget falls below five percent', async () => {
-  const { store, runtime, invocationId, faux } = await runtimeSetup(285_001n, '987654321');
+  const { store, configStore, runtime, invocationId, faux } = await runtimeSetup(285_001n, '987654321');
   faux.setResponses([fauxAssistantMessage('   ')]);
-  await runtime.run(invocationId, new AbortController().signal);
+  await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
   expect(modelToolLists(store)).toEqual([['read', 'send', 'execute', 'zzz']]);
   store.close();
 });
 
 test('blocks model calls after another chat exhausts the global daily budget', async () => {
-  const { store, runtime, invocationId } = await runtimeSetup(300_000n, '987654321');
-  expect(await runtime.run(invocationId, new AbortController().signal)).toEqual({
+  const { store, configStore, runtime, invocationId } = await runtimeSetup(300_000n, '987654321');
+  expect(await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal)).toEqual({
     state: 'failed',
     reason: 'daily_token_budget',
   });
@@ -142,15 +147,15 @@ test('blocks model calls after another chat exhausts the global daily budget', a
 });
 
 test('keeps zzz hidden at exactly five percent remaining', async () => {
-  const { store, runtime, invocationId, faux } = await runtimeSetup(285_000n);
+  const { store, configStore, runtime, invocationId, faux } = await runtimeSetup(285_000n);
   faux.setResponses([fauxAssistantMessage('   ')]);
-  await runtime.run(invocationId, new AbortController().signal);
+  await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
   expect(modelToolLists(store)).toEqual([['read', 'send', 'execute']]);
   store.close();
 });
 
 test('adds zzz at the next turn boundary when a running session crosses the threshold', async () => {
-  const { store, runtime, invocationId, faux } = await runtimeSetup(285_000n);
+  const { store, configStore, runtime, invocationId, faux } = await runtimeSetup(285_000n);
   const systemPrompts: string[] = [];
   const first = fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'good night' }), {
     stopReason: 'toolUse',
@@ -175,7 +180,7 @@ test('adds zzz at the next turn boundary when a running session crosses the thre
       return fauxAssistantMessage(fauxToolCall('zzz', {}), { stopReason: 'toolUse' });
     },
   ]);
-  await runtime.run(invocationId, new AbortController().signal);
+  await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
   expect(modelToolLists(store)).toEqual([
     ['read', 'send', 'execute'],
     ['read', 'send', 'execute', 'zzz'],
@@ -200,7 +205,7 @@ test('states the sleep state only while zzz is exposed', async () => {
       return fauxAssistantMessage('   ');
     },
   ]);
-  await awake.runtime.run(awake.invocationId, new AbortController().signal);
+  await awake.runtime.run(awake.invocationId, awake.configStore.beginInvocation(), new AbortController().signal);
   expect(awakePrompts).toHaveLength(1);
   expect(awakePrompts[0]).not.toContain(SLEEP_STATE_PROMPT);
   expect(
@@ -220,7 +225,7 @@ test('states the sleep state only while zzz is exposed', async () => {
       return fauxAssistantMessage('   ');
     },
   ]);
-  await sleepy.runtime.run(sleepy.invocationId, new AbortController().signal);
+  await sleepy.runtime.run(sleepy.invocationId, sleepy.configStore.beginInvocation(), new AbortController().signal);
   expect(sleepyPrompts).toHaveLength(1);
   expect(sleepyPrompts[0]).not.toContain(SLEEP_STATE_PROMPT);
   expect(
@@ -234,9 +239,9 @@ test('states the sleep state only while zzz is exposed', async () => {
 });
 
 test('zzz enters sleeping and ends without another model turn', async () => {
-  const { store, runtime, invocationId, faux } = await runtimeSetup(285_001n);
+  const { store, configStore, runtime, invocationId, faux } = await runtimeSetup(285_001n);
   faux.setResponses([fauxAssistantMessage(fauxToolCall('zzz', {}), { stopReason: 'toolUse' })]);
-  expect(await runtime.run(invocationId, new AbortController().signal)).toEqual({
+  expect(await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal)).toEqual({
     state: 'completed',
     reason: 'sleep',
   });
@@ -254,9 +259,9 @@ test('zzz enters sleeping and ends without another model turn', async () => {
 });
 
 test('sleeping skips both due and already queued agent sessions', async () => {
-  const { loaded, store } = await openStore();
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => {
+  const { configStore, store } = await openStore();
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
+  const scheduler = new BucketScheduler(store, configStore, async () => {
     throw new Error('Sleeping scheduler must not create an agent session');
   });
   const now = new Date();
@@ -297,15 +302,15 @@ test('sleeping persists across reopening the SQLite store', async () => {
 });
 
 test('the next UTC budget period wakes the bot after its minimum sleep', async () => {
-  const { loaded, store } = await openStore();
+  const { configStore, store } = await openStore();
   const slept = enterSleep(store.orm, new Date('2026-08-15T01:00:00.000Z'));
   expect(slept.sleepUntil).toBe('2026-08-16T00:00:00.000Z');
   expect(activeSleepUntil(store.orm, new Date('2026-08-15T23:59:59.999Z'))).toBe(slept.sleepUntil);
   expect(activeSleepUntil(store.orm, new Date('2026-08-16T00:00:00.000Z'))).toBeNull();
   expect(store.db.prepare('SELECT value FROM app_state WHERE key = ?').get(SLEEP_STATE_KEY)).toBeUndefined();
   const awakeAt = new Date('2026-08-16T00:00:00.001Z');
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));

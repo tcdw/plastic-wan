@@ -208,21 +208,19 @@ export interface Injection {
 
 export class ContextBuilder {
   readonly #store: SqliteStore;
-  readonly #config: RawConfig;
   readonly #memory: MemoryStore;
   readonly #skills: readonly SystemSkill[];
   readonly #refs: ContextRefStore;
 
-  constructor(store: SqliteStore, config: RawConfig, refs: ContextRefStore, skills: readonly SystemSkill[] = []) {
+  constructor(store: SqliteStore, refs: ContextRefStore, skills: readonly SystemSkill[] = []) {
     this.#store = store;
-    this.#config = config;
     this.#memory = new MemoryStore(store.orm);
     this.#refs = refs;
     this.#skills = skills;
   }
 
   /** Resolves the Conversation identity and alarm context of one invocation. */
-  identity(invocationId: bigint): ContextIdentity {
+  identity(config: RawConfig, invocationId: bigint): ContextIdentity {
     const identity = this.#store.db
       .prepare<[bigint], InvocationIdentityRow>(
         `SELECT i.conversation_id, c.telegram_chat_id, v.message_thread_id, c.type AS chat_type,
@@ -237,7 +235,7 @@ export class ContextBuilder {
     if (identity === undefined) {
       throw new Error(`Invocation ${invocationId} does not exist`);
     }
-    const chatConfig = resolveChatConfig(this.#config, this.#store.orm, identity.telegram_chat_id);
+    const chatConfig = resolveChatConfig(config, this.#store.orm, identity.telegram_chat_id);
     if (chatConfig === undefined) {
       throw new Error(`Invocation chat ${identity.telegram_chat_id} is no longer configured`);
     }
@@ -261,7 +259,7 @@ export class ContextBuilder {
               displayName: alarmIdentity.target_display_name,
               summary: alarmIdentity.summary,
             },
-      timezone: chatConfig.timezone ?? this.#config.timezone,
+      timezone: chatConfig.timezone ?? config.timezone,
     };
   }
 
@@ -272,14 +270,19 @@ export class ContextBuilder {
    * `renderInjection` instead, because a changing system prompt invalidates the
    * context and the provider prefix cache every run.
    */
-  buildSystemPrompt(identity: ContextIdentity, supportsImages: boolean, agentModel: PromptTemplateModel): StablePrompt {
-    const chatConfig = resolveChatConfig(this.#config, this.#store.orm, identity.chatId);
+  buildSystemPrompt(
+    config: RawConfig,
+    identity: ContextIdentity,
+    supportsImages: boolean,
+    agentModel: PromptTemplateModel,
+  ): StablePrompt {
+    const chatConfig = resolveChatConfig(config, this.#store.orm, identity.chatId);
     if (chatConfig === undefined) {
       throw new Error(`Invocation chat ${identity.chatId} is no longer configured`);
     }
     const templateValues: PromptTemplateValues = {
       agent: agentModel,
-      vision: { provider: this.#config.vision.provider, model: this.#config.vision.model },
+      vision: { provider: config.vision.provider, model: config.vision.model },
       timezone: identity.timezone,
     };
     const conversationMode =
@@ -297,7 +300,7 @@ export class ContextBuilder {
       renderSkillIndexPrompt(this.#skills),
       imageHandling,
       stickerCatalogHandling,
-      renderPromptTemplate(this.#config.agent.system_prompt, templateValues),
+      renderPromptTemplate(config.agent.system_prompt, templateValues),
       conversationMode,
       MEMORY_GUIDANCE,
       INTERNAL_CONTEXT_GUIDANCE,
@@ -318,7 +321,7 @@ export class ContextBuilder {
    * blocked by a participation gate, for example), which are the only way the
    * model can still see them.
    */
-  renderInjection(input: InjectionInput): Injection {
+  renderInjection(config: RawConfig, input: InjectionInput): Injection {
     const { identity } = input;
     const now = input.now ?? new Date();
     const rows = this.#store.db
@@ -360,7 +363,7 @@ export class ContextBuilder {
     const renderStickerCatalog = stickerCatalog.length > 0 && stickerCatalog !== input.carriedStickerCatalog;
     const maximumCharacters = Math.max(
       1_024,
-      Math.floor(input.contextWindow * 4 * this.#config.agent.context_stop_ratio) -
+      Math.floor(input.contextWindow * 4 * config.agent.context_stop_ratio) -
         input.toolDefinitionCharacters -
         input.maxOutputTokens * 4 -
         input.transcriptCharacters,

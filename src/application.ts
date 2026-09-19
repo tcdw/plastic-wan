@@ -25,6 +25,7 @@ import { MediaService } from './capabilities/media/media.ts';
 import { createMemoryTools, MemoryStore } from './context/memory.ts';
 import { AgentModelSwitcher } from './platform/model-switch.ts';
 import { createModelRegistry } from './platform/providers.ts';
+import { RuntimeConfigurationStore } from './platform/runtime-config.ts';
 import { BucketScheduler } from './orchestration/scheduler.ts';
 import { ConversationRuntime } from './orchestration/conversation-runtime.ts';
 import { SecretStore } from './platform/secrets.ts';
@@ -41,6 +42,7 @@ const ALLOWED_UPDATES = ['message', 'edited_message', 'my_chat_member'] as const
 export async function serve(configPath: string): Promise<void> {
   const loaded = await loadConfig(configPath);
   await assertConfigPermissions(loaded.configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const secrets = new SecretStore();
   let lock: ServeLock | undefined;
   let store: SqliteStore | undefined;
@@ -75,7 +77,7 @@ export async function serve(configPath: string): Promise<void> {
     seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? []);
     bot = new Bot(token);
     const registry = await createModelRegistry(loaded.config, secrets);
-    const modelSwitcher = new AgentModelSwitcher(loaded.config, registry.models);
+    const modelSwitcher = new AgentModelSwitcher(configStore, registry.models);
     const me = await bot.api.getMe();
     try {
       await registerBotCommands(bot.api);
@@ -100,11 +102,11 @@ export async function serve(configPath: string): Promise<void> {
         .values({ key: 'telegram_initialized', value: '1', updatedAt: new Date().toISOString() })
         .run();
     }
-    const ingestion = new TelegramIngestion(store, loaded.config, me);
+    const ingestion = new TelegramIngestion(store, configStore, me);
     const modelGate = new KeyedSemaphore();
     const media = new MediaService({
       store,
-      config: loaded.config,
+      configStore,
       secrets,
       registry,
       mediaClient: new TelegramMediaClient(bot.api, token),
@@ -142,7 +144,7 @@ export async function serve(configPath: string): Promise<void> {
     const additionalTools: ToolFactory = (context, deadline) => [...mcpManager.createTools(context, deadline)];
     runtime = new AgentRuntime({
       store,
-      config: loaded.config,
+      configStore,
       secrets,
       registry,
       modelSwitcher,
@@ -161,13 +163,12 @@ export async function serve(configPath: string): Promise<void> {
     });
     const startedScheduler = new BucketScheduler(
       store,
-      loaded.config,
-      loaded.hash,
-      (invocationId, signal) => runtime.run(invocationId, signal),
+      configStore,
+      (invocationId, snapshot, signal) => runtime.run(invocationId, snapshot, signal),
       conversationRuntime,
     );
     scheduler = startedScheduler;
-    const commands = new BotCommandService(store, loaded.config, startedScheduler, modelSwitcher, conversationRuntime);
+    const commands = new BotCommandService(store, configStore, startedScheduler, modelSwitcher, conversationRuntime);
     const preview = previewContext();
     mcpManager.setRegistryValidator((mcpTools) => runtime.validateAdditionalTools(preview, mcpTools));
     const catchUpController = new AbortController();
@@ -189,7 +190,7 @@ export async function serve(configPath: string): Promise<void> {
     await mcpManager.start();
     startedScheduler.start();
     if (loaded.config.admin?.enabled === true) {
-      const adminServer = new AdminServer({ store, config: loaded.config, scheduler: startedScheduler, modelSwitcher });
+      const adminServer = new AdminServer({ store, configStore, scheduler: startedScheduler, modelSwitcher });
       admin = adminServer;
       const listening = await adminServer.start();
       logEvent('admin_started', { host: listening.hostname, port: listening.port });

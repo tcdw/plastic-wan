@@ -9,6 +9,7 @@ import { ConversationContextStore } from '../src/context/context-store.ts';
 import { ContextRefStore } from '../src/context/context-refs.ts';
 import { ContextBuilder } from '../src/context/context-builder.ts';
 import { type FileConfig, type RawConfig, loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import {
   type ParticipationRule,
   compileParticipation,
@@ -46,6 +47,7 @@ type ParticipationOptions = NonNullable<FileConfig['telegram']['participation']>
 interface Harness {
   readonly store: SqliteStore;
   readonly config: RawConfig;
+  readonly configStore: RuntimeConfigurationStore;
   readonly ingestion: TelegramIngestion;
   readonly scheduler: BucketScheduler;
 }
@@ -78,12 +80,14 @@ async function setup(
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   return {
     store,
     config: loaded.config,
-    ingestion: new TelegramIngestion(store, loaded.config, { id: BOT_ID, username: BOT_USERNAME }),
-    scheduler: new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    configStore,
+    ingestion: new TelegramIngestion(store, configStore, { id: BOT_ID, username: BOT_USERNAME }),
+    scheduler: new BucketScheduler(store, configStore, async () => ({
       state: 'completed',
       reason: 'done',
     })),
@@ -483,9 +487,9 @@ describe('participation gate', () => {
     const contexts = new ConversationContextStore(store);
     const stable = new ContextBuilder(
       store,
-      config,
       new ContextRefStore(store, { ttlHours: config.agent.context.ref_ttl_hours }),
     ).buildSystemPrompt(
+      config,
       {
         invocationId: first,
         conversationId,

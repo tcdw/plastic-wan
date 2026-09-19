@@ -1,5 +1,5 @@
 import type { Api, Model, Models } from '@earendil-works/pi-ai';
-import type { RawConfig } from './config.ts';
+import type { RuntimeConfigurationStore } from './runtime-config.ts';
 
 export class ModelSwitchError extends Error {
   readonly code: 'unknown_provider' | 'unknown_model' | 'not_text_capable';
@@ -20,12 +20,12 @@ export interface AgentModelOption {
 }
 
 export class AgentModelSwitcher {
-  readonly #config: RawConfig;
+  readonly #configStore: RuntimeConfigurationStore;
   readonly #models: Models;
   #override: { readonly provider: string; readonly model: string } | null = null;
 
-  constructor(config: RawConfig, models: Models) {
-    this.#config = config;
+  constructor(configStore: RuntimeConfigurationStore, models: Models) {
+    this.#configStore = configStore;
     this.#models = models;
   }
 
@@ -44,7 +44,7 @@ export class AgentModelSwitcher {
 
   list(): readonly AgentModelOption[] {
     const options: AgentModelOption[] = [];
-    for (const alias of Object.keys(this.#config.providers)) {
+    for (const alias of Object.keys(this.#configStore.current().config.providers)) {
       for (const candidate of this.#models.getModels(alias)) {
         if (!candidate.input.includes('text')) {
           continue;
@@ -73,11 +73,12 @@ export class AgentModelSwitcher {
   }
 
   #reference(): { readonly provider: string; readonly model: string } {
-    return this.#override ?? { provider: this.#config.agent.provider, model: this.#config.agent.model };
+    const config = this.#configStore.current().config;
+    return this.#override ?? { provider: config.agent.provider, model: config.agent.model };
   }
 
   #option(provider: string, modelId: string): AgentModelOption {
-    if (this.#config.providers[provider] === undefined) {
+    if (this.#configStore.current().config.providers[provider] === undefined) {
       throw new ModelSwitchError('unknown_provider', `Provider ${provider} is not configured`);
     }
     const found = this.#models.getModel(provider, modelId);

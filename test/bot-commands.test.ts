@@ -13,6 +13,7 @@ import {
   registerBotCommands,
 } from '../src/orchestration/bot-commands.ts';
 import { type FileConfig, type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import { createModelRegistry } from '../src/platform/providers.ts';
@@ -38,9 +39,10 @@ async function setup(
   transform: ConfigTransform = (config) => {
     config.telegram.admins = [42];
   },
-  handler: ConstructorParameters<typeof BucketScheduler>[3] = async () => ({ state: 'completed', reason: 'done' }),
+  handler: ConstructorParameters<typeof BucketScheduler>[2] = async () => ({ state: 'completed', reason: 'done' }),
 ): Promise<{
   loaded: LoadedConfig;
+  configStore: RuntimeConfigurationStore;
   store: SqliteStore;
   ingestion: TelegramIngestion;
   scheduler: BucketScheduler;
@@ -51,15 +53,17 @@ async function setup(
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath, testConfigJsonc(directory, transform));
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? [], new Date('2026-08-15T00:00:00.000Z'));
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, handler);
+  const scheduler = new BucketScheduler(store, configStore, handler);
   return {
     loaded,
+    configStore,
     store,
-    ingestion: new TelegramIngestion(store, loaded.config, { id: 999, username: BOT_USERNAME }),
+    ingestion: new TelegramIngestion(store, configStore, { id: 999, username: BOT_USERNAME }),
     scheduler,
-    commands: new BotCommandService(store, loaded.config, scheduler),
+    commands: new BotCommandService(store, configStore, scheduler),
   };
 }
 
@@ -342,10 +346,10 @@ describe('bot command service', () => {
   });
 
   test('status reflects a runtime model switch', async () => {
-    const { store, loaded, scheduler } = await setup();
+    const { store, loaded, scheduler, configStore } = await setup();
     const registry = await createModelRegistry(loaded.config, new SecretStore());
-    const switcher = new AgentModelSwitcher(loaded.config, registry.models);
-    const commands = new BotCommandService(store, loaded.config, scheduler, switcher);
+    const switcher = new AgentModelSwitcher(configStore, registry.models);
+    const commands = new BotCommandService(store, configStore, scheduler, switcher);
     switcher.switch('vision', 'vision-model');
     expect(commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain('vision / vision-model');
     store.close();
@@ -378,10 +382,10 @@ describe('bot command service', () => {
       commands: BotCommandService;
       switcher: AgentModelSwitcher;
     }> {
-      const { store, loaded, scheduler } = await setup(transform);
+      const { store, loaded, scheduler, configStore } = await setup(transform);
       const registry = await createModelRegistry(loaded.config, new SecretStore());
-      const switcher = new AgentModelSwitcher(loaded.config, registry.models);
-      const commands = new BotCommandService(store, loaded.config, scheduler, switcher);
+      const switcher = new AgentModelSwitcher(configStore, registry.models);
+      const commands = new BotCommandService(store, configStore, scheduler, switcher);
       return { store, commands, switcher };
     }
 
@@ -630,7 +634,7 @@ describe('scheduler pause enforcement', () => {
     let sawAbort = false;
     const { store, ingestion, scheduler } = await setup(
       () => {},
-      async (_id, signal) => {
+      async (_id, _snapshot, signal) => {
         await gate;
         if (signal.aborted) {
           sawAbort = true;

@@ -6,6 +6,7 @@ import { HttpError } from 'grammy';
 import type { Update } from 'grammy/types';
 import { Compile } from 'typebox/compile';
 import { loadConfig, type RawConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { MemoryStore } from '../src/context/memory.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
@@ -40,12 +41,13 @@ async function setup(): Promise<{
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   return {
     store,
     config: loaded.config,
-    ingestion: new TelegramIngestion(store, loaded.config, { id: 999 }),
-    scheduler: new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    ingestion: new TelegramIngestion(store, configStore, { id: 999 }),
+    scheduler: new BucketScheduler(store, configStore, async () => ({
       state: 'completed',
       reason: 'done',
     })),
@@ -112,9 +114,10 @@ describe('invocation context', () => {
       'chat={{ agent.model }}',
     );
     const loaded = await loadConfig(configPath);
+    const configStore = new RuntimeConfigurationStore(loaded);
     const store = await SqliteStore.open(loaded.config);
-    const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
-    const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+    const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
+    const scheduler = new BucketScheduler(store, configStore, async () => ({
       state: 'completed',
       reason: 'done',
     }));

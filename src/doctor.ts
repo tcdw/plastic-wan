@@ -20,6 +20,7 @@ import { MediaService } from './capabilities/media/media.ts';
 import { AgentModelSwitcher } from './platform/model-switch.ts';
 import { type PromptTemplateValues, renderPromptTemplate } from './platform/prompt-template.ts';
 import { createModelRegistry, type ModelRegistry } from './platform/providers.ts';
+import { RuntimeConfigurationStore } from './platform/runtime-config.ts';
 import { SecretStore } from './platform/secrets.ts';
 import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from './platform/system-resources.ts';
 
@@ -49,6 +50,7 @@ async function runDoctorChecks(
   outputAgentPrompt: boolean,
 ): Promise<void> {
   await resolveAllSecrets(config.telegram.token, config.providers, config.mcp?.servers ?? [], secrets);
+  const configStore = new RuntimeConfigurationStore({ config, hash: configHash });
   await mkdir(config.data_dir, { recursive: true, mode: 0o700 });
   await mkdir(dirname(config.paths.database), { recursive: true, mode: 0o700 });
   await mkdir(config.paths.media_cache, { recursive: true, mode: 0o700 });
@@ -151,7 +153,7 @@ async function runDoctorChecks(
     const modelGate = new KeyedSemaphore();
     const media = new MediaService({
       store,
-      config,
+      configStore,
       secrets,
       registry,
       mediaClient: new TelegramMediaClient(bot.api, telegramToken),
@@ -161,10 +163,10 @@ async function runDoctorChecks(
     mcp = manager;
     const runtime = new AgentRuntime({
       store,
-      config,
+      configStore,
       secrets,
       registry,
-      modelSwitcher: new AgentModelSwitcher(config, registry.models),
+      modelSwitcher: new AgentModelSwitcher(configStore, registry.models),
       telegramApi: bot.api,
       bot: {
         id: BigInt(me.id),

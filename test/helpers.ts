@@ -75,10 +75,11 @@ export function renderInvocationContext(
   options: TestContextOptions = {},
 ): TestInvocationContext {
   const refs = new ContextRefStore(store, { ttlHours: config.agent.context.ref_ttl_hours });
-  const builder = new ContextBuilder(store, config, refs, options.skills?.skills ?? []);
-  const identity = builder.identity(invocationId);
+  const builder = new ContextBuilder(store, refs, options.skills?.skills ?? []);
+  const identity = builder.identity(config, invocationId);
   const supportsImages = options.supportsImages ?? false;
   const stable = builder.buildSystemPrompt(
+    config,
     identity,
     supportsImages,
     options.agentModel ?? {
@@ -95,7 +96,7 @@ export function renderInvocationContext(
   if (bucketId === undefined) {
     throw new Error(`Invocation ${invocationId} has no bucket`);
   }
-  const injection = builder.renderInjection({
+  const injection = builder.renderInjection(config, {
     header,
     identity,
     bucketId,

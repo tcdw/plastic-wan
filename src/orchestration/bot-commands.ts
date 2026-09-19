@@ -2,6 +2,7 @@ import type { Message } from 'grammy/types';
 import { and, eq, sql } from 'drizzle-orm';
 import { isBotAdmin } from '../store/admins.ts';
 import type { RawConfig } from '../platform/config.ts';
+import type { RuntimeConfigurationStore } from '../platform/runtime-config.ts';
 import { isWithinActiveWindows } from '../platform/participation.ts';
 import { type SqliteStore, isChatPaused, resolveChatConfig } from '../store/database.ts';
 import { ParticipationRegistry, chatAttentionUntil } from '../store/participation.ts';
@@ -128,7 +129,7 @@ export function parseBotCommand(message: Message, botUsername: string | null): P
 // bot responses, not model output, so they bypass the agent send tool.
 export class BotCommandService {
   readonly #store: SqliteStore;
-  readonly #config: RawConfig;
+  readonly #configStore: RuntimeConfigurationStore;
   readonly #scheduler: BucketScheduler;
   readonly #modelSwitcher: AgentModelSwitcher | undefined;
   readonly #participation: ParticipationRegistry;
@@ -137,16 +138,16 @@ export class BotCommandService {
 
   constructor(
     store: SqliteStore,
-    config: RawConfig,
+    configStore: RuntimeConfigurationStore,
     scheduler: BucketScheduler,
     modelSwitcher?: AgentModelSwitcher,
     conversationRuntime?: ConversationRuntime,
   ) {
     this.#store = store;
-    this.#config = config;
+    this.#configStore = configStore;
     this.#scheduler = scheduler;
     this.#modelSwitcher = modelSwitcher;
-    this.#participation = new ParticipationRegistry(config);
+    this.#participation = new ParticipationRegistry(configStore.current().config);
     this.#contexts = new ConversationContextStore(store);
     this.#conversationRuntime = conversationRuntime;
   }
@@ -360,7 +361,11 @@ export class BotCommandService {
           ),
         )
         .get()?.amount ?? 0n;
-    const dailyBudget = readDailyTokenBudget(this.#store.orm, this.#config.agent.daily_budget.max_tokens, now);
+    const dailyBudget = readDailyTokenBudget(
+      this.#store.orm,
+      this.#configStore.current().config.agent.daily_budget.max_tokens,
+      now,
+    );
     const dailyBudgetBasisPoints =
       (dailyBudget.usedTokens * 10_000n + dailyBudget.maxTokens / 2n) / dailyBudget.maxTokens;
     const dailyBudgetPercentage = `${dailyBudgetBasisPoints / 100n}.${(dailyBudgetBasisPoints % 100n).toString().padStart(2, '0')}%`;
@@ -384,14 +389,15 @@ export class BotCommandService {
                  AND substr(model_calls.finished_at, 1, 10) = ${date}`,
             )
             .at(0);
+    const config = this.#configStore.current().config;
     const paused = chatId !== null && isChatPaused(this.#store.orm, chatId);
     const effective = this.#modelSwitcher?.current() ?? {
-      provider: this.#config.agent.provider,
-      model: this.#config.agent.model,
+      provider: config.agent.provider,
+      model: config.agent.model,
     };
     const lines = [
       `当前模型: ${effective.provider} / ${effective.model}`,
-      `思考强度: ${this.#config.agent.thinking_level}`,
+      `思考强度: ${config.agent.thinking_level}`,
       `本群今日 token 用量: ${tokens.toLocaleString('en-US')}`,
       `全局今日 token 用量: ${dailyBudget.usedTokens.toLocaleString('en-US')} / ${dailyBudget.maxTokens.toLocaleString('en-US')} (${dailyBudgetPercentage})`,
       `读取: ${(tokenBreakdown?.readTokens ?? 0n).toLocaleString('en-US')}`,
@@ -460,6 +466,6 @@ export class BotCommandService {
   }
 
   #chatConfig(telegramChatId: bigint): RawConfig['telegram']['chats'][number] | undefined {
-    return resolveChatConfig(this.#config, this.#store.orm, telegramChatId);
+    return resolveChatConfig(this.#configStore.current().config, this.#store.orm, telegramChatId);
   }
 }

@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type FileConfig, loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import { createModelRegistry } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
@@ -22,8 +23,9 @@ async function switcherWith(transform?: (config: FileConfig) => void): Promise<A
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath, testConfigJsonc(directory, transform));
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const registry = await createModelRegistry(loaded.config, new SecretStore());
-  return new AgentModelSwitcher(loaded.config, registry.models);
+  return new AgentModelSwitcher(configStore, registry.models);
 }
 
 function addImageOnlyModel(config: FileConfig): void {

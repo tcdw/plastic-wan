@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/platform/config.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import type { InvocationContext } from '../src/platform/invocation-context.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
@@ -29,9 +30,10 @@ async function fixture(): Promise<Fixture> {
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
+  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
-  const ingestion = new TelegramIngestion(store, loaded.config, { id: 999 });
-  const scheduler = new BucketScheduler(store, loaded.config, loaded.hash, async () => ({
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
     state: 'completed',
     reason: 'done',
   }));

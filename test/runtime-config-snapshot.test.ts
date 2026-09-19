@@ -354,8 +354,7 @@ describe('configuration snapshots', () => {
     const second = snapshotOf(withAgent(fixture.config, { systemPrompt: 'A later published prompt.' }), 'second');
     const seen: InvocationConfigSnapshot[] = [];
     // Phase 0 cannot publish a new configuration yet, so the store stands in for
-    // the publication point: the scheduler must read it at the transition, not
-    // capture it when it was constructed.
+    // the publication point.
     let published = first;
     fixture.configStore.current = () => published;
     fixture.configStore.beginInvocation = () => published;
@@ -363,25 +362,28 @@ describe('configuration snapshots', () => {
       seen.push(snapshot);
       return { state: 'completed', reason: 'done' };
     });
-    scheduler.start();
     try {
+      // The loop runs `processDue` and the launch in the same tick, so queue the
+      // invocation by hand before the loop starts: it is created under `first`
+      // and has to sit in `queued` while the publication happens.
       fixture.ingestion.ingest(textUpdate(1, 10, 'first'), new Date());
-      scheduler.wake();
-      await waitFor(() => seen.length === 1);
-      await waitFor(() => {
-        const row = fixture.store.db
-          .prepare<[], { state: string }>('SELECT state FROM invocations ORDER BY id DESC LIMIT 1')
-          .get();
-        return row !== undefined && row.state !== 'queued' && row.state !== 'running';
-      });
-      expect(seen[0]).toBe(first);
+      const [invocationId] = scheduler.processDue(new Date());
+      if (invocationId === undefined) {
+        throw new Error('Expected a due invocation');
+      }
+      expect(
+        fixture.store.db
+          .prepare<[bigint], { state: string }>('SELECT state FROM invocations WHERE id = ?')
+          .get(invocationId)?.state,
+      ).toBe('queued');
 
       published = second;
-      fixture.ingestion.ingest(textUpdate(2, 11, 'second'), new Date());
-      scheduler.wake();
-      await waitFor(() => seen.length === 2);
-      expect(seen[1]).toBe(second);
-      expect(seen[1]?.config.agent.system_prompt).toBe('A later published prompt.');
+      scheduler.start();
+      await waitFor(() => seen.length === 1);
+      // Neither the construction of the scheduler nor the queueing of the
+      // invocation fixes its configuration; only the move to `running` does.
+      expect(seen[0]).toBe(second);
+      expect(seen[0]?.config.agent.system_prompt).toBe('A later published prompt.');
     } finally {
       await scheduler.stop();
       fixture.store.close();

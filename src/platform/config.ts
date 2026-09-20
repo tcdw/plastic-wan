@@ -5,13 +5,34 @@ import { parse as parseJsonc, printParseErrorCode, type ParseError } from 'jsonc
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import type { TLocalizedValidationError } from 'typebox/error';
+import {
+  builtinProviderApi,
+  findBuiltinProvider,
+  isSupportedBuiltinPreset,
+  SUPPORTED_PROVIDER_APIS,
+} from './builtin-providers.ts';
 import { stripHtmlComments } from './prompt-markdown.ts';
 import { validatePromptTemplate } from './prompt-template.ts';
 
 const Strict = { additionalProperties: false } as const;
 const PositiveInteger = Type.Integer({ minimum: 1 });
 const NonNegativeNumber = Type.Number({ minimum: 0 });
-const SecretRefSchema = Type.Union([
+/** Provider aliases appear in Admin API paths and in `restart_required` strings. */
+export const PROVIDER_ALIAS_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+/** Which compat overrides each API adapter honours; anything else is rejected. */
+const COMPAT_FIELDS_BY_API: Readonly<Record<ProviderApi, readonly string[]>> = {
+  'openai-completions': [
+    'supports_developer_role',
+    'thinking_format',
+    'max_tokens_field',
+    'requires_reasoning_content',
+    'cache_control_format',
+  ],
+  'openai-responses': ['supports_developer_role'],
+  'anthropic-messages': [],
+  'google-generative-ai': [],
+};
+export const SecretRefSchema = Type.Union([
   Type.String({ minLength: 1 }),
   Type.Object({ env: Type.String({ pattern: '^[A-Za-z_][A-Za-z0-9_]*$' }) }, Strict),
   Type.Object({ command: Type.Array(Type.String(), { minItems: 1 }) }, Strict),
@@ -25,13 +46,36 @@ const CostSchema = Type.Object(
   },
   Strict,
 );
-const ModelCompatSchema = Type.Object(
+/**
+ * Selected Pi compat overrides. Every field is optional, and omitting one leaves
+ * Pi's own detection in charge — the panel therefore shows "automatic" rather
+ * than freezing a detected value into the file.
+ *
+ * `thinking_format` only lists the values that need no extra kwargs;
+ * `cache_control_format` only has the one value Pi can force, because Pi merges
+ * compat with `??` and has no way to switch the detected default off.
+ */
+export const ModelCompatSchema = Type.Object(
   {
-    supports_developer_role: Type.Boolean(),
+    supports_developer_role: Type.Optional(Type.Boolean()),
+    thinking_format: Type.Optional(
+      Type.Union([
+        Type.Literal('openai'),
+        Type.Literal('openrouter'),
+        Type.Literal('deepseek'),
+        Type.Literal('together'),
+        Type.Literal('zai'),
+        Type.Literal('qwen'),
+        Type.Literal('string-thinking'),
+      ]),
+    ),
+    max_tokens_field: Type.Optional(Type.Union([Type.Literal('max_completion_tokens'), Type.Literal('max_tokens')])),
+    requires_reasoning_content: Type.Optional(Type.Boolean()),
+    cache_control_format: Type.Optional(Type.Literal('anthropic')),
   },
   Strict,
 );
-const ModelSchema = Type.Object(
+export const ModelConfigSchema = Type.Object(
   {
     id: Type.String({ minLength: 1 }),
     name: Type.Optional(Type.String({ minLength: 1 })),
@@ -52,21 +96,24 @@ const BuiltinProviderSchema = Type.Object(
     kind: Type.Literal('builtin'),
     provider: Type.String({ minLength: 1 }),
     api_key: SecretRefSchema,
+    models: Type.Array(ModelConfigSchema, { minItems: 1 }),
   },
   Strict,
 );
+const CustomProviderApiSchema = Type.Union([
+  Type.Literal('openai-responses'),
+  Type.Literal('openai-completions'),
+  Type.Literal('anthropic-messages'),
+  Type.Literal('google-generative-ai'),
+]);
 const CustomProviderSchema = Type.Object(
   {
     kind: Type.Literal('custom'),
     base_url: Type.String({ minLength: 1 }),
-    api: Type.Union([
-      Type.Literal('openai-responses'),
-      Type.Literal('openai-completions'),
-      Type.Literal('anthropic-messages'),
-    ]),
+    api: CustomProviderApiSchema,
     api_key: SecretRefSchema,
     headers: Type.Optional(Type.Record(Type.String({ minLength: 1 }), SecretRefSchema)),
-    models: Type.Array(ModelSchema, { minItems: 1 }),
+    models: Type.Array(ModelConfigSchema, { minItems: 1 }),
   },
   Strict,
 );
@@ -250,6 +297,9 @@ export const ConfigSchema = Type.Object(
 );
 
 export type SecretRef = Static<typeof SecretRefSchema>;
+export type ProviderApi = Static<typeof CustomProviderApiSchema>;
+export type ModelCompatConfig = Static<typeof ModelCompatSchema>;
+export type ModelFileConfig = Static<typeof ModelConfigSchema>;
 export type FileConfig = Static<typeof ConfigSchema>;
 export type FileChat = FileConfig['telegram']['chats'][number];
 export type ParticipationConfig = Static<typeof ParticipationSchema>;
@@ -467,17 +517,18 @@ export function validateSemantics(config: FileConfig): void {
     throw new Error('Agent and vision providers must reference configured aliases');
   }
   for (const [alias, provider] of Object.entries(config.providers)) {
+    if (!PROVIDER_ALIAS_PATTERN.test(alias)) {
+      throw new Error(
+        `Provider alias ${JSON.stringify(alias)} must match ${PROVIDER_ALIAS_PATTERN.source}: the alias is a URL path segment and part of restart path strings`,
+      );
+    }
+    const api = resolveProviderApi(alias, provider);
+    assertUnique(provider.models, (model) => model.id, `provider ${alias} model ID`);
+    for (const model of provider.models) {
+      assertModelConfig(api, model, `Provider ${alias} model ${model.id}`);
+    }
     if (provider.kind === 'custom') {
       validateEndpoint(provider.base_url, `provider ${alias} base_url`);
-      assertUnique(provider.models, (model) => model.id, `provider ${alias} model ID`);
-      for (const model of provider.models) {
-        if (model.max_tokens > model.context_window) {
-          throw new Error(`Provider ${alias} model ${model.id} max_tokens exceeds context_window`);
-        }
-        if (model.compat !== undefined && provider.api === 'anthropic-messages') {
-          throw new Error(`Provider ${alias} model ${model.id} supports_developer_role requires an OpenAI API adapter`);
-        }
-      }
     }
   }
   const servers = config.mcp?.servers ?? [];
@@ -518,9 +569,6 @@ function validateModelReference(
   if (provider === undefined) {
     throw new Error(`${role}.provider references unknown alias ${providerAlias}`);
   }
-  if (provider.kind === 'builtin') {
-    return;
-  }
   const model = provider.models.find((candidate) => candidate.id === modelId);
   if (model === undefined) {
     throw new Error(`${role}.model ${modelId} is absent from provider ${providerAlias}`);
@@ -528,6 +576,47 @@ function validateModelReference(
   for (const requiredInput of requiredInputs) {
     if (!model.input.includes(requiredInput)) {
       throw new Error(`${role}.model ${modelId} lacks ${requiredInput} input capability`);
+    }
+  }
+}
+
+/**
+ * The API a provider's models speak. A custom provider states it; a builtin one
+ * inherits it from Pi's catalog, which is also what decides whether the provider
+ * may be configured at all.
+ */
+function resolveProviderApi(alias: string, provider: ProviderConfig): ProviderApi {
+  if (provider.kind === 'custom') {
+    return provider.api;
+  }
+  const source = findBuiltinProvider(provider.provider);
+  if (source === undefined) {
+    throw new Error(`Provider ${alias} references unknown built-in provider ${provider.provider}`);
+  }
+  const api = builtinProviderApi(source);
+  if (api === null || !SUPPORTED_PROVIDER_APIS.includes(api)) {
+    throw new Error(
+      `Provider ${alias} built-in ${provider.provider} does not expose a single supported API (${SUPPORTED_PROVIDER_APIS.join(', ')})`,
+    );
+  }
+  if (!isSupportedBuiltinPreset(source)) {
+    throw new Error(`Provider ${alias} built-in ${provider.provider} cannot be driven from a configured API key`);
+  }
+  return api as ProviderApi;
+}
+
+/**
+ * The model invariants a provider's API imposes, shared by the configuration
+ * validator and the Admin Panel so a rejected edit is reported as a user error
+ * before the file is rewritten.
+ */
+export function assertModelConfig(api: ProviderApi, model: ModelFileConfig, label: string): void {
+  if (model.max_tokens > model.context_window) {
+    throw new Error(`${label} max_tokens exceeds context_window`);
+  }
+  for (const field of Object.keys(model.compat ?? {})) {
+    if (!COMPAT_FIELDS_BY_API[api].includes(field)) {
+      throw new Error(`${label} cannot set ${field} for api ${api}`);
     }
   }
 }

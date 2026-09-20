@@ -53,7 +53,11 @@ const HOT_PATHS: ReadonlySet<string> = new Set([
   'agent.context.idle_grace_seconds',
 ]);
 
-/** `agent.rate_limits` is hot as a whole; its three fields are listed for the report. */
+/**
+ * `agent.rate_limits` is hot as a whole; its three fields are listed for the
+ * report. A provider's model list is hot for both kinds, and its per-model paths
+ * are built dynamically, so neither appears here.
+ */
 const HOT_PREFIXES: readonly string[] = ['agent.rate_limits.'];
 
 /**
@@ -296,20 +300,14 @@ function mergeProviders(active: ConfigSource, file: ConfigSource, recorder: Chan
     const fileRecord = fileProvider as unknown as Record<string, unknown>;
     const merged = structuredClone(activeProvider) as unknown as Record<string, unknown>;
     for (const key of unionKeys(activeRecord, fileRecord)) {
-      if (activeProvider.kind === 'custom' && key === 'models') {
+      if (key === 'models') {
         continue;
       }
       mergeField(activeRecord, fileRecord, merged, key, `providers.${alias}.${key}`, recorder);
     }
-    if (activeProvider.kind === 'custom') {
-      merged.models = mergeModels(
-        alias,
-        activeProvider.models,
-        (fileProvider as CustomProviderFileConfig).models,
-        inUse,
-        recorder,
-      );
-    }
+    // Both kinds carry `models`: for a builtin provider the list is the enabled
+    // subset of Pi's catalog, and changing it is as hot as it is for custom.
+    merged.models = mergeModels(alias, activeProvider.models, fileProvider.models, inUse, recorder);
     result[alias] = merged as unknown as ProviderFileConfig;
   }
   for (const alias of Object.keys(file.file.providers)) {

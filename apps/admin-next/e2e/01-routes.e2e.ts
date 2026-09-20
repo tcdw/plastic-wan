@@ -101,11 +101,13 @@ test.describe('13 routes and deep links', () => {
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
   });
 
-  test('/model shows the current model and the switch card', async ({ page }) => {
-    await page.goto(await adminUrl('/model'));
-    await expect(page.getByText('Current model')).toBeVisible();
-    await expect(page.getByText('agent-model').first()).toBeVisible();
-    await expect(page.getByText('Switch model')).toBeVisible();
+  test('/models lists providers, their models and the discovery actions', async ({ page }) => {
+    await page.goto(await adminUrl('/models'));
+    await expect(page.getByText('Providers')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Provider agent' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '获取模型列表' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '手动添加' })).toBeVisible();
+    await expect(page.locator('table tbody tr').first()).toBeVisible();
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
   });
 
@@ -139,7 +141,7 @@ test.describe('no page errors while deep-linking', () => {
     '/alarms',
     '/memories',
     '/admins',
-    '/model',
+    '/models',
     '/stickers',
     '/settings',
   ];

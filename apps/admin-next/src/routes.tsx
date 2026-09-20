@@ -25,7 +25,7 @@ import InvocationsPage from '@/pages/invocations';
 import MemoriesPage from '@/pages/memories';
 import { MessageDetailView } from '@/pages/message-detail';
 import MessagesPage from '@/pages/messages';
-import ModelPage from '@/pages/model';
+import ModelsPage from '@/pages/models';
 import OverviewPage from '@/pages/overview';
 import SettingsPage from '@/pages/settings';
 import StickersPage from '@/pages/stickers';
@@ -210,7 +210,7 @@ const memoriesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/mem
 
 const adminsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/admins', component: AdminsPage });
 
-const modelRoute = createRoute({ getParentRoute: () => rootRoute, path: '/model', component: ModelPage });
+const modelsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/models', component: ModelsPage });
 
 const stickersRoute = createRoute({ getParentRoute: () => rootRoute, path: '/stickers', component: StickersPage });
 
@@ -227,7 +227,7 @@ export const routeTree = rootRoute.addChildren([
   messageDetailRoute,
   memoriesRoute,
   adminsRoute,
-  modelRoute,
+  modelsRoute,
   stickersRoute,
   settingsRoute,
 ]);

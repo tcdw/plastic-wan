@@ -1,12 +1,13 @@
 import { checkbox, input, select } from '@inquirer/prompts';
-import type { SecretRef } from '../platform/config.ts';
+import type { ProviderApi, SecretRef } from '../platform/config.ts';
 
-export type ApiAdapter = 'openai-responses' | 'openai-completions' | 'anthropic-messages';
+export type ApiAdapter = ProviderApi;
 
 const API_ADAPTER_LABELS: Record<ApiAdapter, string> = {
   'openai-responses': 'OpenAI Responses API',
   'openai-completions': 'OpenAI Chat Completions API',
   'anthropic-messages': 'Anthropic Messages API',
+  'google-generative-ai': 'Google Generative AI API (base URL must include the version path)',
 };
 
 export async function promptSecretRef(message: string, allowLiteral = true): Promise<SecretRef> {

@@ -5,23 +5,27 @@ import {
   type Model,
   type Models,
   type MutableModels,
+  type OpenAICompletionsCompat,
   type Provider,
   type ProviderAuth,
   type ProviderStreams,
 } from '@earendil-works/pi-ai';
 import { anthropicMessagesApi } from '@earendil-works/pi-ai/api/anthropic-messages.lazy';
+import { googleGenerativeAIApi } from '@earendil-works/pi-ai/api/google-generative-ai.lazy';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy';
-import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
-import type { RawConfig } from './config.ts';
+import { builtinProviderApi, findBuiltinProvider } from './builtin-providers.ts';
+import type { ModelCompatConfig, ModelFileConfig, RawConfig } from './config.ts';
 import type { SecretStore } from './secrets.ts';
 
 export type CustomProviderConfig = Extract<RawConfig['providers'][string], { kind: 'custom' }>;
+export type BuiltinProviderConfig = Extract<RawConfig['providers'][string], { kind: 'builtin' }>;
 
 const CUSTOM_ADAPTERS: Record<string, () => ProviderStreams> = {
   'openai-responses': openAIResponsesApi,
   'openai-completions': openAICompletionsApi,
   'anthropic-messages': anthropicMessagesApi,
+  'google-generative-ai': googleGenerativeAIApi,
 };
 
 export interface ModelRegistry {
@@ -30,17 +34,32 @@ export interface ModelRegistry {
   readonly visionModel: Model<Api>;
 }
 
+/**
+ * Registers one provider object per configured alias.
+ *
+ * Builtin providers keep Pi's base URL, headers and provider-specific logic, but
+ * their model list comes from the configuration alone: the catalog decides what
+ * may be configured, never what is reachable at runtime.
+ */
 export async function createModelRegistry(config: RawConfig, secrets: SecretStore): Promise<ModelRegistry> {
   const models = createModels();
-  const builtinById = new Map(builtinProviders().map((provider) => [provider.id, provider]));
   for (const [alias, configured] of Object.entries(config.providers)) {
     const apiKey = await secrets.resolve(configured.api_key);
     if (configured.kind === 'builtin') {
-      const source = builtinById.get(configured.provider);
+      const source = findBuiltinProvider(configured.provider);
       if (source === undefined) {
         throw new Error(`Unknown built-in provider: ${configured.provider}`);
       }
-      models.setProvider(aliasBuiltinProvider(alias, source, fixedAuth(alias, apiKey)));
+      const api = builtinProviderApi(source);
+      if (api === null) {
+        throw new Error(`Built-in provider ${configured.provider} does not expose a single API adapter`);
+      }
+      if (source.baseUrl === undefined) {
+        throw new Error(`Built-in provider ${configured.provider} has no base URL`);
+      }
+      models.setProvider(
+        aliasBuiltinProvider(alias, source, fixedAuth(alias, apiKey), api, source.baseUrl, configured.models),
+      );
       continue;
     }
     const headers: Record<string, string> = {};
@@ -82,10 +101,7 @@ export async function createModelRegistry(config: RawConfig, secrets: SecretStor
  * which is a restart-only field and therefore identical to the startup value.
  */
 export function rebuildCustomProvider(models: Models, alias: string, configured: CustomProviderConfig): Provider {
-  const existing = models.getProvider(alias);
-  if (existing === undefined) {
-    throw new Error(`Provider ${alias} is not registered`);
-  }
+  const existing = requireRegisteredProvider(models, alias);
   if (existing.baseUrl === undefined) {
     throw new Error(`Provider ${alias} has no base URL to preserve`);
   }
@@ -104,36 +120,112 @@ export function rebuildCustomProvider(models: Models, alias: string, configured:
   });
 }
 
-function customProviderModels(alias: string, baseUrl: string, configured: CustomProviderConfig): Model<Api>[] {
-  return configured.models.map((model) => ({
-    id: model.id,
-    name: model.name ?? model.id,
-    api: configured.api,
-    provider: alias,
-    baseUrl,
-    reasoning: model.reasoning,
-    ...(model.compat === undefined ? {} : { compat: { supportsDeveloperRole: model.compat.supports_developer_role } }),
-    input: [...model.input],
-    contextWindow: model.context_window,
-    maxTokens: model.max_tokens,
-    cost: {
-      input: model.cost.input,
-      output: model.cost.output,
-      cacheRead: model.cost.cache_read,
-      cacheWrite: model.cost.cache_write,
-    },
-  }));
+/**
+ * Rebuilds one builtin provider from a new model list. Like the custom path, the
+ * registry's own auth and base URL are reused, so no SecretRef is resolved
+ * again; only the models the configuration enables change.
+ */
+export function rebuildBuiltinProvider(models: Models, alias: string, configured: BuiltinProviderConfig): Provider {
+  const existing = requireRegisteredProvider(models, alias);
+  const source = findBuiltinProvider(configured.provider);
+  if (source === undefined) {
+    throw new Error(`Unknown built-in provider: ${configured.provider}`);
+  }
+  const api = builtinProviderApi(source);
+  if (api === null) {
+    throw new Error(`Built-in provider ${configured.provider} does not expose a single API adapter`);
+  }
+  const baseUrl = existing.baseUrl ?? source.baseUrl;
+  if (baseUrl === undefined) {
+    throw new Error(`Built-in provider ${configured.provider} has no base URL`);
+  }
+  return aliasBuiltinProvider(alias, source, existing.auth, api, baseUrl, configured.models);
 }
 
-function aliasBuiltinProvider(alias: string, source: Provider, auth: ProviderAuth): Provider {
-  const sourceModels = source.getModels();
-  const aliasedModels = sourceModels.map((model) => ({ ...model, provider: alias }));
+function requireRegisteredProvider(models: Models, alias: string): Provider {
+  const existing = models.getProvider(alias);
+  if (existing === undefined) {
+    throw new Error(`Provider ${alias} is not registered`);
+  }
+  return existing;
+}
+
+function customProviderModels(alias: string, baseUrl: string, configured: CustomProviderConfig): Model<Api>[] {
+  return providerModels(alias, configured.api, baseUrl, configured.models);
+}
+
+/**
+ * The configured model list of one provider. Builtin and custom providers share
+ * this mapping: the only difference is where `api` comes from.
+ */
+function providerModels(alias: string, api: Api, baseUrl: string, models: readonly ModelFileConfig[]): Model<Api>[] {
+  return models.map((model) => {
+    const built: Model<Api> = {
+      id: model.id,
+      name: model.name ?? model.id,
+      api,
+      provider: alias,
+      baseUrl,
+      reasoning: model.reasoning,
+      input: [...model.input],
+      contextWindow: model.context_window,
+      maxTokens: model.max_tokens,
+      cost: {
+        input: model.cost.input,
+        output: model.cost.output,
+        cacheRead: model.cost.cache_read,
+        cacheWrite: model.cost.cache_write,
+      },
+    };
+    const compat = model.compat === undefined ? undefined : mapCompat(model.compat);
+    return compat === undefined ? built : { ...built, compat };
+  });
+}
+
+/** The one place that turns the file's snake_case compat into Pi's camelCase. */
+export function mapCompat(compat: ModelCompatConfig): NonNullable<Model<Api>['compat']> | undefined {
+  const mapped: OpenAICompletionsCompat = {};
+  if (compat.supports_developer_role !== undefined) {
+    mapped.supportsDeveloperRole = compat.supports_developer_role;
+  }
+  if (compat.thinking_format !== undefined) {
+    mapped.thinkingFormat = compat.thinking_format;
+  }
+  if (compat.max_tokens_field !== undefined) {
+    mapped.maxTokensField = compat.max_tokens_field;
+  }
+  if (compat.requires_reasoning_content !== undefined) {
+    mapped.requiresReasoningContentOnAssistantMessages = compat.requires_reasoning_content;
+  }
+  if (compat.cache_control_format !== undefined) {
+    mapped.cacheControlFormat = compat.cache_control_format;
+  }
+  return Object.keys(mapped).length === 0 ? undefined : mapped;
+}
+
+/**
+ * Re-exposes a builtin provider under its configured alias.
+ *
+ * Requests must keep Pi's own provider id: automatic compat detection keys off
+ * it (OpenRouter's cache-control format, DeepSeek's reasoning replay), so the
+ * alias is only ever the registry key. `api` is the catalog's single adapter,
+ * which is what the configured models are built with.
+ */
+function aliasBuiltinProvider(
+  alias: string,
+  source: Provider,
+  auth: ProviderAuth,
+  api: Api,
+  baseUrl: string,
+  configuredModels: readonly ModelFileConfig[],
+): Provider {
+  const aliasedModels = providerModels(alias, api, baseUrl, configuredModels);
   const fetchDeferred = source.fetchDeferred?.bind(source);
   const cancelDeferred = source.cancelDeferred?.bind(source);
   return {
     id: alias,
     name: source.name,
-    ...(source.baseUrl === undefined ? {} : { baseUrl: source.baseUrl }),
+    baseUrl,
     ...(source.headers === undefined ? {} : { headers: source.headers }),
     auth,
     getModels: () => aliasedModels,

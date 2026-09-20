@@ -52,6 +52,13 @@ SQLite + `test/fixtures/admin-seed.ts` 合成数据 + 真实 `AdminServer`
 安全断言。真实命令与契约清单见
 [agent-doc/verification.md](../../agent-doc/verification.md#admin-panel-浏览器-e2e)。
 
+`e2e/server.ts` 另外为 Models 页准备离线夹具：一个回环 `/v1/models` 上游
+（`e2e/models-fixture.ts` 定义模型 id 与密钥，`E2E_ACCEPTED_RELAY_KEYS` 决定
+它接受哪些 Key），以及用 `loadModelsDevCatalog({ fetchImpl })` 预置的
+models.dev 目录缓存——`GET /providers/discover` 与 `lookup-metadata` 因此
+永远不访问外网。夹具配置里还有一个 builtin `openrouter` provider，用来覆盖
+「只读连接卡 + 已启用模型列表」这条路径。
+
 ## 数据请求约定
 
 - 业务页面一律使用 `useQuery` / `useInfiniteQuery` 并显式渲染
@@ -64,6 +71,21 @@ SQLite + `test/fixtures/admin-seed.ts` 合成数据 + 真实 `AdminServer`
   失效 session query，让 AuthGate 回到登录 gate。登录 / setup / 改凭据的
   `invalid_credentials` 等 401 属于表单错误，必须留在表单内展示，不得被
   全局处理吞掉（判定按错误 code，不是按 status）。
+
+### Models 页（`src/pages/models.tsx`）写入约定
+
+- 每个写请求都带 `GET /api/providers` 返回的 `revision`（`If-Match`）。
+  `409 config_conflict` 表示 config.jsonc 在编辑期间被改动：提示「配置文件已被修改」、
+  重新拉取，再让用户重试（`lib/model-manager.ts` 的 `writeErrorMessage`）。
+- 保存反馈必须区分「已生效」与「已保存，待重启」：只要 `apply.restart_required` 非空，
+  就不能显示成已应用（`applyFeedback`），待重启横幅与「立即重启」按钮由
+  `restart_required` + `supervised` 驱动（未声明 `PLASTICWAN_SUPERVISED=1` 时只列字段）。
+- 凭据只写不读：`api_key` 与 header 值永远是 `type="password"`、`autocomplete="new-password"`
+  的空输入框，没有查看按钮；提交后用 `mutation.reset()` 立刻把带明文 key 的请求体
+  从 mutation cache 里丢掉。页面不写 localStorage，也不把 key 放进任何持久结构。
+- 元数据草稿（`ModelMetadataDraft`）带 `sources` 与 `needs_confirmation`：`null` 或只有
+  `models.dev-fuzzy` 匹配的字段必须由管理员在编辑弹窗里填写/确认后才能保存，
+  面板不替模型填默认值；「高级设置」只显示当前 API 真正支持的 compat 字段。
 
 ## 共享业务组件契约
 

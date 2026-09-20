@@ -8,15 +8,16 @@ import {
   validateSemantics,
 } from './config.ts';
 import { type ConfigChange, type ConfigSource, deepEqual, diffConfig } from './config-diff.ts';
-import { ConfigWriteError, writeConfigEdits } from './config-file.ts';
+import { ConfigWriteError, type ConfigEdit, readConfigRevision, writeConfigEdits } from './config-file.ts';
 import { type AgentModelSwitcher, ModelSwitchError } from './model-switch.ts';
-import { type CustomProviderConfig, rebuildCustomProvider } from './providers.ts';
+import { rebuildBuiltinProvider, rebuildCustomProvider } from './providers.ts';
 import type { RuntimeConfigurationStore } from './runtime-config.ts';
 import type { SecretStore } from './secrets.ts';
 
 export type ConfigErrorCode =
   | 'config_permissions'
   | 'config_invalid'
+  | 'config_conflict'
   | 'candidate_invalid'
   | 'model_unusable'
   | 'unknown_provider'
@@ -129,12 +130,33 @@ export class ConfigReloader {
   }
 
   /**
+   * Writes edits into the configuration file and applies the result, both inside
+   * one lock hold so two panel writes cannot interleave.
+   *
+   * `expectedRevision` is the revision the caller read the file at; a stale one
+   * is refused with `config_conflict` and leaves the file untouched.
+   */
+  writeAndApply(edits: readonly ConfigEdit[], expectedRevision?: string): Promise<ConfigApplyResult> {
+    return this.#withLock(() => this.#writeAndApply(edits, expectedRevision));
+  }
+
+  /** Absolute path of the configuration file this reloader owns. */
+  get configPath(): string {
+    return this.#configPath;
+  }
+
+  /** Revision of the file on disk, for the panel's optimistic concurrency. */
+  revision(): Promise<string> {
+    return readConfigRevision(this.#configPath);
+  }
+
+  /**
    * Writes `agent.provider` / `agent.model` into the configuration file and
    * applies the file. The model must be usable before anything is written, so a
    * rejected switch leaves the file untouched; once it is written, a failed
    * apply reports `fileWritten` instead of pretending nothing happened.
    */
-  setAgentModel(provider: string, model: string): Promise<ConfigApplyResult> {
+  setAgentModel(provider: string, model: string, expectedRevision?: string): Promise<ConfigApplyResult> {
     return this.#withLock(async () => {
       let selected: { readonly provider: string; readonly model: string };
       try {
@@ -154,19 +176,31 @@ export class ConfigReloader {
       } catch (error) {
         return this.#rejected('model_unusable', messageOf(error));
       }
-      try {
-        await writeConfigEdits(this.#configPath, [
+      return await this.#writeAndApply(
+        [
           { path: ['agent', 'provider'], value: provider },
           { path: ['agent', 'model'], value: model },
-        ]);
-      } catch (error) {
-        return error instanceof ConfigWriteError
-          ? this.#rejected(error.code, error.message)
-          : this.#rejected('config_write_failed', messageOf(error));
-      }
-      const result = await this.#applyFile();
-      return result.ok ? result : { ...result, fileWritten: true };
+        ],
+        expectedRevision,
+        'model_switch_failed',
+      );
     });
+  }
+
+  async #writeAndApply(
+    edits: readonly ConfigEdit[],
+    expectedRevision: string | undefined,
+    rejectedEvent = 'config_write_failed',
+  ): Promise<ConfigApplyResult> {
+    try {
+      await writeConfigEdits(this.#configPath, edits, expectedRevision);
+    } catch (error) {
+      return error instanceof ConfigWriteError
+        ? this.#rejected(error.code, error.message, rejectedEvent)
+        : this.#rejected('config_write_failed', messageOf(error), rejectedEvent);
+    }
+    const result = await this.#applyFile();
+    return result.ok ? result : { ...result, fileWritten: true };
   }
 
   async #applyFile(): Promise<ConfigApplyResult> {
@@ -255,11 +289,8 @@ export class ConfigReloader {
   #rebuildProviders(candidateFile: FileConfig): { providers: readonly RebuiltProvider[]; error: string | null } {
     const providers: RebuiltProvider[] = [];
     for (const [alias, configured] of Object.entries(candidateFile.providers)) {
-      if (configured.kind !== 'custom') {
-        continue;
-      }
       const activeProvider = this.#activeFile.providers[alias];
-      if (activeProvider === undefined || activeProvider.kind !== 'custom') {
+      if (activeProvider === undefined || activeProvider.kind !== configured.kind) {
         continue;
       }
       if (deepEqual(activeProvider.models, configured.models)) {
@@ -268,7 +299,10 @@ export class ConfigReloader {
       try {
         providers.push({
           alias,
-          provider: rebuildCustomProvider(this.#models, alias, configured as CustomProviderConfig),
+          provider:
+            configured.kind === 'custom'
+              ? rebuildCustomProvider(this.#models, alias, configured)
+              : rebuildBuiltinProvider(this.#models, alias, configured),
         });
       } catch (error) {
         return { providers: [], error: messageOf(error) };
@@ -299,13 +333,13 @@ export class ConfigReloader {
   }
 
   /**
-   * A model switch refused before the file was written. No reload ran, so the
-   * status keeps describing the last apply: the caller gets the error, and the
-   * log records it under its own event.
+   * A write refused before the file was written. No reload ran, so the status
+   * keeps describing the last apply: the caller gets the error, and the log
+   * records it under its own event.
    */
-  #rejected(code: ConfigErrorCode, message: string): ConfigApplyResult {
+  #rejected(code: ConfigErrorCode, message: string, event = 'model_switch_failed'): ConfigApplyResult {
     const redacted = this.#secrets.redact(message);
-    console.log(JSON.stringify({ event: 'model_switch_failed', code, error: redacted, at: new Date().toISOString() }));
+    console.log(JSON.stringify({ event, code, error: redacted, at: new Date().toISOString() }));
     return { ok: false, code, message: redacted, fileWritten: false, status: this.status() };
   }
 

@@ -22,6 +22,7 @@ import { AdminServer } from '../../../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../../../src/platform/config.ts';
 import { ConfigReloader } from '../../../src/platform/config-reload.ts';
 import { AgentModelSwitcher } from '../../../src/platform/model-switch.ts';
+import { loadModelsDevCatalog } from '../../../src/platform/models-dev.ts';
 import { RuntimeConfigurationStore } from '../../../src/platform/runtime-config.ts';
 import { createModelRegistry } from '../../../src/platform/providers.ts';
 import { SecretStore } from '../../../src/platform/secrets.ts';
@@ -29,13 +30,29 @@ import { asRunResult, SqliteStore } from '../../../src/store/database.ts';
 import { adminSessions, alarms } from '../../../src/store/schema.ts';
 import { enterSleep, wakeFromSleep } from '../../../src/store/sleep.ts';
 import { seedAdminBulkRows, seedAdminFixture } from '../../../test/fixtures/admin-seed.ts';
-import { testConfigJsonc, writeTestConfig } from '../../../test/helpers.ts';
+import { startFixtureServer, stopFixtureServer, testConfigJsonc, writeTestConfig } from '../../../test/helpers.ts';
+import {
+  E2E_ACCEPTED_RELAY_KEYS,
+  E2E_BUILTIN_ALIAS,
+  E2E_BUILTIN_PROVIDER,
+  E2E_MODELS_DEV_CATALOG,
+  E2E_RELAY_ALIAS,
+  E2E_RELAY_DISCOVERED_MODELS,
+  E2E_SECRETS,
+} from './models-fixture.ts';
 
 const ADMIN_USERNAME = 'e2e-admin';
 const ADMIN_PASSWORD = 'e2e-correct-horse';
 
+/**
+ * The Models page only offers 「立即重启」 when the deployment declared a
+ * supervisor; nothing here actually exits the process (see `requestRestart`).
+ */
+process.env.PLASTICWAN_SUPERVISED = '1';
+
 let store: SqliteStore | null = null;
 let server: ServerType | null = null;
+let upstream: ServerType | null = null;
 let directory = '';
 let shuttingDown = false;
 
@@ -50,6 +67,13 @@ async function shutdown(): Promise<void> {
         server.closeAllConnections();
       }
       server.close();
+    }
+  } catch {
+    // best effort
+  }
+  try {
+    if (upstream !== null) {
+      await stopFixtureServer(upstream);
     }
   } catch {
     // best effort
@@ -142,6 +166,27 @@ async function main(): Promise<void> {
   directory = await mkdtemp(join(tmpdir(), 'plasticwan-admin-e2e-'));
   const configPath = join(directory, 'config.jsonc');
   const staticDir = resolve(join(import.meta.dirname, '..', 'dist'));
+  // A local listing endpoint for the custom relay provider: the Models page's
+  // discovery must never reach the network, and the key/header assertions only
+  // hold when the request lands here.
+  const relay = await startFixtureServer((incoming) => {
+    const url = new URL(incoming.url);
+    if (url.pathname !== '/v1/models') {
+      return Response.json({ error: { message: 'not found' } }, { status: 404 });
+    }
+    if (incoming.headers.get('authorization') === null) {
+      return Response.json({ error: { message: 'missing key' } }, { status: 401 });
+    }
+    const presented = (incoming.headers.get('authorization') ?? '').replace(/^Bearer /, '');
+    if (!E2E_ACCEPTED_RELAY_KEYS.includes(presented)) {
+      return Response.json({ error: { message: 'invalid key' } }, { status: 401 });
+    }
+    return Response.json({
+      object: 'list',
+      data: E2E_RELAY_DISCOVERED_MODELS.map((id) => ({ id, name: id, object: 'model' })),
+    });
+  });
+  upstream = relay.server;
   await writeTestConfig(
     directory,
     configPath,
@@ -153,8 +198,51 @@ async function main(): Promise<void> {
         session_ttl_hours: 12,
         static_dir: staticDir.replaceAll('\\', '/'),
       };
+      // A builtin provider with a model list: Pi supplies the address and the
+      // adapter, the file supplies the enabled models.
+      config.providers[E2E_BUILTIN_ALIAS] = {
+        kind: 'builtin',
+        provider: E2E_BUILTIN_PROVIDER,
+        api_key: E2E_SECRETS.builtin,
+        models: [
+          {
+            id: 'openrouter/auto',
+            name: 'Auto Router',
+            reasoning: false,
+            input: ['text'],
+            context_window: 128_000,
+            max_tokens: 8_192,
+            cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+          },
+        ],
+      };
+      config.providers[E2E_RELAY_ALIAS] = {
+        kind: 'custom',
+        base_url: `http://127.0.0.1:${String(relay.port)}/v1`,
+        api: 'openai-completions',
+        api_key: E2E_SECRETS.relay,
+        headers: { 'x-relay-token': E2E_SECRETS.relayHeader },
+        models: [
+          {
+            id: 'relay-existing-model',
+            name: 'Relay Existing Model',
+            reasoning: false,
+            input: ['text', 'image'],
+            context_window: 64_000,
+            max_tokens: 4_096,
+            cost: { input: 0.1, output: 0.2, cache_read: 0, cache_write: 0 },
+          },
+        ],
+      };
     }),
   );
+  // `discover` and `lookup-metadata` resolve metadata against the models.dev
+  // catalog. Priming it with a fixture (the module's own test seam) keeps the
+  // E2E server offline.
+  await loadModelsDevCatalog({
+    ttlMs: 60 * 60 * 1000,
+    fetchImpl: () => Promise.resolve(Response.json(E2E_MODELS_DEV_CATALOG)),
+  });
   const loaded: LoadedConfig = await loadConfig(configPath);
   const adminConfig = loaded.config.admin;
   if (adminConfig === undefined) {
@@ -168,7 +256,8 @@ async function main(): Promise<void> {
   seedAdminFixture(store);
   seedAdminBulkRows(store);
 
-  const registry = await createModelRegistry(loaded.config, new SecretStore());
+  const secrets = new SecretStore();
+  const registry = await createModelRegistry(loaded.config, secrets);
   const configStore = new RuntimeConfigurationStore(loaded);
   const modelSwitcher = new AgentModelSwitcher(configStore, registry.models);
   const configReloader = new ConfigReloader({
@@ -176,13 +265,26 @@ async function main(): Promise<void> {
     store: configStore,
     models: registry.models,
     modelSwitcher,
-    secrets: new SecretStore(),
+    secrets,
     // This fixture runs no agent runtime, so there is no tool registry to fit
     // into the model's context window; production wires the real validator.
     validateAgentModel: () => undefined,
     onPublished: () => undefined,
   });
-  const admin = new AdminServer({ store, configStore, modelSwitcher, configReloader });
+  const admin = new AdminServer({
+    store,
+    configStore,
+    modelSwitcher,
+    configReloader,
+    secrets,
+    models: registry.models,
+    // The E2E process has to outlive the suite, so a restart request is recorded
+    // instead of shutting the process down. `POST /api/restart` itself (the
+    // config check and the 202) is exercised by test/admin-providers.test.ts.
+    requestRestart: () => {
+      console.log('E2E_RESTART_REQUESTED');
+    },
+  });
 
   const started = serve({
     hostname: '127.0.0.1',

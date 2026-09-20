@@ -1,9 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { serve, type ServerType } from '@hono/node-server';
-import type { RawConfig } from '../../platform/config.ts';
+import type { Models } from '@earendil-works/pi-ai';
+import { assertConfigPermissions, loadConfig, type RawConfig } from '../../platform/config.ts';
 import type { ConfigErrorCode, ConfigReloader } from '../../platform/config-reload.ts';
+import { type ConfigEdit, readConfigRevision } from '../../platform/config-file.ts';
 import type { RuntimeConfigurationStore } from '../../platform/runtime-config.ts';
+import type { SecretStore } from '../../platform/secrets.ts';
 import type { SqliteStore } from '../../store/database.ts';
 import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from '../../context/memory.ts';
 import type { AgentModelOption, AgentModelSwitcher } from '../../platform/model-switch.ts';
@@ -38,6 +41,30 @@ import {
   updateMemory,
 } from './memory-admin.ts';
 import { cancelPendingSessions } from './operations.ts';
+import {
+  appendModels,
+  createProvider,
+  deleteModel,
+  deleteProvider,
+  discover,
+  listProviderPresets,
+  listProviders,
+  lookupMetadata,
+  parseAlias,
+  parseCreateProviderBody,
+  parseDiscoverBody,
+  parseLookupMetadataBody,
+  parseModelBody,
+  parseModelsBody,
+  parseUpdateProviderBody,
+  parseVisionBody,
+  type ProviderWriteContext,
+  PROVIDER_BODY_MAX_BYTES,
+  replaceModel,
+  supervisedRestartEnabled,
+  updateProvider,
+  visionEdits,
+} from './providers-admin.ts';
 
 const SESSION_COOKIE = 'plasticwan_admin';
 const MAX_BODY_BYTES = 8_192;
@@ -73,6 +100,12 @@ export interface AdminServerOptions {
   readonly scheduler?: BucketScheduler;
   readonly modelSwitcher?: AgentModelSwitcher;
   readonly configReloader?: ConfigReloader;
+  /** Registers panel-supplied plaintext secrets before they are written or sent. */
+  readonly secrets?: SecretStore;
+  /** The live model registry, used for saved-mode provider discovery. */
+  readonly models?: Models;
+  /** Starts the graceful shutdown that exits with the restart code. */
+  readonly requestRestart?: () => void;
 }
 
 /** Model reference problems are user errors; everything else is a conflict. */
@@ -83,6 +116,15 @@ const MODEL_ERROR_STATUS: Partial<Record<ConfigErrorCode, number>> = {
   model_unusable: 400,
 };
 
+/** Write failures the panel can act on, versus the ones that need an operator. */
+const CONFIG_WRITE_STATUS: Partial<Record<ConfigErrorCode, number>> = {
+  config_conflict: 409,
+  config_invalid: 422,
+  config_permissions: 409,
+  config_symlink: 409,
+  config_write_failed: 500,
+};
+
 export class AdminServer {
   readonly #store: SqliteStore;
   readonly #admin: AdminConfig;
@@ -90,6 +132,9 @@ export class AdminServer {
   readonly #scheduler: BucketScheduler | undefined;
   readonly #modelSwitcher: AgentModelSwitcher | undefined;
   readonly #configReloader: ConfigReloader | undefined;
+  readonly #secrets: SecretStore | undefined;
+  readonly #models: Models | undefined;
+  readonly #requestRestart: (() => void) | undefined;
   readonly #staticDir: string;
   readonly #memoryWarningDays: number;
   #server: ServerType | undefined;
@@ -106,6 +151,9 @@ export class AdminServer {
     this.#scheduler = options.scheduler;
     this.#modelSwitcher = options.modelSwitcher;
     this.#configReloader = options.configReloader;
+    this.#secrets = options.secrets;
+    this.#models = options.models;
+    this.#requestRestart = options.requestRestart;
     this.#staticDir = resolve(
       admin.static_dir ?? join(import.meta.dirname, '..', '..', '..', 'apps', 'admin-next', 'dist'),
     );
@@ -296,15 +344,18 @@ export class AdminServer {
       if (switcher === undefined || reloader === undefined) {
         return json({ error: 'model_switch_unavailable', message: 'Runtime model switching is not wired' }, 503);
       }
-      if (request.method === 'GET') {
-        return json(this.#modelState(switcher, switcher.current()));
-      }
+      // `GET /model` was removed with the Model page: the Models page reads the
+      // file view from `GET /providers` and gets the live model back from here.
       if (request.method === 'PUT') {
+        const revision = requiredRevision(request);
+        if (revision === null) {
+          return revisionRequired();
+        }
         const body = await readJsonObject(request);
         if (typeof body.provider !== 'string' || typeof body.model !== 'string') {
           return json({ error: 'invalid_model_reference', message: 'provider and model must be strings' }, 400);
         }
-        const result = await reloader.setAgentModel(body.provider, body.model);
+        const result = await reloader.setAgentModel(body.provider, body.model, revision);
         if (!result.ok) {
           const status = MODEL_ERROR_STATUS[result.code] ?? 409;
           const message = result.fileWritten
@@ -317,6 +368,19 @@ export class AdminServer {
           apply: { applied: result.applied, restart_required: result.restartRequired },
         });
       }
+    }
+    if (route === 'provider-presets' && request.method === 'GET') {
+      return json({ presets: listProviderPresets() });
+    }
+    if (segments[0] === 'providers') {
+      return await this.#providers(request, segments);
+    }
+    if (route === 'vision' && request.method === 'PUT') {
+      const body = parseVisionBody(await readJsonObject(request));
+      return await this.#providerWrite(request, (context) => visionEdits(context, body));
+    }
+    if (route === 'restart' && request.method === 'POST') {
+      return await this.#restart();
     }
     if (route === 'config/apply' && request.method === 'POST') {
       const reloader = this.#configReloader;
@@ -400,6 +464,208 @@ export class AdminServer {
     return json({ error: 'not_found', message: 'Unknown admin API route' }, 404);
   }
 
+  /**
+   * `/api/providers` — the model manager's read and write surface.
+   *
+   * Model ids may contain `/`, so the path is split on `/` first and each segment
+   * is decoded afterwards: `PUT /providers/:alias/models/:id` only matches when
+   * the client encoded the id.
+   */
+  async #providers(request: Request, segments: readonly string[]): Promise<Response> {
+    const reloader = this.#configReloader;
+    if (reloader === undefined || this.#secrets === undefined || this.#models === undefined) {
+      return json({ error: 'providers_unavailable', message: 'Provider management is not wired' }, 503);
+    }
+    const parts = segments.map((segment) => decodeURIComponent(segment));
+    const second = parts[1];
+    const third = parts[2];
+    const fourth = parts[3];
+    // Checked before the body is parsed, so a missing revision is reported as
+    // such even when the payload is malformed too. Discovery and metadata lookup
+    // write nothing and therefore need no revision.
+    const readShapedPost = parts.length === 2 && (second === 'discover' || second === 'lookup-metadata');
+    if (request.method !== 'GET' && !readShapedPost && requiredRevision(request) === null) {
+      return revisionRequired();
+    }
+    if (parts.length === 1 && request.method === 'GET') {
+      return json(await this.#providersView(reloader));
+    }
+    if (parts.length === 1 && request.method === 'POST') {
+      const body = parseCreateProviderBody(await readJsonObject(request, PROVIDER_BODY_MAX_BYTES));
+      return await this.#providerWrite(request, (context) => createProvider(context, body));
+    }
+    if (parts.length === 2 && second === 'discover' && request.method === 'POST') {
+      const body = parseDiscoverBody(await readJsonObject(request, PROVIDER_BODY_MAX_BYTES));
+      return await this.#providerResponse((context) => discover(context, body));
+    }
+    if (parts.length === 2 && second === 'lookup-metadata' && request.method === 'POST') {
+      const body = parseLookupMetadataBody(await readJsonObject(request, PROVIDER_BODY_MAX_BYTES));
+      return await this.#providerResponse((context) => lookupMetadata(body, context.secrets));
+    }
+    if (parts.length === 2 && second !== undefined && request.method === 'PUT') {
+      const alias = parseAlias(second);
+      const body = parseUpdateProviderBody(await readJsonObject(request, PROVIDER_BODY_MAX_BYTES));
+      return await this.#providerWrite(request, (context) => updateProvider(context, alias, body));
+    }
+    if (parts.length === 2 && second !== undefined && request.method === 'DELETE') {
+      const alias = parseAlias(second);
+      return await this.#providerWrite(request, (context) => deleteProvider(context, alias));
+    }
+    if (parts.length === 3 && second !== undefined && third === 'models' && request.method === 'POST') {
+      const alias = parseAlias(second);
+      const models = parseModelsBody(await readJsonObject(request, PROVIDER_BODY_MAX_BYTES));
+      return await this.#providerWrite(request, (context) => appendModels(context, alias, models));
+    }
+    if (parts.length === 4 && second !== undefined && third === 'models' && fourth !== undefined) {
+      const alias = parseAlias(second);
+      if (request.method === 'PUT') {
+        const model = parseModelBody(await readJsonObject(request, PROVIDER_BODY_MAX_BYTES));
+        return await this.#providerWrite(request, (context) => replaceModel(context, alias, fourth, model));
+      }
+      if (request.method === 'DELETE') {
+        return await this.#providerWrite(request, (context) => deleteModel(context, alias, fourth));
+      }
+    }
+    return json({ error: 'not_found', message: 'Unknown providers route' }, 404);
+  }
+
+  /**
+   * A write endpoint: the file is read for the prechecks, the edits are applied
+   * inside the reloader's lock, and the response carries both the apply summary
+   * and the refreshed view so the panel needs no second round trip.
+   */
+  async #providerWrite(
+    request: Request,
+    build: (context: ProviderWriteContext) => Promise<ConfigEdit[]> | ConfigEdit[],
+  ): Promise<Response> {
+    const reloader = this.#configReloader;
+    const secrets = this.#secrets;
+    if (reloader === undefined || secrets === undefined) {
+      return json({ error: 'providers_unavailable', message: 'Provider management is not wired' }, 503);
+    }
+    const revision = requiredRevision(request);
+    if (revision === null) {
+      return revisionRequired();
+    }
+    let context: ProviderWriteContext;
+    try {
+      context = await this.#providerContext(reloader);
+    } catch (error) {
+      return json({ error: 'config_invalid', message: this.#redact(error) }, 422);
+    }
+    let edits: readonly ConfigEdit[];
+    try {
+      edits = await build(context);
+    } catch (error) {
+      if (error instanceof AdminQueryError) {
+        return json({ error: error.code, message: error.message }, error.status);
+      }
+      return json({ error: 'provider_write_failed', message: this.#redact(error) }, 500);
+    }
+    const result = await reloader.writeAndApply(edits, revision);
+    if (!result.ok) {
+      const message = result.fileWritten
+        ? `config.jsonc was updated but not applied: ${result.message}`
+        : result.message;
+      return json({ error: result.code, message }, CONFIG_WRITE_STATUS[result.code] ?? 409);
+    }
+    return json({
+      ...(await this.#providersView(reloader)),
+      apply: { applied: result.applied, restart_required: result.restartRequired, outside_serve: result.outsideServe },
+    });
+  }
+
+  /** A read-shaped POST: provider discovery and metadata lookup write nothing. */
+  async #providerResponse(build: (context: ProviderWriteContext) => Promise<unknown>): Promise<Response> {
+    const reloader = this.#configReloader;
+    const secrets = this.#secrets;
+    if (reloader === undefined || secrets === undefined) {
+      return json({ error: 'providers_unavailable', message: 'Provider management is not wired' }, 503);
+    }
+    let context: ProviderWriteContext;
+    try {
+      context = await this.#providerContext(reloader);
+    } catch (error) {
+      return json({ error: 'config_invalid', message: this.#redact(error) }, 422);
+    }
+    try {
+      return json(await build(context));
+    } catch (error) {
+      if (error instanceof AdminQueryError) {
+        return json({ error: error.code, message: error.message }, error.status);
+      }
+      // Upstream failures echo the request, key included.
+      return json({ error: 'provider_discovery_failed', message: this.#redact(error) }, 502);
+    }
+  }
+
+  async #providerContext(reloader: ConfigReloader): Promise<ProviderWriteContext> {
+    const secrets = this.#secrets;
+    const models = this.#models;
+    if (secrets === undefined || models === undefined) {
+      throw new Error('Provider management is not wired');
+    }
+    const loaded = await loadConfig(reloader.configPath);
+    return {
+      file: loaded.fileConfig,
+      secrets,
+      models,
+      restartRequired: reloader.status().restartRequired,
+    };
+  }
+
+  /**
+   * The panel reads the file, not the active configuration: a pending restart
+   * must be visible as what is on disk, and the revision is the file's own.
+   */
+  async #providersView(reloader: ConfigReloader): Promise<ReturnType<typeof listProviders>> {
+    let loaded: Awaited<ReturnType<typeof loadConfig>>;
+    try {
+      loaded = await loadConfig(reloader.configPath);
+    } catch (error) {
+      throw new AdminQueryError('config_invalid', this.#redact(error), 422);
+    }
+    const revision = await readConfigRevision(reloader.configPath);
+    return listProviders(loaded.fileConfig, revision, reloader.status().restartRequired);
+  }
+
+  /**
+   * Restarts `serve` by exiting with a dedicated code, once the configuration on
+   * disk is known to load. A process that cannot come back up stops the bot
+   * until an operator intervenes, so this check is not optional.
+   */
+  async #restart(): Promise<Response> {
+    if (!supervisedRestartEnabled()) {
+      return json(
+        {
+          error: 'restart_unsupported',
+          message:
+            'This deployment does not declare an external supervisor; set PLASTICWAN_SUPERVISED=1 when something restarts the process',
+        },
+        409,
+      );
+    }
+    const reloader = this.#configReloader;
+    const requestRestart = this.#requestRestart;
+    if (reloader === undefined || requestRestart === undefined) {
+      return json({ error: 'restart_unavailable', message: 'Restarting is not wired' }, 503);
+    }
+    try {
+      await assertConfigPermissions(reloader.configPath);
+      await loadConfig(reloader.configPath);
+    } catch (error) {
+      return json({ error: 'config_invalid', message: this.#redact(error) }, 422);
+    }
+    // The response has to leave the socket before the shutdown closes it.
+    setImmediate(() => requestRestart());
+    return json({ status: 'restarting' }, 202);
+  }
+
+  #redact(error: unknown): string {
+    const message = messageOf(error);
+    return this.#secrets === undefined ? message : this.#secrets.redact(message);
+  }
+
   #modelState(
     switcher: AgentModelSwitcher,
     current: AgentModelOption,
@@ -460,6 +726,31 @@ export class AdminServer {
     const maxAge = Math.floor(this.#auth.sessionTtlMs / 1000);
     return `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}`;
   }
+}
+
+/**
+ * The revision of the configuration the caller last read, from `If-Match`.
+ * Surrounding quotes and a weak prefix are accepted so an ETag-shaped header
+ * works as well as the bare digest.
+ */
+function requiredRevision(request: Request): string | null {
+  const header = request.headers.get('if-match');
+  if (header === null) {
+    return null;
+  }
+  const revision = header.trim().replace(/^W\//, '').replace(/^"|"$/g, '');
+  return revision.length === 0 ? null : revision;
+}
+
+function revisionRequired(): Response {
+  return json(
+    { error: 'revision_required', message: 'If-Match with the current configuration revision is required' },
+    400,
+  );
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function json(body: unknown, status = 200, cookie?: string): Response {
@@ -524,13 +815,13 @@ function readCookie(request: Request, name: string): string {
   return '';
 }
 
-async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
+async function readJsonObject(request: Request, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
   const declared = request.headers.get('content-length');
-  if (declared !== null && Number(declared) > MAX_BODY_BYTES) {
+  if (declared !== null && Number(declared) > maxBytes) {
     throw new AdminAuthError(413, 'body_too_large', 'Request body is too large');
   }
   const text = await request.text();
-  if (text.length > MAX_BODY_BYTES) {
+  if (text.length > maxBytes) {
     throw new AdminAuthError(413, 'body_too_large', 'Request body is too large');
   }
   let parsed: unknown;

@@ -1,6 +1,6 @@
-import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { confirm, input, search, select } from '@inquirer/prompts';
-import type { FileConfig, SecretRef } from '../platform/config.ts';
+import { supportedBuiltinApi, findBuiltinProvider, listBuiltinPresets } from '../platform/builtin-providers.ts';
+import type { FileConfig, ModelCompatConfig, SecretRef } from '../platform/config.ts';
 import { SecretStore } from '../platform/secrets.ts';
 import {
   fetchModelsDevCatalog,
@@ -10,7 +10,7 @@ import {
   type ModelsDevCatalog,
   type ModelsDevModel,
   toModelDefaults,
-} from './models-dev.ts';
+} from '../platform/models-dev.ts';
 import {
   promptApiAdapter,
   type ApiAdapter,
@@ -20,12 +20,18 @@ import {
   promptSecretRef,
   promptString,
 } from './prompts.ts';
-import { type DiscoveredProviderModel, fetchProviderModels, modelsEndpoint } from './provider-models.ts';
+import {
+  type DiscoveredProviderModel,
+  assertBaseUrl,
+  fetchProviderModels,
+  planModelsEndpoint,
+} from '../platform/provider-models.ts';
 
 type BuiltinProviderConfig = {
   kind: 'builtin';
   provider: string;
   api_key: SecretRef;
+  models: ModelConfig[];
 };
 
 type CustomProviderConfig = {
@@ -43,6 +49,7 @@ type ModelConfig = {
   id: string;
   name?: string;
   reasoning: boolean;
+  compat?: ModelCompatConfig;
   input: Array<'text' | 'image'>;
   context_window: number;
   max_tokens: number;
@@ -53,7 +60,7 @@ type ProviderAction = 'add' | 'edit' | 'delete' | 'back';
 type ModelAction = 'add' | 'discover' | 'edit' | 'delete' | 'back';
 type ProviderKind = 'builtin' | 'custom';
 type AddProviderKindAction = ProviderKind | 'back' | 'cancel';
-type BuiltinProviderField = 'provider' | 'api_key' | 'save' | 'back';
+type BuiltinProviderField = 'provider' | 'api_key' | 'discover' | 'models' | 'save' | 'back';
 type CustomProviderDraftField = 'base_url' | 'api' | 'api_key' | 'headers' | 'discover' | 'models' | 'save' | 'back';
 type CustomProviderField = 'base_url' | 'api' | 'api_key' | 'headers' | 'models' | 'cancel';
 type ModelField = 'name' | 'reasoning' | 'input' | 'context_window' | 'max_tokens' | 'cost' | 'cancel';
@@ -166,45 +173,73 @@ async function addProvider(): Promise<{ alias: string; config: ProviderConfig } 
   }
 }
 
+/**
+ * A builtin provider registers exactly the models written here: Pi's catalog
+ * decides which ids may be configured, never which are reachable at runtime.
+ */
 async function configureBuiltinProvider(): Promise<ProviderConfig | undefined> {
-  const providers = builtinProviders().sort((a, b) => a.name.localeCompare(b.name));
+  const providers = listBuiltinPresets();
   let providerId: string | undefined;
   let apiKey: SecretRef | undefined;
+  let models: ModelConfig[] = [];
+  let discoveredModels: DiscoveredProviderModel[] = [];
   while (true) {
+    const source = providerId === undefined ? undefined : findBuiltinProvider(providerId);
+    const api = source === undefined ? null : supportedBuiltinApi(source);
+    const readyToDiscover =
+      source !== undefined && api !== null && source.baseUrl !== undefined && apiKey !== undefined;
+    const readyToSave = providerId !== undefined && apiKey !== undefined && models.length > 0;
     const action = await select<BuiltinProviderField>({
       message: 'Add built-in provider',
       choices: [
         { value: 'provider', name: `Built-in provider: ${providerId ?? 'not set'}` },
         { value: 'api_key', name: `API key: ${apiKey === undefined ? 'not set' : 'configured'}` },
         {
+          value: 'discover',
+          name: `Fetch models from ${readyToDiscover ? planModelsEndpoint({ ...(providerId === undefined ? {} : { builtinProvider: providerId }), baseUrl: source.baseUrl, api }).endpoint : 'the provider /models endpoint'}`,
+          disabled: readyToDiscover ? false : 'Select a provider and configure its API key first',
+        },
+        { value: 'models', name: `Models (${models.length}; ${discoveredModels.length} fetched)` },
+        {
           value: 'save',
           name: 'Add provider',
-          disabled:
-            providerId === undefined || apiKey === undefined
-              ? 'Select a provider and configure its API key first'
-              : false,
+          disabled: readyToSave ? false : 'Select a provider, configure its API key, and add at least one model',
         },
         { value: 'back', name: 'Back to provider kind' },
       ],
     });
     switch (action) {
       case 'provider': {
-        const selected = await searchChoice(
+        providerId = await searchChoice(
           'Built-in provider',
           providers.map((provider) => ({
             value: provider.id,
             name: `${provider.name} (${provider.id})`,
           })),
         );
-        providerId = selected;
+        discoveredModels = [];
         break;
       }
       case 'api_key':
         apiKey = await promptSecretRef('API key');
+        discoveredModels = [];
+        break;
+      case 'discover':
+        if (source !== undefined && api !== null && source.baseUrl !== undefined && apiKey !== undefined) {
+          discoveredModels = await discoverProviderModels({
+            ...(providerId === undefined ? {} : { builtinProvider: providerId }),
+            baseUrl: source.baseUrl,
+            api,
+            apiKey,
+          });
+        }
+        break;
+      case 'models':
+        models = await runModelWizard(models, discoveredModels);
         break;
       case 'save':
-        if (providerId !== undefined && apiKey !== undefined) {
-          return { kind: 'builtin', provider: providerId, api_key: apiKey };
+        if (providerId !== undefined && apiKey !== undefined && models.length > 0) {
+          return { kind: 'builtin', provider: providerId, api_key: apiKey, models };
         }
         break;
       default:
@@ -232,7 +267,7 @@ async function configureCustomProvider(): Promise<ProviderConfig | undefined> {
         { value: 'headers', name: `Custom headers (${Object.keys(headers).length})` },
         {
           value: 'discover',
-          name: `Fetch models from ${baseUrl === undefined ? 'the provider /models endpoint' : `${baseUrl.replace(/\/+$/, '')}/models`}`,
+          name: `Fetch models from ${baseUrl === undefined ? 'the provider /models endpoint' : planModelsEndpoint({ baseUrl, api: api ?? 'openai-completions' }).endpoint}`,
           disabled: readyToDiscover ? false : 'Configure the Base URL, API adapter, and API key first',
         },
         { value: 'models', name: `Models (${models.length}; ${discoveredModels.length} fetched)` },
@@ -267,7 +302,7 @@ async function configureCustomProvider(): Promise<ProviderConfig | undefined> {
         break;
       case 'discover':
         if (baseUrl !== undefined && api !== undefined && apiKey !== undefined) {
-          discoveredModels = await discoverCustomProviderModels({ baseUrl, api, apiKey, headers });
+          discoveredModels = await discoverProviderModels({ baseUrl, api, apiKey, headers });
         }
         break;
       case 'models':
@@ -293,8 +328,7 @@ async function configureCustomProvider(): Promise<ProviderConfig | undefined> {
 
 async function editProvider(provider: ProviderConfig): Promise<ProviderConfig | undefined> {
   if (provider.kind === 'builtin') {
-    const apiKey = await promptSecretRef('API key');
-    return { ...provider, api_key: apiKey };
+    return await editBuiltinProvider(provider);
   }
   let updated: ProviderConfig = { ...provider };
   const action = await select<CustomProviderField>({
@@ -335,6 +369,42 @@ async function editProvider(provider: ProviderConfig): Promise<ProviderConfig | 
       return undefined;
   }
   return updated;
+}
+
+async function editBuiltinProvider(provider: BuiltinProviderConfig): Promise<ProviderConfig | undefined> {
+  const action = await select<'api_key' | 'models' | 'cancel'>({
+    message: `Edit built-in provider (${provider.provider})`,
+    choices: [
+      { value: 'api_key', name: 'API key' },
+      { value: 'models', name: `Models (${provider.models.length})` },
+      { value: 'cancel', name: 'Cancel' },
+    ],
+  });
+  switch (action) {
+    case 'api_key':
+      return { ...provider, api_key: await promptSecretRef('API key') };
+    case 'models': {
+      const source = findBuiltinProvider(provider.provider);
+      const api = source === undefined ? null : supportedBuiltinApi(source);
+      const discovered =
+        source !== undefined && api !== null && source.baseUrl !== undefined
+          ? await discoverProviderModels({
+              builtinProvider: provider.provider,
+              baseUrl: source.baseUrl,
+              api,
+              apiKey: provider.api_key,
+            })
+          : [];
+      const models = await runModelWizard(provider.models, discovered);
+      if (models.length === 0) {
+        console.error('A built-in provider needs at least one configured model');
+        return undefined;
+      }
+      return { ...provider, models };
+    }
+    default:
+      return undefined;
+  }
 }
 
 async function editHeaders(headers: Record<string, SecretRef>): Promise<Record<string, SecretRef>> {
@@ -398,7 +468,7 @@ async function runModelWizard(
           'Fetched model',
           availableDiscoveredModels.map((model) => ({
             value: model,
-            name: model.name === undefined ? model.id : `${model.name} (${model.id})`,
+            name: model.name === null ? model.id : `${model.name} (${model.id})`,
           })),
         );
         const model = await addModel(discovered.id);
@@ -590,19 +660,20 @@ async function lookupModelDefaults(id: string): Promise<
   return defaults;
 }
 
-async function discoverCustomProviderModels(config: {
+async function discoverProviderModels(config: {
+  readonly builtinProvider?: string;
   readonly baseUrl: string;
   readonly api: ApiAdapter;
   readonly apiKey: SecretRef;
-  readonly headers: Readonly<Record<string, SecretRef>>;
+  readonly headers?: Readonly<Record<string, SecretRef>>;
 }): Promise<DiscoveredProviderModel[]> {
   const secrets = new SecretStore();
   try {
-    const models = await fetchProviderModels(config, secrets);
+    const listing = await fetchProviderModels(config, secrets);
     console.log(
-      `Fetched ${models.length} model${models.length === 1 ? '' : 's'} from ${modelsEndpoint(config.baseUrl)}`,
+      `Fetched ${listing.models.length} model${listing.models.length === 1 ? '' : 's'} from ${listing.endpoint}`,
     );
-    return models;
+    return [...listing.models];
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Failed to fetch provider models: ${secrets.redact(message)}`);
@@ -612,7 +683,7 @@ async function discoverCustomProviderModels(config: {
 
 function validateBaseUrl(value: string): true | string {
   try {
-    modelsEndpoint(value);
+    assertBaseUrl(value);
     return true;
   } catch {
     return 'Must be an HTTP(S) URL without credentials, query, or fragment';

@@ -59,5 +59,9 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # Data and config volume mount points
 RUN mkdir -p /data /config && chown plasticwan:plasticwan /data /config
 
+# The container is supervised: `restart: unless-stopped` (or any restart policy)
+# brings `serve` back after the Admin Panel's "restart now" exits with code 75.
+ENV PLASTICWAN_SUPERVISED=1
+
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["serve", "--config", "/config/config.jsonc"]

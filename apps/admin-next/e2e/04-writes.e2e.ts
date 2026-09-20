@@ -77,33 +77,34 @@ test.describe('bot admins', () => {
   });
 });
 
-test.describe('model hot-switch', () => {
-  test('switch to vision and back to the agent model', async ({ page }) => {
-    await page.goto(await adminUrl('/model'));
-    await expect(page.getByText('Current model')).toBeVisible();
-    await expect(page.getByText('agent-model').first()).toBeVisible();
+test.describe('agent model hot-switch', () => {
+  test('switch to the vision model and back through the model rows', async ({ page }) => {
+    await page.goto(await adminUrl('/models'));
 
-    await page.getByRole('combobox', { name: 'Provider and model' }).click();
-    await page.getByRole('option', { name: /vision \/ vision-model/ }).click();
-    await page.getByRole('button', { name: 'Switch', exact: true }).click();
+    await page.getByRole('button', { name: 'Provider vision' }).click();
+    await page.locator('tr', { hasText: 'vision-model' }).getByRole('button', { name: '设为 Agent 模型' }).click();
     // The toast only appears once the write and the reload succeeded.
-    await expect(page.getByText('Model switched — applies to subsequent invocations')).toBeVisible();
+    await expect(page.getByText('已生效').first()).toBeVisible();
+    // Wait for the refreshed view before the next write: a switch has to be
+    // built on the revision the previous one produced.
+    await expect(page.getByRole('button', { name: 'Provider vision' }).getByText('Agent 在用')).toBeVisible();
 
-    const switched = (await (await page.request.get(await adminUrl('/api/model'))).json()) as {
-      current: { model: string };
+    // `GET /model` is gone with the old Model page; the live model is read back
+    // from the provider view, which is what the page itself renders.
+    const switched = (await (await page.request.get(await adminUrl('/api/providers'))).json()) as {
+      agent: { provider: string; model: string };
     };
-    expect(switched.current.model).toBe('vision-model');
+    expect(switched.agent).toEqual({ provider: 'vision', model: 'vision-model' });
 
     // There is no default to restore: the way back is another switch.
-    await page.getByRole('combobox', { name: 'Provider and model' }).click();
-    await page.getByRole('option', { name: /agent \/ agent-model/ }).click();
-    await page.getByRole('button', { name: 'Switch', exact: true }).click();
-    await expect(page.getByText('Model switched — applies to subsequent invocations').nth(1)).toBeVisible();
+    await page.getByRole('button', { name: 'Provider agent' }).click();
+    await page.locator('tr', { hasText: 'agent-model' }).getByRole('button', { name: '设为 Agent 模型' }).click();
+    await expect(page.getByRole('button', { name: 'Provider agent' }).getByText('Agent 在用')).toBeVisible();
 
-    const restored = (await (await page.request.get(await adminUrl('/api/model'))).json()) as {
-      current: { model: string };
+    const restored = (await (await page.request.get(await adminUrl('/api/providers'))).json()) as {
+      agent: { provider: string; model: string };
     };
-    expect(restored.current.model).toBe('agent-model');
+    expect(restored.agent).toEqual({ provider: 'agent', model: 'agent-model' });
   });
 });
 

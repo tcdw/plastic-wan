@@ -132,7 +132,7 @@ node src/cli.ts serve --config dev-data/config.jsonc
 8. Overview 的 Bot status 卡片显示 `sleeping`/`awake` 与 `sleep_until`，睡眠时 `Wake now` 带二次确认；同时列出所有 `chat_pause` Chat 与暂停时间。
 9. Alarms 页面按 state/Chat/Target 过滤，pending 优先置顶，展开显示完整诊断并链接到对应 Tool session；取消只对 pending 开放且需二次确认，对非 pending 给出 409 冲突提示。
 10. Bot admins 页面能添加/移除管理员，`telegram.admins` 的种子项来源显示为 `config`。
-11. Model 页面显示当前模型与可切换模型；切换后 `config.jsonc` 的 `agent.provider` / `agent.model` 被改写，Telegram `/status` 与页面立即反映新模型，重启 `serve` 后仍是新模型。Settings 页的 `Configuration file` 卡片显示 generation、active hash 与 file hash；改一个白名单字段后点 `Apply config file`，应用列表出现该路径，改一个 restart 字段则出现在待重启列表。
+11. Models 页面列出 Provider 与模型；切换 agent / vision 模型后 `config.jsonc` 的 `agent.provider` / `agent.model`（或 `vision.*`）被改写，Telegram `/status` 与页面立即反映新模型（vision 显示为待重启），重启 `serve` 后仍然生效；模型列表的新增/删除即时生效，连接字段与 Provider 增删显示为「已保存，待重启」。Settings 页的 `Configuration file` 卡片显示 generation、active hash 与 file hash；改一个白名单字段后点 `Apply config file`，应用列表出现该路径，改一个 restart 字段则出现在待重启列表。
 12. Conversation Contexts 页面按 chat 过滤，列表按最近活跃倒序并可用 Load more 翻页；详情显示 head/next seq、保留消息数与 capability refs，展开消息看到 `payload_preview` 与截断标记，且不出现已 GC 的行。
 13. 登出后访问深链接回落登录页；重新登录恢复访问。
 14. `admin_users.password_hash` 以 `$argon2id$` 开头，`admin_sessions` 只有 64 位十六进制摘要。

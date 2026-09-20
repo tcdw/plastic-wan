@@ -53,7 +53,7 @@ const NAV_GROUPS: NavGroup[] = [
       { title: 'Alarms', url: '/alarms', icon: Bell },
       { title: 'Memories', url: '/memories', icon: Brain },
       { title: 'Bot admins', url: '/admins', icon: Shield },
-      { title: 'Model', url: '/model', icon: Cpu },
+      { title: 'Models', url: '/models', icon: Cpu },
     ],
   },
   {

@@ -372,6 +372,180 @@ export interface ModelSwitchResponse extends ModelState {
   readonly apply: ModelApplySummary;
 }
 
+/** The four adapters the configuration supports; anything else is rejected. */
+export const PROVIDER_APIS = [
+  'openai-completions',
+  'openai-responses',
+  'anthropic-messages',
+  'google-generative-ai',
+] as const;
+
+export type ProviderApi = (typeof PROVIDER_APIS)[number];
+
+export type ProviderKind = 'builtin' | 'custom';
+
+export type ModelInput = 'text' | 'image';
+
+/** Where one metadata field of a model draft came from. */
+export type MetadataSource = 'openrouter' | 'vercel' | 'gemini' | 'models.dev' | 'models.dev-fuzzy' | 'missing';
+
+export type DraftField = 'name' | 'reasoning' | 'input' | 'context_window' | 'max_tokens' | 'cost';
+
+export type ThinkingFormat = 'openai' | 'openrouter' | 'deepseek' | 'together' | 'zai' | 'qwen' | 'string-thinking';
+
+export interface ModelCostConfig {
+  readonly input: number;
+  readonly output: number;
+  readonly cache_read: number;
+  readonly cache_write: number;
+}
+
+/** Selected Pi compat overrides; an absent field leaves Pi's own detection in charge. */
+export interface ModelCompatConfig {
+  readonly supports_developer_role?: boolean;
+  readonly thinking_format?: ThinkingFormat;
+  readonly max_tokens_field?: 'max_completion_tokens' | 'max_tokens';
+  readonly requires_reasoning_content?: boolean;
+  readonly cache_control_format?: 'anthropic';
+}
+
+/** A model as it is stored in config.jsonc. */
+export interface ProviderModelConfig {
+  readonly id: string;
+  readonly name?: string;
+  readonly reasoning: boolean;
+  readonly compat?: ModelCompatConfig;
+  readonly input: readonly ModelInput[];
+  readonly context_window: number;
+  readonly max_tokens: number;
+  readonly cost: ModelCostConfig;
+}
+
+export interface ProviderView {
+  readonly alias: string;
+  readonly kind: ProviderKind;
+  /** Pi's provider id; present on builtin providers only. */
+  readonly provider?: string;
+  readonly api: ProviderApi;
+  readonly base_url: string;
+  /** Header names only; the values never leave the process. */
+  readonly header_names: readonly string[];
+  readonly models: readonly ProviderModelConfig[];
+}
+
+export interface ProviderModelReference {
+  readonly provider: string;
+  readonly model: string;
+}
+
+export interface ProvidersView {
+  /** SHA-256 of config.jsonc; every write has to echo it back via `If-Match`. */
+  readonly revision: string;
+  /** Whether the deployment declares an external supervisor that restarts `serve`. */
+  readonly supervised: boolean;
+  readonly agent: ProviderModelReference;
+  readonly vision: ProviderModelReference;
+  /** Config paths whose new value is on disk but not live yet. */
+  readonly restart_required: readonly string[];
+  readonly providers: readonly ProviderView[];
+}
+
+export interface ProviderPresetView {
+  readonly id: string;
+  readonly name: string;
+  readonly api: ProviderApi;
+  readonly base_url: string;
+}
+
+export interface ModelMetadataDraft {
+  readonly id: string;
+  readonly name: string | null;
+  readonly reasoning: boolean | null;
+  readonly input: readonly ModelInput[] | null;
+  readonly context_window: number | null;
+  readonly max_tokens: number | null;
+  readonly cost: ModelCostConfig | null;
+  /** `true` only when models.dev records that reasoning content must be replayed. */
+  readonly requires_reasoning_content: boolean;
+  readonly sources: Readonly<Record<DraftField, MetadataSource>>;
+  readonly requires_reasoning_content_source: MetadataSource;
+  readonly match: { readonly provider: string; readonly model: string; readonly fuzzy: boolean } | null;
+  readonly candidates: readonly { readonly provider: string; readonly model: string; readonly fuzzy: boolean }[];
+  /** Fields the admin has to fill or confirm before the model may be saved. */
+  readonly needs_confirmation: readonly DraftField[];
+}
+
+export interface DiscoveredModel extends ModelMetadataDraft {
+  readonly configured: boolean;
+}
+
+export interface DiscoverResponse {
+  readonly endpoint: string;
+  readonly models: readonly DiscoveredModel[];
+  /**
+   * Set when models.dev could not be fetched: the listing is still usable, but
+   * every field only that catalog could have filled needs manual confirmation.
+   */
+  readonly metadata_source_error: string | null;
+}
+
+export interface LookupMetadataResponse {
+  readonly models: readonly ModelMetadataDraft[];
+  readonly metadata_source_error: string | null;
+}
+
+export interface ProviderApplySummary {
+  readonly applied: readonly string[];
+  readonly restart_required: readonly string[];
+  readonly outside_serve: readonly string[];
+}
+
+/** Every provider write answers with the refreshed view plus what the apply did. */
+export interface ProviderWriteResponse extends ProvidersView {
+  readonly apply: ProviderApplySummary;
+}
+
+export interface CreateProviderRequest {
+  readonly alias: string;
+  readonly kind: ProviderKind;
+  readonly provider?: string;
+  readonly base_url?: string;
+  readonly api?: ProviderApi;
+  readonly api_key: string;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly models: readonly ProviderModelConfig[];
+}
+
+/** Omitted fields keep their stored value; `null` header values delete the header. */
+export interface UpdateProviderRequest {
+  readonly base_url?: string;
+  readonly api?: ProviderApi;
+  readonly api_key?: string;
+  readonly headers?: Readonly<Record<string, string | null>>;
+}
+
+export interface DiscoverRequest {
+  readonly alias?: string;
+  readonly kind?: ProviderKind;
+  readonly provider?: string;
+  readonly base_url?: string;
+  readonly api?: ProviderApi;
+  readonly api_key?: string;
+  readonly headers?: Readonly<Record<string, string>>;
+}
+
+export interface LookupMetadataRequest {
+  readonly kind: ProviderKind;
+  readonly provider?: string;
+  readonly base_url?: string;
+  readonly api?: ProviderApi;
+  readonly ids: readonly string[];
+}
+
+export interface RestartResponse {
+  readonly status: string;
+}
+
 export interface ConfigErrorDetail {
   readonly code: string;
   readonly message: string;
@@ -636,16 +810,119 @@ export function removeBotAdmin(telegramUserId: string): Promise<{ status: string
   return call<{ status: string }>(`/admins/${encodeURIComponent(telegramUserId)}`, { method: 'DELETE' });
 }
 
-export function getAgentModel(): Promise<ModelState> {
-  return call<ModelState>('/model');
+/**
+ * Write requests carry the revision they were built against, so the server
+ * rejects a write whose configuration has moved on (`409 config_conflict`)
+ * instead of silently overwriting somebody else's edit.
+ */
+function writeHeaders(revision: string): HeadersInit {
+  return { 'content-type': 'application/json', 'if-match': revision };
 }
 
-export function switchAgentModel(request: ModelSwitchRequest): Promise<ModelSwitchResponse> {
+export function switchAgentModel(request: ModelSwitchRequest, revision: string): Promise<ModelSwitchResponse> {
   return call<ModelSwitchResponse>('/model', {
     method: 'PUT',
-    headers: { 'content-type': 'application/json' },
+    headers: writeHeaders(revision),
     body: JSON.stringify(request),
   });
+}
+
+export function getProviders(): Promise<ProvidersView> {
+  return call<ProvidersView>('/providers');
+}
+
+export function getProviderPresets(): Promise<{ readonly presets: readonly ProviderPresetView[] }> {
+  return call<{ readonly presets: readonly ProviderPresetView[] }>('/provider-presets');
+}
+
+export function createProvider(body: CreateProviderRequest, revision: string): Promise<ProviderWriteResponse> {
+  return call<ProviderWriteResponse>('/providers', {
+    method: 'POST',
+    headers: writeHeaders(revision),
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateProvider(
+  alias: string,
+  body: UpdateProviderRequest,
+  revision: string,
+): Promise<ProviderWriteResponse> {
+  return call<ProviderWriteResponse>(`/providers/${encodeURIComponent(alias)}`, {
+    method: 'PUT',
+    headers: writeHeaders(revision),
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteProvider(alias: string, revision: string): Promise<ProviderWriteResponse> {
+  return call<ProviderWriteResponse>(`/providers/${encodeURIComponent(alias)}`, {
+    method: 'DELETE',
+    headers: writeHeaders(revision),
+  });
+}
+
+export function appendProviderModels(
+  alias: string,
+  models: readonly ProviderModelConfig[],
+  revision: string,
+): Promise<ProviderWriteResponse> {
+  return call<ProviderWriteResponse>(`/providers/${encodeURIComponent(alias)}/models`, {
+    method: 'POST',
+    headers: writeHeaders(revision),
+    body: JSON.stringify({ models }),
+  });
+}
+
+/** Model ids may contain `/`, so the path segment has to stay percent-encoded. */
+export function replaceProviderModel(
+  alias: string,
+  modelId: string,
+  model: ProviderModelConfig,
+  revision: string,
+): Promise<ProviderWriteResponse> {
+  return call<ProviderWriteResponse>(`/providers/${encodeURIComponent(alias)}/models/${encodeURIComponent(modelId)}`, {
+    method: 'PUT',
+    headers: writeHeaders(revision),
+    body: JSON.stringify(model),
+  });
+}
+
+export function deleteProviderModel(alias: string, modelId: string, revision: string): Promise<ProviderWriteResponse> {
+  return call<ProviderWriteResponse>(`/providers/${encodeURIComponent(alias)}/models/${encodeURIComponent(modelId)}`, {
+    method: 'DELETE',
+    headers: writeHeaders(revision),
+  });
+}
+
+/** Discovery and metadata lookup write nothing and therefore need no revision. */
+export function discoverProviderModels(body: DiscoverRequest): Promise<DiscoverResponse> {
+  return call<DiscoverResponse>('/providers/discover', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+export function lookupModelMetadata(body: LookupMetadataRequest): Promise<LookupMetadataResponse> {
+  return call<LookupMetadataResponse>('/providers/lookup-metadata', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+export function switchVisionModel(request: ModelSwitchRequest, revision: string): Promise<ProviderWriteResponse> {
+  return call<ProviderWriteResponse>('/vision', {
+    method: 'PUT',
+    headers: writeHeaders(revision),
+    body: JSON.stringify(request),
+  });
+}
+
+/** Asks a supervised deployment to restart; the process exits with code 75. */
+export function restartServer(): Promise<RestartResponse> {
+  return call<RestartResponse>('/restart', { method: 'POST' });
 }
 
 export function getConfigStatus(): Promise<ConfigStatus> {

@@ -1,11 +1,12 @@
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import {
-  getAgentModel,
   getConfigStatus,
   getConversationContext,
   getInvocation,
   getMessage,
   getOverview,
+  getProviderPresets,
+  getProviders,
   getSession,
   getUsage,
   type ListFilters,
@@ -96,9 +97,17 @@ export const adminsQuery = queryOptions({
   queryFn: listBotAdmins,
 });
 
-export const modelQuery = queryOptions({
-  queryKey: ['model'],
-  queryFn: getAgentModel,
+export const providersQuery = queryOptions({
+  queryKey: ['providers'],
+  queryFn: getProviders,
+  // The page writes and reads the same resource, so a cached view goes stale on
+  // every write; the mutations invalidate it explicitly.
+  staleTime: 0,
+});
+
+export const providerPresetsQuery = queryOptions({
+  queryKey: ['provider-presets'],
+  queryFn: getProviderPresets,
 });
 
 export const configStatusQuery = queryOptions({

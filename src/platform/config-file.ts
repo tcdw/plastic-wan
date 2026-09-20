@@ -1,10 +1,15 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { lstat, open, readFile, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { applyEdits, type JSONPath, modify } from 'jsonc-parser';
 import { assertConfigPermissions, loadConfig } from './config.ts';
 
-export type ConfigWriteErrorCode = 'config_symlink' | 'config_permissions' | 'config_invalid' | 'config_write_failed';
+export type ConfigWriteErrorCode =
+  | 'config_symlink'
+  | 'config_permissions'
+  | 'config_invalid'
+  | 'config_write_failed'
+  | 'config_conflict';
 
 /** A failed configuration write, carrying the code the API reports. */
 export class ConfigWriteError extends Error {
@@ -23,6 +28,16 @@ export interface ConfigEdit {
 }
 
 /**
+ * Identity of the configuration file's own bytes. Prompt files are excluded, so
+ * a panel can compare this against the revision it last read and detect a
+ * concurrent edit without also invalidating on an unrelated prompt change.
+ */
+export async function readConfigRevision(configPath: string): Promise<string> {
+  const source = await readFile(resolve(configPath));
+  return createHash('sha256').update(source).digest('hex');
+}
+
+/**
  * Applies value edits to the configuration file, keeping its comments and
  * formatting.
  *
@@ -30,8 +45,18 @@ export interface ConfigEdit {
  * sibling temporary file, `loadConfig` must accept it, and only then is it
  * renamed over the original. A reader therefore sees either the old file or a
  * fully valid new one, and a rejected edit never touches the file at all.
+ *
+ * `expectedRevision` makes the write conditional: the file is hashed right after
+ * it is read and the edit is refused with `config_conflict` when the caller's
+ * revision is stale. Panel writes are already serialized by `ConfigReloader`, so
+ * the remaining window between that comparison and the rename only matters for
+ * hand edits landing in the same instant.
  */
-export async function writeConfigEdits(configPath: string, edits: readonly ConfigEdit[]): Promise<void> {
+export async function writeConfigEdits(
+  configPath: string,
+  edits: readonly ConfigEdit[],
+  expectedRevision?: string,
+): Promise<void> {
   const target = resolve(configPath);
   await assertWritableTarget(target);
   let source: string;
@@ -39,6 +64,15 @@ export async function writeConfigEdits(configPath: string, edits: readonly Confi
     source = await readFile(target, 'utf8');
   } catch (error) {
     throw new ConfigWriteError('config_write_failed', describe('Cannot read config', error));
+  }
+  if (expectedRevision !== undefined) {
+    const current = createHash('sha256').update(Buffer.from(source, 'utf8')).digest('hex');
+    if (current !== expectedRevision) {
+      throw new ConfigWriteError(
+        'config_conflict',
+        'The configuration file changed since it was read; reload the panel and try again',
+      );
+    }
   }
   const bom = source.charCodeAt(0) === 0xfeff;
   let text = bom ? source.slice(1) : source;

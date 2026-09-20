@@ -11,6 +11,7 @@ import { BotCommandService, type CommandSender } from '../src/orchestration/bot-
 import { ConversationRuntime } from '../src/orchestration/conversation-runtime.ts';
 import { BucketScheduler, type InvocationOutcome } from '../src/orchestration/scheduler.ts';
 import { type FileConfig, type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { readConfigRevision } from '../src/platform/config-file.ts';
 import { ConfigReloader } from '../src/platform/config-reload.ts';
 import { previewContext } from '../src/platform/invocation-context.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
@@ -87,6 +88,17 @@ function customProvider(
   return provider;
 }
 
+function builtinProvider(
+  providers: Readonly<Record<string, ProviderEntry>>,
+  alias: string,
+): Extract<ProviderEntry, { kind: 'builtin' }> {
+  const provider = providers[alias];
+  if (provider === undefined || provider.kind !== 'builtin') {
+    throw new Error(`Expected a builtin provider fixture: ${alias}`);
+  }
+  return provider;
+}
+
 function model(id: string, overrides: Partial<ModelEntry> = {}): ModelEntry {
   return {
     id,
@@ -100,16 +112,35 @@ function model(id: string, overrides: Partial<ModelEntry> = {}): ModelEntry {
   };
 }
 
+/** Counts SecretRef resolutions so a reload can be shown not to run one again. */
+class CountingSecrets extends SecretStore {
+  resolutions = 0;
+
+  override async resolve(reference: Parameters<SecretStore['resolve']>[0]): Promise<string> {
+    this.resolutions += 1;
+    return await super.resolve(reference);
+  }
+}
+
 /**
  * The agent runs on a faux provider registered under a builtin alias: the file
- * cannot change that provider's models, so the registry stays the only source of
- * truth for them, while the custom `agent` / `vision` providers stay available
- * for the provider-level reload cases.
+ * declares that alias's models (a builtin provider registers exactly the models
+ * the configuration enables) and the tests then swap in the faux provider, so
+ * the registry owns the streaming behavior while the custom `agent` / `vision`
+ * providers stay available for the provider-level reload cases.
  */
 function baseConfig(config: FileConfig): void {
   config.telegram.admins = [42];
   config.agent.send_nudge_enabled = false;
-  config.providers.faux = { kind: 'builtin', provider: 'deepseek', api_key: 'faux-secret' };
+  config.providers.faux = {
+    kind: 'builtin',
+    provider: 'deepseek',
+    api_key: 'faux-secret',
+    models: [
+      model(AGENT_MODEL, { reasoning: true, input: ['text', 'image'], context_window: 200_000, max_tokens: 32_768 }),
+      model(SECOND_MODEL, { reasoning: true }),
+    ],
+  };
   config.agent.provider = 'faux';
   config.agent.model = AGENT_MODEL;
   config.agent.thinking_level = 'low';
@@ -176,8 +207,10 @@ async function setup(
   const store = await SqliteStore.open(loaded.config);
   seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? []);
   const configStore = new RuntimeConfigurationStore(loaded);
-  const registry = await createModelRegistry(loaded.config, new SecretStore());
+  // One store for the registry and the reloader, exactly as the composition root
+  // wires it: credentials are resolved once, at startup.
   const secrets = options.secrets ?? new SecretStore();
+  const registry = await createModelRegistry(loaded.config, secrets);
   const modelSwitcher = new AgentModelSwitcher(configStore, registry.models);
   const conversationRuntime = new ConversationRuntime({
     agentCacheSize: loaded.config.agent.context.agent_cache_size,
@@ -377,6 +410,9 @@ test('refuses a candidate whose model cannot run the tool registry', async () =>
     });
     fixture.runtimeWith(faux);
     await fixture.patch((config) => {
+      builtinProvider(config.providers, 'faux').models.push(
+        model('tiny-model', { context_window: 1_000, max_tokens: 512 }),
+      );
       config.agent.model = 'tiny-model';
     });
     const result = await fixture.reloader.reloadFromFile();
@@ -392,11 +428,11 @@ test('refuses a candidate whose model cannot run the tool registry', async () =>
   }
 });
 
-test('refuses a builtin model that is not registered', async () => {
+test('refuses a builtin model the file does not list', async () => {
   const fixture = await setup();
   try {
-    // A builtin provider has no model list in the file, so the file validates
-    // and only the prepare step can reject the reference.
+    // A builtin provider's models come from the file, so an unregistered
+    // reference is a file error: `check-config` rejects it before a reload does.
     await fixture.patch((config) => {
       config.agent.model = 'no-such-model';
     });
@@ -405,7 +441,7 @@ test('refuses a builtin model that is not registered', async () => {
     if (result.ok) {
       throw new Error('Expected the unknown model to be refused');
     }
-    expect(result.code).toBe('model_unusable');
+    expect(result.code).toBe('config_invalid');
     expect(result.message).toContain('no-such-model');
     expect(fixture.configStore.current().config.agent.model).toBe(AGENT_MODEL);
   } finally {
@@ -883,6 +919,8 @@ test('a reloaded model and thinking level show up in /status and the admin API',
       configStore: fixture.configStore,
       modelSwitcher: fixture.modelSwitcher,
       configReloader: fixture.reloader,
+      secrets: new SecretStore(),
+      models: fixture.registry.models,
     });
     const created = await server.handle(
       new Request('http://127.0.0.1:8899/api/auth/setup', {
@@ -892,11 +930,10 @@ test('a reloaded model and thinking level show up in /status and the admin API',
       }),
     );
     const cookie = created.headers.get('set-cookie')?.split(';')[0] ?? '';
-    const model = (await (
-      await server.handle(new Request('http://127.0.0.1:8899/api/model', { headers: { cookie } }))
-    ).json()) as { current: { provider: string; model: string }; default?: unknown };
-    expect(model.current).toMatchObject({ provider: 'faux', model: SECOND_MODEL });
-    expect(model.default).toBeUndefined();
+    const view = (await (
+      await server.handle(new Request('http://127.0.0.1:8899/api/providers', { headers: { cookie } }))
+    ).json()) as { agent: { provider: string; model: string } };
+    expect(view.agent).toMatchObject({ provider: 'faux', model: SECOND_MODEL });
   } finally {
     fixture.store.close();
   }
@@ -1173,6 +1210,8 @@ test('admin config endpoints apply the file and report status', async () => {
       configStore: fixture.configStore,
       modelSwitcher: fixture.modelSwitcher,
       configReloader: fixture.reloader,
+      secrets: new SecretStore(),
+      models: fixture.registry.models,
     });
     const call = (path: string, init: RequestInit = {}): Request => new Request(`http://127.0.0.1:8899${path}`, init);
     const json = async (response: Response): Promise<any> => await response.json();
@@ -1236,7 +1275,11 @@ test('admin config endpoints apply the file and report status', async () => {
     const unknown = await server.handle(
       call('/api/model', {
         method: 'PUT',
-        headers: { 'content-type': 'application/json', cookie },
+        headers: {
+          'content-type': 'application/json',
+          cookie,
+          'if-match': await readConfigRevision(fixture.configPath),
+        },
         body: JSON.stringify({ provider: 'ghost', model: 'agent-model' }),
       }),
     );
@@ -1247,7 +1290,11 @@ test('admin config endpoints apply the file and report status', async () => {
       await server.handle(
         call('/api/model', {
           method: 'PUT',
-          headers: { 'content-type': 'application/json', cookie },
+          headers: {
+            'content-type': 'application/json',
+            cookie,
+            'if-match': await readConfigRevision(fixture.configPath),
+          },
           body: JSON.stringify({ provider: 'agent', model: 'agent-model' }),
         }),
       ),
@@ -1290,6 +1337,115 @@ test('rejects a configuration file that is not 0600 or whose directory is not 07
   } finally {
     await chmod(fixture.directory, 0o700).catch(() => undefined);
     await chmod(fixture.configPath, 0o600).catch(() => undefined);
+    fixture.store.close();
+  }
+});
+
+test('a write with a stale revision is refused and leaves the file unchanged', async () => {
+  const fixture = await setup();
+  try {
+    const revision = await readConfigRevision(fixture.configPath);
+    const before = await fixture.readText();
+
+    const stale = await fixture.reloader.writeAndApply(
+      [{ path: ['agent', 'thinking_level'], value: 'high' }],
+      'f'.repeat(64),
+    );
+    expect(stale.ok).toBe(false);
+    if (stale.ok) {
+      throw new Error('Expected the stale revision to be refused');
+    }
+    expect(stale.code).toBe('config_conflict');
+    expect(await fixture.readText()).toBe(before);
+    expect(fixture.configStore.current().config.agent.thinking_level).toBe('low');
+
+    const applied = await fixture.reloader.writeAndApply(
+      [{ path: ['agent', 'thinking_level'], value: 'high' }],
+      revision,
+    );
+    expect(applied.ok).toBe(true);
+    if (!applied.ok) {
+      throw new Error(applied.message);
+    }
+    expect(applied.applied).toEqual(['agent.thinking_level']);
+    expect(fixture.configStore.current().config.agent.thinking_level).toBe('high');
+    // Leaf edits keep the comments the test configuration was written with.
+    expect(await fixture.readText()).toBe(before.replace('"thinking_level": "low"', '"thinking_level": "high"'));
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('setAgentModel refuses a stale revision before writing', async () => {
+  const fixture = await setup({
+    transform: (config) => {
+      customProvider(config.providers, 'agent').models.push(model('agent-extra'));
+    },
+  });
+  try {
+    const before = await fixture.readText();
+    const result = await fixture.reloader.setAgentModel('agent', 'agent-extra', 'f'.repeat(64));
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error('Expected the stale revision to be refused');
+    }
+    expect(result.code).toBe('config_conflict');
+    expect(result.fileWritten).toBe(false);
+    expect(await fixture.readText()).toBe(before);
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('a new model on an existing builtin provider is hot, rebuilds the registry, and re-resolves no secret', async () => {
+  const secrets = new CountingSecrets();
+  const fixture = await setup({ secrets });
+  try {
+    const resolvedAtStartup = secrets.resolutions;
+    expect(resolvedAtStartup).toBeGreaterThan(0);
+    // Pi's catalog knows this id, the file does not: it must stay unreachable.
+    expect(fixture.registry.models.getModel('faux', 'deepseek-reasoner')).toBeUndefined();
+
+    await fixture.patch((config) => {
+      builtinProvider(config.providers, 'faux').models.push(model('deepseek-reasoner'));
+    });
+    const result = await fixture.reloader.reloadFromFile();
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.message);
+    }
+    expect(result.applied).toEqual(['providers.faux.models[deepseek-reasoner]']);
+    expect(fixture.registry.models.getModel('faux', 'deepseek-reasoner')).toBeDefined();
+    expect(fixture.registry.models.getModel('faux', AGENT_MODEL)).toBeDefined();
+    // Rebuilding a builtin provider reuses the auth the registry already holds;
+    // a `command` SecretRef must not run again on reload.
+    expect(secrets.resolutions).toBe(resolvedAtStartup);
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('editing a builtin model in use waits for a restart', async () => {
+  const fixture = await setup();
+  try {
+    await fixture.patch((config) => {
+      const agentModel = builtinProvider(config.providers, 'faux').models[0];
+      if (agentModel === undefined) {
+        throw new Error('Expected the faux agent model');
+      }
+      agentModel.context_window = 100_000;
+    });
+    const result = await fixture.reloader.reloadFromFile();
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.message);
+    }
+    expect(result.restartRequired).toEqual([`providers.faux.models[${AGENT_MODEL}]`]);
+    expect(builtinProvider(fixture.configStore.current().config.providers, 'faux').models[0]?.context_window).toBe(
+      200_000,
+    );
+    expect(fixture.registry.models.getModel('faux', AGENT_MODEL)?.contextWindow).toBe(200_000);
+  } finally {
     fixture.store.close();
   }
 });

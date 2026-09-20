@@ -77,13 +77,13 @@ async function runDoctorChecks(
   const store = await SqliteStore.open(config);
   let mcp: McpManager | undefined;
   try {
-    for (const [alias, provider] of Object.entries(config.providers)) {
-      if (provider.kind !== 'custom') {
-        continue;
-      }
+    // Every configured provider gets a connectivity probe; one with no
+    // text-capable model (a vision-only alias) is skipped rather than failing
+    // the run, since the vision probe below covers it.
+    for (const alias of Object.keys(config.providers)) {
       const model = registry.models.getModels(alias).find((candidate) => candidate.input.includes('text'));
       if (model === undefined) {
-        throw new Error(`Custom provider ${alias} has no text-capable model for doctor probe`);
+        continue;
       }
       await completeDoctorCall(
         store,

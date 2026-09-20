@@ -169,7 +169,214 @@ describe('configuration', () => {
         provider.api = 'anthropic-messages';
       }),
     );
-    await expect(loadConfig(configPath)).rejects.toThrow('supports_developer_role requires an OpenAI API adapter');
+    await expect(loadConfig(configPath)).rejects.toThrow(
+      'cannot set supports_developer_role for api anthropic-messages',
+    );
+  });
+
+  test('rejects compat values outside the selected set', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        const provider = config.providers.agent;
+        if (provider?.kind !== 'custom') {
+          throw new Error('Expected custom agent provider fixture');
+        }
+        provider.api = 'openai-completions';
+        const model = provider.models[0];
+        if (model === undefined) {
+          throw new Error('Expected an agent model fixture');
+        }
+        // `baseten` needs kwargs, so it is not offered as a thinking format.
+        model.compat = { thinking_format: 'baseten' } as never;
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
+  });
+
+  test('rejects a cache control format Pi cannot force off', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        const provider = config.providers.agent;
+        if (provider?.kind !== 'custom') {
+          throw new Error('Expected custom agent provider fixture');
+        }
+        provider.api = 'openai-completions';
+        const model = provider.models[0];
+        if (model === undefined) {
+          throw new Error('Expected an agent model fixture');
+        }
+        model.compat = { cache_control_format: 'openai' } as never;
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
+  });
+
+  test('rejects a vision model a builtin provider does not list', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        config.providers.builtin = {
+          kind: 'builtin',
+          provider: 'google',
+          api_key: 'secret',
+          models: [
+            {
+              id: 'gemini-3.7-flash',
+              reasoning: true,
+              input: ['text', 'image'],
+              context_window: 1_048_576,
+              max_tokens: 65_536,
+              cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+            },
+          ],
+        };
+        config.vision.provider = 'builtin';
+        config.vision.model = 'gemini-3.7-pro';
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('gemini-3.7-pro is absent from provider builtin');
+  });
+
+  test('rejects compat fields the model API does not honour', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        const provider = config.providers.agent;
+        if (provider?.kind !== 'custom') {
+          throw new Error('Expected custom agent provider fixture');
+        }
+        // Responses adapters only read `supports_developer_role`.
+        provider.api = 'openai-responses';
+        const model = provider.models[0];
+        if (model === undefined) {
+          throw new Error('Expected an agent model fixture');
+        }
+        model.compat = { thinking_format: 'deepseek' };
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('cannot set thinking_format for api openai-responses');
+  });
+
+  test('accepts the selected compat fields for an OpenAI completions adapter', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        const provider = config.providers.agent;
+        if (provider?.kind !== 'custom') {
+          throw new Error('Expected custom agent provider fixture');
+        }
+        provider.api = 'openai-completions';
+        const model = provider.models[0];
+        if (model === undefined) {
+          throw new Error('Expected an agent model fixture');
+        }
+        model.compat = {
+          supports_developer_role: false,
+          thinking_format: 'openrouter',
+          max_tokens_field: 'max_tokens',
+          requires_reasoning_content: true,
+          cache_control_format: 'anthropic',
+        };
+      }),
+    );
+    const loaded = await loadConfig(configPath);
+    expect(loaded.fileConfig.providers.agent?.models[0]?.compat).toMatchObject({ thinking_format: 'openrouter' });
+  });
+
+  test('rejects a provider alias that cannot survive a URL path or restart string', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        config.providers['bad alias'] = {
+          kind: 'custom',
+          base_url: 'https://example.test/v1',
+          api: 'openai-completions',
+          api_key: 'secret',
+          models: [
+            {
+              id: 'model',
+              reasoning: false,
+              input: ['text'],
+              context_window: 1_000,
+              max_tokens: 100,
+              cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+            },
+          ],
+        };
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('must match');
+  });
+
+  test('rejects a builtin provider without a model list', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        config.providers.builtin = { kind: 'builtin', provider: 'openrouter', api_key: 'secret' } as never;
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
+  });
+
+  test('rejects a builtin provider whose catalog is not supported', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        config.providers.unsupported = {
+          kind: 'builtin',
+          provider: 'mistral',
+          api_key: 'secret',
+          models: [
+            {
+              id: 'mistral-large-latest',
+              reasoning: false,
+              input: ['text'],
+              context_window: 128_000,
+              max_tokens: 8_192,
+              cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+            },
+          ],
+        };
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('does not expose a single supported API');
+  });
+
+  test('rejects an agent model a builtin provider does not list', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        config.providers.builtin = {
+          kind: 'builtin',
+          provider: 'deepseek',
+          api_key: 'secret',
+          models: [
+            {
+              id: 'deepseek-chat',
+              reasoning: false,
+              input: ['text'],
+              context_window: 128_000,
+              max_tokens: 8_192,
+              cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+            },
+          ],
+        };
+        config.agent.provider = 'builtin';
+        config.agent.model = 'deepseek-reasoner';
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('deepseek-reasoner is absent from provider builtin');
   });
 
   test('rejects a leftover max_output_tokens in the agent section', async () => {

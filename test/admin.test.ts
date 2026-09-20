@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { Update } from 'grammy/types';
 import { AdminServer } from '../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { readConfigRevision } from '../src/platform/config-file.ts';
 import { ConfigReloader } from '../src/platform/config-reload.ts';
 import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
@@ -770,7 +771,8 @@ test('admins API lists, adds and removes bot admins', async () => {
 });
 
 test('model API lists and switches the agent model through the config file', async () => {
-  const { store, loaded, configStore } = await fixture();
+  const { store, loaded, configStore, directory } = await fixture();
+  const configPath = join(directory, 'config.jsonc');
   const registry = await createModelRegistry(loaded.config, new SecretStore());
   const switcher = new AgentModelSwitcher(configStore, registry.models);
   const configReloader = new ConfigReloader({
@@ -784,74 +786,63 @@ test('model API lists and switches the agent model through the config file', asy
   });
   const server = new AdminServer({ store, configStore, modelSwitcher: switcher, configReloader });
   try {
-    const unauthenticated = await server.handle(request('/api/model'));
+    const unauthenticated = await server.handle(
+      request('/api/model', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'agent', model: 'agent-model' }),
+      }),
+    );
     expect(unauthenticated.status).toBe(401);
 
     const created = await server.handle(post('/api/auth/setup', { username: 'owner', password: PASSWORD }));
     const cookie = sessionCookie(created);
+    // The panel takes the revision from `GET /providers`; this test reads it the
+    // same way the server computes it.
+    const revision = await readConfigRevision(configPath);
     const call = (init: RequestInit = {}): Request =>
       request('/api/model', { ...init, headers: { ...init.headers, cookie } });
+    const switchModel = (body: unknown): Request =>
+      call({
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', 'if-match': revision },
+        body: JSON.stringify(body),
+      });
 
-    const initial = await readJson(await server.handle(call()));
-    expect(initial.current).toMatchObject({
-      provider: 'agent',
-      model: 'agent-model',
-      name: 'Agent Model',
-      context_window: 200_000,
-      max_tokens: 32_768,
-    });
-    expect(initial.default).toBeUndefined();
-    expect(initial.options).toEqual([
-      { provider: 'agent', model: 'agent-model', name: 'Agent Model' },
-      { provider: 'vision', model: 'vision-model', name: 'Vision Model' },
-    ]);
+    // `GET /model` is gone with the Model page; the read now falls through to the
+    // read-only audit branch.
+    const removedGet = await server.handle(call());
+    expect(removedGet.status).toBe(404);
 
-    const switched = await readJson(
-      await server.handle(
-        call({
-          method: 'PUT',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ provider: 'vision', model: 'vision-model' }),
-        }),
-      ),
+    const withoutRevision = await server.handle(
+      call({
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'vision', model: 'vision-model' }),
+      }),
     );
+    expect(withoutRevision.status).toBe(400);
+    expect(await readJson(withoutRevision)).toMatchObject({ error: 'revision_required' });
+
+    const switched = await readJson(await server.handle(switchModel({ provider: 'vision', model: 'vision-model' })));
     expect(switched.current).toMatchObject({ provider: 'vision', model: 'vision-model', max_tokens: 8_192 });
     expect(switched.apply).toEqual({ applied: ['agent.model', 'agent.provider'], restart_required: [] });
 
-    const malformed = await server.handle(
-      call({
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: 'vision' }),
-      }),
-    );
+    const malformed = await server.handle(switchModel({ provider: 'vision' }));
     expect(malformed.status).toBe(400);
     expect(await readJson(malformed)).toMatchObject({ error: 'invalid_model_reference' });
 
-    const unknownProvider = await server.handle(
-      call({
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: 'ghost', model: 'agent-model' }),
-      }),
-    );
+    const unknownProvider = await server.handle(switchModel({ provider: 'ghost', model: 'agent-model' }));
     expect(unknownProvider.status).toBe(400);
     expect(await readJson(unknownProvider)).toMatchObject({ error: 'unknown_provider' });
 
-    const unknownModel = await server.handle(
-      call({
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: 'agent', model: 'ghost-model' }),
-      }),
-    );
+    const unknownModel = await server.handle(switchModel({ provider: 'agent', model: 'ghost-model' }));
     expect(unknownModel.status).toBe(400);
     expect(await readJson(unknownModel)).toMatchObject({ error: 'unknown_model' });
 
     // The failed switches must not change the effective model.
-    const afterFailures = await readJson(await server.handle(call()));
-    expect(afterFailures.current).toMatchObject({ provider: 'vision', model: 'vision-model' });
     expect(switcher.current()).toMatchObject({ provider: 'vision', model: 'vision-model' });
+    expect(configStore.current().config.agent).toMatchObject({ provider: 'vision', model: 'vision-model' });
 
     // There is no default to restore: the request falls through to the read-only 405.
     const removed = await server.handle(call({ method: 'DELETE' }));

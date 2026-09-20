@@ -40,6 +40,13 @@ import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from './platform/system
 
 const ALLOWED_UPDATES = ['message', 'edited_message', 'my_chat_member'] as const;
 
+/**
+ * Exit code of a panel-requested restart. `EX_TEMPFAIL` marks an intentional
+ * stop that a supervisor should bring back, and stays distinguishable from a
+ * crash in logs and container restart policies.
+ */
+export const RESTART_EXIT_CODE = 75;
+
 export async function serve(configPath: string): Promise<void> {
   const loaded = await loadConfig(configPath);
   await assertConfigPermissions(loaded.configPath);
@@ -54,6 +61,7 @@ export async function serve(configPath: string): Promise<void> {
   let admin: AdminServer | undefined;
   let startupCatchUpController: AbortController | undefined;
   let shuttingDown = false;
+  let restartRequested = false;
   const shutdown = (): void => {
     if (shuttingDown) {
       return;
@@ -66,6 +74,18 @@ export async function serve(configPath: string): Promise<void> {
     // swallow its rejection so it can never become an unhandled promise
     // rejection and crash the process mid-shutdown.
     void bot?.stop().catch(() => undefined);
+  };
+  /**
+   * The Admin Panel's restart: the same graceful shutdown as a signal, but the
+   * process leaves with `RESTART_EXIT_CODE` so the supervisor starts it again.
+   */
+  const requestRestart = (): void => {
+    if (restartRequested || shuttingDown) {
+      return;
+    }
+    restartRequested = true;
+    logEvent('restart_requested');
+    shutdown();
   };
   process.once('SIGTERM', shutdown);
   process.once('SIGINT', shutdown);
@@ -219,6 +239,9 @@ export async function serve(configPath: string): Promise<void> {
         scheduler: startedScheduler,
         modelSwitcher,
         configReloader,
+        secrets,
+        models: registry.models,
+        requestRestart,
       });
       admin = adminServer;
       const listening = await adminServer.start();
@@ -245,6 +268,14 @@ export async function serve(configPath: string): Promise<void> {
     await mcp?.stop();
     store?.close();
     await lock?.release();
+  }
+  if (restartRequested) {
+    logEvent('restart_exit', { code: RESTART_EXIT_CODE });
+    // Leaving through the exit code lets pending output flush; the unref'd timer
+    // only fires if some handle outlives the cleanup, so the supervisor is not
+    // left waiting on a process that cannot finish.
+    process.exitCode = RESTART_EXIT_CODE;
+    setTimeout(() => process.exit(RESTART_EXIT_CODE), 1_000).unref();
   }
 }
 

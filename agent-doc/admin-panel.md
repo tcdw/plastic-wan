@@ -2,7 +2,7 @@
 
 Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析、已配置 Sticker Set 的可搜索索引、Agent 短期记忆（`memories`）以及 Alarm（闹钟 / 延迟调用）。后端在 `src/ingress/admin/`，前端在 `apps/admin-next/`（Vite + React + Tailwind 4 + shadcn/Base UI + TanStack Query + TanStack Router），构建产物是**纯静态 SPA**，由 `AdminServer` 同源托管，不依赖任何 Node/Nitro 运行时。
 
-审计数据只读；记忆管理、Bot 管理员列表管理、模型热切换、配置文件应用、解除睡眠、取消挂起会话与取消 pending Alarm 是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume`、`/cut_topic` 等 Bot 管理员命令的 Telegram 用户，热切换 agent 模型（写回 `config.jsonc` 并重新加载），唤醒/取消挂起会话，取消尚未触发的 Alarm，或把配置文件中的热更新白名单字段应用到运行中的进程。除 `PUT /model` 写入的 `agent.provider` / `agent.model` 之外，面板不能改写配置文件、不能重跑 Invocation 或删除审计记录。
+审计数据只读；记忆管理、Bot 管理员列表管理、模型与 Provider 管理（Models 页）、配置文件应用、立即重启、解除睡眠、取消挂起会话与取消 pending Alarm 是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume`、`/cut_topic` 等 Bot 管理员命令的 Telegram 用户，在 Models 页维护 Provider 与模型列表（写回 `config.jsonc` 并重新加载）、切换 agent 与 vision 模型，唤醒/取消挂起会话，取消尚未触发的 Alarm，把配置文件中的热更新白名单字段应用到运行中的进程，或在有待重启字段时直接重启 `serve`。写入只发生在 [API](#api) 白名单里的端点，且全部经过 `writeConfigEdits` 与 `ConfigReloader`（先写文件、再应用，可回滚到未写入状态）。
 
 `admin` section 的字段语义见 [configuration.md](configuration.md#admin-panel)；`admin.host` 不限制取值，绑定地址与暴露风险由运维负责（推荐回环 + 反向代理）。`admin.*` 不在热更新白名单里：改动后进入待重启列表，重启 `serve` 才生效。热更新白名单与语义见 [configuration.md](configuration.md#运行时配置热更新)。
 
@@ -40,7 +40,32 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 完整路由表以 `src/ingress/admin/server.ts` 的分发为准。这里只记录路由签名看不出来的约束。
 
-**审计读端点**（`GET /auth/session`、`/overview`、`/usage`、`/invocations[/:id]`、`/contexts[/:conversation_id]`、`/messages[/:id]`、`/sticker-sets`、`/stickers`、`/alarms`、`/memories`、`/memories/chats`、`/admins`、`/model`、`/config/status`）一律只读；落到审计分支的非 `GET` 请求返回 405 `method_not_allowed`。`/usage` 额外接受 `days`（1–90，默认 7），越界返回 400 `invalid_days`；Token 序列来自 `daily_usage`，Invocation 与 Tool call 序列直接按 UTC 日期 `COUNT` `invocations` 与 `tool_calls`。`/contexts` 是按 Conversation（chat + Forum Topic）维度只读投影 Conversation Context；`:conversation_id` 是 `conversations.id` 而不是 `conversation_contexts.id`，不存在返回 404。`GET /model` 返回当前生效模型与可切换模型列表，不再有 `default` 字段；`GET /config/status` 返回 `generation`、`active_hash`、`file_hash`、`restart_required` 与 `last_error`（`{ code, message, at }` 或 `null`）。两个端点在 `ConfigReloader` 未接线时分别返回 503 `model_switch_unavailable` / `config_reload_unavailable`。
+**审计读端点**（`GET /auth/session`、`/overview`、`/usage`、`/invocations[/:id]`、`/contexts[/:conversation_id]`、`/messages[/:id]`、`/sticker-sets`、`/stickers`、`/alarms`、`/memories`、`/memories/chats`、`/admins`、`/providers`、`/provider-presets`、`/config/status`）一律只读；落到审计分支的非 `GET` 请求返回 405 `method_not_allowed`。`/usage` 额外接受 `days`（1–90，默认 7），越界返回 400 `invalid_days`；Token 序列来自 `daily_usage`，Invocation 与 Tool call 序列直接按 UTC 日期 `COUNT` `invocations` 与 `tool_calls`。`/contexts` 是按 Conversation（chat + Forum Topic）维度只读投影 Conversation Context；`:conversation_id` 是 `conversations.id` 而不是 `conversation_contexts.id`，不存在返回 404。`GET /config/status` 返回 `generation`、`active_hash`、`file_hash`、`restart_required` 与 `last_error`（`{ code, message, at }` 或 `null`）。这两个端点在 `ConfigReloader` 未接线时分别返回 503 `model_switch_unavailable` / `config_reload_unavailable`。
+
+`GET /providers` 是 Models 页的主读端点，读的是**磁盘上的 `config.jsonc`**（不是运行中的 active 配置），因此待重启字段以文件为准：
+
+```jsonc
+{
+  "revision": "<config.jsonc 原始字节的 SHA-256>",
+  "supervised": false,                       // PLASTICWAN_SUPERVISED=1 时为 true
+  "agent": { "provider": "openrouter", "model": "deepseek/deepseek-v4-flash-0731" },
+  "vision": { "provider": "google", "model": "gemini-3.7-flash" },
+  "restart_required": ["providers.oproxy.base_url"],
+  "providers": [
+    {
+      "alias": "openrouter",
+      "kind": "builtin",
+      "provider": "openrouter",              // builtin 才有；Pi 供应商 id
+      "api": "openai-completions",           // builtin 由 Pi 目录推导
+      "base_url": "https://openrouter.ai/api/v1",
+      "header_names": [],                    // 只有名称，永远没有值
+      "models": [ /* 完整模型配置，含 compat */ ]
+    }
+  ]
+}
+```
+
+响应里不出现 `api_key`，也不出现任何 header 值，也不说明已保存的 SecretRef 是明文、`env` 还是 `command`。文件无效时返回 422 `config_invalid`（错误经过密钥脱敏）。`GET /provider-presets` 列出可配置的 builtin Provider（`id`、`name`、`api`、`base_url`），过滤规则见 [configuration.md](configuration.md#provider)。
 
 **写端点是白名单例外**，只有这些：
 
@@ -52,11 +77,35 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 | `POST /cancel-pending-sessions` | 取消所有 `collecting`/`queued` Bucket 及其 queued Invocation |
 | `POST` / `PUT` / `DELETE /memories[/:id]` | 创建时若 `(chat_id, message_thread_id)` 的 Conversation 不存在会自动建；`PUT` 至少要提供 `content` 或 `ttl_seconds` 之一 |
 | `POST` / `DELETE /admins[/:id]` | `:id` 是 Telegram 用户 ID 不是行 ID；添加幂等；删掉配置种子项后重启会重新出现 |
-| `PUT /model` | 切换 agent 模型：把 `agent.provider` / `agent.model` 写入 `config.jsonc` 并重新加载，重启后仍然生效，只影响后续 Invocation。未知 provider/model、模型无 text 能力或模型不可用返回 400（`unknown_provider`/`unknown_model`/`not_text_capable`/`model_unusable`），其它失败（配置权限、文件校验、candidate 校验等）返回 409；body 为 `{ error, message }`，文件已写入但应用失败时 message 以 `config.jsonc was updated but not applied: ` 开头。`DELETE /model` 已删除，落到 405 `method_not_allowed` |
+| `PUT /model` | 切换 agent 模型：把 `agent.provider` / `agent.model` 写入 `config.jsonc` 并重新加载，重启后仍然生效，只影响后续 Invocation。必须带 `If-Match`（revision 来自 `GET /providers`），缺失返回 400 `revision_required`，过期返回 409 `config_conflict`。未知 provider/model、模型无 text 能力或模型不可用返回 400（`unknown_provider`/`unknown_model`/`not_text_capable`/`model_unusable`），其它失败（配置权限、文件校验、candidate 校验等）返回 409；body 为 `{ error, message }`，文件已写入但应用失败时 message 以 `config.jsonc was updated but not applied: ` 开头。`GET /model` 与 `DELETE /model` 已删除，落到 405 `method_not_allowed` |
+| `POST` / `PUT` / `DELETE /providers[...]` | Provider 与模型管理，见「Models 页写端点」 |
+| `PUT /vision` | 切换 vision 模型。写入前预检：模型在文件的该 Provider 下存在、支持 image 输入、且 `vision.max_output_tokens ≤ 该模型的 max_tokens`，不满足返回 400（`unknown_provider`/`unknown_model`/`not_image_capable`/`max_output_tokens_exceeded`）。`vision.*` 是 restart 字段，结果是待重启 |
+| `POST /restart` | 「立即重启」。部署方未声明 `PLASTICWAN_SUPERVISED=1` 时返回 409 `restart_unsupported`；磁盘配置权限或内容校验失败时返回 422 `config_invalid` 且不退出；成功返回 202 `{ status: 'restarting' }`，随后走优雅关闭并以退出码 75（`EX_TEMPFAIL`）退出，由外部监督重新拉起 |
 | `POST /config/apply` | 重新读取 `config.jsonc` 并把热更新白名单字段应用到运行中的进程。成功返回 200 `{ status: 'applied', applied, restart_required, outside_serve, generation, active_hash, file_hash }`；失败返回 422 `{ error, message }`，此时 active 配置不变，错误记录在 `GET /config/status` 的 `last_error` |
 | `DELETE /alarms/:id` | **只能**取消 `pending`：`firing` 与其它终态返回 409 `alarm_not_pending`，不存在返回 404 `not_found`。取消记录当前面板管理员与 `admin_cancelled` 原因并唤醒 Scheduler |
 
 列表过滤同样只在少数端点上有效：`/alarms` 按 `state`(`pending`/`firing`/`fired`/`cancelled`)/`chat`/`target`，`/memories` 按 `chat`/`state`(`active`/`expired`/`long_ttl`)，`/stickers` 按 `set`/`state`，`/contexts` 只按 `chat`。记忆列表项带 `expired` 与 `long_ttl` 布尔标记，`long_ttl` 表示剩余寿命超过 `agent.memory_ttl_warning_days`。Alarm 列表把 `pending` 按 `scheduled_at, id` 升序置顶，非 pending 历史按最近状态时间/id 倒序。
+
+## Models 页写端点
+
+所有写端点：路径在 `/api` 下；必须带 `If-Match: <revision>`（缺失返回 400 `revision_required`，过期返回 409 `config_conflict` 且文件不变）；在 `ConfigReloader` 的锁里「写文件 → 应用」；响应是 `GET /providers` 的完整视图加上 `apply: { applied, restart_required, outside_serve }`。模型 id 可能含 `/`，路径里必须 `encodeURIComponent` 编码：服务端先按 `/` 切分再逐段解码，未编码的 id 不会匹配到路由。
+
+| 端点 | 语义 |
+| --- | --- |
+| `POST /providers` | 新建 Provider。body：`alias`、`kind`、builtin 的 `provider` 或 custom 的 `base_url` + `api`、`api_key`（必填明文）、`headers?`、`models`（至少 1 个）。alias 已存在返回 409 `provider_exists`；builtin 不满足收录规则返回 400 `unknown_builtin_provider` / `unsupported_builtin_provider`；模型违反 `max_tokens ≤ context_window` 或 compat 适用性返回 400 `invalid_model`。新增 Provider 是 restart 字段，结果是待重启 |
+| `PUT /providers/:alias` | 修改连接字段。`api_key` 省略表示保持；`headers` 按名称逐项处理（省略保持、字符串替换、`null` 删除）。**修改 `base_url` 时必须在同一次请求里重新提交 `api_key` 与全部已有 header 值**，否则返回 400 `credentials_required`——面板被盗用时改地址即可把已保存的凭据引向攻击者的服务器。builtin 只接受 `api_key`，其它字段返回 400 `immutable_field`；`kind`、`alias`、builtin 的 `provider` 都不可改。没有任何字段变化返回 400 `no_changes` |
+| `DELETE /providers/:alias` | 删除。文件里的 `agent.provider` 或 `vision.provider` 指向它时返回 409 `provider_in_use` |
+| `POST /providers/:alias/models` | 批量追加模型（`models`，1–200 个）。id 重复返回 409 `model_exists`。热更新 |
+| `PUT /providers/:alias/models/:id` | 替换单个模型定义，body 的 `id` 必须等于 `:id`（否则 400 `invalid_model_id`）。热更新；在用模型变成待重启 |
+| `DELETE /providers/:alias/models/:id` | 删除模型。在用（agent 或 vision 模型）返回 409 `model_in_use` |
+| `POST /providers/discover` | 拉取模型列表并解析元数据，同时充当「检测」。两种模式二选一：`{ alias }` 用运行中 registry 的 baseUrl 与凭据（不重新解析文件里的 SecretRef，`env`/`command` 不会执行；连接字段待重启时返回 409 `restart_pending`），或临时模式 `{ kind, provider \| base_url+api, api_key, headers? }` 用请求体里的完整连接。响应 `{ endpoint, models: [draft], metadata_source_error }`，每个 draft 带元数据、来源标记与 `configured`。上游错误经脱敏后以 502 `provider_discovery_failed` 返回 |
+| `POST /providers/lookup-metadata` | 给定手动输入的模型 id 列表（1–100）只做元数据解析，不访问供应商端点。响应 `{ models: [draft], metadata_source_error }` |
+
+`metadata_source_error` 只在 models.dev 目录拉取失败时非空：目录只是元数据来源之一，列表本身仍然可用，拿不到的字段一律标成「缺失」并要求管理员确认，而不是让整个请求失败。
+
+草稿字段：`id`、`name`、`reasoning`、`input`、`context_window`、`max_tokens`、`cost`、`requires_reasoning_content`、`sources`（逐字段来源：`openrouter`/`vercel`/`gemini`/`models.dev`/`models.dev-fuzzy`/`missing`）、`requires_reasoning_content_source`、`match`、`candidates`、`needs_confirmation`。字段为空、只由模糊匹配支撑、或列为 `needs_confirmation` 时，面板必须让管理员确认或手填后才能保存；服务端不填任何默认值。
+
+**SecretRef 只写不读**：面板只能把 `api_key` / header 值写成明文字符串，不能写 `{ env }` 或 `{ command }`（`command` 等于让面板在宿主机上执行命令；`env` 配合可编辑的 `base_url` 等于能外泄进程里任意环境变量）。输入框固定提示「已设置，留空以保持当前设置」：留空表示保持，非空表示替换成明文。代价是：原来用 `env` 的 Provider 在面板里被替换成明文后，环境变量不再生效，页面上也看不出这一点——要继续用 `env` 管理 key 的人只能手改配置文件；又因为 `base_url` 改动强制重填凭据，改地址会把 `env` / `command` 引用一并降级成明文。服务端收到明文后先 `secrets.resolve(value)` 注册进 `SecretStore`，再写文件或发请求，这样日志、reload 错误与上游报错都能脱敏。
 
 `/contexts` 按 `last_active_at` 倒序，游标是 `last_active_at|id` 复合值（`invalid_cursor` 由解析失败给出）。`GET /contexts/:conversation_id` 返回 Context Header 加上保留窗口（`seq >= head_seq`）内的 `context_messages` 与存活 `context_refs`；`payload_preview` 截断到 2000 字符并附 `payload_truncated`，被 GC 软删的行不出现在响应里。两个端点都是 `GET`，前端页面不发任何写请求。
 
@@ -102,7 +151,7 @@ pnpm run admin:test:e2e  # Playwright 浏览器 E2E（真实 AdminServer + 临�
 | `src/lib/memory-ttl.ts` | 记忆 TTL 边界纯函数 |
 | `src/lib/timeline.ts` | Invocation 时间线纯模型（同时间排序、send 参数解析） |
 | `src/components/business/**` | 共享业务组件（CursorList / FilterToolbar / StateBadge / TableShell / JsonViewer / KvList / ConfirmDialog / ChartCard / PrivateReasoning / DetailState 等），契约见 `apps/admin-next/README.md` |
-| `src/pages/*.tsx` | Overview、Tool sessions、Contexts、Alarms、Messages、Memories、Bot admins、Sticker Set 索引、Model、Settings |
+| `src/pages/*.tsx` | Overview、Tool sessions、Contexts、Alarms、Messages、Memories、Bot admins、Sticker Set 索引、Models、Settings |
 
 前端约定：
 
@@ -118,7 +167,9 @@ pnpm run admin:test:e2e  # Playwright 浏览器 E2E（真实 AdminServer + 临�
 
 Overview 的 Bot status 卡片显示当前 `sleeping`/`awake`、`sleep_until`，睡眠时提供带确认的 `Wake now` 操作，并显示所有 `chat_pause` Chat 的名称或 Telegram ID 与暂停时间。
 
-Settings 页有一张 `Configuration file` 卡片：显示 generation、active hash 与 file hash、待重启字段列表与 last error，并提供 `Apply config file` 按钮（调用 `POST /config/apply`），成功或失败后都刷新配置状态。Model 页不再有 `Restore default` 按钮与 `Source`/`Default` 行。
+Settings 页有一张 `Configuration file` 卡片：显示 generation、active hash 与 file hash、待重启字段列表与 last error，并提供 `Apply config file` 按钮（调用 `POST /config/apply`），成功或失败后都刷新配置状态。
+
+Models 页是 Provider 与模型的管理器：左栏 Provider 列表（搜索、Agent/Vision 在用徽章、待重启徽章），右栏连接字段与模型列表。连接区里 builtin 只读展示 Pi 的供应商名与 baseUrl，custom 可编辑 `base_url` 与 `api`；API Key 与 header 值一律 `type="password"` 且没有查看按钮，提示「已设置，留空以保持当前设置」；`base_url` 一改动，key 与所有 header 值立刻变成必填。模型区显示 👁/💡/context/max output 与在用徽章，支持「获取模型列表」（发现 + 元数据预览，待重启时改用临时模式并要求再填一次 key）、「手动添加」与编辑弹窗（元数据字段带来源标签，compat 三态放在折叠的「高级设置」里，只显示当前 API 适用的字段）。有待重启字段时页面顶部出现横幅与「立即重启」按钮（部署方未声明进程监督时隐藏），点击后界面会断开并轮询等待服务恢复。保存反馈区分「已生效」与「已保存，待重启」。
 
 Tool session 详情默认打开 Overview 时间线：按时间合并冻结消息、Invocation 生命周期、Model Call、Tool Call 与 Agent transcript；消息正文和 `send` 参数中的发送内容直接展示，Tool 结果与完整参数按需展开。失败的 Model Call 同时展示稳定错误码，并可展开查看经密钥脱敏的完整 Provider 错误详情。Assistant 文本显式标注为私有推理，只有 `send` Tool 会发往 Telegram。
 

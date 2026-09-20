@@ -11,8 +11,8 @@ import {
   extractReasoningEffortOptions,
   type ModelsDevModel,
   toModelDefaults,
-} from '../src/tui/models-dev.ts';
-import { fetchProviderModels, modelsEndpoint } from '../src/tui/provider-models.ts';
+} from '../src/platform/models-dev.ts';
+import { assertBaseUrl, fetchProviderModels, planModelsEndpoint } from '../src/platform/provider-models.ts';
 import { filterSearchChoices } from '../src/tui/provider-wizard.ts';
 import { startFixtureServer, stopFixtureServer, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
@@ -109,9 +109,11 @@ describe('provider wizard discovery', () => {
   });
 
   test('appends models to the configured API root', () => {
-    expect(modelsEndpoint('https://example.test/v1/')).toBe('https://example.test/v1/models');
-    expect(() => modelsEndpoint('https://user@example.test/v1')).toThrow('without credentials');
-    expect(() => modelsEndpoint('https://example.test/v1?tenant=a')).toThrow('query');
+    expect(planModelsEndpoint({ baseUrl: 'https://example.test/v1/', api: 'openai-responses' }).endpoint).toBe(
+      'https://example.test/v1/models',
+    );
+    expect(() => assertBaseUrl('https://user@example.test/v1')).toThrow('without credentials');
+    expect(() => assertBaseUrl('https://example.test/v1?tenant=a')).toThrow('query');
   });
 
   test('fetches, authenticates, validates, and deduplicates provider models', async () => {
@@ -136,7 +138,7 @@ describe('provider wizard discovery', () => {
     });
     try {
       const baseUrl = `http://127.0.0.1:${server.port}`;
-      const models = await fetchProviderModels(
+      const listing = await fetchProviderModels(
         {
           baseUrl: `${baseUrl}/v1`,
           api: 'openai-responses',
@@ -148,7 +150,11 @@ describe('provider wizard discovery', () => {
       expect(observedPath).toBe('/v1/models');
       expect(observedAuthorization).toBe('Bearer provider-secret');
       expect(observedRoute).toBe('route-secret');
-      expect(models).toEqual([{ id: 'alpha', name: 'Alpha' }, { id: 'zeta' }]);
+      expect(listing.endpoint).toBe(`${baseUrl}/v1/models`);
+      expect(listing.models.map((model) => ({ id: model.id, name: model.name }))).toEqual([
+        { id: 'alpha', name: 'Alpha' },
+        { id: 'zeta', name: null },
+      ]);
 
       await expect(
         fetchProviderModels(

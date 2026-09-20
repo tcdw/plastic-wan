@@ -46,6 +46,7 @@
 | [20260911 定时活跃模式设计计划](design/20260911%20定时活跃模式设计计划.md) | 活跃时段、触发关键词与注意力窗口 | 已实现，见 [configuration.md](configuration.md)、[telegram-agent-flow.md](telegram-agent-flow.md) |
 | [20260913 连续 Context 与长活 Invocation 设计计划](design/20260913%20连续%20Context%20与长活%20Invocation%20设计计划.md) | Conversation Context、checkpoint 丢弃式 GC、Invocation 内消息热注入 | 已实现，见 [telegram-agent-flow.md](telegram-agent-flow.md#context-生命周期)、[configuration.md](configuration.md)、[data-layer.md](data-layer.md) |
 | [20260918 内置 Agent 插件化计划与结论](design/20260918%20内置能力插件化计划与结论.md) | 区分 IM 接入与 Agent 两条插件渠道；仅计划 Agent 插件的 ESM / definePlugin、三个 Epic、存储与固定前端边界 | 已明确范围，未实施；IM 接入插件仅为远期方向，暂不做用户插件平台、独立 migration 或前端插件机制 |
+| [20260920 Admin 模型管理器设计计划](design/20260920%20Admin%20模型管理器设计计划.md) | Admin「模型服务」页：屏蔽 Pi 模型目录改由配置 `models[]` 启用、元数据来源、compat 高级设置、SecretRef 只写不读 | 已完成设计，未实施 |
 
 ## 文档边界
 

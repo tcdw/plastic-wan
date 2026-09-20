@@ -476,7 +476,10 @@ export class AdminServer {
     if (reloader === undefined || this.#secrets === undefined || this.#models === undefined) {
       return json({ error: 'providers_unavailable', message: 'Provider management is not wired' }, 503);
     }
-    const parts = segments.map((segment) => decodeURIComponent(segment));
+    const parts = decodeSegments(segments);
+    if (parts === null) {
+      return json({ error: 'invalid_path', message: 'Path segments must be valid percent-encoded UTF-8' }, 400);
+    }
     const second = parts[1];
     const third = parts[2];
     const fourth = parts[3];
@@ -725,6 +728,19 @@ export class AdminServer {
   #sessionCookie(token: string): string {
     const maxAge = Math.floor(this.#auth.sessionTtlMs / 1000);
     return `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}`;
+  }
+}
+
+/**
+ * Decodes the path segments, or `null` when one of them is not valid
+ * percent-encoding. A malformed id is the caller's mistake, not a server fault,
+ * so it must not surface as `internal_error`.
+ */
+function decodeSegments(segments: readonly string[]): string[] | null {
+  try {
+    return segments.map((segment) => decodeURIComponent(segment));
+  } catch {
+    return null;
   }
 }
 

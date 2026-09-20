@@ -12,7 +12,6 @@ import {
   planModelsEndpoint,
   type DiscoveredProviderModel,
 } from '../src/platform/provider-models.ts';
-import { SecretStore } from '../src/platform/secrets.ts';
 import { startFixtureServer, stopFixtureServer } from './helpers.ts';
 
 /**
@@ -194,14 +193,11 @@ describe('provider model listing', () => {
       });
     });
     try {
-      const listing = await fetchProviderModels(
-        {
-          baseUrl: `http://127.0.0.1:${server.port}/v1beta`,
-          api: 'google-generative-ai',
-          apiKey: 'gemini-key',
-        },
-        new SecretStore(),
-      );
+      const listing = await fetchProviderModels({
+        baseUrl: `http://127.0.0.1:${server.port}/v1beta`,
+        api: 'google-generative-ai',
+        apiKey: 'gemini-key',
+      });
       expect(listing.models.map((model) => model.id)).toEqual(['gemini-3.7-flash', 'gemini-3.7-pro']);
       expect(pages).toEqual(['/v1beta/models?pageSize=1000', '/v1beta/models?pageSize=1000&pageToken=page-2']);
       const pro = listing.models.find((model) => model.id === 'gemini-3.7-pro');
@@ -226,15 +222,12 @@ describe('provider model listing', () => {
       });
     });
     try {
-      const listing = await fetchProviderModels(
-        {
-          builtinProvider: 'vercel-ai-gateway',
-          baseUrl: `http://127.0.0.1:${server.port}`,
-          api: 'anthropic-messages',
-          apiKey: 'gateway-key',
-        },
-        new SecretStore(),
-      );
+      const listing = await fetchProviderModels({
+        builtinProvider: 'vercel-ai-gateway',
+        baseUrl: `http://127.0.0.1:${server.port}`,
+        api: 'anthropic-messages',
+        apiKey: 'gateway-key',
+      });
       expect(path).toBe('/v1/models');
       expect(authorization).toBe('Bearer gateway-key');
       expect(listing.models.map((model) => model.id)).toEqual(['anthropic/claude-sonnet-4.5']);
@@ -259,15 +252,75 @@ describe('provider model listing', () => {
       return Response.json({ data: [{ id: 'claude-b' }], has_more: false, last_id: 'claude-b' });
     });
     try {
-      const listing = await fetchProviderModels(
-        { baseUrl: `http://127.0.0.1:${server.port}`, api: 'anthropic-messages', apiKey: 'anthropic-key' },
-        new SecretStore(),
-      );
+      const listing = await fetchProviderModels({
+        baseUrl: `http://127.0.0.1:${server.port}`,
+        api: 'anthropic-messages',
+        apiKey: 'anthropic-key',
+      });
       expect(requests).toEqual(['-|anthropic-key', 'claude-a|anthropic-key']);
       expect(listing.models).toEqual([
         { id: 'claude-a', name: 'Claude A', extension: { format: 'anthropic' } },
         { id: 'claude-b', name: null, extension: { format: 'anthropic' } },
       ]);
+    } finally {
+      await stopFixtureServer(server.server);
+    }
+  });
+
+  // OpenRouter's own listing was 737 KB on 2026-09-21 and grows with every model
+  // it adds, so a megabyte-sized page must go through.
+  test('reads a listing larger than one megabyte', async () => {
+    const filler = 'd'.repeat(1_400);
+    const server = await startFixtureServer(() =>
+      Response.json({
+        data: Array.from({ length: 1_000 }, (_, index) => ({
+          id: `vendor/model-${String(index)}`,
+          description: filler,
+        })),
+      }),
+    );
+    try {
+      const listing = await fetchProviderModels({
+        baseUrl: `http://127.0.0.1:${String(server.port)}/v1`,
+        api: 'openai-completions',
+        apiKey: 'key',
+      });
+      expect(listing.models).toHaveLength(1_000);
+    } finally {
+      await stopFixtureServer(server.server);
+    }
+  });
+
+  test('stops reading an oversized listing that declares no length', async () => {
+    const chunk = new TextEncoder().encode('x'.repeat(1_048_576));
+    let produced = 0;
+    const server = await startFixtureServer(
+      () =>
+        new Response(
+          // No content-length: the cap only holds if the bytes are counted as
+          // they arrive. The producer stops on its own so the test cannot hang.
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              produced += 1;
+              if (produced > 64) {
+                controller.close();
+                return;
+              }
+              controller.enqueue(chunk);
+            },
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    try {
+      await expect(
+        fetchProviderModels({
+          baseUrl: `http://127.0.0.1:${String(server.port)}/v1`,
+          api: 'openai-completions',
+          apiKey: 'key',
+        }),
+      ).rejects.toThrow(/exceeds/);
+      expect(produced).toBeLessThan(64);
     } finally {
       await stopFixtureServer(server.server);
     }

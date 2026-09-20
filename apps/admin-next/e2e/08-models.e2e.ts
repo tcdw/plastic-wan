@@ -192,4 +192,35 @@ test.describe('models page', () => {
     expect(after.restart_required).toContain('providers.relay2');
     expect(JSON.stringify(after)).not.toContain(E2E_SECRETS.wizard);
   });
+
+  test('refuses to create a provider while a header row has no value', async ({ page }) => {
+    const before = await (await page.request.get(await adminUrl('/api/providers'))).json();
+    const relayBaseUrl = before.providers.find((provider: { alias: string }) => provider.alias === E2E_RELAY_ALIAS)
+      .base_url as string;
+
+    await page.goto(await adminUrl('/models'));
+    await page.getByRole('button', { name: '新建 Provider' }).click();
+
+    await page.locator('#wizard-kind').click();
+    await page.getByRole('option', { name: /custom/ }).click();
+    await page.locator('#wizard-alias').fill('relay3');
+    await page.locator('#wizard-base-url').fill(relayBaseUrl);
+    await page.getByRole('button', { name: 'Next' }).click();
+
+    await page.locator('#wizard-api-key').fill(E2E_SECRETS.wizard);
+    await page.getByRole('button', { name: 'Add header' }).click();
+    await page.locator('#wizard-header-name-0').fill('x-extra');
+    await page.getByRole('button', { name: 'Next' }).click();
+
+    // Metadata lookup never sends headers, so the incomplete row survives until
+    // the submit — where it must be reported instead of silently dropped.
+    await page.getByLabel('或者手填模型 id（每行一个，或用逗号分隔）').fill(E2E_RELAY_MANUAL_MODEL);
+    await page.getByRole('button', { name: '获取元数据' }).click();
+    await page.getByLabel(`Select ${E2E_RELAY_MANUAL_MODEL}`).check();
+    await page.getByRole('button', { name: '创建 Provider' }).click();
+
+    await expect(page.getByText('Header x-extra needs a value')).toBeVisible();
+    const after = await (await page.request.get(await adminUrl('/api/providers'))).json();
+    expect(after.providers.map((provider: { alias: string }) => provider.alias)).not.toContain('relay3');
+  });
 });

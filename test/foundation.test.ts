@@ -549,6 +549,30 @@ describe('secrets', () => {
     expect(value).toBe('secret-value');
     expect(store.redact('failed secret-value request')).toBe('failed [REDACTED] request');
   });
+
+  test('keeps submitted plaintext redactable without letting it accumulate', async () => {
+    const store = new SecretStore();
+    const configured = await store.resolve('configured-api-key');
+    store.remember('submitted-api-key');
+    expect(configured).toBe('configured-api-key');
+    expect(store.redact('sent submitted-api-key upstream')).toBe('sent [REDACTED] upstream');
+    // A session that keeps submitting keys must not grow the store forever, and
+    // the configured secret is not what gets dropped.
+    for (let index = 0; index < 200; index += 1) {
+      store.remember(`throwaway-key-${String(index)}`);
+    }
+    expect(store.redact('sent submitted-api-key upstream')).toBe('sent submitted-api-key upstream');
+    expect(store.redact('sent throwaway-key-199 upstream')).toBe('sent [REDACTED] upstream');
+    expect(store.redact('sent configured-api-key upstream')).toBe('sent [REDACTED] upstream');
+  });
+
+  test('does not turn a very short value into a redaction pattern', () => {
+    const store = new SecretStore();
+    store.remember('1');
+    expect(store.redact('providers.relay.models[0] failed with status 1')).toBe(
+      'providers.relay.models[0] failed with status 1',
+    );
+  });
 });
 
 describe('database', () => {

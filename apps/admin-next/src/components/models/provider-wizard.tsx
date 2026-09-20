@@ -143,8 +143,14 @@ export function ProviderWizard({
     if (selection.models === null) {
       return;
     }
-    setCreateError(null);
     const payload = headerValues(headers);
+    if (payload.error !== null) {
+      // An incomplete header row must stop the submit: dropping it silently
+      // would create the provider without a header the admin meant to send.
+      setCreateError(payload.error);
+      return;
+    }
+    setCreateError(null);
     create.mutate({
       alias,
       kind,

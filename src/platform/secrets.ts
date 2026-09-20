@@ -3,9 +3,22 @@ import { pickEnv, readBoundedOutput, spawnProcess } from './subprocess.ts';
 
 const MAX_SECRET_BYTES = 4_096;
 const SECRET_TIMEOUT_MS = 5_000;
+/**
+ * Redaction replaces every occurrence of a known value, so a very short one
+ * would mask ordinary words and digits and make the output useless without
+ * protecting anything: nothing that short is a credential.
+ */
+const MIN_REDACTED_LENGTH = 6;
+/**
+ * How many plaintext values submitted through an API may be remembered. A
+ * configured SecretRef lives as long as the process, but submissions arrive with
+ * requests and must not accumulate without limit.
+ */
+const MAX_SUBMITTED_SECRETS = 64;
 
 export class SecretStore {
   readonly #values = new Set<string>();
+  readonly #submitted: string[] = [];
 
   async resolve(reference: SecretRef): Promise<string> {
     let value: string;
@@ -27,9 +40,30 @@ export class SecretStore {
     return value;
   }
 
+  /**
+   * Remembers plaintext that arrived with a request (the Admin Panel's API key
+   * and header fields) so it can be redacted before it is written or sent
+   * anywhere. The oldest entry is dropped once the bound is reached, which keeps
+   * repeated submissions — a mistyped key, a probing session — from growing the
+   * store and slowing every later redaction down.
+   */
+  remember(value: string): void {
+    const existing = this.#submitted.indexOf(value);
+    if (existing >= 0) {
+      this.#submitted.splice(existing, 1);
+    }
+    this.#submitted.push(value);
+    if (this.#submitted.length > MAX_SUBMITTED_SECRETS) {
+      this.#submitted.shift();
+    }
+  }
+
   redact(text: string): string {
     let redacted = text;
-    for (const value of this.#values) {
+    for (const value of [...this.#values, ...this.#submitted]) {
+      if (value.length < MIN_REDACTED_LENGTH) {
+        continue;
+      }
       redacted = redacted.replaceAll(value, '[REDACTED]');
     }
     return redacted;

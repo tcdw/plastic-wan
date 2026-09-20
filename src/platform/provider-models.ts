@@ -1,9 +1,12 @@
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
-import type { ProviderApi, SecretRef } from './config.ts';
-import type { SecretStore } from './secrets.ts';
+import type { ProviderApi } from './config.ts';
 
-const MAX_MODELS_RESPONSE_BYTES = 1_048_576;
+/**
+ * One budget for the whole listing rather than a smaller per-page cap: an
+ * unpaginated provider answers in a single page, and OpenRouter's is already
+ * ~0.7 MB and grows with every model it adds.
+ */
 const MAX_MODELS_TOTAL_BYTES = 8 * 1_048_576;
 const MODELS_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_MODELS_PAGES = 20;
@@ -150,8 +153,14 @@ export interface ProviderDiscoveryRequest {
   readonly builtinProvider?: string;
   readonly baseUrl: string;
   readonly api: ProviderApi;
-  readonly apiKey: SecretRef;
-  readonly headers?: Readonly<Record<string, SecretRef>>;
+  /**
+   * Already-resolved credentials. Whether a SecretRef may be resolved at all is
+   * the caller's policy — the Admin Panel never resolves what a request handed
+   * it into the process-wide secret set, while the TUI resolves `env` and
+   * `command` refs on purpose.
+   */
+  readonly apiKey: string;
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 export interface ProviderModelListing {
@@ -196,21 +205,17 @@ export function planModelsEndpoint(request: {
   }
 }
 
-export async function fetchProviderModels(
-  request: ProviderDiscoveryRequest,
-  secrets: SecretStore,
-): Promise<ProviderModelListing> {
+export async function fetchProviderModels(request: ProviderDiscoveryRequest): Promise<ProviderModelListing> {
   const plan = planModelsEndpoint(request);
   const extraHeaders = new Headers({ accept: 'application/json' });
-  for (const [name, reference] of Object.entries(request.headers ?? {})) {
-    extraHeaders.set(name, await secrets.resolve(reference));
+  for (const [name, value] of Object.entries(request.headers ?? {})) {
+    extraHeaders.set(name, value);
   }
-  const apiKey = await secrets.resolve(request.apiKey);
-  applyAuth(extraHeaders, plan, apiKey);
+  applyAuth(extraHeaders, plan, request.apiKey);
 
   const collected = new Map<string, DiscoveredProviderModel>();
   let pageToken: string | undefined;
-  let bytes = 0;
+  let remaining = MAX_MODELS_TOTAL_BYTES;
   for (let page = 0; page < MAX_MODELS_PAGES; page += 1) {
     const url = pageUrl(plan, pageToken);
     const response = await fetch(url, {
@@ -224,12 +229,9 @@ export async function fetchProviderModels(
         `Models endpoint ${plan.endpoint} returned ${response.status} ${response.statusText}: ${await readErrorBody(response)}`.trim(),
       );
     }
-    const text = await readBoundedText(response);
-    bytes += Buffer.byteLength(text);
-    if (bytes > MAX_MODELS_TOTAL_BYTES) {
-      throw new Error(`Models endpoint response exceeds ${MAX_MODELS_TOTAL_BYTES} bytes`);
-    }
-    const raw = parseJson(text);
+    const body = await readBoundedText(response, remaining);
+    remaining -= body.bytes;
+    const raw = parseJson(body.text);
     const parsed = parsePage(plan.format, raw);
     for (const model of parsed.models) {
       if (!collected.has(model.id)) {
@@ -393,19 +395,46 @@ function stripTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, '');
 }
 
-async function readBoundedText(response: Response): Promise<string> {
+interface BoundedBody {
+  readonly text: string;
+  readonly bytes: number;
+}
+
+/**
+ * Reads one page, counting bytes as they arrive and stopping as soon as the
+ * remaining budget is gone. Counting after `response.text()` would let an
+ * endpoint that declares no `content-length` buffer its whole body first, which
+ * is exactly what the cap exists to prevent.
+ */
+async function readBoundedText(response: Response, budget: number): Promise<BoundedBody> {
   const declaredLength = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_MODELS_RESPONSE_BYTES) {
-    throw new Error(`Models endpoint response exceeds ${MAX_MODELS_RESPONSE_BYTES} bytes`);
+  if (Number.isFinite(declaredLength) && declaredLength > budget) {
+    throw new Error(`Models endpoint response exceeds ${MAX_MODELS_TOTAL_BYTES} bytes`);
   }
   if (response.body === null) {
     throw new Error('Models endpoint returned an empty response');
   }
-  const text = await response.text();
-  if (Buffer.byteLength(text) > MAX_MODELS_RESPONSE_BYTES) {
-    throw new Error(`Models endpoint response exceeds ${MAX_MODELS_RESPONSE_BYTES} bytes`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let bytes = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done || chunk.value === undefined) {
+        break;
+      }
+      bytes += chunk.value.byteLength;
+      if (bytes > budget) {
+        throw new Error(`Models endpoint response exceeds ${MAX_MODELS_TOTAL_BYTES} bytes`);
+      }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally {
+    // Releases the connection whether the body ended or the budget did.
+    await reader.cancel().catch(() => undefined);
   }
-  return text;
+  return { text: text + decoder.decode(), bytes };
 }
 
 /**

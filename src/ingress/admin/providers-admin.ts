@@ -312,11 +312,12 @@ function checkModel(api: ProviderApi, model: ModelFileConfig, label: string): vo
 /**
  * A plaintext secret is registered with the `SecretStore` before it is written
  * or sent anywhere: until it is, redaction cannot mask it in logs, reload errors
- * or upstream failures.
+ * or upstream failures. Submissions are remembered rather than resolved, so a
+ * value that arrived with a request cannot pile up in the process-wide set.
  */
-async function registerSecrets(secrets: SecretStore, values: readonly string[]): Promise<void> {
+function registerSecrets(secrets: SecretStore, values: readonly string[]): void {
   for (const value of values) {
-    await secrets.resolve(value);
+    secrets.remember(value);
   }
 }
 
@@ -328,7 +329,7 @@ export async function createProvider(context: ProviderWriteContext, body: Create
   for (const model of body.models) {
     checkModel(api, model, `model ${model.id}`);
   }
-  await registerSecrets(context.secrets, [body.api_key, ...Object.values(body.headers ?? {})]);
+  registerSecrets(context.secrets, [body.api_key, ...Object.values(body.headers ?? {})]);
   const provider =
     body.kind === 'builtin'
       ? {
@@ -455,7 +456,7 @@ export async function updateProvider(
   if (edits.length === 0) {
     throw new AdminQueryError('no_changes', 'The request does not change any connection field');
   }
-  await registerSecrets(context.secrets, secretsToRegister);
+  registerSecrets(context.secrets, secretsToRegister);
   return edits;
 }
 
@@ -556,7 +557,7 @@ export function visionEdits(
 
 export async function discover(context: ProviderWriteContext, body: DiscoverBody): Promise<DiscoverResponse> {
   const request = await discoveryRequest(context, body);
-  const listing = await fetchProviderModels(request.request, context.secrets);
+  const listing = await fetchProviderModels(request.request);
   const catalog = await loadCatalog(context.secrets);
   const drafts = resolveModelDrafts(request.descriptor, listing.models, catalog.catalog);
   const configured = new Set(
@@ -673,7 +674,7 @@ async function discoveryRequest(context: ProviderWriteContext, body: DiscoverBod
         `Built-in provider ${body.provider} has no single supported API adapter`,
       );
     }
-    await registerSecrets(context.secrets, [body.api_key, ...Object.values(body.headers ?? {})]);
+    registerSecrets(context.secrets, [body.api_key, ...Object.values(body.headers ?? {})]);
     const request = {
       builtinProvider: body.provider,
       baseUrl: source.baseUrl,
@@ -690,7 +691,7 @@ async function discoveryRequest(context: ProviderWriteContext, body: DiscoverBod
   if (body.base_url === undefined || body.api === undefined) {
     throw new AdminQueryError('invalid_body', 'base_url and api are required for a custom provider');
   }
-  await registerSecrets(context.secrets, [body.api_key, ...Object.values(body.headers ?? {})]);
+  registerSecrets(context.secrets, [body.api_key, ...Object.values(body.headers ?? {})]);
   const baseUrl = body.base_url.replace(/\/+$/, '');
   const request = {
     baseUrl,

@@ -736,6 +736,20 @@ test('still lists models when the models.dev catalog is unreachable', async () =
   }
 });
 
+test('answers a malformed model id with a request error, not a server error', async () => {
+  const fixture = await adminFixture();
+  try {
+    const response = await call(fixture, '/api/providers/agent/models/%ZZ', {
+      method: 'DELETE',
+      headers: { 'if-match': await revisionOf(fixture) },
+    });
+    expect(response.status).toBe(400);
+    expect(await readJson(response)).toMatchObject({ error: 'invalid_path' });
+  } finally {
+    fixture.store.close();
+  }
+});
+
 test('rejects cross-origin provider writes', async () => {
   const fixture = await adminFixture();
   try {

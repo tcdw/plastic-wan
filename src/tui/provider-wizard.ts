@@ -669,7 +669,19 @@ async function discoverProviderModels(config: {
 }): Promise<DiscoveredProviderModel[]> {
   const secrets = new SecretStore();
   try {
-    const listing = await fetchProviderModels(config, secrets);
+    // The wizard may use `env` and `command` refs, so it resolves them here; the
+    // listing call itself only ever sees the resolved values.
+    const headers: Record<string, string> = {};
+    for (const [name, reference] of Object.entries(config.headers ?? {})) {
+      headers[name] = await secrets.resolve(reference);
+    }
+    const listing = await fetchProviderModels({
+      ...(config.builtinProvider === undefined ? {} : { builtinProvider: config.builtinProvider }),
+      baseUrl: config.baseUrl,
+      api: config.api,
+      apiKey: await secrets.resolve(config.apiKey),
+      ...(Object.keys(headers).length === 0 ? {} : { headers }),
+    });
     console.log(
       `Fetched ${listing.models.length} model${listing.models.length === 1 ? '' : 's'} from ${listing.endpoint}`,
     );

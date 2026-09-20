@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { parseCli } from '../src/cli-options.ts';
 import { loadConfig } from '../src/platform/config.ts';
 import { renderDoctorAgentPrompt } from '../src/doctor.ts';
-import { SecretStore } from '../src/platform/secrets.ts';
 import {
   extractInputCapabilities,
   extractReasoningEffortOptions,
@@ -138,15 +137,12 @@ describe('provider wizard discovery', () => {
     });
     try {
       const baseUrl = `http://127.0.0.1:${server.port}`;
-      const listing = await fetchProviderModels(
-        {
-          baseUrl: `${baseUrl}/v1`,
-          api: 'openai-responses',
-          apiKey: 'provider-secret',
-          headers: { 'x-route': 'route-secret' },
-        },
-        new SecretStore(),
-      );
+      const listing = await fetchProviderModels({
+        baseUrl: `${baseUrl}/v1`,
+        api: 'openai-responses',
+        apiKey: 'provider-secret',
+        headers: { 'x-route': 'route-secret' },
+      });
       expect(observedPath).toBe('/v1/models');
       expect(observedAuthorization).toBe('Bearer provider-secret');
       expect(observedRoute).toBe('route-secret');
@@ -157,14 +153,11 @@ describe('provider wizard discovery', () => {
       ]);
 
       await expect(
-        fetchProviderModels(
-          {
-            baseUrl: `${baseUrl}/invalid`,
-            api: 'openai-completions',
-            apiKey: 'provider-secret',
-          },
-          new SecretStore(),
-        ),
+        fetchProviderModels({
+          baseUrl: `${baseUrl}/invalid`,
+          api: 'openai-completions',
+          apiKey: 'provider-secret',
+        }),
       ).rejects.toThrow('invalid OpenAI models response');
     } finally {
       await stopFixtureServer(server.server);

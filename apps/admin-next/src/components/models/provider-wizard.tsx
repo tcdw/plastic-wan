@@ -342,12 +342,19 @@ export function ProviderWizard({
                     onSearchChange={selection.setSearch}
                     emptyText="没有匹配的模型。"
                   />
-                  <p className="text-muted-foreground text-xs">
-                    已选 {formatNumber(selection.selectedCount)} 个
-                    {selection.unresolved.length === 0
-                      ? ''
-                      : ` · ${selection.unresolved.map((draft) => draft.id).join(', ')} 还有需确认的字段，请先点「编辑」填写`}
-                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-muted-foreground text-xs">
+                      已选 {formatNumber(selection.selectedCount)} 个
+                      {selection.unresolved.length === 0
+                        ? ''
+                        : ` · ${selection.unresolved.map((draft) => draft.id).join(', ')} 还有需确认的字段`}
+                    </p>
+                    {selection.confirmable === 0 ? null : (
+                      <Button type="button" variant="outline" size="sm" onClick={selection.confirmSelected}>
+                        按列出的值确认 {formatNumber(selection.confirmable)} 个
+                      </Button>
+                    )}
+                  </div>
                 </>
               )}
             </div>

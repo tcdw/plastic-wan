@@ -78,6 +78,11 @@ export async function serve(configPath: string): Promise<void> {
   /**
    * The Admin Panel's restart: the same graceful shutdown as a signal, but the
    * process leaves with `RESTART_EXIT_CODE` so the supervisor starts it again.
+   *
+   * Shutdown reaches `admin.stop()` only through the `finally` block below,
+   * after `bot.stop()` has unblocked `bot.start()`, so the panel's 202 is long
+   * gone by the time the Admin server destroys its connections. Anything that
+   * stops the Admin server earlier would cut that response off.
    */
   const requestRestart = (): void => {
     if (restartRequested || shuttingDown) {

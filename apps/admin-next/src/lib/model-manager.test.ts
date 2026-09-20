@@ -7,6 +7,7 @@ import {
   compatStateFromConfig,
   draftNeedsConfirmation,
   isDraftFieldUnconfirmed,
+  matchLabel,
   metadataSourceLabel,
   modelFormFromConfig,
   modelFromDraft,
@@ -50,8 +51,20 @@ describe('metadata source labels', () => {
     expect(metadataSourceLabel('openrouter')).toBe('OpenRouter');
     expect(metadataSourceLabel('vercel')).toBe('Vercel');
     expect(metadataSourceLabel('models.dev')).toBe('models.dev');
+    expect(metadataSourceLabel('models.dev-cross-provider')).toBe('models.dev (其它供应商)');
     expect(metadataSourceLabel('models.dev-fuzzy')).toBe('models.dev (模糊匹配)');
     expect(metadataSourceLabel('missing')).toBe('缺失');
+  });
+
+  test('names where a draft was matched, and says nothing when it was not', () => {
+    expect(matchLabel(null)).toBeNull();
+    expect(matchLabel({ provider: 'openrouter', model: 'vendor/model', confidence: 'exact' })).toBe(
+      '元数据匹配：models.dev 的 openrouter / vendor/model',
+    );
+    expect(matchLabel({ provider: 'openrouter', model: 'vendor/model', confidence: 'cross-provider' })).toContain(
+      '其它供应商',
+    );
+    expect(matchLabel({ provider: 'openrouter', model: 'vendor/model', confidence: 'fuzzy' })).toContain('模糊匹配');
   });
 });
 
@@ -71,6 +84,21 @@ describe('draft confirmation', () => {
     expect(isDraftFieldUnconfirmed(fuzzy, 'reasoning')).toBe(true);
     expect(isDraftFieldUnconfirmed(fuzzy, 'name')).toBe(false);
     expect(unconfirmedFields(fuzzy)).toEqual(['reasoning']);
+  });
+
+  test('a cross-provider match needs confirming just like a fuzzy one', () => {
+    const borrowed = draft({
+      sources: {
+        name: 'models.dev-cross-provider',
+        reasoning: 'models.dev-cross-provider',
+        input: 'models.dev-cross-provider',
+        context_window: 'models.dev-cross-provider',
+        max_tokens: 'models.dev-cross-provider',
+        cost: 'models.dev-cross-provider',
+      },
+    });
+    expect(unconfirmedFields(borrowed)).toEqual(['reasoning', 'input', 'context_window', 'max_tokens', 'cost']);
+    expect(isDraftFieldUnconfirmed(borrowed, 'name')).toBe(false);
   });
 
   test('a missing value is unconfirmed even when the server did not flag it', () => {

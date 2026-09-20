@@ -18,6 +18,7 @@ import {
   compatFieldsForApi,
   fieldSourceLabel,
   isDraftFieldUnconfirmed,
+  matchLabel,
   modelFormToConfig,
   type ModelFormState,
   unconfirmedFields,
@@ -96,6 +97,7 @@ export function ModelEditDialog({
   const compatFields = compatFieldsForApi(api);
   const showAdvanced = compatFields.length > 0;
   const confirmations = draft === null ? [] : unconfirmedFields(draft);
+  const matchNote = draft === null ? null : matchLabel(draft.match);
 
   const toggleInput = (modality: ModelInput): void => {
     setForm((previous) => ({
@@ -119,6 +121,9 @@ export function ModelEditDialog({
               需确认的字段：{confirmations.join(', ')}。确认或填写后才能保存，面板不会替你填默认值。
             </p>
           ) : null}
+          {/* Naming the match makes "需确认" actionable: a cross-provider or
+              normalized hit is a lead from another deployment, not an answer. */}
+          {matchNote === null ? null : <p className="text-muted-foreground text-xs">{matchNote}</p>}
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <FieldLabel htmlFor="model-id" label="id" draft={null} field="name" />

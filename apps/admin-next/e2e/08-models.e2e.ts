@@ -101,11 +101,20 @@ test.describe('models page', () => {
     const incompleteRow = page.locator('li').filter({ hasText: E2E_RELAY_INCOMPLETE_MODEL });
     await expect(completeRow).toBeVisible();
     await expect(incompleteRow).toBeVisible();
-    // Every field of the second model is missing, so it needs confirmation first.
+    // The relay's own host is unknown to models.dev, so even the model it does
+    // know was matched under another provider and has to be confirmed.
+    await expect(completeRow.getByText('需确认', { exact: false })).toBeVisible();
+    // Every field of the second model is missing, so it cannot be taken as it is.
     await expect(incompleteRow.getByText('需确认', { exact: false })).toBeVisible();
 
     await page.getByLabel(`Select ${E2E_RELAY_COMPLETE_MODEL}`).check();
     await page.getByLabel(`Select ${E2E_RELAY_INCOMPLETE_MODEL}`).check();
+    await expect(page.getByRole('button', { name: /添加 \d+ 个模型/ })).toBeDisabled();
+
+    // Accepting the listed values covers the draft that has them all; the one
+    // with empty fields still has to go through the dialog.
+    await page.getByRole('button', { name: /按列出的值确认 1 个/ }).click();
+    await expect(completeRow.getByText('已确认')).toBeVisible();
     await expect(page.getByRole('button', { name: /添加 \d+ 个模型/ })).toBeDisabled();
 
     await incompleteRow.getByRole('button', { name: '编辑' }).click();
@@ -179,6 +188,7 @@ test.describe('models page', () => {
     const row = page.locator('li').filter({ hasText: E2E_RELAY_COMPLETE_MODEL });
     await expect(row).toBeVisible();
     await page.getByLabel(`Select ${E2E_RELAY_COMPLETE_MODEL}`).check();
+    await page.getByRole('button', { name: /按列出的值确认 1 个/ }).click();
     await page.getByRole('button', { name: '创建 Provider' }).click();
 
     await expect(page.getByRole('dialog').getByText('已保存，待重启')).toBeVisible();
@@ -217,6 +227,7 @@ test.describe('models page', () => {
     await page.getByLabel('或者手填模型 id（每行一个，或用逗号分隔）').fill(E2E_RELAY_MANUAL_MODEL);
     await page.getByRole('button', { name: '获取元数据' }).click();
     await page.getByLabel(`Select ${E2E_RELAY_MANUAL_MODEL}`).check();
+    await page.getByRole('button', { name: /按列出的值确认 1 个/ }).click();
     await page.getByRole('button', { name: '创建 Provider' }).click();
 
     await expect(page.getByText('Header x-extra needs a value')).toBeVisible();

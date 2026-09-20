@@ -659,7 +659,12 @@ export class AdminServer {
     } catch (error) {
       return json({ error: 'config_invalid', message: this.#redact(error) }, 422);
     }
-    // The response has to leave the socket before the shutdown closes it.
+    // The response has to leave the socket before the shutdown closes it, and
+    // `stop()` destroys live connections rather than draining them. Two things
+    // keep the 202 intact: the adaptor writes it while resolving this promise,
+    // which runs before the `setImmediate` callback, and `serve`'s shutdown only
+    // reaches `admin.stop()` after `bot.stop()` has unblocked long polling. The
+    // second one is a property of the caller, so `requestRestart` states it too.
     setImmediate(() => requestRestart());
     return json({ status: 'restarting' }, 202);
   }

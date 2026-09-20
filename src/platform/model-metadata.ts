@@ -3,11 +3,38 @@ import { extractInputCapabilities, findModel, type ModelsDevCatalog, type Models
 import type { DiscoveredProviderModel, GeminiModel, OpenRouterModel, VercelModel } from './provider-models.ts';
 
 /**
- * Where one metadata field came from. `models.dev-fuzzy` means the catalog entry
- * was matched by a normalized id instead of an exact one, so the value is a
- * guess the admin has to confirm.
+ * Where one metadata field came from. The two qualified models.dev sources are
+ * guesses the admin has to confirm: `models.dev-cross-provider` is the model id
+ * found under a provider the descriptor never named, and `models.dev-fuzzy` is a
+ * normalized id rather than an exact one.
  */
-export type MetadataSource = 'openrouter' | 'vercel' | 'gemini' | 'models.dev' | 'models.dev-fuzzy' | 'missing';
+export type MetadataSource =
+  | 'openrouter'
+  | 'vercel'
+  | 'gemini'
+  | 'models.dev'
+  | 'models.dev-cross-provider'
+  | 'models.dev-fuzzy'
+  | 'missing';
+
+/**
+ * How far the models.dev lookup had to reach. Only `exact` — the provider the
+ * descriptor names, with the model id as listed — is trusted without
+ * confirmation: the same id under another provider is a different deployment,
+ * with its own prices and limits.
+ */
+export type ModelsDevConfidence = 'exact' | 'cross-provider' | 'fuzzy';
+
+const CATALOG_SOURCE: Readonly<Record<ModelsDevConfidence, MetadataSource>> = {
+  exact: 'models.dev',
+  'cross-provider': 'models.dev-cross-provider',
+  fuzzy: 'models.dev-fuzzy',
+};
+
+/** Whether a source is a guess, which is what `needs_confirmation` reports. */
+function isGuessedSource(source: MetadataSource): boolean {
+  return source === 'models.dev-cross-provider' || source === 'models.dev-fuzzy';
+}
 
 export type DraftField = 'name' | 'reasoning' | 'input' | 'context_window' | 'max_tokens' | 'cost';
 
@@ -30,7 +57,7 @@ export interface ModelCostDraft {
 export interface ModelsDevMatch {
   readonly provider: string;
   readonly model: string;
-  readonly fuzzy: boolean;
+  readonly confidence: ModelsDevConfidence;
 }
 
 export interface ModelMetadataDraft {
@@ -130,7 +157,7 @@ interface ModelsDevLookup {
 function resolveModelDraft(model: DiscoveredProviderModel, lookup: ModelsDevLookup): ModelMetadataDraft {
   const primary = readExtension(model.extension);
   const fromCatalog = lookup.model === null ? null : readModelsDev(lookup.model);
-  const fuzzy = lookup.match?.fuzzy === true;
+  const catalogSource: MetadataSource = lookup.match === null ? 'missing' : CATALOG_SOURCE[lookup.match.confidence];
   const sources = {} as Record<DraftField, MetadataSource>;
   const values = {} as Record<DraftField, unknown>;
   for (const field of DRAFT_FIELDS) {
@@ -143,7 +170,7 @@ function resolveModelDraft(model: DiscoveredProviderModel, lookup: ModelsDevLook
     const fallback = fromCatalog?.[field];
     if (fallback !== null && fallback !== undefined) {
       values[field] = fallback;
-      sources[field] = fuzzy ? 'models.dev-fuzzy' : 'models.dev';
+      sources[field] = catalogSource;
       continue;
     }
     values[field] = null;
@@ -153,12 +180,12 @@ function resolveModelDraft(model: DiscoveredProviderModel, lookup: ModelsDevLook
   const maxTokens = values.max_tokens as number | null;
   const inconsistent = contextWindow !== null && maxTokens !== null && maxTokens > contextWindow;
   const needsConfirmation = DRAFT_FIELDS.filter(
-    (field) => values[field] === null || (sources[field] === 'models.dev-fuzzy' && field !== 'name'),
+    (field) => values[field] === null || (isGuessedSource(sources[field]) && field !== 'name'),
   );
   if (inconsistent && !needsConfirmation.includes('max_tokens')) {
     needsConfirmation.push('max_tokens');
   }
-  const requiresReasoningContent = lookup.model?.interleaved;
+  const requiresReasoningContent = readInterleavedReasoningContent(lookup.model?.interleaved);
   return {
     id: model.id,
     name: (values.name as string | null) ?? null,
@@ -167,10 +194,12 @@ function resolveModelDraft(model: DiscoveredProviderModel, lookup: ModelsDevLook
     context_window: contextWindow,
     max_tokens: maxTokens,
     cost: (values.cost as ModelCostDraft | null) ?? null,
-    requires_reasoning_content: readInterleavedReasoningContent(requiresReasoningContent),
+    requires_reasoning_content: requiresReasoningContent,
     sources,
-    requires_reasoning_content_source:
-      requiresReasoningContent === undefined ? 'missing' : fuzzy ? 'models.dev-fuzzy' : 'models.dev',
+    // Only the one `interleaved` form maps to an override; every other shape —
+    // absent, a bare boolean, another field name — leaves the value on Pi's own
+    // detection, which no source filled in.
+    requires_reasoning_content_source: requiresReasoningContent ? catalogSource : 'missing',
     match: lookup.match,
     candidates: lookup.candidates,
     needs_confirmation: needsConfirmation,
@@ -302,14 +331,22 @@ function matchModelsDev(catalog: ModelsDevCatalog, hint: string | null, modelId:
   if (hint !== null) {
     const hinted = findModel(catalog, hint, modelId);
     if (hinted !== undefined) {
-      return { match: { provider: hint, model: modelId, fuzzy: false }, model: hinted, candidates: [] };
+      return { match: { provider: hint, model: modelId, confidence: 'exact' }, model: hinted, candidates: [] };
     }
   }
   const providerIds = Object.keys(catalog).sort();
   for (const providerId of providerIds) {
     const found = findModel(catalog, providerId, modelId);
     if (found !== undefined) {
-      return { match: { provider: providerId, model: modelId, fuzzy: false }, model: found, candidates: [] };
+      // The id is exact but the provider is not the one being configured, which
+      // is the normal case for an unknown relay. Prices, limits and capabilities
+      // belong to that other provider's deployment, so the draft is a lead for
+      // the admin to confirm rather than an answer.
+      return {
+        match: { provider: providerId, model: modelId, confidence: 'cross-provider' },
+        model: found,
+        candidates: [],
+      };
     }
   }
   const normalized = normalizeModelId(modelId);
@@ -319,7 +356,7 @@ function matchModelsDev(catalog: ModelsDevCatalog, hint: string | null, modelId:
       if (normalizeModelId(candidateId) !== normalized) {
         continue;
       }
-      candidates.push({ provider: providerId, model: candidateId, fuzzy: true });
+      candidates.push({ provider: providerId, model: candidateId, confidence: 'fuzzy' });
       if (candidates.length >= MAX_FUZZY_CANDIDATES) {
         break;
       }

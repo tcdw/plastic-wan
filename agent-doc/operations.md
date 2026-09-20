@@ -73,7 +73,7 @@ node src/cli.ts serve --config dev-data/config.jsonc
 
 Admin Panel 的 Models 页在有字段等待重启时提供「立即重启」（`POST /api/restart`）。它不是 supervisor，只是请求当前进程优雅退出：走上面同一套关闭流程，然后以退出码 **75**（`EX_TEMPFAIL`，与崩溃区分）退出，由外部把进程重新拉起。重启期间 Admin 页面会断开，界面轮询等待服务恢复；这段时间收到的 Telegram 消息由启动补偿拉取。
 
-只有部署方声明了监督时这个端点才可用：环境变量 `PLASTICWAN_SUPERVISED=1` 未设置时端点返回 409 `restart_unsupported`，界面也不显示按钮。仓库自带的 Docker 镜像已经在 `Dockerfile` 里设好该变量，配合 `restart: unless-stopped` 即可；Electron 版由主进程重启 server。裸机前台运行时不要设置它，否则退出后不会有人把 bot 拉起来。
+只有部署方声明了监督时这个端点才可用：环境变量 `PLASTICWAN_SUPERVISED=1` 未设置时端点返回 409 `restart_unsupported`，界面也不显示按钮。**声明的位置是部署，不是镜像**：`Dockerfile` 故意不设这个变量（镜像无法知道自己会不会带着重启策略跑），`docker-compose.yml` 模板在 `restart: unless-stopped` 旁边设好了；用 `docker run` 的话要自己同时给出 `--restart` 和 `-e PLASTICWAN_SUPERVISED=1`，systemd 则配合 `Restart=always`。Electron 版由主进程重启 server。裸机前台运行时不要设置它，否则退出后不会有人把 bot 拉起来。
 
 执行前会按启动流程校验磁盘上的配置（权限检查与完整 `loadConfig`）：配置无效时拒绝重启并返回 422，否则进程退出后起不来，bot 就停了。本期没有「上次可用配置」回退，启动期才失败的情况（SecretRef 解析失败、Pi 升级导致 builtin 模型消失等）仍然需要人工修复。
 

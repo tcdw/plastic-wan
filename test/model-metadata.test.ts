@@ -476,7 +476,10 @@ describe('metadata resolution', () => {
       catalog(),
     );
     // models.dev says `reasoning_details` for kimi-k2.6, which Pi does not model.
-    expect(draftOf(drafts, 'moonshotai/kimi-k2.6').requires_reasoning_content).toBe(false);
+    const kimi = draftOf(drafts, 'moonshotai/kimi-k2.6');
+    expect(kimi.requires_reasoning_content).toBe(false);
+    // The catalog was read but filled nothing in, so no source may claim it.
+    expect(kimi.requires_reasoning_content_source).toBe('missing');
     // No models.dev entry at all: stays on automatic detection.
     const pro = draftOf(drafts, 'deepseek/deepseek-v4-pro');
     expect(pro.requires_reasoning_content).toBe(false);
@@ -517,6 +520,7 @@ describe('metadata resolution', () => {
     expect(draft.cost).toEqual({ input: 3, output: 15, cache_read: 0, cache_write: 0 });
     expect(draft.sources.cost).toBe('vercel');
     expect(draft.requires_reasoning_content).toBe(false);
+    expect(draft.requires_reasoning_content_source).toBe('missing');
   });
 
   test('falls back to a fuzzy models.dev match and asks for confirmation', () => {
@@ -526,13 +530,55 @@ describe('metadata resolution', () => {
       catalog(),
     );
     const draft = draftOf(drafts, '~deepseek-ai/DeepSeek-V3:free');
-    expect(draft.match).toEqual({ provider: 'togetherai', model: 'deepseek-ai/DeepSeek-V3', fuzzy: true });
+    expect(draft.match).toEqual({
+      provider: 'togetherai',
+      model: 'deepseek-ai/DeepSeek-V3',
+      confidence: 'fuzzy',
+    });
     expect(draft.sources.name).toBe('models.dev-fuzzy');
     expect(draft.sources.cost).toBe('models.dev-fuzzy');
     // The display name is cosmetic, so a fuzzy match does not force the admin to
     // retype it; every field the registry depends on does.
     expect(draft.needs_confirmation).toEqual(['reasoning', 'input', 'context_window', 'max_tokens', 'cost']);
-    expect(draft.candidates).toEqual([{ provider: 'togetherai', model: 'deepseek-ai/DeepSeek-V3', fuzzy: true }]);
+    expect(draft.candidates).toEqual([
+      { provider: 'togetherai', model: 'deepseek-ai/DeepSeek-V3', confidence: 'fuzzy' },
+    ]);
+  });
+
+  test('asks for confirmation when only another provider lists the same model id', () => {
+    const drafts = resolveModelDrafts(
+      // An unknown relay: the id is exact, but the catalog entry describes
+      // OpenRouter's deployment, whose prices and limits need not be this one's.
+      { kind: 'custom', baseUrl: 'https://relay.example.test/v1', api: 'openai-completions' },
+      [{ id: 'deepseek/deepseek-v4-flash', name: null, extension: { format: 'openai' } }],
+      catalog(),
+    );
+    const draft = draftOf(drafts, 'deepseek/deepseek-v4-flash');
+    expect(draft.match).toEqual({
+      provider: 'openrouter',
+      model: 'deepseek/deepseek-v4-flash',
+      confidence: 'cross-provider',
+    });
+    expect(draft.context_window).toBe(1048576);
+    expect(draft.sources.context_window).toBe('models.dev-cross-provider');
+    expect(draft.needs_confirmation).toEqual(['reasoning', 'input', 'context_window', 'max_tokens', 'cost']);
+    // The same id under the provider the catalog knows is taken as it is.
+    const exact = resolveModelDrafts(
+      {
+        kind: 'builtin',
+        builtinProvider: 'openrouter',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        api: 'openai-completions',
+      },
+      [{ id: 'deepseek/deepseek-v4-flash', name: null, extension: { format: 'openai' } }],
+      catalog(),
+    );
+    expect(draftOf(exact, 'deepseek/deepseek-v4-flash').match).toEqual({
+      provider: 'openrouter',
+      model: 'deepseek/deepseek-v4-flash',
+      confidence: 'exact',
+    });
+    expect(draftOf(exact, 'deepseek/deepseek-v4-flash').needs_confirmation).toEqual([]);
   });
 
   test('reports every field as missing when no source matches', () => {

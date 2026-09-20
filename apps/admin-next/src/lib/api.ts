@@ -386,8 +386,28 @@ export type ProviderKind = 'builtin' | 'custom';
 
 export type ModelInput = 'text' | 'image';
 
-/** Where one metadata field of a model draft came from. */
-export type MetadataSource = 'openrouter' | 'vercel' | 'gemini' | 'models.dev' | 'models.dev-fuzzy' | 'missing';
+/**
+ * Where one metadata field of a model draft came from. The two qualified
+ * models.dev sources are guesses: the id was found under another provider, or
+ * only after normalizing it.
+ */
+export type MetadataSource =
+  | 'openrouter'
+  | 'vercel'
+  | 'gemini'
+  | 'models.dev'
+  | 'models.dev-cross-provider'
+  | 'models.dev-fuzzy'
+  | 'missing';
+
+/** How far the models.dev lookup had to reach for a draft. */
+export type ModelsDevConfidence = 'exact' | 'cross-provider' | 'fuzzy';
+
+export interface ModelsDevMatch {
+  readonly provider: string;
+  readonly model: string;
+  readonly confidence: ModelsDevConfidence;
+}
 
 export type DraftField = 'name' | 'reasoning' | 'input' | 'context_window' | 'max_tokens' | 'cost';
 
@@ -469,8 +489,8 @@ export interface ModelMetadataDraft {
   readonly requires_reasoning_content: boolean;
   readonly sources: Readonly<Record<DraftField, MetadataSource>>;
   readonly requires_reasoning_content_source: MetadataSource;
-  readonly match: { readonly provider: string; readonly model: string; readonly fuzzy: boolean } | null;
-  readonly candidates: readonly { readonly provider: string; readonly model: string; readonly fuzzy: boolean }[];
+  readonly match: ModelsDevMatch | null;
+  readonly candidates: readonly ModelsDevMatch[];
   /** Fields the admin has to fill or confirm before the model may be saved. */
   readonly needs_confirmation: readonly DraftField[];
 }

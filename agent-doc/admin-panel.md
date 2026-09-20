@@ -103,7 +103,17 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 `metadata_source_error` 只在 models.dev 目录拉取失败时非空：目录只是元数据来源之一，列表本身仍然可用，拿不到的字段一律标成「缺失」并要求管理员确认，而不是让整个请求失败。
 
-草稿字段：`id`、`name`、`reasoning`、`input`、`context_window`、`max_tokens`、`cost`、`requires_reasoning_content`、`sources`（逐字段来源：`openrouter`/`vercel`/`gemini`/`models.dev`/`models.dev-fuzzy`/`missing`）、`requires_reasoning_content_source`、`match`、`candidates`、`needs_confirmation`。字段为空、只由模糊匹配支撑、或列为 `needs_confirmation` 时，面板必须让管理员确认或手填后才能保存；服务端不填任何默认值。
+草稿字段：`id`、`name`、`reasoning`、`input`、`context_window`、`max_tokens`、`cost`、`requires_reasoning_content`、`sources`（逐字段来源：`openrouter`/`vercel`/`gemini`/`models.dev`/`models.dev-cross-provider`/`models.dev-fuzzy`/`missing`）、`requires_reasoning_content_source`、`match`、`candidates`、`needs_confirmation`。字段为空、只由「猜出来的」来源支撑、或列为 `needs_confirmation` 时，面板必须让管理员确认或手填后才能保存；服务端不填任何默认值。
+
+`match.confidence` 说明这份元数据是怎么找到的，也决定了要不要确认：
+
+| confidence | 含义 | 来源标记 | 是否需确认 |
+| --- | --- | --- | --- |
+| `exact` | 就在该 Provider 对应的 models.dev 条目下（builtin 按映射表，custom 按 base_url 主机） | `models.dev` | 否 |
+| `cross-provider` | 模型 id 精确命中，但命中的是**别的** provider——不知名中转站的常态 | `models.dev-cross-provider` | 是 |
+| `fuzzy` | 去掉 `~` 前缀、`:free` 之类后缀和 vendor 前缀之后才匹配上 | `models.dev-fuzzy` | 是 |
+
+`cross-provider` 也要确认，是因为同一个模型 id 在不同 provider 下是不同的部署，价格、上下文与输出上限都可能不一样。`requires_reasoning_content_source` 只在真的映射出 `true`（models.dev 的 `interleaved.field === "reasoning_content"`）时才指向 models.dev；`interleaved` 缺失、是裸 `true` 或写的是别的字段名时一律是 `missing`——值留在「自动」，没有来源填过它。
 
 **SecretRef 只写不读**：面板只能把 `api_key` / header 值写成明文字符串，不能写 `{ env }` 或 `{ command }`（`command` 等于让面板在宿主机上执行命令；`env` 配合可编辑的 `base_url` 等于能外泄进程里任意环境变量）。输入框固定提示「已设置，留空以保持当前设置」：留空表示保持，非空表示替换成明文。代价是：原来用 `env` 的 Provider 在面板里被替换成明文后，环境变量不再生效，页面上也看不出这一点——要继续用 `env` 管理 key 的人只能手改配置文件；又因为 `base_url` 改动强制重填凭据，改地址会把 `env` / `command` 引用一并降级成明文。服务端收到明文后先 `secrets.remember(value)` 注册进 `SecretStore`，再写文件或发请求，这样日志、reload 错误与上游报错都能脱敏。请求提交的明文走单独一条有上限的队列（最旧的会被挤掉），不会像配置里解析出来的 Secret 那样永久累积；面板路径也从不调用 `secrets.resolve`，因此请求体里的字符串不会进入进程级的永久集合。
 
@@ -169,7 +179,7 @@ Overview 的 Bot status 卡片显示当前 `sleeping`/`awake`、`sleep_until`，
 
 Settings 页有一张 `Configuration file` 卡片：显示 generation、active hash 与 file hash、待重启字段列表与 last error，并提供 `Apply config file` 按钮（调用 `POST /config/apply`），成功或失败后都刷新配置状态。
 
-Models 页是 Provider 与模型的管理器：左栏 Provider 列表（搜索、Agent/Vision 在用徽章、待重启徽章），右栏连接字段与模型列表。连接区里 builtin 只读展示 Pi 的供应商名与 baseUrl，custom 可编辑 `base_url` 与 `api`；API Key 与 header 值一律 `type="password"` 且没有查看按钮，提示「已设置，留空以保持当前设置」；`base_url` 一改动，key 与所有 header 值立刻变成必填。模型区显示 👁/💡/context/max output 与在用徽章，支持「获取模型列表」（发现 + 元数据预览，待重启时改用临时模式并要求再填一次 key）、「手动添加」与编辑弹窗（元数据字段带来源标签，compat 三态放在折叠的「高级设置」里，只显示当前 API 适用的字段）。有待重启字段时页面顶部出现横幅与「立即重启」按钮（部署方未声明进程监督时隐藏），点击后界面会断开并轮询等待服务恢复。保存反馈区分「已生效」与「已保存，待重启」。
+Models 页是 Provider 与模型的管理器：左栏 Provider 列表（搜索、Agent/Vision 在用徽章、待重启徽章），右栏连接字段与模型列表。连接区里 builtin 只读展示 Pi 的供应商名与 baseUrl，custom 可编辑 `base_url` 与 `api`；API Key 与 header 值一律 `type="password"` 且没有查看按钮，提示「已设置，留空以保持当前设置」；`base_url` 一改动，key 与所有 header 值立刻变成必填。模型区显示 👁/💡/context/max output 与在用徽章，支持「获取模型列表」（发现 + 元数据预览，待重启时改用临时模式并要求再填一次 key）、「手动添加」与编辑弹窗（元数据字段带来源标签与匹配来源，compat 三态放在折叠的「高级设置」里，只显示当前 API 适用的字段）。带「需确认」的草稿不能直接提交：字段齐全的可以用「按列出的值确认 N 个」一次接受列表里显示的值，有空缺的必须进编辑弹窗填写。有待重启字段时页面顶部出现横幅与「立即重启」按钮（部署方未声明进程监督时隐藏），点击后界面会断开并轮询等待服务恢复。保存反馈区分「已生效」与「已保存，待重启」。
 
 Tool session 详情默认打开 Overview 时间线：按时间合并冻结消息、Invocation 生命周期、Model Call、Tool Call 与 Agent transcript；消息正文和 `send` 参数中的发送内容直接展示，Tool 结果与完整参数按需展开。失败的 Model Call 同时展示稳定错误码，并可展开查看经密钥脱敏的完整 Provider 错误详情。Assistant 文本显式标注为私有推理，只有 `send` Tool 会发往 Telegram。
 

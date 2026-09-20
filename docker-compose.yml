@@ -22,13 +22,18 @@ services:
   plasticwan:
     image: ghcr.io/tcdw/plasticwan:latest
     restart: unless-stopped
+    environment:
+      # Declares that something restarts the process, which is what the restart
+      # policy above does. It is what enables the Admin Panel's "restart now";
+      # drop it together with `restart:`, or the panel offers a button that
+      # stops the bot until someone starts it by hand.
+      PLASTICWAN_SUPERVISED: "1"
+      # Optional: match host UID/GID to avoid permission issues with bind mounts
+      # PUID: "1000"
+      # PGID: "1000"
     volumes:
       - ./data:/data
       - ./config:/config
-    # Optional: match host UID/GID to avoid permission issues with bind mounts
-    # environment:
-    #   PUID: "1000"
-    #   PGID: "1000"
     # Admin panel binds to admin.host from config.jsonc (typically 127.0.0.1,
     # which Docker port publishing cannot reach). To publish the panel, set
     # admin.host to 0.0.0.0 in config.jsonc and uncomment:

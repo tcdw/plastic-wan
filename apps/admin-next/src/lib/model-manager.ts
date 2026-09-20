@@ -2,6 +2,8 @@ import {
   ApiError,
   type DraftField,
   type MetadataSource,
+  type ModelsDevConfidence,
+  type ModelsDevMatch,
   type ModelApplySummary,
   type ModelCompatConfig,
   type ModelCostConfig,
@@ -27,9 +29,13 @@ const SOURCE_LABELS: Record<MetadataSource, string> = {
   vercel: 'Vercel',
   gemini: 'Gemini',
   'models.dev': 'models.dev',
+  'models.dev-cross-provider': 'models.dev (其它供应商)',
   'models.dev-fuzzy': 'models.dev (模糊匹配)',
   missing: '缺失',
 };
+
+/** Sources that are a lead rather than an answer, so the field needs confirming. */
+const GUESSED_SOURCES: readonly MetadataSource[] = ['models.dev-cross-provider', 'models.dev-fuzzy'];
 
 export function metadataSourceLabel(source: MetadataSource): string {
   return SOURCE_LABELS[source];
@@ -41,7 +47,7 @@ export function fieldSourceLabel(draft: ModelMetadataDraft, field: DraftField): 
 
 /**
  * A field the admin has to look at before saving: the value is missing, only a
- * fuzzy models.dev match backs it, or the server flagged it (for example a
+ * guessed models.dev match backs it, or the server flagged it (for example a
  * `max_tokens` above `context_window`). `name` is optional, so a missing name is
  * not a reason to block the model.
  */
@@ -49,10 +55,24 @@ export function isDraftFieldUnconfirmed(draft: ModelMetadataDraft, field: DraftF
   if (draft.needs_confirmation.includes(field)) {
     return true;
   }
-  if (draft.sources[field] === 'models.dev-fuzzy' && field !== 'name') {
+  if (GUESSED_SOURCES.includes(draft.sources[field]) && field !== 'name') {
     return true;
   }
   return field !== 'name' && draft[field] === null;
+}
+
+const CONFIDENCE_NOTES: Record<ModelsDevConfidence, string> = {
+  exact: '',
+  'cross-provider': '（其它供应商，请核对价格与上限）',
+  fuzzy: '（模糊匹配，请核对每个字段）',
+};
+
+/** Where a draft's metadata was matched, so "需确认" is explainable. */
+export function matchLabel(match: ModelsDevMatch | null): string | null {
+  if (match === null) {
+    return null;
+  }
+  return `元数据匹配：models.dev 的 ${match.provider} / ${match.model}${CONFIDENCE_NOTES[match.confidence]}`;
 }
 
 export function draftNeedsConfirmation(draft: ModelMetadataDraft): boolean {

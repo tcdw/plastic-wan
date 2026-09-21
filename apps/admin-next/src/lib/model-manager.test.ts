@@ -3,10 +3,12 @@ import type { ModelMetadataDraft, ProviderModelConfig } from './api.ts';
 import {
   agentModelConfig,
   applyFeedback,
+  AUTO_COMPAT,
   compatConfigFromState,
   compatFieldsForApi,
   compatStateFromConfig,
   draftNeedsConfirmation,
+  emptyModelForm,
   isDraftFieldUnconfirmed,
   matchLabel,
   metadataSourceLabel,
@@ -291,6 +293,31 @@ describe('model form validation', () => {
       cost: { input: '1', output: '', cache_read: '0', cache_write: '0' },
     };
     expect(validateModelForm(form).cost).toBeDefined();
+  });
+});
+
+describe('tool-schema keywords', () => {
+  const config: ProviderModelConfig = {
+    id: 'qwen/qwen3.8-27b:free',
+    name: 'Qwen',
+    reasoning: true,
+    tool_schema_keywords: 'minimal',
+    input: ['text', 'image'],
+    context_window: 262_144,
+    max_tokens: 235_929,
+    cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+  };
+
+  test('a stored profile survives the form round trip', () => {
+    const form = modelFormFromConfig(config, 'openai-completions');
+    expect(form.tool_schema_keywords).toBe('minimal');
+    expect(modelFormToConfig(form, 'openai-completions')).toMatchObject({ tool_schema_keywords: 'minimal' });
+  });
+
+  test('automatic leaves the field out of the configuration', () => {
+    const form = { ...modelFormFromConfig(config, 'openai-completions'), tool_schema_keywords: AUTO_COMPAT };
+    expect(modelFormToConfig(form, 'openai-completions')).not.toHaveProperty('tool_schema_keywords');
+    expect(emptyModelForm('anthropic-messages').tool_schema_keywords).toBe(AUTO_COMPAT);
   });
 });
 

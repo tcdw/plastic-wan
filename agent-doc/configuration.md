@@ -305,6 +305,26 @@ Admin Panel 从 models.dev 的 `reasoning_options` 预填级别（`src/platform/
 
 `configure` 向导与 Admin 的「获取模型列表」按 API 选择列表端点：OpenAI 系拼 `${base_url}/models`（Bearer）；Anthropic 系拼 `${base_url}/v1/models`（`x-api-key` + `anthropic-version`，按 `has_more`/`last_id` 翻页）；`google-generative-ai` 拼 `${base_url}/models`（`x-goog-api-key`，按 `nextPageToken` 翻页，只保留 `supportedGenerationMethods` 含 `generateContent` 的模型）；Vercel AI Gateway 是特例，拼 `${base_url}/v1/models`（Bearer，只保留 `type === "language"`）。该响应只用于发现可路由的模型 ID；`reasoning`、输入能力、上下文、输出上限与费用由供应商扩展字段、models.dev 或管理员确认后写入。
 
+### 模型 tool schema 关键字
+
+`tool_schema_keywords`（可选）决定这个模型的 Tool 定义里能带哪些 JSON Schema 关键字，由运行时而不是 Pi 读取（`src/platform/tool-schema.ts`）。省略即原样发送：Tool 参数按 TypeBox 写成什么样就发什么样。取值 `minimal` 时把 schema 收敛成「能折叠成解码文法的形状」：
+
+- 丢掉只用于事后校验的注解：`minLength`、`maxLength`、`pattern`、`minimum`、`maximum`、`multipleOf`、`minItems`、`maxItems`、`uniqueItems`、`minProperties`、`maxProperties`、`default`、`format`、`$schema`、`patternProperties`；
+- `anyOf` / `oneOf` 收敛成第一个带 `type` 的变体的那个类型（联合里的 `enum`、`pattern` 不保留）——文法折叠器拒绝「同一个值有两种读法」，无类型的属性在它看来正是这种歧义；`allOf`、`not`、`if`/`then`/`else`、`contains`、`propertyNames`、`dependent*`、`unevaluated*` 一并丢掉。没有变体带 `type` 时只能整段丢掉，属性退化成只剩 `description` 的文档。
+
+为什么需要它：把 Tool 参数折叠成解码文法的端点会拒绝不认识的写法，而且是整个请求 400，模型一个 token 都没生成：
+
+```
+failed to translate request: folding the request grammar: grammar rejected:
+tool "read" parameter schema: parameter "uri": unsupported schema keyword "minLength"
+```
+
+同一个端点还会在联合类型上再拒一次（`tool "brave__brave_web_search" parameter schema: parameter "goggles": more than one JSON reading of the same emitted value`）。
+
+一次这样的失败就让 Invocation 以 `model_error` 结束，对应的 Bucket 落 `failed`，那批消息不重试（实际案例见 OpenRouter 上 `qwen/qwen3.8-27b:free` 路由到的 ModelRun）。收敛不会放松运行时的边界：每个 Tool 在自己的边界上重新校验参数（MCP Tool 用服务端发布的原始 schema 编译自己的校验器，与发给模型的那份副本无关），这些关键字本来就只是给模型的提示，不是强制手段。
+
+主 Agent 的 Tool 注册表（含 allowlist 的 MCP Tool）按 agent 模型声明的 profile 发送，Vision 的 Sticker 分析 Tool 按 vision 模型声明的 profile 发送；两者各自读自己那条模型配置。Admin Panel 的模型编辑弹窗把它放在 thinking levels 之后，三态为 `Automatic` / `minimal`。
+
 ## Agent 与 Vision
 
 - `daily_budget.max_tokens`: 主 Agent 与聊天触发的 `read_image` 共享的全局每日 Token 上限；各 Chat 用量仍分别写入 `daily_usage`。

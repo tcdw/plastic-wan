@@ -444,6 +444,11 @@ export interface ProviderModelConfig {
   /** Reasoning models only; absent means Pi's default (`off` through `high`). */
   readonly thinking_levels?: readonly ThinkingLevel[];
   readonly compat?: ModelCompatConfig;
+  /**
+   * Which JSON Schema keywords this model's tool definitions may carry; absent
+   * sends every keyword the runtime builds.
+   */
+  readonly tool_schema_keywords?: 'minimal';
   readonly input: readonly ModelInput[];
   readonly context_window: number;
   readonly max_tokens: number;

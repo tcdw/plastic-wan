@@ -29,6 +29,7 @@ import {
   type ModelFormState,
   matchLabel,
   modelFormToConfig,
+  TOOL_SCHEMA_KEYWORDS_OPTIONS,
   unconfirmedFields,
   validateModelForm,
 } from '@/lib/model-manager.ts';
@@ -246,6 +247,32 @@ export function ModelEditDialog({
               </p>
             </div>
           ) : null}
+
+          <div className="space-y-2">
+            <Label htmlFor="model-tool-schema" className="font-mono text-xs">
+              tool_schema_keywords
+            </Label>
+            <Select
+              value={form.tool_schema_keywords}
+              onValueChange={(value) => setForm((previous) => ({ ...previous, tool_schema_keywords: value }))}
+            >
+              <SelectTrigger id="model-tool-schema" className="w-full sm:w-64">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TOOL_SCHEMA_KEYWORDS_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-muted-foreground text-xs">
+              Which JSON Schema keywords this model's tool definitions may carry. Automatic sends every keyword the
+              runtime builds; minimal drops the validation-only ones that grammar-constrained endpoints reject with
+              "unsupported schema keyword".
+            </p>
+          </div>
 
           <div className="space-y-2">
             <FieldLabel htmlFor="model-cost-input" label="cost (USD per 1M tokens)" draft={draft} field="cost" />

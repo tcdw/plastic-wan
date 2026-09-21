@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig } from '../src/platform/config.ts';
+import { configuredToolSchemaKeywords, loadConfig } from '../src/platform/config.ts';
 import { buildModelRegistry, requireModel } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { backupDatabase, SqliteStore } from '../src/store/database.ts';
@@ -288,6 +288,38 @@ describe('configuration', () => {
     );
     const loaded = await loadConfig(configPath);
     expect(loaded.fileConfig.providers.agent?.models[0]?.compat).toMatchObject({ thinking_format: 'openrouter' });
+  });
+
+  test('accepts the minimal tool-schema keyword profile on any adapter', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        const model = config.providers.agent?.models[0];
+        if (model === undefined) {
+          throw new Error('Expected an agent model fixture');
+        }
+        model.tool_schema_keywords = 'minimal';
+      }),
+    );
+    const loaded = await loadConfig(configPath);
+    expect(loaded.fileConfig.providers.agent?.models[0]?.tool_schema_keywords).toBe('minimal');
+    expect(configuredToolSchemaKeywords(loaded.config, 'agent', 'agent-model')).toBe('minimal');
+  });
+
+  test('rejects a tool-schema keyword profile the runtime does not implement', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        const model = config.providers.agent?.models[0];
+        if (model === undefined) {
+          throw new Error('Expected an agent model fixture');
+        }
+        model.tool_schema_keywords = 'full' as never;
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
   });
 
   test('rejects thinking levels on a model that does not reason', async () => {

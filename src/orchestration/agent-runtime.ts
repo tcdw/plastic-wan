@@ -11,7 +11,8 @@ import {
 } from '@earendil-works/pi-ai';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { KeyedSemaphore } from '../platform/concurrency.ts';
-import type { RawConfig } from '../platform/config.ts';
+import { configuredToolSchemaKeywords, type RawConfig } from '../platform/config.ts';
+import { applyToolSchemaKeywords } from '../platform/tool-schema.ts';
 import { type ContextIdentity, ContextBuilder, type Injection, type StablePrompt } from '../context/context-builder.ts';
 import { encodeContextMessage, estimateMessageTokens } from '../context/context-codec.ts';
 import { isRenderable, planContextGc, type ContextGcPlan } from '../context/context-gc.ts';
@@ -219,6 +220,10 @@ export class AgentRuntime {
     if (model === undefined) {
       throw new Error(`Agent model ${config.agent.provider}/${config.agent.model} is not registered`);
     }
+    // The declared keyword profile of the agent model decides what its tool
+    // definitions may carry; the snapshot is read so a reload cannot change the
+    // schema mid-run.
+    const toolSchemaKeywords = configuredToolSchemaKeywords(config, config.agent.provider, config.agent.model);
     const identity = this.#contextBuilder.identity(config, invocationId);
     const supportsImages = model.input.includes('image');
     const stable = this.#contextBuilder.buildSystemPrompt(config, identity, supportsImages, {
@@ -295,7 +300,7 @@ export class AgentRuntime {
       ...(this.#additionalTools?.(target, deadline, capabilities) ?? []),
       ...(exposeZzz ? [zzz] : []),
     ];
-    const tools = buildTools(contextState, zzzExposed);
+    const tools = applyToolSchemaKeywords(buildTools(contextState, zzzExposed), toolSchemaKeywords);
     validateToolRegistry(tools, model.contextWindow);
     const toolDefinitionCharacters = estimateToolRegistryCharacters(tools);
     this.#recordToolRegistry(invocationId, tools);

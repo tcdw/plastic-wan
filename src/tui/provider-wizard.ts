@@ -1,6 +1,12 @@
 import { confirm, input, search, select } from '@inquirer/prompts';
 import { supportedBuiltinApi, findBuiltinProvider, listBuiltinPresets } from '../platform/builtin-providers.ts';
-import type { FileConfig, ModelCompatConfig, SecretRef, ThinkingLevelConfig } from '../platform/config.ts';
+import type {
+  FileConfig,
+  ModelCompatConfig,
+  SecretRef,
+  ThinkingLevelConfig,
+  ToolSchemaKeywords,
+} from '../platform/config.ts';
 import { SecretStore } from '../platform/secrets.ts';
 import {
   fetchModelsDevCatalog,
@@ -51,6 +57,7 @@ type ModelConfig = {
   reasoning: boolean;
   thinking_levels?: ThinkingLevelConfig[];
   compat?: ModelCompatConfig;
+  tool_schema_keywords?: ToolSchemaKeywords;
   input: Array<'text' | 'image'>;
   context_window: number;
   max_tokens: number;

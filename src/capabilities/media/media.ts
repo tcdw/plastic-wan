@@ -6,6 +6,8 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import { AsyncSemaphore, type KeyedSemaphore } from '../../platform/concurrency.ts';
+import { configuredToolSchemaKeywords, type ToolSchemaKeywords } from '../../platform/config.ts';
+import { applyToolSchemaKeywords } from '../../platform/tool-schema.ts';
 import type { RuntimeConfigurationStore } from '../../platform/runtime-config.ts';
 import { finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from '../../store/database.ts';
 import type { CapabilityRefResolver, DirectImage, InvocationContext } from '../../platform/invocation-context.ts';
@@ -61,6 +63,8 @@ interface VisionRun {
   readonly analysisVersion: string;
   /** Checked against `model.maxTokens` when the snapshot was built, so it must travel with `model`. */
   readonly maxOutputTokens: number;
+  /** The keyword profile the vision model declares for the one tool it is sent. */
+  readonly toolSchemaKeywords: ToolSchemaKeywords | undefined;
 }
 
 export class MediaService {
@@ -99,6 +103,11 @@ export class MediaService {
       model,
       analysisVersion: `${model.provider}/${model.id}/prompt-${this.#visionPromptVersion}`,
       maxOutputTokens: snapshot.config.vision.max_output_tokens,
+      toolSchemaKeywords: configuredToolSchemaKeywords(
+        snapshot.config,
+        snapshot.config.vision.provider,
+        snapshot.config.vision.model,
+      ),
     };
   }
 
@@ -421,14 +430,17 @@ export class MediaService {
               ],
               ...(media.kind === 'sticker'
                 ? {
-                    tools: [
-                      {
-                        name: STICKER_ANALYSIS_TOOL_NAME,
-                        description:
-                          'Record the visual description, emotions, actions, and bilingual search tags for this sticker',
-                        parameters: StickerAnalysisSchema,
-                      },
-                    ],
+                    tools: applyToolSchemaKeywords(
+                      [
+                        {
+                          name: STICKER_ANALYSIS_TOOL_NAME,
+                          description:
+                            'Record the visual description, emotions, actions, and bilingual search tags for this sticker',
+                          parameters: StickerAnalysisSchema,
+                        },
+                      ],
+                      run.toolSchemaKeywords,
+                    ),
                   }
                 : {}),
             },

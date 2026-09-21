@@ -188,6 +188,8 @@ export interface ModelFormState {
   readonly cost: ModelCostForm;
   /** One entry per compat field of the model's API; `auto` means "leave it out". */
   readonly compat: Readonly<Record<string, string>>;
+  /** Tool-schema keyword profile; `auto` means "leave the field out of the file". */
+  readonly tool_schema_keywords: string;
 }
 
 export interface ModelFormErrors {
@@ -211,6 +213,7 @@ export function emptyModelForm(api: ProviderApi): ModelFormState {
     max_tokens: '',
     cost: EMPTY_COST,
     compat: compatStateFromConfig(api, undefined),
+    tool_schema_keywords: AUTO_COMPAT,
   };
 }
 
@@ -230,6 +233,7 @@ export function modelFormFromConfig(model: ProviderModelConfig, api: ProviderApi
       cache_write: String(model.cost.cache_write),
     },
     compat: compatStateFromConfig(api, model.compat),
+    tool_schema_keywords: model.tool_schema_keywords ?? AUTO_COMPAT,
   };
 }
 
@@ -258,6 +262,7 @@ export function modelFormFromDraft(draft: ModelMetadataDraft, api: ProviderApi):
       api,
       draft.requires_reasoning_content ? { requires_reasoning_content: true } : undefined,
     ),
+    tool_schema_keywords: AUTO_COMPAT,
   };
 }
 
@@ -310,6 +315,7 @@ export function modelFormToConfig(form: ModelFormState, api: ProviderApi): Provi
     cache_write: parseNonNegativeNumber(form.cost.cache_write) ?? 0,
   };
   const compat = compatConfigFromState(api, form.compat);
+  const toolSchemaKeywords = toolSchemaKeywordsFromState(form.tool_schema_keywords);
   // Levels only exist on a reasoning model; unchecking reasoning drops them.
   const thinkingLevels = form.reasoning ? sortThinkingLevels(form.thinking_levels) : [];
   return {
@@ -318,6 +324,7 @@ export function modelFormToConfig(form: ModelFormState, api: ProviderApi): Provi
     reasoning: form.reasoning,
     ...(thinkingLevels.length === 0 ? {} : { thinking_levels: thinkingLevels }),
     ...(compat === undefined ? {} : { compat }),
+    ...(toolSchemaKeywords === undefined ? {} : { tool_schema_keywords: toolSchemaKeywords }),
     input: form.input,
     context_window: parsePositiveInteger(form.context_window) ?? 0,
     max_tokens: parsePositiveInteger(form.max_tokens) ?? 0,
@@ -418,6 +425,22 @@ export function compatConfigFromState(
     compat[spec.field] = spec.kind === 'boolean' ? value === 'on' : value;
   }
   return Object.keys(compat).length === 0 ? undefined : (compat as ModelCompatConfig);
+}
+
+// --- tool-schema keywords --------------------------------------------------
+
+/**
+ * The profiles the panel offers for one model. `auto` is the tri-state "leave
+ * the field out", exactly like the compat section: an absent field keeps the
+ * schema the runtime builds.
+ */
+export const TOOL_SCHEMA_KEYWORDS_OPTIONS: readonly CompatOption[] = [
+  { value: AUTO_COMPAT, label: 'Automatic' },
+  { value: 'minimal', label: 'minimal' },
+];
+
+export function toolSchemaKeywordsFromState(state: string): ProviderModelConfig['tool_schema_keywords'] {
+  return state === 'minimal' ? 'minimal' : undefined;
 }
 
 // --- in-use lookups --------------------------------------------------------

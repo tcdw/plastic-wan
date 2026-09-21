@@ -86,6 +86,16 @@ export const ModelCompatSchema = Type.Object(
   },
   Strict,
 );
+/**
+ * How much of a tool definition's JSON Schema may be sent to one model, honoured
+ * by `tool-schema.ts` rather than by Pi. Omitting it sends every keyword the
+ * runtime builds; `minimal` reduces the schema to what a grammar folder can
+ * fold, because such an endpoint rejects the whole request — before the model
+ * produces a token — with `unsupported schema keyword "minLength"` or `more
+ * than one JSON reading of the same emitted value`.
+ */
+export const ToolSchemaKeywordsSchema = Type.Literal('minimal');
+export type ToolSchemaKeywords = Static<typeof ToolSchemaKeywordsSchema>;
 export const ModelConfigSchema = Type.Object(
   {
     id: Type.String({ minLength: 1 }),
@@ -97,6 +107,7 @@ export const ModelConfigSchema = Type.Object(
      */
     thinking_levels: Type.Optional(Type.Array(ThinkingLevelSchema, { minItems: 1, uniqueItems: true })),
     compat: Type.Optional(ModelCompatSchema),
+    tool_schema_keywords: Type.Optional(ToolSchemaKeywordsSchema),
     input: Type.Array(Type.Union([Type.Literal('text'), Type.Literal('image')]), {
       minItems: 1,
       uniqueItems: true,
@@ -633,6 +644,31 @@ export function assertModelConfig(api: ProviderApi, model: ModelFileConfig, labe
       throw new Error(`${label} cannot set ${field} for api ${api}`);
     }
   }
+}
+
+/**
+ * The configured entry for one provider alias and model id, or `undefined` when
+ * the configuration no longer carries it.
+ */
+function configuredModel(
+  config: { readonly providers: FileConfig['providers'] },
+  providerAlias: string,
+  modelId: string,
+): ModelFileConfig | undefined {
+  return config.providers[providerAlias]?.models.find((candidate) => candidate.id === modelId);
+}
+
+/**
+ * The tool-schema keyword profile one configured model declares. Every caller
+ * that sends tool definitions to a model reads it here, so the reduction is
+ * decided by the same entry the model was registered from.
+ */
+export function configuredToolSchemaKeywords(
+  config: { readonly providers: FileConfig['providers'] },
+  providerAlias: string,
+  modelId: string,
+): ToolSchemaKeywords | undefined {
+  return configuredModel(config, providerAlias, modelId)?.tool_schema_keywords;
 }
 
 /**

@@ -887,3 +887,105 @@ test('does not nudge when the model ends without any draft text', async () => {
   expect(faux.state.callCount).toBe(1);
   store.close();
 });
+
+test('a model that declares minimal tool-schema keywords is sent reduced tool definitions', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-tool-schema-'));
+  directories.push(directory);
+  const configPath = join(directory, 'config.jsonc');
+  await writeTestConfig(
+    directory,
+    configPath,
+    testConfigJsonc(directory, (config) => {
+      const provider = config.providers.agent;
+      if (provider?.kind !== 'custom') {
+        throw new Error('Expected a custom agent provider fixture');
+      }
+      const model = provider.models[0];
+      if (model === undefined) {
+        throw new Error('Expected an agent model fixture');
+      }
+      model.tool_schema_keywords = 'minimal';
+    }),
+  );
+  const loaded = await loadConfig(configPath);
+  const faux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  const configStore = await testConfigStore(loaded, fauxRegistry(faux));
+  const store = await SqliteStore.open(loaded.config);
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
+  const update: Update = {
+    update_id: 6,
+    message: {
+      message_id: 12,
+      date: 1_700_000_000,
+      chat: { id: 123456789, type: 'private', first_name: 'Owner' },
+      from: { id: 42, is_bot: false, first_name: 'Alice' },
+      text: 'hello',
+    },
+  };
+  const received = new Date('2026-08-15T00:00:00.000Z');
+  ingestion.ingest(update, received);
+  const scheduler = new BucketScheduler(store, configStore, async () => ({
+    state: 'completed',
+    reason: 'done',
+  }));
+  const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
+  if (invocationId === undefined) {
+    throw new Error('Expected a due invocation');
+  }
+
+  let presented: { name: string; parameters: unknown }[] = [];
+  faux.setResponses([
+    (context, options) => {
+      // The faux provider never touches the network, so the snapshot hooks are
+      // triggered manually to mirror what real adapters do.
+      options?.onPayload?.({ model: 'agent-model', messages: context.messages, tools: context.tools }, faux.getModel());
+      void options?.onResponse?.({ status: 200, headers: {} }, faux.getModel());
+      presented = (context.tools ?? []).map((tool) => ({ name: tool.name, parameters: tool.parameters }));
+      return fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'published' }), { stopReason: 'toolUse' });
+    },
+    fauxAssistantMessage('private assistant text'),
+  ]);
+  const runtime = new AgentRuntime({
+    store,
+    configStore,
+    secrets: new SecretStore(),
+    telegramApi: {
+      sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
+      sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
+    },
+    bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    systemResources: SystemResources.empty(),
+  });
+  const outcome = await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
+  expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+
+  // What the provider was handed: the shape of every call survives, the
+  // validation-only annotations a grammar endpoint rejects are gone.
+  expect(presented.map((tool) => tool.name)).toEqual(['read', 'send', 'execute']);
+  expect(JSON.stringify(presented)).not.toContain('minLength');
+  expect(JSON.stringify(presented)).not.toContain('maxLength');
+  expect(JSON.stringify(presented)).not.toContain('patternProperties');
+  expect(presented.find((tool) => tool.name === 'read')?.parameters).toMatchObject({
+    type: 'object',
+    required: ['uri'],
+    properties: { uri: { type: 'string' } },
+  });
+
+  // The audit records the reduced schema too: the registry hash is taken over the
+  // definitions the model was handed.
+  const registryRow = store.db
+    .prepare<[bigint], { tool_registry_json: string | null }>('SELECT tool_registry_json FROM invocations WHERE id = ?')
+    .get(invocationId);
+  expect(registryRow?.tool_registry_json).toContain('"name":"read"');
+  expect(registryRow?.tool_registry_json).not.toContain('minLength');
+  const snapshot = store.db
+    .prepare<[], { request_json: string | null }>(
+      "SELECT request_json FROM model_calls WHERE role = 'agent' AND request_json IS NOT NULL ORDER BY id LIMIT 1",
+    )
+    .get();
+  expect(snapshot?.request_json).not.toContain('minLength');
+  store.close();
+});

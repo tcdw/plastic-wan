@@ -93,16 +93,16 @@ export function ProviderConnectionCard({
       // Moving the address without re-entering the credentials would let a
       // stolen session point a stored key at another server.
       if (apiKey.length === 0) {
-        setLocalError('修改 base_url 需要重新填写 API Key');
+        setLocalError('Changing base_url requires the API key again');
         return;
       }
       const missing = provider.header_names.filter((name) => !headers.some((row) => row.existing && row.name === name));
       if (missing.length > 0) {
-        setLocalError(`修改 base_url 时不能删除已有的 Header：${missing.join(', ')}`);
+        setLocalError(`A header cannot be removed while base_url changes: ${missing.join(', ')}`);
         return;
       }
       if (headers.some((row) => row.existing && row.value.length === 0)) {
-        setLocalError('修改 base_url 需要重新填写全部 Header 值');
+        setLocalError('Changing base_url requires every header value again');
         return;
       }
     }
@@ -124,7 +124,7 @@ export function ProviderConnectionCard({
       action={
         <div className="flex items-center gap-2">
           <Button type="button" size="sm" variant="outline" onClick={onDetect}>
-            检测
+            Test
           </Button>
           <Button type="button" size="sm" disabled={!dirty || save.isPending} onClick={submit}>
             {save.isPending ? 'Saving…' : 'Save'}
@@ -161,7 +161,9 @@ export function ProviderConnectionCard({
                 </SelectContent>
               </Select>
               {api === 'google-generative-ai' ? (
-                <p className="text-muted-foreground text-xs">base_url 必须已包含版本路径，例如以 /v1beta 结尾。</p>
+                <p className="text-muted-foreground text-xs">
+                  base_url must already carry the version path, for example end with /v1beta.
+                </p>
               ) : null}
             </div>
           </div>
@@ -189,8 +191,8 @@ export function ProviderConnectionCard({
               }}
             />
             <p className="text-muted-foreground text-xs">
-              已设置，留空以保持当前设置
-              {baseUrlChanged ? ' · 修改 base_url 后必须重新填写' : ''}
+              Set - leave empty to keep it
+              {baseUrlChanged ? ' · required again after a base_url change' : ''}
             </p>
           </div>
         </div>
@@ -211,11 +213,13 @@ export function ProviderConnectionCard({
         ) : null}
 
         {baseUrlChanged ? (
-          <p className="text-warning text-xs">修改 base_url 需要同时重新填写 API Key 和全部 Header 值</p>
+          <p className="text-warning text-xs">
+            Changing base_url requires the API key and every header value in the same save
+          </p>
         ) : null}
         {error !== null ? <p className="text-destructive text-sm break-words">{error}</p> : null}
 
-        <p className="text-muted-foreground text-xs">连接字段保存后需要重启才生效。</p>
+        <p className="text-muted-foreground text-xs">Connection fields take effect after a restart.</p>
       </div>
     </Panel>
   );

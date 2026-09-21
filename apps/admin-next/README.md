@@ -75,19 +75,21 @@ models.dev 目录缓存——`GET /providers/discover` 与 `lookup-metadata` 因
 ### Models 页（`src/pages/models.tsx`）写入约定
 
 - 每个写请求都带 `GET /api/providers` 返回的 `revision`（`If-Match`）。
-  `409 config_conflict` 表示 config.jsonc 在编辑期间被改动：提示「配置文件已被修改」、
+  `409 config_conflict` 表示 config.jsonc 在编辑期间被改动：提示 “config.jsonc changed…”、
   重新拉取，再让用户重试（`lib/model-manager.ts` 的 `writeErrorMessage`）。
-- 保存反馈必须区分「已生效」与「已保存，待重启」：只要 `apply.restart_required` 非空，
-  就不能显示成已应用（`applyFeedback`），待重启横幅与「立即重启」按钮由
+- 保存反馈必须区分 “Applied” 与 “Saved, restart required”：只要 `apply.restart_required` 非空，
+  就不能显示成已应用（`applyFeedback`），待重启横幅与 “Restart now” 按钮由
   `restart_required` + `supervised` 驱动（未声明 `PLASTICWAN_SUPERVISED=1` 时只列字段）。
 - 凭据只写不读：`api_key` 与 header 值永远是 `type="password"`、`autocomplete="new-password"`
   的空输入框，没有查看按钮；提交后用 `mutation.reset()` 立刻把带明文 key 的请求体
   从 mutation cache 里丢掉。页面不写 localStorage，也不把 key 放进任何持久结构。
 - 元数据草稿（`ModelMetadataDraft`）带 `sources` 与 `needs_confirmation`：`null`、或只有
   猜出来的匹配（`models.dev-cross-provider` / `models.dev-fuzzy`，见 `match.confidence`）
-  支撑的字段必须由管理员确认后才能保存——字段齐全的可以用「按列出的值确认 N 个」一次接受，
-  有空缺的要进编辑弹窗填写。面板不替模型填默认值；「高级设置」只显示当前 API 真正支持的
+  支撑的字段必须由管理员确认后才能保存——字段齐全的可以用 “Accept listed values (N)” 一次接受，
+  有空缺的要进编辑弹窗填写。面板不替模型填默认值；“Advanced” 折叠区只显示当前 API 真正支持的
   compat 字段。
+
+面板 UI 文案一律英文（与 Memories / Bot admins / Overview 一致）；本文档引用界面文案时用英文原文。
 
 ## 共享业务组件契约
 

@@ -24,10 +24,12 @@ export function RestartBanner({
   return (
     <Alert>
       <AlertTriangle className="text-warning" />
-      <AlertTitle>有 {paths.length} 处配置等待重启</AlertTitle>
+      <AlertTitle>
+        {paths.length} {paths.length === 1 ? 'setting is' : 'settings are'} waiting for a restart
+      </AlertTitle>
       <AlertDescription>
         <div className="space-y-2">
-          <p className="text-xs">这些字段已经写入 config.jsonc，但运行中的进程仍在使用旧值：</p>
+          <p className="text-xs">Written to config.jsonc, but the running process still uses the old values:</p>
           {/* One chip per path: a long joined line wraps into an unreadable
               paragraph as soon as a few fields are waiting. */}
           <ul className="flex flex-wrap gap-1.5">
@@ -39,11 +41,12 @@ export function RestartBanner({
           </ul>
           {supervised ? (
             <Button type="button" size="sm" disabled={pending} onClick={onRestart}>
-              {pending ? '重启中…' : '立即重启'}
+              {pending ? 'Restarting…' : 'Restart now'}
             </Button>
           ) : (
             <p className="text-muted-foreground text-xs">
-              部署方未声明进程监督（PLASTICWAN_SUPERVISED=1），这里不提供重启按钮，请人工重启服务端。
+              This deployment does not declare a supervisor (PLASTICWAN_SUPERVISED=1), so there is no restart button -
+              restart the server by hand.
             </p>
           )}
         </div>

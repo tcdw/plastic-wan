@@ -24,7 +24,7 @@ test.describe('models page', () => {
     await expect(page.getByText('Providers')).toBeVisible();
     await expect(page.getByRole('button', { name: `Provider ${E2E_BUILTIN_ALIAS}` })).toBeVisible();
     await expect(page.getByRole('button', { name: `Provider ${E2E_RELAY_ALIAS}` })).toBeVisible();
-    await expect(page.getByText('Agent 在用').first()).toBeVisible();
+    await expect(page.getByText('Agent in use').first()).toBeVisible();
 
     // Builtin providers show Pi's address read-only and only allow the key to change.
     await page.getByRole('button', { name: `Provider ${E2E_BUILTIN_ALIAS}` }).click();
@@ -33,8 +33,8 @@ test.describe('models page', () => {
     await expect(keyInput).toHaveAttribute('type', 'password');
     await expect(keyInput).toHaveAttribute('autocomplete', 'new-password');
     await expect(keyInput).toHaveValue('');
-    await expect(page.getByText('已设置，留空以保持当前设置')).toBeVisible();
-    await expect(page.getByRole('button', { name: '检测' })).toBeVisible();
+    await expect(page.getByText('Set - leave empty to keep it')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Test' })).toBeVisible();
     await expect(page.locator('table tbody tr').first()).toBeVisible();
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
   });
@@ -64,16 +64,16 @@ test.describe('models page', () => {
     expect(view.providers.map((provider: { alias: string }) => provider.alias)).toContain(E2E_RELAY_ALIAS);
   });
 
-  test('saving a builtin key reports 已保存，待重启 and offers the restart', async ({ page }) => {
+  test('saving a builtin key reports a pending restart and offers it', async ({ page }) => {
     await page.goto(await adminUrl('/models'));
     await page.getByRole('button', { name: `Provider ${E2E_BUILTIN_ALIAS}` }).click();
     await page.getByLabel('API Key').fill('e2e-rotated-builtin-key');
     await page.getByRole('button', { name: 'Save' }).click();
 
     // A connection field is restart-only: the feedback must not claim it is live.
-    await expect(page.getByText('已保存，待重启')).toBeVisible();
+    await expect(page.getByText('Saved, restart required')).toBeVisible();
     await expect(page.getByRole('alert').getByText(`providers.${E2E_BUILTIN_ALIAS}.api_key`)).toBeVisible();
-    await expect(page.getByRole('button', { name: '立即重启' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Restart now' })).toBeVisible();
 
     const view = await (await page.request.get(await adminUrl('/api/providers'))).json();
     expect(view.supervised).toBe(true);
@@ -82,19 +82,19 @@ test.describe('models page', () => {
 
     // The provider is not in the running registry while its connection waits, so
     // discovery asks for the key once and says a restart removes the need.
-    await page.getByRole('button', { name: '获取模型列表' }).click();
+    await page.getByRole('button', { name: 'Fetch models' }).click();
     await expect(page.locator('#picker-api-key')).toBeVisible();
-    await expect(page.getByText('重启之后就不用再填了', { exact: false })).toBeVisible();
+    await expect(page.getByText('After the restart it is no longer needed', { exact: false })).toBeVisible();
     await page.getByRole('button', { name: 'Cancel' }).click();
   });
 
   test('discovery resolves metadata from the local upstream and blocks unconfirmed drafts', async ({ page }) => {
     await page.goto(await adminUrl('/models'));
     await page.getByRole('button', { name: `Provider ${E2E_RELAY_ALIAS}` }).click();
-    await page.getByRole('button', { name: '获取模型列表' }).click();
+    await page.getByRole('button', { name: 'Fetch models' }).click();
 
     // Saved mode: the running registry's connection, which points at the loopback upstream.
-    await page.getByRole('button', { name: '获取', exact: true }).click();
+    await page.getByRole('button', { name: 'Fetch', exact: true }).click();
     await expect(page.getByText('endpoint:')).toBeVisible();
 
     const completeRow = page.locator('li').filter({ hasText: E2E_RELAY_COMPLETE_MODEL });
@@ -103,22 +103,22 @@ test.describe('models page', () => {
     await expect(incompleteRow).toBeVisible();
     // The relay's own host is unknown to models.dev, so even the model it does
     // know was matched under another provider and has to be confirmed.
-    await expect(completeRow.getByText('需确认', { exact: false })).toBeVisible();
+    await expect(completeRow.getByText('to confirm', { exact: false })).toBeVisible();
     // Every field of the second model is missing, so it cannot be taken as it is.
-    await expect(incompleteRow.getByText('需确认', { exact: false })).toBeVisible();
+    await expect(incompleteRow.getByText('to confirm', { exact: false })).toBeVisible();
 
     await page.getByLabel(`Select ${E2E_RELAY_COMPLETE_MODEL}`).check();
     await page.getByLabel(`Select ${E2E_RELAY_INCOMPLETE_MODEL}`).check();
-    await expect(page.getByRole('button', { name: /添加 \d+ 个模型/ })).toBeDisabled();
+    await expect(page.getByRole('button', { name: /Add \d+ models/ })).toBeDisabled();
 
     // Accepting the listed values covers the draft that has them all; the one
     // with empty fields still has to go through the dialog.
-    await page.getByRole('button', { name: /按列出的值确认 1 个/ }).click();
-    await expect(completeRow.getByText('已确认')).toBeVisible();
-    await expect(page.getByRole('button', { name: /添加 \d+ 个模型/ })).toBeDisabled();
+    await page.getByRole('button', { name: 'Accept listed values (1)' }).click();
+    await expect(completeRow.getByText('Confirmed')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Add \d+ models/ })).toBeDisabled();
 
-    await incompleteRow.getByRole('button', { name: '编辑' }).click();
-    await expect(page.getByText('需确认的字段：', { exact: false })).toBeVisible();
+    await incompleteRow.getByRole('button', { name: 'Edit' }).click();
+    await expect(page.getByText('Confirm or fill in:', { exact: false })).toBeVisible();
     await page.locator('#model-context').fill('64000');
     await page.locator('#model-max-tokens').fill('8192');
     await page.locator('#model-input-text').check();
@@ -128,9 +128,9 @@ test.describe('models page', () => {
     await page.locator('#model-cost-cache_write').fill('0');
     await page.getByRole('button', { name: 'Save' }).click();
 
-    await expect(incompleteRow.getByText('已确认')).toBeVisible();
-    await page.getByRole('button', { name: /添加 \d+ 个模型/ }).click();
-    await expect(page.getByText('已生效').first()).toBeVisible();
+    await expect(incompleteRow.getByText('Confirmed')).toBeVisible();
+    await page.getByRole('button', { name: /Add \d+ models/ }).click();
+    await expect(page.getByText('Applied').first()).toBeVisible();
 
     // The write went through the real server: both models are in the file now.
     const view = await (await page.request.get(await adminUrl('/api/providers'))).json();
@@ -144,20 +144,20 @@ test.describe('models page', () => {
   test('adds a model by id through lookup-metadata', async ({ page }) => {
     await page.goto(await adminUrl('/models'));
     await page.getByRole('button', { name: `Provider ${E2E_RELAY_ALIAS}` }).click();
-    await page.getByRole('button', { name: '手动添加' }).click();
-    await page.getByLabel('模型 id（每行一个，或用逗号分隔）').fill(E2E_RELAY_MANUAL_MODEL);
-    await page.getByRole('button', { name: '获取元数据' }).click();
+    await page.getByRole('button', { name: 'Add by id' }).click();
+    await page.getByLabel('Model ids (one per line, or comma separated)').fill(E2E_RELAY_MANUAL_MODEL);
+    await page.getByRole('button', { name: 'Look up metadata' }).click();
 
     // A single id opens the edit dialog straight away: the metadata comes from
     // models.dev and is confirmed there before anything is written.
-    await expect(page.getByText('确认 relay-manual-model')).toBeVisible();
+    await expect(page.getByText('Confirm relay-manual-model')).toBeVisible();
     await expect(page.locator('#model-context')).toHaveValue('64000');
     await page.getByRole('button', { name: 'Save' }).click();
 
     const row = page.locator('li').filter({ hasText: E2E_RELAY_MANUAL_MODEL });
-    await expect(row.getByText('已确认')).toBeVisible();
-    await page.getByRole('button', { name: '添加 1 个模型' }).click();
-    await expect(page.getByText('已生效').first()).toBeVisible();
+    await expect(row.getByText('Confirmed')).toBeVisible();
+    await page.getByRole('button', { name: 'Add 1 model' }).click();
+    await expect(page.getByText('Applied').first()).toBeVisible();
 
     const view = await (await page.request.get(await adminUrl('/api/providers'))).json();
     const relay = view.providers.find((provider: { alias: string }) => provider.alias === E2E_RELAY_ALIAS);
@@ -171,7 +171,7 @@ test.describe('models page', () => {
       .base_url as string;
 
     await page.goto(await adminUrl('/models'));
-    await page.getByRole('button', { name: '新建 Provider' }).click();
+    await page.getByRole('button', { name: 'New provider' }).click();
 
     await page.locator('#wizard-kind').click();
     await page.getByRole('option', { name: /custom/ }).click();
@@ -184,15 +184,15 @@ test.describe('models page', () => {
 
     // The provider is not in the running registry yet, so the listing is fetched
     // in temporary mode with the key that was just typed.
-    await page.getByRole('button', { name: '获取模型列表' }).click();
+    await page.getByRole('button', { name: 'Fetch models' }).click();
     const row = page.locator('li').filter({ hasText: E2E_RELAY_COMPLETE_MODEL });
     await expect(row).toBeVisible();
     await page.getByLabel(`Select ${E2E_RELAY_COMPLETE_MODEL}`).check();
-    await page.getByRole('button', { name: /按列出的值确认 1 个/ }).click();
-    await page.getByRole('button', { name: '创建 Provider' }).click();
+    await page.getByRole('button', { name: 'Accept listed values (1)' }).click();
+    await page.getByRole('button', { name: 'Create provider' }).click();
 
-    await expect(page.getByRole('dialog').getByText('已保存，待重启')).toBeVisible();
-    await expect(page.getByRole('button', { name: '立即重启' })).toBeVisible();
+    await expect(page.getByRole('dialog').getByText('Saved, restart required')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Restart now' })).toBeVisible();
     await page.getByRole('button', { name: 'Done' }).click();
 
     await expect(page.getByRole('button', { name: 'Provider relay2' })).toBeVisible();
@@ -209,7 +209,7 @@ test.describe('models page', () => {
       .base_url as string;
 
     await page.goto(await adminUrl('/models'));
-    await page.getByRole('button', { name: '新建 Provider' }).click();
+    await page.getByRole('button', { name: 'New provider' }).click();
 
     await page.locator('#wizard-kind').click();
     await page.getByRole('option', { name: /custom/ }).click();
@@ -224,11 +224,11 @@ test.describe('models page', () => {
 
     // Metadata lookup never sends headers, so the incomplete row survives until
     // the submit — where it must be reported instead of silently dropped.
-    await page.getByLabel('或者手填模型 id（每行一个，或用逗号分隔）').fill(E2E_RELAY_MANUAL_MODEL);
-    await page.getByRole('button', { name: '获取元数据' }).click();
+    await page.getByLabel('Or enter model ids by hand (one per line, or comma separated)').fill(E2E_RELAY_MANUAL_MODEL);
+    await page.getByRole('button', { name: 'Look up metadata' }).click();
     await page.getByLabel(`Select ${E2E_RELAY_MANUAL_MODEL}`).check();
-    await page.getByRole('button', { name: /按列出的值确认 1 个/ }).click();
-    await page.getByRole('button', { name: '创建 Provider' }).click();
+    await page.getByRole('button', { name: 'Accept listed values (1)' }).click();
+    await page.getByRole('button', { name: 'Create provider' }).click();
 
     await expect(page.getByText('Header x-extra needs a value')).toBeVisible();
     const after = await (await page.request.get(await adminUrl('/api/providers'))).json();

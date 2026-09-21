@@ -76,10 +76,10 @@ export function ModelDraftList({
                     {draft.name === null ? null : (
                       <span className="text-muted-foreground truncate text-xs">{draft.name}</span>
                     )}
-                    {draft.configured ? <ToneBadge tone="neutral">已配置</ToneBadge> : null}
-                    {confirmed ? <ToneBadge tone="success">已确认</ToneBadge> : null}
+                    {draft.configured ? <ToneBadge tone="neutral">Configured</ToneBadge> : null}
+                    {confirmed ? <ToneBadge tone="success">Confirmed</ToneBadge> : null}
                     {needsConfirmation ? (
-                      <ToneBadge tone="warning">需确认 {unconfirmedFields(draft).length} 项</ToneBadge>
+                      <ToneBadge tone="warning">{unconfirmedFields(draft).length} to confirm</ToneBadge>
                     ) : null}
                   </div>
                   <p className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 text-xs">
@@ -95,14 +95,16 @@ export function ModelDraftList({
                     <Metric label="reasoning" value={draft.reasoning === null ? '—' : draft.reasoning ? 'yes' : 'no'} />
                   </p>
                   {/* Where the row came from, once — instead of repeating the
-                      same source after every value. */}
+                      same source after every value. It wraps rather than
+                      truncates: a dialog's grid track sizes to max-content, so
+                      one unbreakable sentence would widen the whole dialog. */}
                   {matchLabel(draft.match) === null ? null : (
-                    <p className="text-muted-foreground truncate text-xs opacity-60">{matchLabel(draft.match)}</p>
+                    <p className="text-muted-foreground text-xs opacity-60">{matchLabel(draft.match)}</p>
                   )}
                 </div>
                 <Button type="button" variant="ghost" size="xs" onClick={() => onEdit(draft)}>
                   <Pencil />
-                  编辑
+                  Edit
                 </Button>
               </li>
             );

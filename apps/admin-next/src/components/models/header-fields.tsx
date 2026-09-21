@@ -59,7 +59,7 @@ export function HeaderFields({
               type="password"
               autoComplete="new-password"
               value={row.value}
-              placeholder={row.existing ? '已设置，留空以保持当前设置' : ''}
+              placeholder={row.existing ? 'Set - leave empty to keep' : ''}
               onChange={(event) => update(index, { value: event.target.value })}
             />
           </div>
@@ -75,7 +75,7 @@ export function HeaderFields({
         </div>
       ))}
       {valuesRequired && rows.some((row) => row.existing && row.value.length === 0) ? (
-        <p className="text-warning text-xs">修改 base_url 需要重新填写全部 Header 值</p>
+        <p className="text-warning text-xs">Changing base_url requires every header value again</p>
       ) : null}
       <Button
         type="button"

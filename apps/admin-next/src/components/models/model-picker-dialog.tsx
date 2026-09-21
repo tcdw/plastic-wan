@@ -79,7 +79,7 @@ export function ModelPickerDialog({
         throw new Error(payload.error);
       }
       if (apiKey.length === 0) {
-        throw new Error('临时模式需要填写 API Key');
+        throw new Error('Temporary mode needs an API key');
       }
       return await discoverProviderModels({
         ...connection,
@@ -98,7 +98,7 @@ export function ModelPickerDialog({
     mutationFn: async () => {
       const parsed = parseModelIds(ids);
       if (parsed.length === 0) {
-        throw new Error('至少输入一个模型 id');
+        throw new Error('Enter at least one model id');
       }
       const result = await lookupModelMetadata({ ...connection, ids: parsed });
       return {
@@ -144,10 +144,12 @@ export function ModelPickerDialog({
     >
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{mode === 'discover' ? '获取模型列表' : '手动添加模型'}</DialogTitle>
+          <DialogTitle>{mode === 'discover' ? 'Fetch models' : 'Add models by id'}</DialogTitle>
           <DialogDescription>
             {provider.alias} · {provider.api}
-            {mode === 'discover' ? ' · 元数据来自 Provider 的扩展字段与 models.dev' : ' · 只解析元数据，不访问列表端点'}
+            {mode === 'discover'
+              ? ' · metadata from the provider listing and models.dev'
+              : ' · metadata only; the listing endpoint is not called'}
           </DialogDescription>
         </DialogHeader>
 
@@ -156,7 +158,7 @@ export function ModelPickerDialog({
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2">
                 <Button type="button" variant="ghost" size="sm" onClick={() => setTempMode((previous) => !previous)}>
-                  {tempMode ? '改用已保存的连接' : '改用临时模式（用请求体里的 API Key）'}
+                  {tempMode ? 'Use the saved connection' : 'Use temporary mode (key from this form)'}
                 </Button>
                 {endpoint === null ? null : (
                   <span className="text-muted-foreground text-xs">
@@ -167,8 +169,8 @@ export function ModelPickerDialog({
               {tempMode ? (
                 <div className="space-y-3 rounded-md border p-3">
                   <p className="text-muted-foreground text-xs">
-                    该 Provider 的连接字段待重启，运行中的进程里还没有它的连接信息，所以要用临时模式再填一次 API
-                    Key；重启之后就不用再填了。
+                    This provider has connection fields waiting for a restart, so the running process does not know them
+                    yet: enter the API key once more here. After the restart it is no longer needed.
                   </p>
                   <div className="space-y-1">
                     <Label htmlFor="picker-api-key">API Key</Label>
@@ -194,13 +196,13 @@ export function ModelPickerDialog({
                   discover.mutate();
                 }}
               >
-                {fetchPending ? '获取中…' : selection.drafts.length === 0 ? '获取' : '重新获取'}
+                {fetchPending ? 'Fetching…' : selection.drafts.length === 0 ? 'Fetch' : 'Fetch again'}
               </Button>
             </div>
           ) : (
             <div className="space-y-3">
               <div className="space-y-1">
-                <Label htmlFor="picker-ids">模型 id（每行一个，或用逗号分隔）</Label>
+                <Label htmlFor="picker-ids">Model ids (one per line, or comma separated)</Label>
                 <Textarea
                   id="picker-ids"
                   rows={3}
@@ -218,7 +220,7 @@ export function ModelPickerDialog({
                   lookup.mutate();
                 }}
               >
-                {fetchPending ? '查询中…' : '获取元数据'}
+                {fetchPending ? 'Looking up…' : 'Look up metadata'}
               </Button>
             </div>
           )}
@@ -229,7 +231,8 @@ export function ModelPickerDialog({
 
           {metadataError === null ? null : (
             <p className="text-muted-foreground text-xs break-words">
-              models.dev 元数据不可用（{metadataError}），列出的模型仍可添加，但需要手工确认每个字段。
+              models.dev metadata is unavailable ({metadataError}). The models listed can still be added, but every
+              field has to be confirmed by hand.
             </p>
           )}
 
@@ -243,18 +246,18 @@ export function ModelPickerDialog({
                 onEdit={setEditing}
                 search={selection.search}
                 onSearchChange={selection.setSearch}
-                emptyText="没有匹配的模型。"
+                emptyText="No matching models."
               />
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-muted-foreground text-xs">
-                  已选 {formatNumber(selection.selectedCount)} 个
+                  {formatNumber(selection.selectedCount)} selected
                   {selection.unresolved.length === 0
                     ? ''
-                    : ` · ${selection.unresolved.map((draft) => draft.id).join(', ')} 还有需确认的字段`}
+                    : ` · ${selection.unresolved.map((draft) => draft.id).join(', ')} still need fields confirmed`}
                 </p>
                 {selection.confirmable === 0 ? null : (
                   <Button type="button" variant="outline" size="sm" onClick={selection.confirmSelected}>
-                    按列出的值确认 {formatNumber(selection.confirmable)} 个
+                    Accept listed values ({formatNumber(selection.confirmable)})
                   </Button>
                 )}
               </div>
@@ -278,7 +281,9 @@ export function ModelPickerDialog({
               }
             }}
           >
-            {append.isPending ? 'Adding…' : `添加 ${formatNumber(selection.selectedCount)} 个模型`}
+            {append.isPending
+              ? 'Adding…'
+              : `Add ${formatNumber(selection.selectedCount)} ${selection.selectedCount === 1 ? 'model' : 'models'}`}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -293,8 +298,8 @@ export function ModelPickerDialog({
             }
           }}
           api={provider.api}
-          title={`确认 ${editing.id}`}
-          description="字段值来自 Provider 列表或 models.dev；标了「需确认」的字段必须由你确认或改写。"
+          title={`Confirm ${editing.id}`}
+          description="Values come from the provider listing or models.dev; anything marked for confirming has to be confirmed or replaced."
           initial={modelFormFromDraft(editing, provider.api)}
           lockId
           draft={editing}

@@ -51,20 +51,20 @@ describe('metadata source labels', () => {
     expect(metadataSourceLabel('openrouter')).toBe('OpenRouter');
     expect(metadataSourceLabel('vercel')).toBe('Vercel');
     expect(metadataSourceLabel('models.dev')).toBe('models.dev');
-    expect(metadataSourceLabel('models.dev-cross-provider')).toBe('models.dev (其它供应商)');
-    expect(metadataSourceLabel('models.dev-fuzzy')).toBe('models.dev (模糊匹配)');
-    expect(metadataSourceLabel('missing')).toBe('缺失');
+    expect(metadataSourceLabel('models.dev-cross-provider')).toBe('models.dev (other provider)');
+    expect(metadataSourceLabel('models.dev-fuzzy')).toBe('models.dev (fuzzy match)');
+    expect(metadataSourceLabel('missing')).toBe('missing');
   });
 
   test('names where a draft was matched, and says nothing when it was not', () => {
     expect(matchLabel(null)).toBeNull();
     expect(matchLabel({ provider: 'openrouter', model: 'vendor/model', confidence: 'exact' })).toBe(
-      '元数据匹配：models.dev 的 openrouter / vendor/model',
+      'Matched against models.dev openrouter / vendor/model',
     );
     expect(matchLabel({ provider: 'openrouter', model: 'vendor/model', confidence: 'cross-provider' })).toContain(
-      '其它供应商',
+      'other provider',
     );
-    expect(matchLabel({ provider: 'openrouter', model: 'vendor/model', confidence: 'fuzzy' })).toContain('模糊匹配');
+    expect(matchLabel({ provider: 'openrouter', model: 'vendor/model', confidence: 'fuzzy' })).toContain('fuzzy match');
   });
 });
 
@@ -243,20 +243,20 @@ describe('in-use lookup', () => {
 describe('write feedback', () => {
   test('a pending restart is never reported as applied', () => {
     expect(applyFeedback({ applied: [], restart_required: ['providers.x.api_key'] })).toEqual({
-      title: '已保存，待重启',
-      description: '待重启字段：providers.x.api_key',
+      title: 'Saved, restart required',
+      description: 'Waiting for a restart: providers.x.api_key',
     });
     const mixed = applyFeedback({
       applied: ['providers.x.models[y]'],
       restart_required: ['providers.x.base_url'],
     });
-    expect(mixed.title).toBe('已保存，待重启');
-    expect(mixed.description).toContain('已生效：providers.x.models[y]');
+    expect(mixed.title).toBe('Saved, restart required');
+    expect(mixed.description).toContain('Applied: providers.x.models[y]');
   });
 
   test('a hot update reports itself as applied', () => {
-    expect(applyFeedback({ applied: ['providers.x.models[y]'], restart_required: [] }).title).toBe('已生效');
-    expect(applyFeedback({ applied: [], restart_required: [] }).title).toBe('已保存');
+    expect(applyFeedback({ applied: ['providers.x.models[y]'], restart_required: [] }).title).toBe('Applied');
+    expect(applyFeedback({ applied: [], restart_required: [] }).title).toBe('Saved');
   });
 });
 
@@ -264,7 +264,7 @@ describe('error text', () => {
   test('a stale revision is explained instead of echoed as a code', async () => {
     const { ApiError } = await import('./api.ts');
     const message = writeErrorMessage(new ApiError(409, 'config_conflict', 'revision mismatch'));
-    expect(message).toContain('配置文件已被修改');
+    expect(message).toContain('config.jsonc changed');
   });
 
   test('other failures keep the code and message', async () => {

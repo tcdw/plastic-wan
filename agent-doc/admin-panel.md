@@ -80,7 +80,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 | `PUT /model` | 切换 agent 模型：把 `agent.provider` / `agent.model` 写入 `config.jsonc` 并重新加载，重启后仍然生效，只影响后续 Invocation。必须带 `If-Match`（revision 来自 `GET /providers`），缺失返回 400 `revision_required`，过期返回 409 `config_conflict`。未知 provider/model、模型无 text 能力或模型不可用返回 400（`unknown_provider`/`unknown_model`/`not_text_capable`/`model_unusable`），其它失败（配置权限、文件校验、candidate 校验等）返回 409；body 为 `{ error, message }`，文件已写入但应用失败时 message 以 `config.jsonc was updated but not applied: ` 开头。`GET /model` 与 `DELETE /model` 已删除，落到 405 `method_not_allowed` |
 | `POST` / `PUT` / `DELETE /providers[...]` | Provider 与模型管理，见「Models 页写端点」 |
 | `PUT /vision` | 切换 vision 模型。写入前预检：模型在文件的该 Provider 下存在、支持 image 输入、且 `vision.max_output_tokens ≤ 该模型的 max_tokens`，不满足返回 400（`unknown_provider`/`unknown_model`/`not_image_capable`/`max_output_tokens_exceeded`）。`vision.*` 是 restart 字段，结果是待重启 |
-| `POST /restart` | 「立即重启」。部署方未声明 `PLASTICWAN_SUPERVISED=1` 时返回 409 `restart_unsupported`；磁盘配置权限或内容校验失败时返回 422 `config_invalid` 且不退出；成功返回 202 `{ status: 'restarting' }`，随后走优雅关闭并以退出码 75（`EX_TEMPFAIL`）退出，由外部监督重新拉起 |
+| `POST /restart` | 界面上的 “Restart now”。部署方未声明 `PLASTICWAN_SUPERVISED=1` 时返回 409 `restart_unsupported`；磁盘配置权限或内容校验失败时返回 422 `config_invalid` 且不退出；成功返回 202 `{ status: 'restarting' }`，随后走优雅关闭并以退出码 75（`EX_TEMPFAIL`）退出，由外部监督重新拉起 |
 | `POST /config/apply` | 重新读取 `config.jsonc` 并把热更新白名单字段应用到运行中的进程。成功返回 200 `{ status: 'applied', applied, restart_required, outside_serve, generation, active_hash, file_hash }`；失败返回 422 `{ error, message }`，此时 active 配置不变，错误记录在 `GET /config/status` 的 `last_error` |
 | `DELETE /alarms/:id` | **只能**取消 `pending`：`firing` 与其它终态返回 409 `alarm_not_pending`，不存在返回 404 `not_found`。取消记录当前面板管理员与 `admin_cancelled` 原因并唤醒 Scheduler |
 
@@ -98,7 +98,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 | `POST /providers/:alias/models` | 批量追加模型（`models`，1–200 个）。id 重复返回 409 `model_exists`。热更新 |
 | `PUT /providers/:alias/models/:id` | 替换单个模型定义，body 的 `id` 必须等于 `:id`（否则 400 `invalid_model_id`）。热更新；在用模型变成待重启 |
 | `DELETE /providers/:alias/models/:id` | 删除模型。在用（agent 或 vision 模型）返回 409 `model_in_use` |
-| `POST /providers/discover` | 拉取模型列表并解析元数据，同时充当「检测」。两种模式二选一：`{ alias }` 用运行中 registry 的 baseUrl 与凭据（不重新解析文件里的 SecretRef，`env`/`command` 不会执行；连接字段待重启时返回 409 `restart_pending`），或临时模式 `{ kind, provider \| base_url+api, api_key, headers? }` 用请求体里的完整连接。响应 `{ endpoint, models: [draft], metadata_source_error }`，每个 draft 带元数据、来源标记与 `configured`。上游错误经脱敏后以 502 `provider_discovery_failed` 返回 |
+| `POST /providers/discover` | 拉取模型列表并解析元数据，同时充当连接自检（界面上的 “Test”）。两种模式二选一：`{ alias }` 用运行中 registry 的 baseUrl 与凭据（不重新解析文件里的 SecretRef，`env`/`command` 不会执行；连接字段待重启时返回 409 `restart_pending`），或临时模式 `{ kind, provider \| base_url+api, api_key, headers? }` 用请求体里的完整连接。响应 `{ endpoint, models: [draft], metadata_source_error }`，每个 draft 带元数据、来源标记与 `configured`。上游错误经脱敏后以 502 `provider_discovery_failed` 返回 |
 | `POST /providers/lookup-metadata` | 给定手动输入的模型 id 列表（1–100）只做元数据解析，不访问供应商端点。响应 `{ models: [draft], metadata_source_error }` |
 
 `metadata_source_error` 只在 models.dev 目录拉取失败时非空：目录只是元数据来源之一，列表本身仍然可用，拿不到的字段一律标成「缺失」并要求管理员确认，而不是让整个请求失败。
@@ -115,7 +115,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 `cross-provider` 也要确认，是因为同一个模型 id 在不同 provider 下是不同的部署，价格、上下文与输出上限都可能不一样。`requires_reasoning_content_source` 只在真的映射出 `true`（models.dev 的 `interleaved.field === "reasoning_content"`）时才指向 models.dev；`interleaved` 缺失、是裸 `true` 或写的是别的字段名时一律是 `missing`——值留在「自动」，没有来源填过它。
 
-**SecretRef 只写不读**：面板只能把 `api_key` / header 值写成明文字符串，不能写 `{ env }` 或 `{ command }`（`command` 等于让面板在宿主机上执行命令；`env` 配合可编辑的 `base_url` 等于能外泄进程里任意环境变量）。输入框固定提示「已设置，留空以保持当前设置」：留空表示保持，非空表示替换成明文。代价是：原来用 `env` 的 Provider 在面板里被替换成明文后，环境变量不再生效，页面上也看不出这一点——要继续用 `env` 管理 key 的人只能手改配置文件；又因为 `base_url` 改动强制重填凭据，改地址会把 `env` / `command` 引用一并降级成明文。服务端收到明文后先 `secrets.remember(value)` 注册进 `SecretStore`，再写文件或发请求，这样日志、reload 错误与上游报错都能脱敏。请求提交的明文走单独一条有上限的队列（最旧的会被挤掉），不会像配置里解析出来的 Secret 那样永久累积；面板路径也从不调用 `secrets.resolve`，因此请求体里的字符串不会进入进程级的永久集合。
+**SecretRef 只写不读**：面板只能把 `api_key` / header 值写成明文字符串，不能写 `{ env }` 或 `{ command }`（`command` 等于让面板在宿主机上执行命令；`env` 配合可编辑的 `base_url` 等于能外泄进程里任意环境变量）。输入框固定提示 “Set - leave empty to keep it”：留空表示保持，非空表示替换成明文。代价是：原来用 `env` 的 Provider 在面板里被替换成明文后，环境变量不再生效，页面上也看不出这一点——要继续用 `env` 管理 key 的人只能手改配置文件；又因为 `base_url` 改动强制重填凭据，改地址会把 `env` / `command` 引用一并降级成明文。服务端收到明文后先 `secrets.remember(value)` 注册进 `SecretStore`，再写文件或发请求，这样日志、reload 错误与上游报错都能脱敏。请求提交的明文走单独一条有上限的队列（最旧的会被挤掉），不会像配置里解析出来的 Secret 那样永久累积；面板路径也从不调用 `secrets.resolve`，因此请求体里的字符串不会进入进程级的永久集合。
 
 `/contexts` 按 `last_active_at` 倒序，游标是 `last_active_at|id` 复合值（`invalid_cursor` 由解析失败给出）。`GET /contexts/:conversation_id` 返回 Context Header 加上保留窗口（`seq >= head_seq`）内的 `context_messages` 与存活 `context_refs`；`payload_preview` 截断到 2000 字符并附 `payload_truncated`，被 GC 软删的行不出现在响应里。两个端点都是 `GET`，前端页面不发任何写请求。
 
@@ -179,7 +179,7 @@ Overview 的 Bot status 卡片显示当前 `sleeping`/`awake`、`sleep_until`，
 
 Settings 页有一张 `Configuration file` 卡片：显示 generation、active hash 与 file hash、待重启字段列表与 last error，并提供 `Apply config file` 按钮（调用 `POST /config/apply`），成功或失败后都刷新配置状态。
 
-Models 页是 Provider 与模型的管理器：左栏 Provider 列表（搜索、Agent/Vision 在用徽章、待重启徽章），右栏连接字段与模型列表。三个区域都是 `Panel`（左栏、Connection、Models），列表项与表格都不再套自己的边框，保持「一个区域一个边框」。连接区里 builtin 只读展示 Pi 的供应商名与 baseUrl，custom 可编辑 `base_url` 与 `api`；API Key 与 header 值一律 `type="password"` 且没有查看按钮，提示「已设置，留空以保持当前设置」；`base_url` 一改动，key 与所有 header 值立刻变成必填。模型区是一个 flush 面板：表格贴边、只保留标题下那条线，行内用图标标出 image / reasoning 能力（带 sr-only 文本），并显示 context / max output 与在用徽章，行末是「设为 Agent」「设为 Vision」与编辑 / 删除图标按钮。面板标题栏放「获取模型列表」（发现 + 元数据预览，待重启时改用临时模式并要求再填一次 key）与「手动添加」；编辑弹窗里元数据字段带来源标签与匹配来源，compat 三态放在折叠的「高级设置」里，只显示当前 API 适用的字段。带「需确认」的草稿不能直接提交：字段齐全的可以用「按列出的值确认 N 个」一次接受列表里显示的值，有空缺的必须进编辑弹窗填写。有待重启字段时页面顶部出现横幅与「立即重启」按钮（部署方未声明进程监督时隐藏），点击后界面会断开并轮询等待服务恢复。保存反馈区分「已生效」与「已保存，待重启」。
+Models 页是 Provider 与模型的管理器：左栏 Provider 列表（搜索、Agent/Vision 在用徽章、待重启徽章），右栏连接字段与模型列表。三个区域都是 `Panel`（左栏、Connection、Models），列表项与表格都不再套自己的边框，保持「一个区域一个边框」。连接区里 builtin 只读展示 Pi 的供应商名与 baseUrl，custom 可编辑 `base_url` 与 `api`；API Key 与 header 值一律 `type="password"` 且没有查看按钮，提示 “Set - leave empty to keep it”；`base_url` 一改动，key 与所有 header 值立刻变成必填。模型区是一个 flush 面板：表格贴边、只保留标题下那条线，行内用图标标出 image / reasoning 能力（带 sr-only 文本），并显示 context / max output 与在用徽章，行末是 “Set as agent” “Set as vision” 与编辑 / 删除图标按钮。面板标题栏放 “Fetch models”（发现 + 元数据预览，待重启时改用临时模式并要求再填一次 key）与 “Add by id”；编辑弹窗里元数据字段带来源标签与匹配来源，compat 三态放在折叠的 “Advanced” 区，只显示当前 API 适用的字段。带 “N to confirm” 的草稿不能直接提交：字段齐全的可以用 “Accept listed values (N)” 一次接受列表里显示的值，有空缺的必须进编辑弹窗填写。有待重启字段时页面顶部出现横幅与 “Restart now” 按钮（部署方未声明进程监督时隐藏），点击后界面会断开并轮询等待服务恢复。保存反馈区分 “Applied” 与 “Saved, restart required”。界面文案全部是英文，与面板其它页面一致。
 
 Tool session 详情默认打开 Overview 时间线：按时间合并冻结消息、Invocation 生命周期、Model Call、Tool Call 与 Agent transcript；消息正文和 `send` 参数中的发送内容直接展示，Tool 结果与完整参数按需展开。失败的 Model Call 同时展示稳定错误码，并可展开查看经密钥脱敏的完整 Provider 错误详情。Assistant 文本显式标注为私有推理，只有 `send` Tool 会发往 Telegram。
 

@@ -29,9 +29,9 @@ const SOURCE_LABELS: Record<MetadataSource, string> = {
   vercel: 'Vercel',
   gemini: 'Gemini',
   'models.dev': 'models.dev',
-  'models.dev-cross-provider': 'models.dev (其它供应商)',
-  'models.dev-fuzzy': 'models.dev (模糊匹配)',
-  missing: '缺失',
+  'models.dev-cross-provider': 'models.dev (other provider)',
+  'models.dev-fuzzy': 'models.dev (fuzzy match)',
+  missing: 'missing',
 };
 
 /** Sources that are a lead rather than an answer, so the field needs confirming. */
@@ -63,16 +63,16 @@ export function isDraftFieldUnconfirmed(draft: ModelMetadataDraft, field: DraftF
 
 const CONFIDENCE_NOTES: Record<ModelsDevConfidence, string> = {
   exact: '',
-  'cross-provider': '（其它供应商，请核对价格与上限）',
-  fuzzy: '（模糊匹配，请核对每个字段）',
+  'cross-provider': ' (other provider - check its price and limits)',
+  fuzzy: ' (fuzzy match - check every field)',
 };
 
-/** Where a draft's metadata was matched, so "需确认" is explainable. */
+/** Where a draft's metadata was matched, so "needs confirming" is explainable. */
 export function matchLabel(match: ModelsDevMatch | null): string | null {
   if (match === null) {
     return null;
   }
-  return `元数据匹配：models.dev 的 ${match.provider} / ${match.model}${CONFIDENCE_NOTES[match.confidence]}`;
+  return `Matched against models.dev ${match.provider} / ${match.model}${CONFIDENCE_NOTES[match.confidence]}`;
 }
 
 export function draftNeedsConfirmation(draft: ModelMetadataDraft): boolean {
@@ -276,8 +276,8 @@ export interface CompatFieldSpec {
 }
 
 const BOOLEAN_OPTIONS: readonly CompatOption[] = [
-  { value: 'on', label: '开' },
-  { value: 'off', label: '关' },
+  { value: 'on', label: 'On' },
+  { value: 'off', label: 'Off' },
 ];
 
 /**
@@ -414,14 +414,17 @@ export function applyFeedback(apply: ModelApplySummary): { readonly title: strin
   const restart = apply.restart_required.join(', ');
   if (apply.restart_required.length > 0) {
     return {
-      title: '已保存，待重启',
-      description: applied.length === 0 ? `待重启字段：${restart}` : `已生效：${applied}；待重启字段：${restart}`,
+      title: 'Saved, restart required',
+      description:
+        applied.length === 0
+          ? `Waiting for a restart: ${restart}`
+          : `Applied: ${applied}. Waiting for a restart: ${restart}`,
     };
   }
   if (apply.applied.length > 0) {
-    return { title: '已生效', description: `已应用：${applied}` };
+    return { title: 'Applied', description: `Applied: ${applied}` };
   }
-  return { title: '已保存', description: '配置文件已更新，没有需要热应用的字段' };
+  return { title: 'Saved', description: 'config.jsonc was updated; no field needed a hot apply' };
 }
 
 export function isConfigConflict(error: unknown): boolean {
@@ -431,7 +434,7 @@ export function isConfigConflict(error: unknown): boolean {
 /** Error text for the page and its dialogs; conflicts get a readable message. */
 export function writeErrorMessage(error: unknown): string {
   if (isConfigConflict(error)) {
-    return '配置文件已被修改：config.jsonc 在本次编辑期间发生了变化，已重新读取，请再试一次';
+    return 'config.jsonc changed while you were editing. It has been read again - try once more.';
   }
   return errorMessage(error);
 }

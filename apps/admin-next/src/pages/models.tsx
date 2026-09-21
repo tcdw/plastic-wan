@@ -72,8 +72,8 @@ function ProviderBadges({
   const usage = providerUsage(view, provider.alias);
   return (
     <span className="flex flex-wrap items-center gap-1">
-      {usage.agent ? <ToneBadge tone="success">Agent 在用</ToneBadge> : null}
-      {usage.vision ? <ToneBadge tone="info">Vision 在用</ToneBadge> : null}
+      {usage.agent ? <ToneBadge tone="success">Agent in use</ToneBadge> : null}
+      {usage.vision ? <ToneBadge tone="info">Vision in use</ToneBadge> : null}
     </span>
   );
 }
@@ -156,13 +156,15 @@ export default function ModelsPage(): React.ReactElement {
   const restart = useMutation({
     mutationFn: restartServer,
     onSuccess: async () => {
-      toast.info('正在重启服务端…', { description: '页面会短暂断开连接，恢复后会自动重新加载。' });
+      toast.info('Restarting the server…', {
+        description: 'The page disconnects for a moment and reloads when it is back.',
+      });
       const recovered = await waitForAdminServer();
       write.refresh();
       if (recovered) {
-        toast.success('服务端已恢复');
+        toast.success('The server is back');
       } else {
-        toast.error('等待服务端恢复超时，请检查进程监督配置');
+        toast.error('Timed out waiting for the server; check the supervisor configuration');
       }
     },
     onError: (error) => {
@@ -228,7 +230,7 @@ export default function ModelsPage(): React.ReactElement {
             </>
           ) : null}
           {modelPendingRestart(restartPaths, row.alias, row.model.id) ? (
-            <ToneBadge tone="warning">待重启</ToneBadge>
+            <ToneBadge tone="warning">Restart pending</ToneBadge>
           ) : null}
         </span>
       ),
@@ -278,7 +280,7 @@ export default function ModelsPage(): React.ReactElement {
               disabled={!isTextCapable(row.model) || usage === 'agent' || usage === 'both' || switchAgent.isPending}
               onClick={() => switchAgent.mutate({ alias: row.alias, model: row.model.id })}
             >
-              设为 Agent
+              Set as agent
             </Button>
             <Button
               type="button"
@@ -287,7 +289,7 @@ export default function ModelsPage(): React.ReactElement {
               disabled={!isImageCapable(row.model) || usage === 'vision' || usage === 'both' || switchVision.isPending}
               onClick={() => switchVision.mutate({ alias: row.alias, model: row.model.id })}
             >
-              设为 Vision
+              Set as vision
             </Button>
             <Button
               type="button"
@@ -332,7 +334,7 @@ export default function ModelsPage(): React.ReactElement {
           className="self-start"
           action={
             <Button type="button" size="sm" onClick={() => setWizardOpen(true)}>
-              新建 Provider
+              New provider
             </Button>
           }
         >
@@ -344,9 +346,9 @@ export default function ModelsPage(): React.ReactElement {
               onChange={(event) => setSearch(event.target.value)}
             />
             {view.providers.length === 0 ? (
-              <p className="text-muted-foreground text-sm">还没有配置任何 Provider。</p>
+              <p className="text-muted-foreground text-sm">No providers configured yet.</p>
             ) : listed.length === 0 ? (
-              <p className="text-muted-foreground text-sm">没有匹配的 Provider。</p>
+              <p className="text-muted-foreground text-sm">No matching providers.</p>
             ) : (
               <ul className="space-y-0.5">
                 {listed.map((provider) => {
@@ -375,7 +377,7 @@ export default function ModelsPage(): React.ReactElement {
                         </span>
                         <span className="flex flex-wrap items-center gap-1.5">
                           <ProviderBadges view={view} provider={provider} />
-                          {pendingRestart ? <ToneBadge tone="warning">待重启</ToneBadge> : null}
+                          {pendingRestart ? <ToneBadge tone="warning">Restart pending</ToneBadge> : null}
                           <span className="text-muted-foreground text-xs tabular-nums">
                             {provider.models.length} {provider.models.length === 1 ? 'model' : 'models'}
                           </span>
@@ -393,7 +395,7 @@ export default function ModelsPage(): React.ReactElement {
           {selected === null ? (
             <Card>
               <CardContent className="text-muted-foreground py-8 text-center text-sm">
-                先新建一个 Provider，再填写 API Key 获取模型列表。
+                Create a provider first, then enter its API key to fetch the model list.
               </CardContent>
             </Card>
           ) : (
@@ -413,7 +415,7 @@ export default function ModelsPage(): React.ReactElement {
                   onClick={() => setDeletingProvider(selected)}
                 >
                   <Trash2 />
-                  删除 Provider
+                  Delete provider
                 </Button>
               </div>
 
@@ -435,7 +437,7 @@ export default function ModelsPage(): React.ReactElement {
                       variant="outline"
                       onClick={() => setPicker({ mode: 'discover', alias: selected.alias, nonce: Date.now() })}
                     >
-                      获取模型列表
+                      Fetch models
                     </Button>
                     <Button
                       type="button"
@@ -443,7 +445,7 @@ export default function ModelsPage(): React.ReactElement {
                       variant="outline"
                       onClick={() => setPicker({ mode: 'manual', alias: selected.alias, nonce: Date.now() })}
                     >
-                      手动添加
+                      Add by id
                     </Button>
                   </div>
                 }
@@ -455,7 +457,7 @@ export default function ModelsPage(): React.ReactElement {
                   data={rows}
                   rowKey={(row) => `${row.alias}/${row.model.id}`}
                   className={FLUSH_TABLE_CLASS}
-                  emptyText="填写 API Key 后获取模型列表"
+                  emptyText="Enter the API key, then fetch the model list"
                 />
               </Panel>
             </>
@@ -494,7 +496,7 @@ export default function ModelsPage(): React.ReactElement {
           }}
           api={view.providers.find((provider) => provider.alias === editing.alias)?.api ?? 'openai-completions'}
           title={`Edit ${editing.model.id}`}
-          description="编辑会替换这个模型在 config.jsonc 里的整条定义；在用模型的改动会等到重启后才生效。"
+          description="Editing replaces this model's whole definition in config.jsonc; a change to a model in use takes effect after a restart."
           initial={modelFormFromConfig(
             editing.model,
             view.providers.find((provider) => provider.alias === editing.alias)?.api ?? 'openai-completions',
@@ -514,11 +516,13 @@ export default function ModelsPage(): React.ReactElement {
             setDeletingModel(null);
           }
         }}
-        title="删除这个模型？"
+        title="Delete this model?"
         description={
-          deletingModel === null ? '' : `${deletingModel.model} 会从 ${deletingModel.alias} 的 models 列表中移除。`
+          deletingModel === null
+            ? ''
+            : `${deletingModel.model} will be removed from the models of ${deletingModel.alias}.`
         }
-        confirmText="删除模型"
+        confirmText="Delete model"
         destructive
         pending={removeModel.isPending}
         error={removeModel.isError ? writeErrorMessage(removeModel.error) : null}
@@ -536,11 +540,13 @@ export default function ModelsPage(): React.ReactElement {
             setDeletingProvider(null);
           }
         }}
-        title="删除这个 Provider？"
+        title="Delete this provider?"
         description={
-          deletingProvider === null ? '' : `${deletingProvider.alias} 及其模型列表会从 config.jsonc 中移除。`
+          deletingProvider === null
+            ? ''
+            : `${deletingProvider.alias} and its model list will be removed from config.jsonc.`
         }
-        confirmText="删除 Provider"
+        confirmText="Delete provider"
         destructive
         pending={removeProvider.isPending}
         error={removeProvider.isError ? writeErrorMessage(removeProvider.error) : null}

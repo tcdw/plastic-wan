@@ -105,8 +105,8 @@ test.describe('13 routes and deep links', () => {
     await page.goto(await adminUrl('/models'));
     await expect(page.getByText('Providers')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Provider agent' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '获取模型列表' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '手动添加' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Fetch models' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add by id' })).toBeVisible();
     await expect(page.locator('table tbody tr').first()).toBeVisible();
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
   });

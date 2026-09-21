@@ -50,7 +50,7 @@ function FieldLabel({
         <>
           <span className="text-muted-foreground text-xs">{fieldSourceLabel(draft, field)}</span>
           {isDraftFieldUnconfirmed(draft, field) ? (
-            <span className="text-warning text-xs font-medium">需确认</span>
+            <span className="text-warning text-xs font-medium">confirm</span>
           ) : null}
         </>
       )}
@@ -118,10 +118,10 @@ export function ModelEditDialog({
         <div className="space-y-4">
           {confirmations.length > 0 ? (
             <p className="text-warning text-xs">
-              需确认的字段：{confirmations.join(', ')}。确认或填写后才能保存，面板不会替你填默认值。
+              Confirm or fill in: {confirmations.join(', ')}. The panel fills in no defaults.
             </p>
           ) : null}
-          {/* Naming the match makes "需确认" actionable: a cross-provider or
+          {/* Naming the match makes "confirm" actionable: a cross-provider or
               normalized hit is a lead from another deployment, not an answer. */}
           {matchNote === null ? null : <p className="text-muted-foreground text-xs">{matchNote}</p>}
           <div className="grid gap-4 sm:grid-cols-2">
@@ -233,10 +233,11 @@ export function ModelEditDialog({
           </div>
 
           {showAdvanced ? (
-            <LazyDetails summary="高级设置" className="text-sm">
+            <LazyDetails summary="Advanced" className="text-sm">
               <div className="space-y-3 pt-3">
                 <p className="text-muted-foreground text-xs">
-                  「自动」表示不写入这个字段，由 Pi 按地址和 provider 自行判断。只有 {api} 支持的字段会出现在这里。
+                  Auto leaves the field out of the configuration and lets Pi detect it from the address and the
+                  provider. Only the fields {api} honours are listed here.
                 </p>
                 {compatFields.map((spec) => (
                   <div key={spec.field} className="space-y-1">
@@ -253,7 +254,7 @@ export function ModelEditDialog({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value={AUTO_COMPAT}>自动</SelectItem>
+                        <SelectItem value={AUTO_COMPAT}>Auto</SelectItem>
                         {spec.options.map((option) => (
                           <SelectItem key={option.value} value={option.value}>
                             {option.label}

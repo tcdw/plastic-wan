@@ -45,7 +45,7 @@ const ADMIN_USERNAME = 'e2e-admin';
 const ADMIN_PASSWORD = 'e2e-correct-horse';
 
 /**
- * The Models page only offers 「立即重启」 when the deployment declared a
+ * The Models page only offers "Restart now" when the deployment declared a
  * supervisor; nothing here actually exits the process (see `requestRestart`).
  */
 process.env.PLASTICWAN_SUPERVISED = '1';

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { serve, type ServerType } from '@hono/node-server';
-import type { Models, ModelThinkingLevel } from '@earendil-works/pi-ai';
+import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 import { assertConfigPermissions, loadConfig, type RawConfig } from '../../platform/config.ts';
 import type { ConfigErrorCode, ConfigReloader } from '../../platform/config-reload.ts';
 import { type ConfigEdit, readConfigRevision } from '../../platform/config-file.ts';
@@ -104,8 +104,6 @@ export interface AdminServerOptions {
   readonly configReloader?: ConfigReloader;
   /** Registers panel-supplied plaintext secrets before they are written or sent. */
   readonly secrets?: SecretStore;
-  /** The live model registry, used for saved-mode provider discovery. */
-  readonly models?: Models;
   /** Starts the graceful shutdown that exits with the restart code. */
   readonly requestRestart?: () => void;
 }
@@ -116,6 +114,7 @@ const MODEL_ERROR_STATUS: Partial<Record<ConfigErrorCode, number>> = {
   unknown_model: 400,
   not_text_capable: 400,
   model_unusable: 400,
+  secret_unresolved: 422,
 };
 
 /** Write failures the panel can act on, versus the ones that need an operator. */
@@ -124,18 +123,19 @@ const CONFIG_WRITE_STATUS: Partial<Record<ConfigErrorCode, number>> = {
   config_invalid: 422,
   config_permissions: 409,
   config_symlink: 409,
+  secret_unresolved: 422,
   config_write_failed: 500,
 };
 
 export class AdminServer {
   readonly #store: SqliteStore;
+  readonly #configStore: RuntimeConfigurationStore;
   readonly #admin: AdminConfig;
   readonly #auth: AdminAuth;
   readonly #scheduler: BucketScheduler | undefined;
   readonly #modelSwitcher: AgentModelSwitcher | undefined;
   readonly #configReloader: ConfigReloader | undefined;
   readonly #secrets: SecretStore | undefined;
-  readonly #models: Models | undefined;
   readonly #requestRestart: (() => void) | undefined;
   readonly #staticDir: string;
   readonly #memoryWarningDays: number;
@@ -148,13 +148,13 @@ export class AdminServer {
       throw new Error('Admin panel is not configured');
     }
     this.#store = options.store;
+    this.#configStore = options.configStore;
     this.#admin = admin;
     this.#auth = new AdminAuth(options.store.orm, admin.session_ttl_hours);
     this.#scheduler = options.scheduler;
     this.#modelSwitcher = options.modelSwitcher;
     this.#configReloader = options.configReloader;
     this.#secrets = options.secrets;
-    this.#models = options.models;
     this.#requestRestart = options.requestRestart;
     this.#staticDir = resolve(
       admin.static_dir ?? join(import.meta.dirname, '..', '..', '..', 'apps', 'admin-next', 'dist'),
@@ -479,7 +479,7 @@ export class AdminServer {
    */
   async #providers(request: Request, segments: readonly string[]): Promise<Response> {
     const reloader = this.#configReloader;
-    if (reloader === undefined || this.#secrets === undefined || this.#models === undefined) {
+    if (reloader === undefined || this.#secrets === undefined) {
       return json({ error: 'providers_unavailable', message: 'Provider management is not wired' }, 503);
     }
     const parts = decodeSegments(segments);
@@ -610,17 +610,11 @@ export class AdminServer {
 
   async #providerContext(reloader: ConfigReloader): Promise<ProviderWriteContext> {
     const secrets = this.#secrets;
-    const models = this.#models;
-    if (secrets === undefined || models === undefined) {
+    if (secrets === undefined) {
       throw new Error('Provider management is not wired');
     }
     const loaded = await loadConfig(reloader.configPath);
-    return {
-      file: loaded.fileConfig,
-      secrets,
-      models,
-      restartRequired: reloader.status().restartRequired,
-    };
+    return { file: loaded.fileConfig, secrets, snapshot: this.#configStore.current() };
   }
 
   /**

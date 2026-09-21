@@ -15,19 +15,25 @@ import sharp from 'sharp';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
+import type { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { capability } from '../src/capabilities/execute-tool.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
 import { MediaService } from '../src/capabilities/media/media.ts';
 import { createMemoryTools, MemoryStore } from '../src/context/memory.ts';
 import { createWebFetchTool } from '../src/capabilities/web-fetch.ts';
-import type { ModelRegistry } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { StickerService } from '../src/capabilities/stickers.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { bundledSystemResources, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import {
+  bundledSystemResources,
+  fauxRegistry,
+  testConfigJsonc,
+  testConfigStore,
+  writeTestConfig,
+  type TestRegistry,
+} from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -47,6 +53,7 @@ interface InvocationSetup {
 async function setupInvocation(
   prefix: string,
   withStickers: boolean,
+  registry: TestRegistry,
 ): Promise<InvocationSetup & { stickerId?: bigint }> {
   const directory = await mkdtemp(join(tmpdir(), prefix));
   directories.push(directory);
@@ -58,7 +65,7 @@ async function setupInvocation(
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded, registry);
   const store = await SqliteStore.open(loaded.config);
   const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const update: Update = {
@@ -84,17 +91,16 @@ async function setupInvocation(
   return { store, loaded, configStore, invocationId };
 }
 
-async function indexOneSticker(setup: InvocationSetup): Promise<{ stickers: StickerService; stickerId: bigint }> {
+async function indexOneSticker(
+  setup: InvocationSetup,
+  visionFaux: ReturnType<typeof fauxProvider>,
+): Promise<{ stickers: StickerService; stickerId: bigint }> {
   const { store, loaded, configStore } = setup;
   const fixturePath = join(tmpdir(), `plasticwan-skills-sticker-${crypto.randomUUID()}.webp`);
   await sharp({ create: { width: 64, height: 64, channels: 4, background: { r: 0, g: 0, b: 255, alpha: 1 } } })
     .webp()
     .toFile(fixturePath);
   directories.push(fixturePath);
-  const visionFaux = fauxProvider({
-    provider: 'vision',
-    models: [{ id: 'vision-model', input: ['text', 'image'], contextWindow: 128_000, maxTokens: 8_192 }],
-  });
   visionFaux.setResponses([
     () =>
       fauxAssistantMessage(
@@ -107,8 +113,6 @@ async function indexOneSticker(setup: InvocationSetup): Promise<{ stickers: Stic
         }),
       ),
   ]);
-  const models = createModels();
-  models.setProvider(visionFaux.provider);
   const downloader: MediaDownloader = {
     download: async (_fileId, destination, signal) => {
       signal.throwIfAborted();
@@ -119,7 +123,6 @@ async function indexOneSticker(setup: InvocationSetup): Promise<{ stickers: Stic
     store,
     configStore,
     secrets: new SecretStore(),
-    registry: { models, visionModel: visionFaux.getModel() },
     mediaClient: downloader,
     modelGate: new KeyedSemaphore(),
   });
@@ -171,12 +174,12 @@ function toolResultText(message: ToolResultMessage): string {
 }
 
 test('the skill index reaches the system prompt and primitives stay directly callable', async () => {
-  const setup = await setupInvocation('plasticwan-skills-index-', false);
-  const { store } = setup;
   const agentFaux = fauxProvider({
     provider: 'agent',
     models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
   });
+  const setup = await setupInvocation('plasticwan-skills-index-', false, fauxRegistry(agentFaux));
+  const { store } = setup;
   agentFaux.setResponses([
     (context) => {
       expect(context.systemPrompt).toContain('System skills:');
@@ -209,16 +212,11 @@ test('the skill index reaches the system prompt and primitives stay directly cal
     // Non-empty draft triggers the send nudge; the model then stays silent.
     fauxAssistantMessage(''),
   ]);
-  const models = createModels();
-  models.setProvider(agentFaux.provider);
-  const model = agentFaux.getModel();
-  const registry: ModelRegistry = { models, visionModel: model };
   const memoryStore = new MemoryStore(store.orm);
   const runtime = new AgentRuntime({
     store,
     configStore: setup.configStore,
     secrets: new SecretStore(),
-    registry,
     telegramApi: {
       sendMessage: async () => ({ message_id: 500, date: 1, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),
@@ -249,13 +247,23 @@ test('the skill index reaches the system prompt and primitives stay directly cal
 });
 
 test('search_stickers runs through execute and its refs authorize a sticker send', async () => {
-  const setup = await setupInvocation('plasticwan-skills-sticker-', true);
-  const { store } = setup;
-  const { stickers, stickerId } = await indexOneSticker(setup);
   const agentFaux = fauxProvider({
     provider: 'agent',
     models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
   });
+  const visionFaux = fauxProvider({
+    provider: 'vision',
+    models: [{ id: 'vision-model', input: ['text', 'image'], contextWindow: 128_000, maxTokens: 8_192 }],
+  });
+  const models = createModels();
+  models.setProvider(agentFaux.provider);
+  models.setProvider(visionFaux.provider);
+  const setup = await setupInvocation('plasticwan-skills-sticker-', true, {
+    models,
+    visionModel: visionFaux.getModel(),
+  });
+  const { store } = setup;
+  const { stickers, stickerId } = await indexOneSticker(setup, visionFaux);
   agentFaux.setResponses([
     (context) => {
       expect(context.systemPrompt ?? '').toContain('search_stickers capability via execute');
@@ -288,16 +296,11 @@ test('search_stickers runs through execute and its refs authorize a sticker send
     },
     fauxAssistantMessage('sent'),
   ]);
-  const models = createModels();
-  models.setProvider(agentFaux.provider);
-  const model = agentFaux.getModel();
-  const registry: ModelRegistry = { models, visionModel: model };
   let sentSticker: string | undefined;
   const runtime = new AgentRuntime({
     store,
     configStore: setup.configStore,
     secrets: new SecretStore(),
-    registry,
     telegramApi: {
       sendMessage: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),
       sendSticker: async (_chatId, sticker) => {
@@ -337,12 +340,12 @@ test('search_stickers runs through execute and its refs authorize a sticker send
 });
 
 test('execute refuses primitives and unknown capabilities while memory calls still work', async () => {
-  const setup = await setupInvocation('plasticwan-skills-memory-', false);
-  const { store } = setup;
   const agentFaux = fauxProvider({
     provider: 'agent',
     models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
   });
+  const setup = await setupInvocation('plasticwan-skills-memory-', false, fauxRegistry(agentFaux));
+  const { store } = setup;
   agentFaux.setResponses([
     fauxAssistantMessage(
       fauxToolCall('execute', { action: 'call', tool: 'send', input: { kind: 'text', text: 'nope' } }),
@@ -374,16 +377,11 @@ test('execute refuses primitives and unknown capabilities while memory calls sti
     },
     fauxAssistantMessage('done'),
   ]);
-  const models = createModels();
-  models.setProvider(agentFaux.provider);
-  const model = agentFaux.getModel();
-  const registry: ModelRegistry = { models, visionModel: model };
   const memoryStore = new MemoryStore(store.orm);
   const runtime = new AgentRuntime({
     store,
     configStore: setup.configStore,
     secrets: new SecretStore(),
-    registry,
     telegramApi: {
       sendMessage: async () => ({ message_id: 500, date: 1, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),
@@ -419,12 +417,12 @@ test('execute refuses primitives and unknown capabilities while memory calls sti
 });
 
 test('execute rejects a half-filled action before dispatch and audits the rejection', async () => {
-  const setup = await setupInvocation('plasticwan-skills-invalid-', false);
-  const { store } = setup;
   const agentFaux = fauxProvider({
     provider: 'agent',
     models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
   });
+  const setup = await setupInvocation('plasticwan-skills-invalid-', false, fauxRegistry(agentFaux));
+  const { store } = setup;
   agentFaux.setResponses([
     // The flattened provider schema cannot require `input` for call alone, so a
     // lenient endpoint can hand this over; the runtime must reject it.
@@ -453,16 +451,11 @@ test('execute rejects a half-filled action before dispatch and audits the reject
     },
     fauxAssistantMessage('done'),
   ]);
-  const models = createModels();
-  models.setProvider(agentFaux.provider);
-  const model = agentFaux.getModel();
-  const registry: ModelRegistry = { models, visionModel: model };
   const memoryStore = new MemoryStore(store.orm);
   const runtime = new AgentRuntime({
     store,
     configStore: setup.configStore,
     secrets: new SecretStore(),
-    registry,
     telegramApi: {
       sendMessage: async () => ({ message_id: 500, date: 1, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),

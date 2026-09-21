@@ -2,7 +2,7 @@ import { afterAll, afterEach, expect, test, vi } from 'vitest';
 import { chmod, lstat, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai';
+import { fauxAssistantMessage, fauxProvider, fauxToolCall, type MutableModels } from '@earendil-works/pi-ai';
 import type { Update } from 'grammy/types';
 import { AdminServer } from '../src/ingress/admin/server.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
@@ -15,14 +15,14 @@ import { readConfigRevision } from '../src/platform/config-file.ts';
 import { ConfigReloader } from '../src/platform/config-reload.ts';
 import { previewContext } from '../src/platform/invocation-context.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
-import { createModelRegistry, type ModelRegistry } from '../src/platform/providers.ts';
+import { buildModelRegistry } from '../src/platform/providers.ts';
 import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { SystemResources } from '../src/platform/system-resources.ts';
 import { seedConfigAdmins } from '../src/store/admins.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
-import { sleep, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { sleep, startFixtureServer, stopFixtureServer, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 const CHAT_ID = 123456789;
@@ -162,7 +162,8 @@ interface Fixture {
   readonly loaded: LoadedConfig;
   readonly store: SqliteStore;
   readonly configStore: RuntimeConfigurationStore;
-  readonly registry: ModelRegistry;
+  /** The startup registry, mutable so a test can stand in a faux provider. */
+  readonly models: MutableModels;
   readonly modelSwitcher: AgentModelSwitcher;
   readonly reloader: ConfigReloader;
   readonly ingestion: TelegramIngestion;
@@ -206,12 +207,15 @@ async function setup(
   let fileConfig = structuredClone(loaded.fileConfig);
   const store = await SqliteStore.open(loaded.config);
   seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? []);
-  const configStore = new RuntimeConfigurationStore(loaded);
-  // One store for the registry and the reloader, exactly as the composition root
-  // wires it: credentials are resolved once, at startup.
+  // One registry for the store and the reloader, exactly as the composition root
+  // wires it: credentials are resolved once, at startup. The fixture keeps the
+  // mutable handle the registry was built from so a test can stand in a faux
+  // provider; a published registry is read-only by type.
   const secrets = options.secrets ?? new SecretStore();
-  const registry = await createModelRegistry(loaded.config, secrets);
-  const modelSwitcher = new AgentModelSwitcher(configStore, registry.models);
+  const registry = await buildModelRegistry(loaded.config, null, secrets);
+  const models = registry.models as MutableModels;
+  const configStore = new RuntimeConfigurationStore({ config: loaded.config, hash: loaded.hash, ...registry });
+  const modelSwitcher = new AgentModelSwitcher(configStore);
   const conversationRuntime = new ConversationRuntime({
     agentCacheSize: loaded.config.agent.context.agent_cache_size,
   });
@@ -228,7 +232,6 @@ async function setup(
   const reloader = new ConfigReloader({
     loaded,
     store: configStore,
-    models: registry.models,
     modelSwitcher,
     secrets,
     // The pipeline tests build a runtime; without one there is no tool registry
@@ -248,7 +251,7 @@ async function setup(
     loaded,
     store,
     configStore,
-    registry,
+    models,
     modelSwitcher,
     reloader,
     ingestion,
@@ -271,12 +274,11 @@ async function setup(
     },
     readText: () => readFile(configPath, 'utf8'),
     runtimeWith: (faux) => {
-      registry.models.setProvider(faux.provider);
+      models.setProvider(faux.provider);
       runtime = new AgentRuntime({
         store,
         configStore,
         secrets,
-        registry,
         telegramApi: sendApi,
         bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
         systemResources: SystemResources.empty(),
@@ -815,6 +817,214 @@ test('a bucket attached to a long-lived invocation keeps its snapshot', async ()
   }
 }, 30_000);
 
+/**
+ * A loopback endpoint speaking the minimum of the OpenAI chat-completions
+ * streaming protocol Pi's adapter needs, recording what each request carried.
+ */
+interface CompletionServer {
+  readonly baseUrl: string;
+  readonly requests: { readonly authorization: string | null; readonly path: string }[];
+  stop(): Promise<void>;
+}
+
+async function startCompletionServer(onRequest?: (index: number) => Promise<void>): Promise<CompletionServer> {
+  const requests: { authorization: string | null; path: string }[] = [];
+  const { server, port } = await startFixtureServer(async (request) => {
+    requests.push({ authorization: request.headers.get('authorization'), path: new URL(request.url).pathname });
+    await request.text();
+    await onRequest?.(requests.length - 1);
+    return new Response(completionStream('answered'), { headers: { 'content-type': 'text/event-stream' } });
+  });
+  return { baseUrl: `http://127.0.0.1:${port}/v1`, requests, stop: () => stopFixtureServer(server) };
+}
+
+function completionStream(text: string): string {
+  const chunk = (delta: unknown, finishReason: string | null): string =>
+    `data: ${JSON.stringify({
+      id: 'chatcmpl-fixture',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model: 'agent-model',
+      choices: [{ index: 0, delta, finish_reason: finishReason }],
+    })}\n\n`;
+  return `${chunk({ role: 'assistant', content: text }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`;
+}
+
+test('a running invocation keeps the connection it started with', async () => {
+  const second = await startCompletionServer();
+  let fixture: Fixture | undefined;
+  let reloaded = 'not attempted';
+  const running = await startCompletionServer(async (index) => {
+    if (index !== 0) {
+      return;
+    }
+    // The connection changes between the two turns of one invocation, exactly
+    // where a panel save lands while a long-lived run is still going.
+    const active = fixture;
+    if (active === undefined) {
+      throw new Error('Expected the fixture to be built');
+    }
+    await active.patch((config) => {
+      customProvider(config.providers, 'agent').base_url = `${second.baseUrl}/`;
+      customProvider(config.providers, 'agent').api_key = 'key-b';
+    });
+    const result = await active.reloader.reloadFromFile();
+    reloaded = result.ok ? 'ok' : `${result.code}: ${result.message}`;
+  });
+  const active = await setup({
+    transform: (config) => {
+      config.agent.send_nudge_enabled = true;
+      config.providers.agent = {
+        kind: 'custom',
+        base_url: `${running.baseUrl}/`,
+        api: 'openai-completions',
+        api_key: 'key-a',
+        models: [
+          model('agent-model', {
+            reasoning: false,
+            input: ['text', 'image'],
+            context_window: 200_000,
+            max_tokens: 32_768,
+          }),
+        ],
+      };
+      config.agent.provider = 'agent';
+      config.agent.model = 'agent-model';
+      config.agent.thinking_level = 'off';
+    },
+  });
+  fixture = active;
+  try {
+    // The runtime streams through the configured endpoint; the faux only stands
+    // in for the unrelated `faux` alias the fixture's base configuration keeps.
+    const runtime = active.runtimeWith(fauxAgent());
+    active.ingestion.ingest(textUpdate(1, 10, 'hello'), new Date());
+    const [invocationId] = active.scheduler.processDue(new Date(Date.now() + 60_000));
+    if (invocationId === undefined) {
+      throw new Error('Expected a queued invocation');
+    }
+    const outcome = await runDirect(active, runtime, invocationId);
+    expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+    expect(reloaded).toBe('ok');
+    // Both turns of the run went to the connection it started with, under the
+    // key the process had resolved for it.
+    expect(running.requests.map((request) => request.authorization)).toEqual(['Bearer key-a', 'Bearer key-a']);
+    expect(second.requests).toEqual([]);
+
+    // The invocation that starts after the publication uses the new connection.
+    active.ingestion.ingest(textUpdate(2, 11, 'again'), new Date(Date.now() + 120_000));
+    const [next] = active.scheduler.processDue(new Date(Date.now() + 180_000));
+    if (next === undefined) {
+      throw new Error('Expected a second queued invocation');
+    }
+    await runDirect(active, runtime, next);
+    expect(second.requests.length).toBeGreaterThan(0);
+    expect(second.requests.every((request) => request.authorization === 'Bearer key-b')).toBe(true);
+    expect(running.requests).toHaveLength(2);
+  } finally {
+    await running.stop();
+    await second.stop();
+    active.store.close();
+  }
+});
+
+test('a connection change re-resolves exactly one provider secret', async () => {
+  const secrets = new CountingSecrets();
+  const fixture = await setup({ secrets });
+  try {
+    const resolvedAtStartup = secrets.resolutions;
+    expect(resolvedAtStartup).toBeGreaterThan(0);
+    await fixture.patch((config) => {
+      // One provider changes its connection, another only its model list.
+      customProvider(config.providers, 'agent').api_key = 'agent-rotated';
+      builtinProvider(config.providers, 'faux').models.push(model('deepseek-reasoner'));
+    });
+    const result = await fixture.reloader.reloadFromFile();
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.message);
+    }
+    expect(secrets.resolutions).toBe(resolvedAtStartup + 1);
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('a reload that cannot resolve a new secret leaves the running configuration alone', async () => {
+  const fixture = await setup();
+  try {
+    const before = fixture.configStore.current();
+    await fixture.patch((config) => {
+      // Two providers change their connection in one edit; the second one's
+      // SecretRef cannot be resolved, so nothing may be published.
+      customProvider(config.providers, 'agent').api_key = 'agent-rotated';
+      customProvider(config.providers, 'vision').api_key = { env: 'PLASTICWAN_TEST_MISSING_SECRET' };
+    });
+    const result = await fixture.reloader.reloadFromFile();
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error('Expected the reload to fail');
+    }
+    expect(result.code).toBe('secret_unresolved');
+    expect(result.message).toContain('PLASTICWAN_TEST_MISSING_SECRET');
+    expect(fixture.reloader.status().lastError).toMatchObject({ code: 'secret_unresolved' });
+    // Neither the generation nor the registry moved: the whole candidate is
+    // refused, not half applied.
+    expect(fixture.configStore.current()).toBe(before);
+    expect(fixture.configStore.current().config.providers.agent).toMatchObject({ api_key: 'agent-secret' });
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('a run keeps the registry it started with when a reload publishes a new one', async () => {
+  const fixture = await setup({
+    transform: (config) => {
+      config.agent.send_nudge_enabled = true;
+    },
+  });
+  try {
+    const faux = fauxAgent();
+    const seen: { readonly id: string; readonly contextWindow: number }[] = [];
+    faux.setResponses([
+      async (_context, _options, _state, requestModel) => {
+        seen.push(requestModel);
+        // The reload lands between this turn and the next one, exactly where a
+        // panel save can land while a long-lived invocation is still running.
+        await fixture.patch((config) => {
+          builtinProvider(config.providers, 'faux').models.push(model('deepseek-reasoner'));
+        });
+        const reloaded = await fixture.reloader.reloadFromFile();
+        expect(reloaded.ok).toBe(true);
+        return fauxAssistantMessage('a private draft');
+      },
+      (_context, _options, _state, requestModel) => {
+        seen.push(requestModel);
+        return fauxAssistantMessage('');
+      },
+    ]);
+    const runtime = fixture.runtimeWith(faux);
+    const before = fixture.configStore.beginInvocation();
+    fixture.ingestion.ingest(textUpdate(1, 10, 'hello'), new Date());
+    const [invocationId] = fixture.scheduler.processDue(new Date(Date.now() + 60_000));
+    if (invocationId === undefined) {
+      throw new Error('Expected a queued invocation');
+    }
+    const outcome = await runDirect(fixture, runtime, invocationId);
+    expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+    expect(seen).toHaveLength(2);
+    // The second turn resolved its model from the snapshot the run started with,
+    // even though the reload published a registry carrying a freshly built one.
+    expect(seen[1]).toBe(seen[0]);
+    expect(fixture.configStore.current().models).not.toBe(before.models);
+    expect(before.models.getModel('faux', 'deepseek-reasoner')).toBeUndefined();
+    expect(fixture.configStore.current().models.getModel('faux', 'deepseek-reasoner')).toBeDefined();
+    expect(before.models.getModel('faux', AGENT_MODEL)?.id).toBe(AGENT_MODEL);
+  } finally {
+    fixture.store.close();
+  }
+});
+
 test('a prompt change rebuilds the Conversation Context on the next run', async () => {
   const fixture = await setup();
   try {
@@ -920,7 +1130,6 @@ test('a reloaded model and thinking level show up in /status and the admin API',
       modelSwitcher: fixture.modelSwitcher,
       configReloader: fixture.reloader,
       secrets: new SecretStore(),
-      models: fixture.registry.models,
     });
     const created = await server.handle(
       new Request('http://127.0.0.1:8899/api/auth/setup', {
@@ -1019,7 +1228,6 @@ test('/model reports a config symlink instead of replacing it', async () => {
     const linkLoader = new ConfigReloader({
       loaded: { ...fixture.loaded, configPath: linkPath },
       store: fixture.configStore,
-      models: fixture.registry.models,
       modelSwitcher: fixture.modelSwitcher,
       secrets: new SecretStore(),
       validateAgentModel: () => undefined,
@@ -1216,7 +1424,6 @@ test('admin config endpoints apply the file and report status', async () => {
       modelSwitcher: fixture.modelSwitcher,
       configReloader: fixture.reloader,
       secrets: new SecretStore(),
-      models: fixture.registry.models,
     });
     const call = (path: string, init: RequestInit = {}): Request => new Request(`http://127.0.0.1:8899${path}`, init);
     const json = async (response: Response): Promise<any> => await response.json();
@@ -1446,7 +1653,7 @@ test('a new model on an existing builtin provider is hot, rebuilds the registry,
     const resolvedAtStartup = secrets.resolutions;
     expect(resolvedAtStartup).toBeGreaterThan(0);
     // Pi's catalog knows this id, the file does not: it must stay unreachable.
-    expect(fixture.registry.models.getModel('faux', 'deepseek-reasoner')).toBeUndefined();
+    expect(fixture.configStore.current().models.getModel('faux', 'deepseek-reasoner')).toBeUndefined();
 
     await fixture.patch((config) => {
       builtinProvider(config.providers, 'faux').models.push(model('deepseek-reasoner'));
@@ -1457,8 +1664,8 @@ test('a new model on an existing builtin provider is hot, rebuilds the registry,
       throw new Error(result.message);
     }
     expect(result.applied).toEqual(['providers.faux.models[deepseek-reasoner]']);
-    expect(fixture.registry.models.getModel('faux', 'deepseek-reasoner')).toBeDefined();
-    expect(fixture.registry.models.getModel('faux', AGENT_MODEL)).toBeDefined();
+    expect(fixture.configStore.current().models.getModel('faux', 'deepseek-reasoner')).toBeDefined();
+    expect(fixture.configStore.current().models.getModel('faux', AGENT_MODEL)).toBeDefined();
     // Rebuilding a builtin provider reuses the auth the registry already holds;
     // a `command` SecretRef must not run again on reload.
     expect(secrets.resolutions).toBe(resolvedAtStartup);
@@ -1467,7 +1674,7 @@ test('a new model on an existing builtin provider is hot, rebuilds the registry,
   }
 });
 
-test('editing a builtin model in use waits for a restart', async () => {
+test('editing a builtin model in use is hot and reaches the registry', async () => {
   const fixture = await setup();
   try {
     await fixture.patch((config) => {
@@ -1482,11 +1689,12 @@ test('editing a builtin model in use waits for a restart', async () => {
     if (!result.ok) {
       throw new Error(result.message);
     }
-    expect(result.restartRequired).toEqual([`providers.faux.models[${AGENT_MODEL}]`]);
+    expect(result.applied).toEqual([`providers.faux.models[${AGENT_MODEL}]`]);
+    expect(result.restartRequired).toEqual([]);
     expect(builtinProvider(fixture.configStore.current().config.providers, 'faux').models[0]?.context_window).toBe(
-      200_000,
+      100_000,
     );
-    expect(fixture.registry.models.getModel('faux', AGENT_MODEL)?.contextWindow).toBe(200_000);
+    expect(fixture.configStore.current().models.getModel('faux', AGENT_MODEL)?.contextWindow).toBe(100_000);
   } finally {
     fixture.store.close();
   }
@@ -1525,16 +1733,18 @@ test('a new model on an existing custom provider is hot and immediately selectab
     if (!connection.ok) {
       throw new Error(connection.message);
     }
-    expect(connection.restartRequired).toEqual(['providers.agent.base_url']);
+    expect(connection.applied).toContain('providers.agent.base_url');
+    expect(connection.restartRequired).toEqual([]);
     expect(fixture.configStore.current().config.providers.agent).toMatchObject({
-      base_url: 'https://example.test/v1',
+      base_url: 'https://other.test/v1',
     });
+    expect(fixture.configStore.current().models.getProvider('agent')?.baseUrl).toBe('https://other.test/v1');
   } finally {
     fixture.store.close();
   }
 });
 
-test('editing the model in use waits for a restart', async () => {
+test('editing the model in use is hot', async () => {
   const fixture = await setup({
     transform: (config) => {
       config.agent.provider = 'agent';
@@ -1550,10 +1760,10 @@ test('editing the model in use waits for a restart', async () => {
     if (!result.ok) {
       throw new Error(result.message);
     }
-    expect(result.applied).toEqual([]);
-    expect(result.restartRequired).toEqual(['providers.agent.models[agent-model]']);
+    expect(result.applied).toEqual(['providers.agent.models[agent-model]']);
+    expect(result.restartRequired).toEqual([]);
     expect(customProvider(fixture.configStore.current().config.providers, 'agent').models[0]?.context_window).toBe(
-      200_000,
+      100_000,
     );
   } finally {
     fixture.store.close();
@@ -1595,7 +1805,7 @@ test('editing a model the agent just left is hot', async () => {
   }
 });
 
-test('editing the vision model waits for a restart', async () => {
+test('editing the vision model is hot and republishes the vision model', async () => {
   const fixture = await setup();
   try {
     await fixture.patch((config) => {
@@ -1606,15 +1816,59 @@ test('editing the vision model waits for a restart', async () => {
     if (!result.ok) {
       throw new Error(result.message);
     }
-    expect(result.applied).toEqual([]);
-    expect(result.restartRequired).toEqual(['providers.vision.models[vision-model]']);
-    expect(customProvider(fixture.configStore.current().config.providers, 'vision').models[0]?.max_tokens).toBe(8_192);
+    expect(result.applied).toEqual(['providers.vision.models[vision-model]']);
+    expect(result.restartRequired).toEqual([]);
+    expect(customProvider(fixture.configStore.current().config.providers, 'vision').models[0]?.max_tokens).toBe(4_096);
+    expect(fixture.configStore.current().visionModel.maxTokens).toBe(4_096);
   } finally {
     fixture.store.close();
   }
 });
 
-test('an agent pointing at a brand new provider waits for a restart', async () => {
+test('switching the vision model is hot and refuses a model over the output limit', async () => {
+  const fixture = await setup({
+    transform: (config) => {
+      const vision = config.providers.vision;
+      if (vision?.kind !== 'custom') {
+        throw new Error('Expected the custom vision provider fixture');
+      }
+      vision.models.push(model('vision-alt', { input: ['text', 'image'] }));
+    },
+  });
+  try {
+    await fixture.patch((config) => {
+      config.vision.model = 'vision-alt';
+      config.vision.max_output_tokens = 4_096;
+    });
+    const switched = await fixture.reloader.reloadFromFile();
+    expect(switched.ok).toBe(true);
+    if (!switched.ok) {
+      throw new Error(switched.message);
+    }
+    expect(switched.applied).toEqual(['vision.max_output_tokens', 'vision.model']);
+    expect(switched.restartRequired).toEqual([]);
+    expect(fixture.configStore.current().visionModel.id).toBe('vision-alt');
+
+    // The check that used to guard the next startup now guards the publication:
+    // a limit the new model cannot honour leaves the running configuration alone.
+    const before = fixture.configStore.current();
+    await fixture.patch((config) => {
+      config.vision.max_output_tokens = 65_536;
+    });
+    const refused = await fixture.reloader.reloadFromFile();
+    expect(refused.ok).toBe(false);
+    if (refused.ok) {
+      throw new Error('Expected the output limit to be refused');
+    }
+    expect(refused.code).toBe('model_unusable');
+    expect(refused.message).toContain('Vision max_output_tokens');
+    expect(fixture.configStore.current()).toBe(before);
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('an agent pointing at a brand new provider switches in the same reload', async () => {
   const fixture = await setup();
   try {
     await fixture.patch((config) => {
@@ -1634,9 +1888,33 @@ test('an agent pointing at a brand new provider waits for a restart', async () =
     if (!result.ok) {
       throw new Error(result.message);
     }
-    expect(result.applied).toEqual(['agent.thinking_level']);
-    expect(result.restartRequired).toEqual(['agent.model', 'agent.provider', 'providers.extra']);
-    expect(fixture.configStore.current().config.agent).toMatchObject({ provider: 'faux', model: AGENT_MODEL });
+    expect(result.applied).toEqual(['agent.model', 'agent.provider', 'agent.thinking_level', 'providers.extra']);
+    expect(result.restartRequired).toEqual([]);
+    expect(fixture.configStore.current().config.agent).toMatchObject({ provider: 'extra', model: 'extra-model' });
+    expect(fixture.configStore.current().models.getModel('extra', 'extra-model')).toBeDefined();
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('removing a provider is hot and unregisters it', async () => {
+  const fixture = await setup();
+  try {
+    await fixture.patch((config) => {
+      delete config.providers.vision;
+      config.vision.provider = 'agent';
+      config.vision.model = 'agent-model';
+      config.agent.provider = 'faux';
+    });
+    const result = await fixture.reloader.reloadFromFile();
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.message);
+    }
+    expect(result.applied).toEqual(['providers.vision', 'vision.model', 'vision.provider']);
+    expect(result.restartRequired).toEqual([]);
+    expect(fixture.configStore.current().models.getProvider('vision')).toBeUndefined();
+    expect(fixture.configStore.current().visionModel.provider).toBe('agent');
   } finally {
     fixture.store.close();
   }

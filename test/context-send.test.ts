@@ -6,7 +6,6 @@ import { HttpError } from 'grammy';
 import type { Update } from 'grammy/types';
 import { Compile } from 'typebox/compile';
 import { loadConfig, type RawConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { MemoryStore } from '../src/context/memory.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
@@ -16,6 +15,7 @@ import {
   invocationCapabilities,
   renderInvocationContext,
   testConfigJsonc,
+  testConfigStore,
   writeTestConfig,
   type TestContextOptions,
   type TestInvocationContext,
@@ -41,7 +41,7 @@ async function setup(): Promise<{
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   return {
     store,
@@ -114,7 +114,7 @@ describe('invocation context', () => {
       'chat={{ agent.model }}',
     );
     const loaded = await loadConfig(configPath);
-    const configStore = new RuntimeConfigurationStore(loaded);
+    const configStore = await testConfigStore(loaded);
     const store = await SqliteStore.open(loaded.config);
     const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
     const scheduler = new BucketScheduler(store, configStore, async () => ({

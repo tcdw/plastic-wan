@@ -14,15 +14,14 @@ import {
 } from '../src/orchestration/bot-commands.ts';
 import { type FileConfig, type LoadedConfig, loadConfig } from '../src/platform/config.ts';
 import { ConfigReloader } from '../src/platform/config-reload.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
+import type { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
-import { createModelRegistry } from '../src/platform/providers.ts';
 import { BucketScheduler, STARTUP_CATCH_UP_STATE_KEY } from '../src/orchestration/scheduler.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { ConversationContextStore } from '../src/context/context-store.ts';
-import { sleep, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { sleep, testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 const BOT_USERNAME = 'plasticwan_test_bot';
@@ -55,7 +54,7 @@ async function setup(
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath, testConfigJsonc(directory, transform));
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? [], new Date('2026-08-15T00:00:00.000Z'));
   const scheduler = new BucketScheduler(store, configStore, handler);
@@ -350,12 +349,13 @@ describe('bot command service', () => {
 
   test('status reflects a published agent model', async () => {
     const { store, loaded, scheduler, configStore } = await setup();
-    const registry = await createModelRegistry(loaded.config, new SecretStore());
-    const switcher = new AgentModelSwitcher(configStore, registry.models);
+    const switcher = new AgentModelSwitcher(configStore);
     const commands = new BotCommandService(store, configStore, scheduler, switcher);
     configStore.publish({
       config: { ...loaded.config, agent: { ...loaded.config.agent, provider: 'vision', model: 'vision-model' } },
       hash: 'published',
+      models: configStore.current().models,
+      visionModel: configStore.current().visionModel,
     });
     expect(await commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain('vision / vision-model');
     store.close();
@@ -389,12 +389,10 @@ describe('bot command service', () => {
       switcher: AgentModelSwitcher;
     }> {
       const { store, loaded, scheduler, configStore } = await setup(transform);
-      const registry = await createModelRegistry(loaded.config, new SecretStore());
-      const switcher = new AgentModelSwitcher(configStore, registry.models);
+      const switcher = new AgentModelSwitcher(configStore);
       const configReloader = new ConfigReloader({
         loaded,
         store: configStore,
-        models: registry.models,
         modelSwitcher: switcher,
         secrets: new SecretStore(),
         validateAgentModel: () => undefined,

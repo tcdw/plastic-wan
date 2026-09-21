@@ -1,4 +1,4 @@
-import type { Api, Model, Models, ModelThinkingLevel } from '@earendil-works/pi-ai';
+import type { Api, Model, ModelThinkingLevel } from '@earendil-works/pi-ai';
 import type { RuntimeConfigurationStore } from './runtime-config.ts';
 
 export class ModelSwitchError extends Error {
@@ -21,7 +21,7 @@ export interface AgentModelOption {
 
 /**
  * Reads and validates agent model references against the live configuration and
- * model registry.
+ * the model registry published with it.
  *
  * There is no in-memory override: the model in use is always the one the active
  * configuration names, so a switch has to reach the configuration file to mean
@@ -29,11 +29,9 @@ export interface AgentModelOption {
  */
 export class AgentModelSwitcher {
   readonly #configStore: RuntimeConfigurationStore;
-  readonly #models: Models;
 
-  constructor(configStore: RuntimeConfigurationStore, models: Models) {
+  constructor(configStore: RuntimeConfigurationStore) {
     this.#configStore = configStore;
-    this.#models = models;
   }
 
   current(): AgentModelOption {
@@ -47,8 +45,9 @@ export class AgentModelSwitcher {
   }
 
   model(): Model<Api> {
-    const config = this.#configStore.current().config;
-    const found = this.#models.getModel(config.agent.provider, config.agent.model);
+    const snapshot = this.#configStore.current();
+    const config = snapshot.config;
+    const found = snapshot.models.getModel(config.agent.provider, config.agent.model);
     if (found === undefined) {
       throw new Error(`Agent model ${config.agent.provider}/${config.agent.model} is not registered`);
     }
@@ -56,9 +55,10 @@ export class AgentModelSwitcher {
   }
 
   list(): readonly AgentModelOption[] {
+    const snapshot = this.#configStore.current();
     const options: AgentModelOption[] = [];
-    for (const alias of Object.keys(this.#configStore.current().config.providers)) {
-      for (const candidate of this.#models.getModels(alias)) {
+    for (const alias of Object.keys(snapshot.config.providers)) {
+      for (const candidate of snapshot.models.getModels(alias)) {
         if (!candidate.input.includes('text')) {
           continue;
         }
@@ -76,10 +76,11 @@ export class AgentModelSwitcher {
 
   /** Validates a target without applying it. */
   option(provider: string, modelId: string): AgentModelOption {
-    if (this.#configStore.current().config.providers[provider] === undefined) {
+    const snapshot = this.#configStore.current();
+    if (snapshot.config.providers[provider] === undefined) {
       throw new ModelSwitchError('unknown_provider', `Provider ${provider} is not configured`);
     }
-    const found = this.#models.getModel(provider, modelId);
+    const found = snapshot.models.getModel(provider, modelId);
     if (found === undefined) {
       throw new ModelSwitchError('unknown_model', `Model ${provider}/${modelId} is not registered`);
     }

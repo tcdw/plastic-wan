@@ -6,12 +6,12 @@ import type { Update } from 'grammy/types';
 import { seedConfigAdmins } from '../src/store/admins.ts';
 import { BotCommandService } from '../src/orchestration/bot-commands.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
+import type { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { ConversationContextStore } from '../src/context/context-store.ts';
-import { sleep, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { sleep, testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 const ALICE = { id: 42n, name: 'Alice', username: 'alice' };
@@ -80,7 +80,7 @@ async function setup(): Promise<{
     }),
   );
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? []);
   const scheduler = new BucketScheduler(store, configStore, async () => ({

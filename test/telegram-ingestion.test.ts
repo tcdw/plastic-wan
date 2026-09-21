@@ -5,9 +5,8 @@ import { join } from 'node:path';
 import type { Update } from 'grammy/types';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { type FileConfig, loadConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -27,7 +26,7 @@ async function setup(
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath, testConfigJsonc(directory, transform));
   const { config } = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore({ config, hash: 'hash' });
+  const configStore = await testConfigStore({ config, hash: 'hash' });
   const store = await SqliteStore.open(config);
   return { store, ingestion: new TelegramIngestion(store, configStore, { id: 999 }) };
 }

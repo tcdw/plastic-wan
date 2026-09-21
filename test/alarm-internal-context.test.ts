@@ -5,12 +5,12 @@ import { join } from 'node:path';
 import type { Update } from 'grammy/types';
 import { createAlarmTool, createDeleteAlarmTool, createListAlarmTool } from '../src/capabilities/alarm.ts';
 import { loadConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import {
   testConfigJsonc,
+  testConfigStore,
   writeTestConfig,
   renderInvocationContext,
   pathExists,
@@ -37,7 +37,7 @@ async function setup() {
     }),
   );
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   return {
     directory,

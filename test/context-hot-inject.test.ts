@@ -2,22 +2,21 @@ import { afterAll, describe, expect, test } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai';
+import { fauxAssistantMessage, fauxProvider, fauxToolCall, type MutableModels } from '@earendil-works/pi-ai';
 import type { Update } from 'grammy/types';
 import { loadConfig, type FileConfig, type RawConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore, type InvocationConfigSnapshot } from '../src/platform/runtime-config.ts';
+import type { RuntimeConfigurationStore, InvocationConfigSnapshot } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { ConversationRuntime } from '../src/orchestration/conversation-runtime.ts';
 import { ConversationContextStore } from '../src/context/context-store.ts';
 import { InvocationQueueService } from '../src/orchestration/invocation-queue.ts';
-import type { ModelRegistry } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { SystemResources } from '../src/platform/system-resources.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
-import { sleep, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { fauxRegistry, sleep, testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 const CHAT_ID = 123456789;
@@ -41,12 +40,12 @@ interface Fixture {
   runtimeWith(
     faux: ReturnType<typeof fauxProvider>,
     overrides?: { readonly systemPrompt?: string; readonly registryModelId?: string },
-  ): AgentRuntime;
+  ): Promise<AgentRuntime>;
   /** The same runtime plus the invocation snapshot that carries its config overrides. */
   runtimeAndSnapshot(
     faux: ReturnType<typeof fauxProvider>,
     overrides?: { readonly systemPrompt?: string; readonly registryModelId?: string },
-  ): { readonly runtime: AgentRuntime; readonly snapshot: InvocationConfigSnapshot };
+  ): Promise<{ readonly runtime: AgentRuntime; readonly snapshot: InvocationConfigSnapshot }>;
 }
 
 async function fixture(transform?: (config: FileConfig) => void): Promise<Fixture> {
@@ -65,7 +64,11 @@ async function fixture(transform?: (config: FileConfig) => void): Promise<Fixtur
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  // One faux registry shared by the fixture store and every runtime build: a
+  // test stands its own faux provider into it through the mutable handle below.
+  const registry = fauxRegistry(fauxAgent());
+  const configStore = await testConfigStore(loaded, registry);
+  const models = registry.models as MutableModels;
   const store = await SqliteStore.open(loaded.config);
   const sendApi: TelegramSendApi = {
     sendMessage: async () => ({ message_id: SEND_MESSAGE_ID, date: 1_700_000_100, chat: { id: CHAT_ID } }),
@@ -74,28 +77,23 @@ async function fixture(transform?: (config: FileConfig) => void): Promise<Fixtur
   const conversationRuntime = new ConversationRuntime({
     agentCacheSize: loaded.config.agent.context.agent_cache_size,
   });
-  const build = (
+  const build = async (
     faux: ReturnType<typeof fauxProvider>,
     overrides: { readonly systemPrompt?: string; readonly registryModelId?: string } = {},
-  ): { readonly runtime: AgentRuntime; readonly snapshot: InvocationConfigSnapshot } => {
-    const models = createModels();
+  ): Promise<{ readonly runtime: AgentRuntime; readonly snapshot: InvocationConfigSnapshot }> => {
     models.setProvider(faux.provider);
-    const model = overrides.registryModelId === undefined ? faux.getModel() : faux.getModel(overrides.registryModelId);
-    if (model === undefined) {
-      throw new Error(`Faux model ${overrides.registryModelId} is not registered`);
-    }
-    const registry: ModelRegistry = { models, visionModel: model };
     const config: RawConfig =
       overrides.systemPrompt === undefined
         ? loaded.config
         : { ...loaded.config, agent: { ...loaded.config.agent, system_prompt: overrides.systemPrompt } };
     const runtimeConfigStore =
-      overrides.systemPrompt === undefined ? configStore : new RuntimeConfigurationStore({ config, hash: loaded.hash });
+      overrides.systemPrompt === undefined
+        ? configStore
+        : await testConfigStore({ config, hash: loaded.hash }, registry);
     const runtime = new AgentRuntime({
       store,
       configStore: runtimeConfigStore,
       secrets: new SecretStore(),
-      registry,
       telegramApi: sendApi,
       bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
       systemResources: SystemResources.empty(),
@@ -111,7 +109,7 @@ async function fixture(transform?: (config: FileConfig) => void): Promise<Fixtur
     conversationRuntime,
     ingestion: new TelegramIngestion(store, configStore, { id: 999 }),
     sendApi,
-    runtimeWith: (faux, overrides = {}) => build(faux, overrides).runtime,
+    runtimeWith: async (faux, overrides = {}) => (await build(faux, overrides)).runtime,
     runtimeAndSnapshot: (faux, overrides = {}) => build(faux, overrides),
   };
 }
@@ -186,7 +184,7 @@ describe('long-lived invocation', () => {
         return fauxAssistantMessage('');
       },
     ]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     const scheduler = new BucketScheduler(
       fixtureSetup.store,
       fixtureSetup.configStore,
@@ -280,7 +278,7 @@ describe('long-lived invocation', () => {
         return fauxAssistantMessage('');
       },
     ]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     const started: bigint[] = [];
     let finished!: () => void;
     const finishedSignal = new Promise<void>((resolve) => {
@@ -378,7 +376,7 @@ describe('long-lived invocation', () => {
         return fauxAssistantMessage('');
       },
     ]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     let finished!: () => void;
     const finishedSignal = new Promise<void>((resolve) => {
       finished = resolve;
@@ -456,7 +454,7 @@ describe('long-lived invocation', () => {
       },
       () => fauxAssistantMessage(''),
     ]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     const scheduler = new BucketScheduler(
       fixtureSetup.store,
       fixtureSetup.configStore,
@@ -492,7 +490,7 @@ describe('long-lived invocation', () => {
         return fauxAssistantMessage('');
       },
     ]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     const started: bigint[] = [];
     let finished!: () => void;
     const finishedSignal = new Promise<void>((resolve) => {
@@ -550,7 +548,7 @@ describe('long-lived invocation', () => {
         return fauxAssistantMessage('');
       },
     ]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     const started: bigint[] = [];
     let secondFinished!: () => void;
     const secondFinishedSignal = new Promise<void>((resolve) => {
@@ -640,7 +638,7 @@ describe('long-lived invocation', () => {
         return fauxAssistantMessage('');
       },
     ]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     const scheduler = new BucketScheduler(
       fixtureSetup.store,
       fixtureSetup.configStore,
@@ -832,7 +830,7 @@ describe('long-lived invocation', () => {
       },
       () => fauxAssistantMessage('should never be requested'),
     ]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     try {
       fixtureSetup.ingestion.ingest(update(1, 10, 'hello'), new Date());
       const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.configStore, {
@@ -889,7 +887,7 @@ describe('long-lived invocation', () => {
         fauxAssistantMessage(fauxToolCall('read', { path: 'system:///missing.md' }), { stopReason: 'toolUse' }),
     );
     faux.setResponses([...responses, () => fauxAssistantMessage('done')]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     try {
       fixtureSetup.ingestion.ingest(update(1, 10, 'hello'), new Date());
       const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.configStore, {
@@ -1013,7 +1011,7 @@ describe('long-lived invocation', () => {
     });
     const faux = fauxAgent();
     faux.setResponses([() => fauxAssistantMessage('answered')]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     try {
       fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
       const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.configStore, {
@@ -1079,7 +1077,7 @@ describe('conversation continuity', () => {
       ],
     });
     faux.setResponses([() => fauxAssistantMessage('first answer'), () => fauxAssistantMessage('second answer')]);
-    const runtime = fixtureSetup.runtimeWith(faux, { registryModelId: 'tiny-model' });
+    const runtime = await fixtureSetup.runtimeWith(faux, { registryModelId: 'tiny-model' });
     const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.configStore, async () => ({
       state: 'completed',
       reason: 'done',
@@ -1126,7 +1124,7 @@ describe('conversation continuity', () => {
       () => fauxAssistantMessage('second answer'),
       () => fauxAssistantMessage('third answer'),
     ]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     // The real runtime is the attachment target, so the queued batch reaches the
     // run through the same path production uses.
     const service = new InvocationQueueService(
@@ -1228,7 +1226,7 @@ describe('conversation continuity', () => {
         return fauxAssistantMessage('');
       },
     ]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.configStore, async () => ({
       state: 'completed',
       reason: 'done',
@@ -1314,7 +1312,7 @@ describe('conversation continuity', () => {
         return fauxAssistantMessage('');
       },
     ]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.configStore, async () => ({
       state: 'completed',
       reason: 'done',
@@ -1405,7 +1403,7 @@ describe('conversation continuity', () => {
         return fauxAssistantMessage('second answer');
       },
     ]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.configStore, async () => ({
       state: 'completed',
       reason: 'done',
@@ -1485,7 +1483,7 @@ describe('conversation continuity', () => {
         return fauxAssistantMessage('second answer');
       },
     ]);
-    const runtime = fixtureSetup.runtimeWith(faux);
+    const runtime = await fixtureSetup.runtimeWith(faux);
     const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.configStore, async () => ({
       state: 'completed',
       reason: 'done',
@@ -1573,7 +1571,7 @@ describe('conversation continuity', () => {
       if (first === undefined) {
         throw new Error('Expected the first invocation');
       }
-      const firstRun = fixtureSetup.runtimeAndSnapshot(faux, { systemPrompt: 'prompt A' });
+      const firstRun = await fixtureSetup.runtimeAndSnapshot(faux, { systemPrompt: 'prompt A' });
       await firstRun.runtime.run(first, firstRun.snapshot, new AbortController().signal);
       fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(first);
       fixtureSetup.store.db
@@ -1589,7 +1587,7 @@ describe('conversation continuity', () => {
       if (second === undefined) {
         throw new Error('Expected the second invocation');
       }
-      const secondRun = fixtureSetup.runtimeAndSnapshot(faux, { systemPrompt: 'prompt B' });
+      const secondRun = await fixtureSetup.runtimeAndSnapshot(faux, { systemPrompt: 'prompt B' });
       await secondRun.runtime.run(second, secondRun.snapshot, new AbortController().signal);
 
       // The old rows were dropped, so every row left in the canonical history

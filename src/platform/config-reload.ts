@@ -1,24 +1,19 @@
 import { createHash } from 'node:crypto';
-import {
-  type Api,
-  getSupportedThinkingLevels,
-  type Model,
-  type MutableModels,
-  type Provider,
-} from '@earendil-works/pi-ai';
+import { type Api, getSupportedThinkingLevels, type Model, type Models } from '@earendil-works/pi-ai';
 import {
   assertConfigPermissions,
   type FileConfig,
   type LoadedConfig,
   loadConfig,
+  type RawConfig,
   validateSemantics,
 } from './config.ts';
-import { type ConfigChange, type ConfigSource, deepEqual, diffConfig } from './config-diff.ts';
+import { type ConfigChange, type ConfigSource, diffConfig } from './config-diff.ts';
 import { ConfigWriteError, type ConfigEdit, readConfigRevision, writeConfigEdits } from './config-file.ts';
 import { type AgentModelSwitcher, ModelSwitchError } from './model-switch.ts';
-import { rebuildBuiltinProvider, rebuildCustomProvider } from './providers.ts';
-import type { RuntimeConfigurationStore } from './runtime-config.ts';
-import type { SecretStore } from './secrets.ts';
+import { buildModelRegistry } from './providers.ts';
+import type { ConfigurationModels, RuntimeConfigurationStore } from './runtime-config.ts';
+import { type SecretStore, SecretResolutionError } from './secrets.ts';
 
 export type ConfigErrorCode =
   | 'config_permissions'
@@ -26,6 +21,7 @@ export type ConfigErrorCode =
   | 'config_conflict'
   | 'candidate_invalid'
   | 'model_unusable'
+  | 'secret_unresolved'
   | 'unknown_provider'
   | 'unknown_model'
   | 'not_text_capable'
@@ -69,19 +65,12 @@ export interface ConfigReloaderOptions {
   /** The startup load result: the base for the first diff. */
   readonly loaded: LoadedConfig;
   readonly store: RuntimeConfigurationStore;
-  /** `registry.models`: shared with the switcher, the runtime and media. */
-  readonly models: MutableModels;
   readonly modelSwitcher: AgentModelSwitcher;
   readonly secrets: SecretStore;
   /** Throws when the tool registry does not fit the model's context window. */
   readonly validateAgentModel: (model: Model<Api>) => void;
   /** Called after every successful publish; the composition root wakes the scheduler. */
   readonly onPublished: () => void;
-}
-
-interface RebuiltProvider {
-  readonly alias: string;
-  readonly provider: Provider;
 }
 
 /**
@@ -96,7 +85,6 @@ interface RebuiltProvider {
 export class ConfigReloader {
   readonly #configPath: string;
   readonly #store: RuntimeConfigurationStore;
-  readonly #models: MutableModels;
   readonly #modelSwitcher: AgentModelSwitcher;
   readonly #secrets: SecretStore;
   readonly #validateAgentModel: (model: Model<Api>) => void;
@@ -111,7 +99,6 @@ export class ConfigReloader {
   constructor(options: ConfigReloaderOptions) {
     this.#configPath = options.loaded.configPath;
     this.#store = options.store;
-    this.#models = options.models;
     this.#modelSwitcher = options.modelSwitcher;
     this.#secrets = options.secrets;
     this.#validateAgentModel = options.validateAgentModel;
@@ -177,7 +164,7 @@ export class ConfigReloader {
         }
         throw error;
       }
-      const resolved = this.#models.getModel(selected.provider, selected.model);
+      const resolved = this.#store.current().models.getModel(selected.provider, selected.model);
       if (resolved === undefined) {
         return this.#rejected('model_unusable', `Model ${selected.provider}/${selected.model} is not registered`);
       }
@@ -243,11 +230,11 @@ export class ConfigReloader {
         false,
       );
     }
-    const rebuilt = this.#rebuildProviders(diff.candidate.file);
-    if (rebuilt.error !== null) {
-      return this.#failure('model_unusable', rebuilt.error, false);
+    const rebuilt = await this.#buildRegistry(diff.candidate.raw);
+    if (!rebuilt.ok) {
+      return this.#failure(rebuilt.code, rebuilt.error, false);
     }
-    const model = this.#resolveAgentModel(diff.candidate.file, rebuilt.providers);
+    const model = this.#resolveAgentModel(diff.candidate.raw, rebuilt.registry.models);
     if (model === null) {
       const { provider, model: modelId } = diff.candidate.file.agent;
       return this.#failure('model_unusable', `Agent model ${provider}/${modelId} is not usable`, false);
@@ -283,12 +270,14 @@ export class ConfigReloader {
     // configuration now equals a different file version, e.g. after a pending
     // field was reverted or only a comment was edited. Publishing the equal
     // candidate adopts that identity.
-    // Synchronous from here on: the provider swap and the publication must not be
-    // separated by an await, or a run could start against a half-applied state.
-    for (const entry of rebuilt.providers) {
-      this.#models.setProvider(entry.provider);
-    }
-    this.#store.publish({ config: diff.candidate.raw, hash: activeHash });
+    // Synchronous from here on: the registry and the configuration are published
+    // together, and no run can observe one without the other.
+    this.#store.publish({
+      config: diff.candidate.raw,
+      hash: activeHash,
+      models: rebuilt.registry.models,
+      visionModel: rebuilt.registry.visionModel,
+    });
     this.#activeFile = diff.candidate.file;
     this.#fileHash = file.hash;
     this.#restartRequired = restartRequired;
@@ -298,38 +287,39 @@ export class ConfigReloader {
     return this.#applied(applied, restartRequired, outsideServe);
   }
 
-  #rebuildProviders(candidateFile: FileConfig): { providers: readonly RebuiltProvider[]; error: string | null } {
-    const providers: RebuiltProvider[] = [];
-    for (const [alias, configured] of Object.entries(candidateFile.providers)) {
-      const activeProvider = this.#activeFile.providers[alias];
-      if (activeProvider === undefined || activeProvider.kind !== configured.kind) {
-        continue;
-      }
-      if (deepEqual(activeProvider.models, configured.models)) {
-        continue;
-      }
-      try {
-        providers.push({
-          alias,
-          provider:
-            configured.kind === 'custom'
-              ? rebuildCustomProvider(this.#models, alias, configured)
-              : rebuildBuiltinProvider(this.#models, alias, configured),
-        });
-      } catch (error) {
-        return { providers: [], error: messageOf(error) };
-      }
+  /**
+   * Builds the candidate's registry. Every provider keeps the connection the
+   * running process already resolved unless the file describes a different one,
+   * so this is the only place a reload may resolve a SecretRef — a `command`
+   * reference therefore runs here, exactly as it does at startup.
+   */
+  async #buildRegistry(
+    candidate: RawConfig,
+  ): Promise<
+    | { readonly ok: true; readonly registry: ConfigurationModels }
+    | { readonly ok: false; readonly code: ConfigErrorCode; readonly error: string }
+  > {
+    try {
+      return {
+        ok: true,
+        registry: await buildModelRegistry(
+          candidate,
+          { file: this.#activeFile, models: this.#store.current().models },
+          this.#secrets,
+        ),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        code: error instanceof SecretResolutionError ? 'secret_unresolved' : 'model_unusable',
+        error: messageOf(error),
+      };
     }
-    return { providers, error: null };
   }
 
-  #resolveAgentModel(candidateFile: FileConfig, rebuilt: readonly RebuiltProvider[]): Model<Api> | null {
-    const { provider: alias, model: modelId } = candidateFile.agent;
-    const replacement = rebuilt.find((entry) => entry.alias === alias)?.provider;
-    const model =
-      replacement === undefined
-        ? this.#models.getModel(alias, modelId)
-        : replacement.getModels().find((candidate) => candidate.id === modelId);
+  #resolveAgentModel(candidate: RawConfig, models: Models): Model<Api> | null {
+    const { provider, model: modelId } = candidate.agent;
+    const model = models.getModel(provider, modelId);
     if (model === undefined || !model.input.includes('text')) {
       return null;
     }

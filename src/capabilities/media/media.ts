@@ -11,7 +11,6 @@ import { finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from 
 import type { CapabilityRefResolver, DirectImage, InvocationContext } from '../../platform/invocation-context.ts';
 import { MAX_DOWNLOAD_BYTES, type MediaRow, prepareMediaImage, stickerTelegramValidator } from './media-image.ts';
 import type { MediaDownloader } from './media-download.ts';
-import type { ModelRegistry } from '../../platform/providers.ts';
 import { dailyUsage, mediaAnalyses, media as mediaTable, modelCalls, stickers } from '../../store/schema.ts';
 import type { SecretStore } from '../../platform/secrets.ts';
 import { isDailyTokenBudgetReached, readDailyTokenBudget } from '../../store/sleep.ts';
@@ -46,40 +45,58 @@ export interface MediaServiceOptions {
   readonly store: SqliteStore;
   readonly configStore: RuntimeConfigurationStore;
   readonly secrets: SecretStore;
-  readonly registry: ModelRegistry;
   readonly mediaClient: MediaDownloader;
   readonly modelGate: KeyedSemaphore;
+}
+
+/**
+ * The vision model and cache identity one analysis runs under, taken from the
+ * configuration current when that analysis starts. Background sticker indexing
+ * runs outside any invocation, so the live snapshot is the only one available;
+ * chat analyses use it too, so both paths follow one rule.
+ */
+interface VisionRun {
+  readonly models: Models;
+  readonly model: Model<Api>;
+  readonly analysisVersion: string;
 }
 
 export class MediaService {
   readonly #store: SqliteStore;
   readonly #configStore: RuntimeConfigurationStore;
   readonly #secrets: SecretStore;
-  readonly #models: Models;
-  readonly #model: Model<Api>;
   readonly #mediaClient: MediaDownloader;
   readonly #modelGate: KeyedSemaphore;
   readonly #visionSemaphore: AsyncSemaphore;
-  /**
-   * Cache identity of the vision model and prompt. Derived at construction: a
-   * media analysis is keyed by it, so it must not drift mid-process.
-   */
+  /** Restart-only, like the rest of the vision concurrency and budget fields. */
   readonly #visionPromptVersion: number;
-  readonly #analysisVersion: string;
   readonly #inflight = new Map<string, Promise<string>>();
 
   constructor(options: MediaServiceOptions) {
     this.#store = options.store;
     this.#secrets = options.secrets;
     this.#configStore = options.configStore;
-    this.#models = options.registry.models;
-    this.#model = options.registry.visionModel;
     this.#mediaClient = options.mediaClient;
     this.#modelGate = options.modelGate;
     const vision = options.configStore.current().config.vision;
     this.#visionSemaphore = new AsyncSemaphore(vision.max_concurrency);
     this.#visionPromptVersion = vision.prompt_version;
-    this.#analysisVersion = `${this.#model.provider}/${this.#model.id}/prompt-${vision.prompt_version}`;
+  }
+
+  /**
+   * Pins the model, its registry and the cache identity for one analysis. A
+   * vision model switched while the analysis runs never changes what that
+   * analysis reports, and a cache row written under one model is never read
+   * under another.
+   */
+  #visionRun(): VisionRun {
+    const snapshot = this.#configStore.current();
+    const model = snapshot.visionModel;
+    return {
+      models: snapshot.models,
+      model,
+      analysisVersion: `${model.provider}/${model.id}/prompt-${this.#visionPromptVersion}`,
+    };
   }
 
   async loadDirectImages(images: readonly DirectImage[], signal: AbortSignal): Promise<ImageContent[]> {
@@ -187,10 +204,10 @@ export class MediaService {
           if (media === undefined) {
             throw new Error('Referenced media no longer exists');
           }
-          const version = this.#analysisVersion;
+          const run = this.#visionRun();
           const cached = this.#store.orm
             .all<{ description: string }>(
-              sql`SELECT description FROM media_analyses WHERE file_unique_id = ${media.fileUniqueId} AND analysis_version = ${version} AND state = 'success' AND (expires_at IS NULL OR expires_at >= ${new Date().toISOString()})`,
+              sql`SELECT description FROM media_analyses WHERE file_unique_id = ${media.fileUniqueId} AND analysis_version = ${run.analysisVersion} AND state = 'success' AND (expires_at IS NULL OR expires_at >= ${new Date().toISOString()})`,
             )
             .at(0);
           let description: string;
@@ -201,7 +218,7 @@ export class MediaService {
           } else {
             description = await this.#analyzeDeduplicated(
               media,
-              version,
+              run,
               { kind: 'chat', chatId: context.chatId, invocationId: context.invocationId },
               combinedSignal,
             );
@@ -266,20 +283,20 @@ export class MediaService {
       fileSize: null,
       telegramJson: JSON.stringify(telegram),
     };
-    const version = this.#analysisVersion;
+    const run = this.#visionRun();
     let analysis = this.#store.orm
       .all<{ id: bigint; description: string; metadata_json: string }>(
-        sql`SELECT id, description, metadata_json FROM media_analyses WHERE file_unique_id = ${media.fileUniqueId} AND analysis_version = ${version} AND state = 'success'`,
+        sql`SELECT id, description, metadata_json FROM media_analyses WHERE file_unique_id = ${media.fileUniqueId} AND analysis_version = ${run.analysisVersion} AND state = 'success'`,
       )
       .at(0);
     if (analysis === undefined) {
       if (!this.#reserveStickerImage()) {
         throw new Error('Sticker vision daily budget reached');
       }
-      await this.#analyzeDeduplicated(media, version, { kind: 'sticker_index' }, signal);
+      await this.#analyzeDeduplicated(media, run, { kind: 'sticker_index' }, signal);
       analysis = this.#store.orm
         .all<{ id: bigint; description: string; metadata_json: string }>(
-          sql`SELECT id, description, metadata_json FROM media_analyses WHERE file_unique_id = ${media.fileUniqueId} AND analysis_version = ${version} AND state = 'success'`,
+          sql`SELECT id, description, metadata_json FROM media_analyses WHERE file_unique_id = ${media.fileUniqueId} AND analysis_version = ${run.analysisVersion} AND state = 'success'`,
         )
         .at(0);
     }
@@ -305,21 +322,21 @@ export class MediaService {
 
   async #analyzeDeduplicated(
     media: MediaRow,
-    version: string,
+    run: VisionRun,
     scope: AnalysisScope,
     signal: AbortSignal,
   ): Promise<string> {
-    const key = `${media.fileUniqueId}\u0000${version}`;
+    const key = `${media.fileUniqueId}\u0000${run.analysisVersion}`;
     const existing = this.#inflight.get(key);
     if (existing !== undefined) {
       return existing;
     }
-    const pending = this.#analyze(media, version, scope, signal).finally(() => this.#inflight.delete(key));
+    const pending = this.#analyze(media, run, scope, signal).finally(() => this.#inflight.delete(key));
     this.#inflight.set(key, pending);
     return pending;
   }
 
-  async #analyze(media: MediaRow, version: string, scope: AnalysisScope, signal: AbortSignal): Promise<string> {
+  async #analyze(media: MediaRow, run: VisionRun, scope: AnalysisScope, signal: AbortSignal): Promise<string> {
     if (media.fileSize !== null && media.fileSize > BigInt(MAX_DOWNLOAD_BYTES)) {
       throw new Error('Telegram media exceeds 20 MB');
     }
@@ -345,9 +362,9 @@ export class MediaService {
         .insert(mediaAnalyses)
         .values({
           fileUniqueId: media.fileUniqueId,
-          analysisVersion: version,
-          provider: this.#model.provider,
-          model: this.#model.id,
+          analysisVersion: run.analysisVersion,
+          provider: run.model.provider,
+          model: run.model.id,
           promptVersion: BigInt(this.#visionPromptVersion),
           kind: media.kind === 'sticker' ? 'sticker' : 'image',
           state: 'pending',
@@ -362,7 +379,12 @@ export class MediaService {
       const analysis = this.#store.orm
         .select({ id: mediaAnalyses.id })
         .from(mediaAnalyses)
-        .where(and(eq(mediaAnalyses.fileUniqueId, media.fileUniqueId), eq(mediaAnalyses.analysisVersion, version)))
+        .where(
+          and(
+            eq(mediaAnalyses.fileUniqueId, media.fileUniqueId),
+            eq(mediaAnalyses.analysisVersion, run.analysisVersion),
+          ),
+        )
         .get();
       if (analysis === undefined) {
         throw new Error('Media analysis upsert failed');
@@ -373,12 +395,12 @@ export class MediaService {
       const releaseChat =
         scope.kind === 'chat' ? await this.#modelGate.acquire(scope.chatId.toString(), signal) : undefined;
       try {
-        const callId = this.#startVisionCall(scope, analysisId);
+        const callId = this.#startVisionCall(scope, analysisId, run);
         let response: AssistantMessage;
         try {
           const data = Buffer.from(await readFile(normalized.path)).toString('base64');
-          response = await this.#models.completeSimple(
-            this.#model,
+          response = await run.models.completeSimple(
+            run.model,
             {
               systemPrompt:
                 media.kind === 'sticker'
@@ -408,7 +430,7 @@ export class MediaService {
                 : {}),
             },
             {
-              ...(this.#model.reasoning ? { reasoning: 'low' as const } : {}),
+              ...(run.model.reasoning ? { reasoning: 'low' as const } : {}),
               signal,
               maxTokens: this.#configStore.current().config.vision.max_output_tokens,
               maxRetries: 2,
@@ -482,13 +504,13 @@ export class MediaService {
     }
   }
 
-  #startVisionCall(scope: AnalysisScope, analysisId: bigint): bigint {
+  #startVisionCall(scope: AnalysisScope, analysisId: bigint, run: VisionRun): bigint {
     // Raw template: model_calls.invocation_id is nullable in the migrations, but the
     // drizzle schema in schema.ts marks it notNull(), so the builder cannot bind the
     // NULL written here for sticker-index calls.
     const created = this.#store.orm
       .all<{ id: bigint }>(
-        sql`INSERT INTO model_calls(invocation_id, media_analysis_id, role, provider, model, attempt, state, created_at) VALUES (${scope.kind === 'chat' ? scope.invocationId : null}, ${analysisId}, ${scope.kind === 'chat' ? 'vision_chat' : 'vision_sticker'}, ${this.#model.provider}, ${this.#model.id}, 1, 'pending', ${new Date().toISOString()}) RETURNING id`,
+        sql`INSERT INTO model_calls(invocation_id, media_analysis_id, role, provider, model, attempt, state, created_at) VALUES (${scope.kind === 'chat' ? scope.invocationId : null}, ${analysisId}, ${scope.kind === 'chat' ? 'vision_chat' : 'vision_sticker'}, ${run.model.provider}, ${run.model.id}, 1, 'pending', ${new Date().toISOString()}) RETURNING id`,
       )
       .at(0);
     if (created === undefined) {

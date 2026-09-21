@@ -7,7 +7,6 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { Update } from 'grammy/types';
 import { z } from 'zod';
 import { loadConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { McpManager } from '../src/capabilities/mcp.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
@@ -18,6 +17,7 @@ import {
   startFixtureServer,
   stopFixtureServer,
   testConfigJsonc,
+  testConfigStore,
   writeTestConfig,
 } from './helpers.ts';
 
@@ -58,7 +58,7 @@ test('stdio MCP discovery, result bounds, audit, and unmetered repeat calls', as
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const manager = new McpManager(store, loaded.config, new SecretStore());
   try {
@@ -186,7 +186,7 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const manager = new McpManager(store, loaded.config, new SecretStore());
   try {

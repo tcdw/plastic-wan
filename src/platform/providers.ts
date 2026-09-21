@@ -4,7 +4,6 @@ import {
   createProvider,
   type Model,
   type Models,
-  type MutableModels,
   type OpenAICompletionsCompat,
   type Provider,
   type ProviderAuth,
@@ -15,12 +14,13 @@ import { googleGenerativeAIApi } from '@earendil-works/pi-ai/api/google-generati
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy';
 import { builtinProviderApi, findBuiltinProvider } from './builtin-providers.ts';
-import type { ModelCompatConfig, ModelFileConfig, RawConfig } from './config.ts';
+import type { FileConfig, ModelCompatConfig, ModelFileConfig, RawConfig } from './config.ts';
+import { deepEqual } from './config-diff.ts';
+import type { ConfigurationModels } from './runtime-config.ts';
 import type { SecretStore } from './secrets.ts';
 import { thinkingLevelMap } from './thinking-levels.ts';
 
-export type CustomProviderConfig = Extract<RawConfig['providers'][string], { kind: 'custom' }>;
-export type BuiltinProviderConfig = Extract<RawConfig['providers'][string], { kind: 'builtin' }>;
+type ProviderFileConfig = FileConfig['providers'][string];
 
 const CUSTOM_ADAPTERS: Record<string, () => ProviderStreams> = {
   'openai-responses': openAIResponsesApi,
@@ -29,22 +29,44 @@ const CUSTOM_ADAPTERS: Record<string, () => ProviderStreams> = {
   'google-generative-ai': googleGenerativeAIApi,
 };
 
-export interface ModelRegistry {
-  /** Shared, mutable registry: a reload replaces a custom provider in place. */
-  readonly models: MutableModels;
-  readonly visionModel: Model<Api>;
+/**
+ * The registry a reload starts from: the file layer the running process was
+ * built from, and the providers it registered.
+ */
+export interface PreviousRegistry {
+  readonly file: FileConfig;
+  readonly models: Models;
 }
 
 /**
- * Registers one provider object per configured alias.
+ * Builds one generation's model registry: one provider object per configured
+ * alias, plus the vision model the configuration points at.
+ *
+ * A provider whose connection fields are unchanged keeps the object the process
+ * already has, so credentials are never resolved twice — a `command` SecretRef
+ * runs a process, and only an explicitly requested reload of a new or changed
+ * connection may have that side effect. `previous` is `null` at startup, which
+ * builds every provider from the file.
  *
  * Builtin providers keep Pi's base URL, headers and provider-specific logic, but
  * their model list comes from the configuration alone: the catalog decides what
  * may be configured, never what is reachable at runtime.
  */
-export async function createModelRegistry(config: RawConfig, secrets: SecretStore): Promise<ModelRegistry> {
+export async function buildModelRegistry(
+  config: RawConfig,
+  previous: PreviousRegistry | null,
+  secrets: SecretStore,
+): Promise<ConfigurationModels> {
   const models = createModels();
   for (const [alias, configured] of Object.entries(config.providers)) {
+    const existing = reusableProvider(previous, alias, configured);
+    if (existing !== null) {
+      // The model list is built once and closed over, exactly as the provider it
+      // replaces did: a lookup must not rebuild the objects on every call.
+      const reused = providerModelsFor(alias, configured, existing);
+      models.setProvider({ ...existing, getModels: () => reused });
+      continue;
+    }
     const apiKey = await secrets.resolve(configured.api_key);
     if (configured.kind === 'builtin') {
       const source = findBuiltinProvider(configured.provider);
@@ -80,7 +102,7 @@ export async function createModelRegistry(config: RawConfig, secrets: SecretStor
         headers,
         auth: fixedAuth(alias, apiKey),
         api: adapter(),
-        models: customProviderModels(alias, baseUrl, configured),
+        models: providerModels(alias, configured.api, baseUrl, configured.models),
       }),
     );
   }
@@ -92,67 +114,60 @@ export async function createModelRegistry(config: RawConfig, secrets: SecretStor
 }
 
 /**
- * Rebuilds one custom provider from a new model list, reusing the connection
- * fields the registry resolved at startup.
- *
- * Credentials are never re-resolved: a `command` SecretRef runs a process, and a
- * reload must not have that side effect. `createProvider` stores `baseUrl`,
- * `headers` and `auth` on the provider object as given, so the ones already
- * there are the resolved ones. The `api` adapter comes from the configuration,
- * which is a restart-only field and therefore identical to the startup value.
+ * The registered provider to keep for one configured alias, or `null` when the
+ * alias has to be built from scratch.
  */
-export function rebuildCustomProvider(models: Models, alias: string, configured: CustomProviderConfig): Provider {
-  const existing = requireRegisteredProvider(models, alias);
-  if (existing.baseUrl === undefined) {
-    throw new Error(`Provider ${alias} has no base URL to preserve`);
+function reusableProvider(
+  previous: PreviousRegistry | null,
+  alias: string,
+  configured: ProviderFileConfig,
+): Provider | null {
+  if (previous === null) {
+    return null;
   }
-  const adapter = CUSTOM_ADAPTERS[configured.api];
-  if (adapter === undefined) {
-    throw new Error(`Unsupported custom API adapter: ${configured.api}`);
+  const previousConfig = previous.file.providers[alias];
+  if (previousConfig === undefined || !sameConnection(previousConfig, configured)) {
+    return null;
   }
-  return createProvider({
-    id: alias,
-    name: alias,
-    baseUrl: existing.baseUrl,
-    headers: existing.headers ?? {},
-    auth: existing.auth,
-    api: adapter(),
-    models: customProviderModels(alias, existing.baseUrl, configured),
-  });
+  return previous.models.getProvider(alias) ?? null;
 }
 
 /**
- * Rebuilds one builtin provider from a new model list. Like the custom path, the
- * registry's own auth and base URL are reused, so no SecretRef is resolved
- * again; only the models the configuration enables change.
+ * Whether two configurations of one alias describe the same connection:
+ * everything the file carries but the enabled model list. Re-kinding a provider
+ * counts as a different connection too, since `kind` is part of what is compared.
  */
-export function rebuildBuiltinProvider(models: Models, alias: string, configured: BuiltinProviderConfig): Provider {
-  const existing = requireRegisteredProvider(models, alias);
-  const source = findBuiltinProvider(configured.provider);
-  if (source === undefined) {
-    throw new Error(`Unknown built-in provider: ${configured.provider}`);
+export function sameConnection(left: ProviderFileConfig, right: ProviderFileConfig): boolean {
+  return deepEqual(connectionOf(left), connectionOf(right));
+}
+
+/** One provider's connection fields: everything the file carries but `models`. */
+function connectionOf(provider: ProviderFileConfig): Record<string, unknown> {
+  const connection = { ...provider } as Record<string, unknown>;
+  delete connection.models;
+  return connection;
+}
+
+/** The model list one reused provider serves: same connection, newly enabled models. */
+function providerModelsFor(alias: string, configured: ProviderFileConfig, existing: Provider): Model<Api>[] {
+  if (configured.kind === 'custom') {
+    return providerModels(
+      alias,
+      configured.api,
+      existing.baseUrl ?? configured.base_url.replace(/\/+$/, ''),
+      configured.models,
+    );
   }
-  const api = builtinProviderApi(source);
+  const source = findBuiltinProvider(configured.provider);
+  const api = source === undefined ? null : builtinProviderApi(source);
   if (api === null) {
     throw new Error(`Built-in provider ${configured.provider} does not expose a single API adapter`);
   }
-  const baseUrl = existing.baseUrl ?? source.baseUrl;
+  const baseUrl = existing.baseUrl ?? source?.baseUrl;
   if (baseUrl === undefined) {
     throw new Error(`Built-in provider ${configured.provider} has no base URL`);
   }
-  return aliasBuiltinProvider(alias, source, existing.auth, api, baseUrl, configured.models);
-}
-
-function requireRegisteredProvider(models: Models, alias: string): Provider {
-  const existing = models.getProvider(alias);
-  if (existing === undefined) {
-    throw new Error(`Provider ${alias} is not registered`);
-  }
-  return existing;
-}
-
-function customProviderModels(alias: string, baseUrl: string, configured: CustomProviderConfig): Model<Api>[] {
-  return providerModels(alias, configured.api, baseUrl, configured.models);
+  return providerModels(alias, api, baseUrl, configured.models);
 }
 
 /**

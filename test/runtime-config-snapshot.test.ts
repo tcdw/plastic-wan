@@ -9,14 +9,14 @@ import { ConversationRuntime } from '../src/orchestration/conversation-runtime.t
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { loadConfig, type FileConfig, type RawConfig } from '../src/platform/config.ts';
 import { previewContext } from '../src/platform/invocation-context.ts';
-import type { ModelRegistry } from '../src/platform/providers.ts';
+import { buildModelRegistry } from '../src/platform/providers.ts';
 import { RuntimeConfigurationStore, type InvocationConfigSnapshot } from '../src/platform/runtime-config.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { SystemResources } from '../src/platform/system-resources.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
-import { sleep, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { type TestRegistry, sleep, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 const CHAT_ID = 123456789;
@@ -51,10 +51,15 @@ interface Fixture {
   readonly store: SqliteStore;
   readonly config: RawConfig;
   readonly configStore: RuntimeConfigurationStore;
+  /** The registry the fixture's own store was built with. */
+  readonly registry: TestRegistry;
   readonly ingestion: TelegramIngestion;
   readonly scheduler: BucketScheduler;
   readonly sends: string[];
-  runtimeWith(faux: ReturnType<typeof fauxProvider>, config?: RawConfig): { readonly runtime: AgentRuntime };
+  runtimeWith(
+    faux: ReturnType<typeof fauxProvider>,
+    config?: RawConfig,
+  ): { readonly runtime: AgentRuntime; readonly registry: TestRegistry };
 }
 
 async function setup(): Promise<Fixture> {
@@ -71,7 +76,8 @@ async function setup(): Promise<Fixture> {
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const registry = await buildModelRegistry(loaded.config, null, new SecretStore());
+  const configStore = new RuntimeConfigurationStore({ config: loaded.config, hash: loaded.hash, ...registry });
   const sends: string[] = [];
   let messageId = 900;
   const sendApi: TelegramSendApi = {
@@ -88,32 +94,34 @@ async function setup(): Promise<Fixture> {
     store,
     config: loaded.config,
     configStore,
+    registry,
     ingestion: new TelegramIngestion(store, configStore, { id: 999 }),
     scheduler: new BucketScheduler(store, configStore, async () => ({ state: 'completed', reason: 'done' })),
     sends,
     runtimeWith: (faux, config = loaded.config) => {
       const models = createModels();
       models.setProvider(faux.provider);
-      const registry: ModelRegistry = { models, visionModel: faux.getModel() };
-      const runtimeStore = new RuntimeConfigurationStore({ config, hash: 'runtime' });
+      const fauxModels: TestRegistry = { models, visionModel: faux.getModel() };
+      const runtimeStore = new RuntimeConfigurationStore({ config, hash: 'runtime', ...fauxModels });
       return {
         runtime: new AgentRuntime({
           store,
           configStore: runtimeStore,
           secrets: new SecretStore(),
-          registry,
           telegramApi: sendApi,
           bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
           systemResources: SystemResources.empty(),
           conversationRuntime,
         }),
+        registry: fauxModels,
       };
     },
   };
 }
 
-function snapshotOf(config: RawConfig, hash = 'snapshot'): InvocationConfigSnapshot {
-  return new RuntimeConfigurationStore({ config, hash }).beginInvocation();
+/** A snapshot carrying `registry`, as the scheduler hands one to a run. */
+function snapshotOf(config: RawConfig, registry: TestRegistry, hash = 'snapshot'): InvocationConfigSnapshot {
+  return new RuntimeConfigurationStore({ config, hash, ...registry }).beginInvocation();
 }
 
 function withAgent(
@@ -204,9 +212,16 @@ describe('configuration snapshots', () => {
         return fauxAssistantMessage('first answer');
       },
     ]);
-    const { runtime } = fixture.runtimeWith(faux);
+    const { runtime, registry } = fixture.runtimeWith(faux);
     try {
-      await runOnce(fixture, runtime, snapshotOf(withAgent(fixture.config, { thinkingLevel: 'low' })), 1, 10, 'first');
+      await runOnce(
+        fixture,
+        runtime,
+        snapshotOf(withAgent(fixture.config, { thinkingLevel: 'low' }), registry),
+        1,
+        10,
+        'first',
+      );
       faux.setResponses([
         (_context, options) => {
           levels.push(options?.reasoning);
@@ -217,7 +232,7 @@ describe('configuration snapshots', () => {
       await runOnce(
         fixture,
         runtime,
-        snapshotOf(withAgent(fixture.config, { thinkingLevel: 'high' }), 'second'),
+        snapshotOf(withAgent(fixture.config, { thinkingLevel: 'high' }), registry, 'second'),
         2,
         11,
         'second',
@@ -235,12 +250,12 @@ describe('configuration snapshots', () => {
     const sendCall = (): ReturnType<typeof fauxAssistantMessage> =>
       fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text }), { stopReason: 'toolUse' });
     faux.setResponses([sendCall, () => fauxAssistantMessage('done')]);
-    const { runtime } = fixture.runtimeWith(faux);
+    const { runtime, registry } = fixture.runtimeWith(faux);
     try {
       const first = await runOnce(
         fixture,
         runtime,
-        snapshotOf(withAgent(fixture.config, { sendMaxTextLength: 10 })),
+        snapshotOf(withAgent(fixture.config, { sendMaxTextLength: 10 }), registry),
         1,
         10,
         'first',
@@ -261,7 +276,7 @@ describe('configuration snapshots', () => {
       const second = await runOnce(
         fixture,
         runtime,
-        snapshotOf(withAgent(fixture.config, { sendMaxTextLength: 100 }), 'second'),
+        snapshotOf(withAgent(fixture.config, { sendMaxTextLength: 100 }), registry, 'second'),
         2,
         11,
         'second',
@@ -284,13 +299,13 @@ describe('configuration snapshots', () => {
     const fixture = await setup();
     const faux = fauxAgent();
     faux.setResponses([() => fauxAssistantMessage('first answer')]);
-    const { runtime } = fixture.runtimeWith(faux);
+    const { runtime, registry } = fixture.runtimeWith(faux);
     const logs: string[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((line: unknown) => {
       logs.push(String(line));
     });
     try {
-      await runOnce(fixture, runtime, snapshotOf(fixture.config), 1, 10, 'first');
+      await runOnce(fixture, runtime, snapshotOf(fixture.config, registry), 1, 10, 'first');
       const before = contextRows(fixture.store);
       expect(before.length).toBeGreaterThan(0);
       expect(assistantTranscript(before)).toContain('first answer');
@@ -301,7 +316,11 @@ describe('configuration snapshots', () => {
       await runOnce(
         fixture,
         runtime,
-        snapshotOf(withAgent(fixture.config, { systemPrompt: 'A completely different system prompt.' }), 'second'),
+        snapshotOf(
+          withAgent(fixture.config, { systemPrompt: 'A completely different system prompt.' }),
+          registry,
+          'second',
+        ),
         2,
         11,
         'second',
@@ -349,7 +368,11 @@ describe('configuration snapshots', () => {
   test('the scheduler hands the invocation the configuration current at queued to running', async () => {
     const fixture = await setup();
     const first = fixture.configStore.current();
-    const second = snapshotOf(withAgent(fixture.config, { systemPrompt: 'A later published prompt.' }), 'second');
+    const second = snapshotOf(
+      withAgent(fixture.config, { systemPrompt: 'A later published prompt.' }),
+      fixture.registry,
+      'second',
+    );
     const seen: InvocationConfigSnapshot[] = [];
     // Phase 0 cannot publish a new configuration yet, so the store stands in for
     // the publication point.

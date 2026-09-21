@@ -7,7 +7,6 @@ import {
   createAssistantMessageEventStream,
   type ImageContent,
   type Model,
-  type Models,
   type Usage,
 } from '@earendil-works/pi-ai';
 import { and, eq, isNull, sql } from 'drizzle-orm';
@@ -27,7 +26,6 @@ import {
   type VisibleSender,
 } from '../platform/invocation-context.ts';
 import { serializeModelRequestForAudit } from '../platform/model-request-audit.ts';
-import type { ModelRegistry } from '../platform/providers.ts';
 import type { InvocationConfigSnapshot, RuntimeConfigurationStore } from '../platform/runtime-config.ts';
 import type { InvocationOutcome } from './scheduler.ts';
 import { agentMessages, dailyUsage, invocations, modelCalls, toolCalls as toolCallsTable } from '../store/schema.ts';
@@ -67,7 +65,6 @@ export interface AgentRuntimeOptions {
   readonly store: SqliteStore;
   readonly configStore: RuntimeConfigurationStore;
   readonly secrets: SecretStore;
-  readonly registry: ModelRegistry;
   readonly telegramApi: TelegramSendApi;
   readonly bot: { readonly id: bigint; readonly displayName: string; readonly username: string | null };
   /** The bundled system:/// resource tree: read primitive backend plus skill index. */
@@ -121,7 +118,6 @@ export class AgentRuntime {
   readonly #store: SqliteStore;
   readonly #configStore: RuntimeConfigurationStore;
   readonly #secrets: SecretStore;
-  readonly #models: Models;
   readonly #telegramApi: TelegramSendApi;
   readonly #bot: AgentRuntimeOptions['bot'];
   readonly #systemResources: SystemResources;
@@ -138,7 +134,6 @@ export class AgentRuntime {
     this.#store = options.store;
     this.#secrets = options.secrets;
     this.#configStore = options.configStore;
-    this.#models = options.registry.models;
     this.#telegramApi = options.telegramApi;
     this.#bot = options.bot;
     this.#systemResources = options.systemResources;
@@ -214,12 +209,13 @@ export class AgentRuntime {
     schedulerSignal: AbortSignal,
   ): Promise<InvocationOutcome> {
     // Every runtime-policy read below comes from the snapshot this run was
-    // started with; only the global daily budget is re-read live.
+    // started with; only the global daily budget is re-read live. The snapshot
+    // carries its own model registry, so a configuration published while this
+    // run is in flight never reaches it — neither its models nor its provider
+    // connections — and a model that is no longer registered fails the run
+    // instead of silently falling back.
     const config = snapshot.config;
-    // Resolved at run start, from the snapshot: a configuration published while
-    // this run is in flight never reaches it, and a model that is no longer
-    // registered fails the run instead of silently falling back.
-    const model = this.#models.getModel(config.agent.provider, config.agent.model);
+    const model = snapshot.models.getModel(config.agent.provider, config.agent.model);
     if (model === undefined) {
       throw new Error(`Agent model ${config.agent.provider}/${config.agent.model} is not registered`);
     }
@@ -465,7 +461,7 @@ export class AgentRuntime {
         modelContext.tools?.map((tool) => tool.name) ?? [],
       );
       try {
-        const stream = this.#models.streamSimple(streamModel, modelContext, {
+        const stream = snapshot.models.streamSimple(streamModel, modelContext, {
           ...options,
           signal,
           maxTokens: streamModel.maxTokens,

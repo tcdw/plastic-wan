@@ -25,7 +25,7 @@ import { TelegramMediaClient } from './capabilities/media/media-download.ts';
 import { MediaService } from './capabilities/media/media.ts';
 import { createMemoryTools, MemoryStore } from './context/memory.ts';
 import { AgentModelSwitcher } from './platform/model-switch.ts';
-import { createModelRegistry } from './platform/providers.ts';
+import { buildModelRegistry } from './platform/providers.ts';
 import { RuntimeConfigurationStore } from './platform/runtime-config.ts';
 import { BucketScheduler } from './orchestration/scheduler.ts';
 import { ConversationRuntime } from './orchestration/conversation-runtime.ts';
@@ -50,7 +50,6 @@ export const RESTART_EXIT_CODE = 75;
 export async function serve(configPath: string): Promise<void> {
   const loaded = await loadConfig(configPath);
   await assertConfigPermissions(loaded.configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
   const secrets = new SecretStore();
   let lock: ServeLock | undefined;
   let store: SqliteStore | undefined;
@@ -101,8 +100,11 @@ export async function serve(configPath: string): Promise<void> {
     const webFetchStore = store;
     seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? []);
     bot = new Bot(token);
-    const registry = await createModelRegistry(loaded.config, secrets);
-    const modelSwitcher = new AgentModelSwitcher(configStore, registry.models);
+    // The registry is built once here and republished by every reload; the
+    // configuration and its models always travel together.
+    const registry = await buildModelRegistry(loaded.config, null, secrets);
+    const configStore = new RuntimeConfigurationStore({ config: loaded.config, hash: loaded.hash, ...registry });
+    const modelSwitcher = new AgentModelSwitcher(configStore);
     const me = await bot.api.getMe();
     try {
       await registerBotCommands(bot.api);
@@ -133,7 +135,6 @@ export async function serve(configPath: string): Promise<void> {
       store,
       configStore,
       secrets,
-      registry,
       mediaClient: new TelegramMediaClient(bot.api, token),
       modelGate,
     });
@@ -171,7 +172,6 @@ export async function serve(configPath: string): Promise<void> {
       store,
       configStore,
       secrets,
-      registry,
       telegramApi: bot.api,
       bot: {
         id: BigInt(me.id),
@@ -196,7 +196,6 @@ export async function serve(configPath: string): Promise<void> {
     const configReloader = new ConfigReloader({
       loaded,
       store: configStore,
-      models: registry.models,
       modelSwitcher,
       secrets,
       validateAgentModel: (model) =>
@@ -245,7 +244,6 @@ export async function serve(configPath: string): Promise<void> {
         modelSwitcher,
         configReloader,
         secrets,
-        models: registry.models,
         requestRestart,
       });
       admin = adminServer;

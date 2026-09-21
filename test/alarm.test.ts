@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, type Tool } from '@earendil-works/pi-ai';
+import { fauxAssistantMessage, fauxProvider, fauxToolCall, type Tool } from '@earendil-works/pi-ai';
 import { getJsonSchemaToolParameters } from '@earendil-works/pi-ai/api/constrained-sampling';
 import { GrammyError } from 'grammy';
 import type { Update } from 'grammy/types';
@@ -14,7 +14,7 @@ import { AlarmInputSchema, createAlarmTool, createListAlarmTool } from '../src/c
 import { BotCommandService } from '../src/orchestration/bot-commands.ts';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
+import type { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { purgeExpiredData, SqliteStore } from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
@@ -24,11 +24,14 @@ import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { capability } from '../src/capabilities/execute-tool.ts';
 import { SystemResources } from '../src/platform/system-resources.ts';
 import {
+  fauxRegistry,
   invocationCapabilities,
   renderInvocationContext,
   testConfigJsonc,
+  testConfigStore,
   writeTestConfig,
   type TestContextOptions,
+  type TestRegistry,
 } from './helpers.ts';
 
 const directories: string[] = [];
@@ -39,13 +42,13 @@ afterAll(async () => {
   );
 });
 
-async function setup() {
+async function setup(registry?: TestRegistry) {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-alarm-'));
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded, registry);
   const store = await SqliteStore.open(loaded.config);
   return {
     directory,
@@ -84,7 +87,7 @@ async function setupAdmin(): Promise<{
     }),
   );
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   return { store, loaded, configStore };
 }
@@ -358,15 +361,15 @@ describe('alarm tool', () => {
   });
 
   test('the agent runtime presents list_alarm with an object schema to the model', async () => {
-    const { store, ingestion, scheduler, configStore } = await setup();
-    const received = new Date('2026-08-15T00:00:00.000Z');
-    ingestion.ingest(update(1, 10, '我有哪些闹钟'), received);
-    const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
-
     const faux = fauxProvider({
       provider: 'agent',
       models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
     });
+    const { store, ingestion, scheduler, configStore } = await setup(fauxRegistry(faux));
+    const received = new Date('2026-08-15T00:00:00.000Z');
+    ingestion.ingest(update(1, 10, '我有哪些闹钟'), received);
+    const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
+
     faux.setResponses([
       (context, options) => {
         // Mirror what real adapters do: capture the provider payload for audit.
@@ -405,15 +408,10 @@ describe('alarm tool', () => {
       // Non-empty draft triggers the send nudge; the model then stays silent.
       fauxAssistantMessage(''),
     ]);
-    const models = createModels();
-    models.setProvider(faux.provider);
-    const model = faux.getModel();
-    const registry = { models, visionModel: model };
     const runtime = new AgentRuntime({
       store,
       configStore,
       secrets: new SecretStore(),
-      registry,
       telegramApi: {
         sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
         sendSticker: async () => ({ message_id: 501, date: 1_700_000_101, chat: { id: 123456789 } }),
@@ -581,7 +579,11 @@ describe('alarm scheduler', () => {
 
 describe('alarm runtime budget bypass', () => {
   test('an alarm invocation bypasses the daily token gate while an ordinary invocation still blocks', async () => {
-    const { store, ingestion, scheduler, loaded, configStore } = await setup();
+    const faux = fauxProvider({
+      provider: 'agent',
+      models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
+    });
+    const { store, ingestion, scheduler, loaded, configStore } = await setup(fauxRegistry(faux));
     // Real-clock-relative dates: the runtime anchors a batch's collection window
     // to the instant the agent becomes free, so a test that drives ingestion with
     // frozen dates in the past would compare fake instants against real ones.
@@ -606,24 +608,15 @@ describe('alarm runtime budget bypass', () => {
       throw new Error('Expected alarm invocation');
     }
 
-    const faux = fauxProvider({
-      provider: 'agent',
-      models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
-    });
     faux.setResponses([
       fauxAssistantMessage('followed up'),
       // Non-empty draft triggers the send nudge; the model then stays silent.
       fauxAssistantMessage(''),
     ]);
-    const models = createModels();
-    models.setProvider(faux.provider);
-    const model = faux.getModel();
-    const registry = { models, visionModel: model };
     const runtime = new AgentRuntime({
       store,
       configStore,
       secrets: new SecretStore(),
-      registry,
       telegramApi: {
         sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
         sendSticker: async () => ({ message_id: 501, date: 1_700_000_101, chat: { id: 123456789 } }),

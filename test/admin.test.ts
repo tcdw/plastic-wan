@@ -7,15 +7,14 @@ import { AdminServer } from '../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
 import { readConfigRevision } from '../src/platform/config-file.ts';
 import { ConfigReloader } from '../src/platform/config-reload.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
+import type { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
-import { createModelRegistry } from '../src/platform/providers.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { enterSleep } from '../src/store/sleep.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
 
 const PASSWORD = 'correct-horse-battery';
 const directories: string[] = [];
@@ -56,7 +55,7 @@ async function fixture(): Promise<Fixture> {
     }),
   );
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   return { store, server: new AdminServer({ store, configStore }), loaded, configStore, directory };
 }
@@ -773,12 +772,10 @@ test('admins API lists, adds and removes bot admins', async () => {
 test('model API lists and switches the agent model through the config file', async () => {
   const { store, loaded, configStore, directory } = await fixture();
   const configPath = join(directory, 'config.jsonc');
-  const registry = await createModelRegistry(loaded.config, new SecretStore());
-  const switcher = new AgentModelSwitcher(configStore, registry.models);
+  const switcher = new AgentModelSwitcher(configStore);
   const configReloader = new ConfigReloader({
     loaded,
     store: configStore,
-    models: registry.models,
     modelSwitcher: switcher,
     secrets: new SecretStore(),
     validateAgentModel: () => undefined,

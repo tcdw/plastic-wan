@@ -8,6 +8,7 @@ import {
   type Context,
   getSupportedThinkingLevels,
   type Model,
+  type Models,
   type ModelThinkingLevel,
   type ThinkingLevel,
 } from '@earendil-works/pi-ai';
@@ -26,7 +27,7 @@ import { createLottieCommand } from './capabilities/media/media-image.ts';
 import { TelegramMediaClient } from './capabilities/media/media-download.ts';
 import { MediaService } from './capabilities/media/media.ts';
 import { type PromptTemplateValues, renderPromptTemplate } from './platform/prompt-template.ts';
-import { createModelRegistry, type ModelRegistry, requireModel } from './platform/providers.ts';
+import { buildModelRegistry, requireModel } from './platform/providers.ts';
 import { RuntimeConfigurationStore } from './platform/runtime-config.ts';
 import { SecretStore } from './platform/secrets.ts';
 import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from './platform/system-resources.ts';
@@ -57,7 +58,8 @@ async function runDoctorChecks(
   outputAgentPrompt: boolean,
 ): Promise<void> {
   await resolveAllSecrets(config.telegram.token, config.providers, config.mcp?.servers ?? [], secrets);
-  const configStore = new RuntimeConfigurationStore({ config, hash: configHash });
+  const registry = await buildModelRegistry(config, null, secrets);
+  const configStore = new RuntimeConfigurationStore({ config, hash: configHash, ...registry });
   await mkdir(config.data_dir, { recursive: true, mode: 0o700 });
   await mkdir(dirname(config.paths.database), { recursive: true, mode: 0o700 });
   await mkdir(config.paths.media_cache, { recursive: true, mode: 0o700 });
@@ -81,7 +83,6 @@ async function runDoctorChecks(
   await runDependency(['ffprobe', '-version']);
   await verifyLottie(config.data_dir);
 
-  const registry = await createModelRegistry(config, secrets);
   const store = await SqliteStore.open(config);
   let mcp: McpManager | undefined;
   try {
@@ -95,7 +96,7 @@ async function runDoctorChecks(
       }
       await completeDoctorCall(
         store,
-        registry,
+        registry.models,
         model,
         {
           systemPrompt: 'This is a connectivity probe. Return a short plain-text acknowledgement.',
@@ -108,7 +109,7 @@ async function runDoctorChecks(
     const agentModel = requireModel(registry.models, config.agent.provider, config.agent.model, ['text']);
     const agentResponse = await completeDoctorCall(
       store,
-      registry,
+      registry.models,
       agentModel,
       {
         systemPrompt: 'Call doctor_probe exactly once with an empty object. Do not answer with text.',
@@ -133,7 +134,7 @@ async function runDoctorChecks(
       .toBuffer();
     await completeDoctorCall(
       store,
-      registry,
+      registry.models,
       registry.visionModel,
       {
         systemPrompt: 'Describe the image in one word.',
@@ -163,7 +164,6 @@ async function runDoctorChecks(
       store,
       configStore,
       secrets,
-      registry,
       mediaClient: new TelegramMediaClient(bot.api, telegramToken),
       modelGate,
     });
@@ -173,7 +173,6 @@ async function runDoctorChecks(
       store,
       configStore,
       secrets,
-      registry,
       telegramApi: bot.api,
       bot: {
         id: BigInt(me.id),
@@ -229,7 +228,7 @@ function doctorReasoning(model: Model<Api>, level: ModelThinkingLevel): Thinking
 
 async function completeDoctorCall(
   store: SqliteStore,
-  registry: ModelRegistry,
+  models: Models,
   model: Model<Api>,
   context: Context,
   reasoning: ThinkingLevel | undefined,
@@ -243,7 +242,7 @@ async function completeDoctorCall(
     .run(model.provider, model.id, now);
   const callId = BigInt(created.lastInsertRowid);
   try {
-    const response = await registry.models.completeSimple(model, context, {
+    const response = await models.completeSimple(model, context, {
       ...(reasoning === undefined ? {} : { reasoning }),
       signal: AbortSignal.timeout(30_000),
       maxTokens: Math.min(128, model.maxTokens),

@@ -4,11 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
 import { type FileConfig, type LoadedConfig, loadConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { sleep, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { sleep, testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -33,7 +32,7 @@ async function setup(
   const jsonc = testConfigJsonc(directory, transform);
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   return {
     loaded,

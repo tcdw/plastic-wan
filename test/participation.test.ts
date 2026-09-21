@@ -9,7 +9,7 @@ import { ConversationContextStore } from '../src/context/context-store.ts';
 import { ContextRefStore } from '../src/context/context-refs.ts';
 import { ContextBuilder } from '../src/context/context-builder.ts';
 import { type FileConfig, type RawConfig, loadConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
+import type { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import {
   type ParticipationRule,
   compileParticipation,
@@ -18,7 +18,7 @@ import {
 } from '../src/platform/participation.ts';
 import { type StartupCatchUpApi, runStartupCatchUp } from '../src/startup-catch-up.ts';
 import { SqliteStore, purgeExpiredData } from '../src/store/database.ts';
-import { renderInvocationContext, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { renderInvocationContext, testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -80,7 +80,7 @@ async function setup(
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   return {
     store,

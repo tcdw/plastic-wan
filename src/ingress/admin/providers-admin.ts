@@ -1,6 +1,5 @@
 import Type, { type Static, type TSchema } from 'typebox';
 import Compile from 'typebox/compile';
-import type { Models } from '@earendil-works/pi-ai';
 import {
   findBuiltinProvider,
   isSupportedBuiltinPreset,
@@ -21,6 +20,8 @@ import type { ConfigEdit } from '../../platform/config-file.ts';
 import { type ModelMetadataDraft, resolveModelDrafts } from '../../platform/model-metadata.ts';
 import { loadModelsDevCatalog, type ModelsDevCatalog } from '../../platform/models-dev.ts';
 import { type DiscoveredProviderModel, fetchProviderModels } from '../../platform/provider-models.ts';
+import { sameConnection } from '../../platform/providers.ts';
+import type { RuntimeConfiguration } from '../../platform/runtime-config.ts';
 import type { SecretStore } from '../../platform/secrets.ts';
 import { supportedThinkingLevels } from '../../platform/thinking-levels.ts';
 import { AdminQueryError } from './audit.ts';
@@ -157,9 +158,12 @@ export interface ProviderWriteContext {
   /** The configuration file as it is on disk right now. */
   readonly file: FileConfig;
   readonly secrets: SecretStore;
-  /** The live registry, used for saved-mode discovery. */
-  readonly models: Models;
-  readonly restartRequired: readonly string[];
+  /**
+   * The configuration the running process serves. Saved-mode discovery compares
+   * the file against it, because a connection the process has not applied may
+   * not receive the credentials the process resolved.
+   */
+  readonly snapshot: RuntimeConfiguration;
 }
 
 const createProviderValidator = Compile(CreateProviderBodySchema);
@@ -634,27 +638,32 @@ async function discoveryRequest(context: ProviderWriteContext, body: DiscoverBod
       throw new AdminQueryError('invalid_body', 'Pass either alias or a full connection, not both');
     }
     const configured = providerOf(context.file, body.alias);
-    const pending = context.restartRequired.some(
-      (path) => path === `providers.${body.alias}` || path.startsWith(`providers.${body.alias}.`),
-    );
-    if (pending) {
-      // The running registry still holds the old connection, and its credentials
-      // must never be sent to an address that only exists in the file.
+    const active = context.snapshot.config.providers[body.alias];
+    if (active === undefined) {
       throw new AdminQueryError(
-        'restart_pending',
-        `Provider ${body.alias} has connection fields waiting for a restart; restart first or use the temporary mode`,
+        'provider_not_registered',
+        `Provider ${body.alias} is not registered in the running process; apply the config file first or use the temporary mode`,
         409,
       );
     }
-    const registered = context.models.getProvider(body.alias);
+    if (!sameConnection(active, configured)) {
+      // The running process still holds the old connection, and its credentials
+      // must never be sent to an address that only exists in the file.
+      throw new AdminQueryError(
+        'connection_not_applied',
+        `Provider ${body.alias} has connection fields the running process has not applied; apply the config file first or use the temporary mode`,
+        409,
+      );
+    }
+    const registered = context.snapshot.models.getProvider(body.alias);
     if (registered === undefined) {
       throw new AdminQueryError(
         'provider_not_registered',
-        `Provider ${body.alias} is not registered in the running process; restart first or use the temporary mode`,
+        `Provider ${body.alias} is not registered in the running process; apply the config file first or use the temporary mode`,
         409,
       );
     }
-    const auth = await context.models.getAuth(body.alias);
+    const auth = await context.snapshot.models.getAuth(body.alias);
     const apiKey = auth?.auth.apiKey;
     if (apiKey === undefined) {
       throw new AdminQueryError('credentials_unavailable', `Provider ${body.alias} has no resolved API key`, 409);

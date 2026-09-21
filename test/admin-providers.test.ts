@@ -8,11 +8,11 @@ import { type FileConfig, type LoadedConfig, loadConfig, type ModelFileConfig } 
 import { ConfigReloader } from '../src/platform/config-reload.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import { loadModelsDevCatalog, resetModelsDevCatalogCache } from '../src/platform/models-dev.ts';
-import { createModelRegistry } from '../src/platform/providers.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
+import { buildModelRegistry } from '../src/platform/providers.ts';
+import type { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { SqliteStore } from '../src/store/database.ts';
-import { startFixtureServer, stopFixtureServer, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { startFixtureServer, stopFixtureServer, testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
 
 const PASSWORD = 'correct-horse-battery';
 const directories: string[] = [];
@@ -100,15 +100,14 @@ async function adminFixture(options: FixtureOptions = {}): Promise<Fixture> {
   const loaded = await loadConfig(configPath);
   // Kept so the restart test can restore a loadable file after breaking it.
   await writeFile(join(directory, 'original.jsonc'), await readFile(configPath, 'utf8'));
-  const configStore = new RuntimeConfigurationStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const secrets = new SecretStore();
-  const registry = await createModelRegistry(loaded.config, secrets);
-  const switcher = new AgentModelSwitcher(configStore, registry.models);
+  const registry = await buildModelRegistry(loaded.config, null, secrets);
+  const configStore = await testConfigStore(loaded, registry);
+  const switcher = new AgentModelSwitcher(configStore);
   const reloader = new ConfigReloader({
     loaded,
     store: configStore,
-    models: registry.models,
     modelSwitcher: switcher,
     secrets,
     validateAgentModel: () => undefined,
@@ -121,7 +120,6 @@ async function adminFixture(options: FixtureOptions = {}): Promise<Fixture> {
     modelSwitcher: switcher,
     configReloader: reloader,
     secrets,
-    models: registry.models,
     requestRestart: () => {
       restarts += 1;
       options.onRestart?.();
@@ -204,6 +202,13 @@ function write(
     },
     body: JSON.stringify(body),
   });
+}
+
+/** Edits the file behind the panel's back, as a hand edit would. */
+async function rewriteFile(fixture: Fixture, transform: (config: FileConfig) => void): Promise<void> {
+  const config = JSON.parse(await fixture.read()) as FileConfig;
+  transform(config);
+  await writeFile(fixture.configPath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 test('lists providers without leaking keys or header values', async () => {
@@ -312,7 +317,7 @@ test('creates, updates, and deletes a provider through the configuration file', 
     );
     expect(created.status).toBe(200);
     const createdView = await readJson(created);
-    expect(createdView.apply.restart_required).toContain('providers.relay');
+    expect(createdView.apply).toMatchObject({ applied: ['providers.relay'], restart_required: [] });
     const relay = createdView.providers.find((entry: any) => entry.alias === 'relay');
     expect(relay).toMatchObject({
       kind: 'custom',
@@ -367,9 +372,14 @@ test('creates, updates, and deletes a provider through the configuration file', 
       await revisionOf(fixture),
     );
     expect(withKey.status).toBe(200);
-    // The provider itself is still restart-only inside this process, so the
-    // reload reports the whole alias rather than the two connection fields.
-    expect((await readJson(withKey)).apply.restart_required).toContain('providers.relay');
+    // The connection change is hot: the same reload adopts the new address, key
+    // and headers, and the registry serves them from now on.
+    const withKeyView = await readJson(withKey);
+    expect(withKeyView.apply).toMatchObject({
+      applied: ['providers.relay.api_key', 'providers.relay.base_url', 'providers.relay.headers.x-route'],
+      restart_required: [],
+    });
+    expect(fixture.configStore.current().models.getProvider('relay')?.baseUrl).toBe('https://relay.example.test/v2');
     const updated = fixture.file().providers.relay;
     expect(updated).toMatchObject({
       base_url: 'https://relay.example.test/v2',
@@ -489,8 +499,9 @@ test('protects the providers and models that are in use', async () => {
     );
     expect(replaced.status).toBe(200);
     expect(await readJson(replaced)).toMatchObject({
-      apply: { restart_required: ['providers.agent.models[agent-model]'] },
+      apply: { applied: ['providers.agent.models[agent-model]'], restart_required: [] },
     });
+    expect(fixture.configStore.current().models.getModel('agent', 'agent-model')?.contextWindow).toBe(300_000);
 
     const mismatch = await write(
       fixture,
@@ -517,7 +528,9 @@ test('protects the providers and models that are in use', async () => {
 });
 
 test('discovers models in saved mode from the registry connection', async () => {
+  const requests: string[] = [];
   const upstream = await startFixtureServer((incoming) => {
+    requests.push(new URL(incoming.url).pathname);
     expect(new URL(incoming.url).pathname).toBe('/v1/models');
     expect(incoming.headers.get('authorization')).toBe('Bearer agent-secret');
     expect(incoming.headers.get('x-route')).toBe('header-secret-value');
@@ -562,8 +575,8 @@ test('discovers models in saved mode from the registry connection', async () => 
     expect(fresh).toMatchObject({ configured: false });
     expect(fresh.needs_confirmation).toContain('input');
 
-    // A pending connection change must not send the old credentials to a new
-    // address, so discovery refuses until the restart.
+    // A connection change the process could not apply must never send the
+    // credentials it resolved to an address that only exists in the file.
     const changed = await write(
       fixture,
       '/api/providers/agent',
@@ -572,9 +585,28 @@ test('discovers models in saved mode from the registry connection', async () => 
       await revisionOf(fixture),
     );
     expect(changed.status).toBe(200);
+    expect(requests).toEqual(['/v1/models']);
+
+    // The file now describes another address and a pending restart-only field
+    // the running process cannot adopt, so nothing of the file is applied.
+    await rewriteFile(fixture, (config) => {
+      config.telegram.bucket_window_seconds = 5;
+      config.agent.context.idle_grace_seconds = 10;
+      const agent = config.providers.agent;
+      if (agent?.kind !== 'custom') {
+        throw new Error('Expected a custom agent provider');
+      }
+      agent.base_url = `http://127.0.0.1:${upstream.port}/v3`;
+    });
+    const refused = await write(fixture, '/api/config/apply', 'POST', {}, null);
+    expect(refused.status).toBe(422);
+    expect(await readJson(refused)).toMatchObject({ error: 'candidate_invalid' });
+
     const pending = await write(fixture, '/api/providers/discover', 'POST', { alias: 'agent' });
     expect(pending.status).toBe(409);
-    expect(await readJson(pending)).toMatchObject({ error: 'restart_pending' });
+    expect(await readJson(pending)).toMatchObject({ error: 'connection_not_applied' });
+    // Nothing was sent anywhere: the saved mode refuses before it dials.
+    expect(requests).toEqual(['/v1/models']);
   } finally {
     fixture.store.close();
     await stopFixtureServer(upstream.server);
@@ -647,10 +679,13 @@ test('checks the vision model before writing it', async () => {
 
     const ok = await write(fixture, '/api/vision', 'PUT', { provider: 'agent', model: 'agent-model' }, revision);
     expect(ok.status).toBe(200);
-    expect(await readJson(ok)).toMatchObject({ apply: { restart_required: ['vision.model', 'vision.provider'] } });
+    expect(await readJson(ok)).toMatchObject({
+      apply: { applied: ['vision.model', 'vision.provider'], restart_required: [] },
+    });
     expect(fixture.file().vision).toMatchObject({ provider: 'agent', model: 'agent-model' });
-    // The running process keeps the old vision model until it restarts.
-    expect(fixture.configStore.current().config.vision).toMatchObject({ provider: 'vision', model: 'vision-model' });
+    // The switch is hot: the running process analyzes with the new model.
+    expect(fixture.configStore.current().config.vision).toMatchObject({ provider: 'agent', model: 'agent-model' });
+    expect(fixture.configStore.current().visionModel.id).toBe('agent-model');
   } finally {
     fixture.store.close();
   }

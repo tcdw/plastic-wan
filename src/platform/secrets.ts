@@ -16,6 +16,18 @@ const MIN_REDACTED_LENGTH = 6;
  */
 const MAX_SUBMITTED_SECRETS = 64;
 
+/**
+ * A SecretRef that cannot be turned into a value: a missing environment
+ * variable, a failing command, or an empty result. Callers that can report it as
+ * a configuration problem rather than a crash distinguish it by type.
+ */
+export class SecretResolutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SecretResolutionError';
+  }
+}
+
 export class SecretStore {
   readonly #values = new Set<string>();
   readonly #submitted: string[] = [];
@@ -27,14 +39,14 @@ export class SecretStore {
     } else if ('env' in reference) {
       const resolved = process.env[reference.env];
       if (resolved === undefined) {
-        throw new Error(`Secret environment variable is not set: ${reference.env}`);
+        throw new SecretResolutionError(`Secret environment variable is not set: ${reference.env}`);
       }
       value = resolved;
     } else {
       value = await resolveCommand(reference.command);
     }
     if (value.length === 0) {
-      throw new Error('Resolved secret is empty');
+      throw new SecretResolutionError('Resolved secret is empty');
     }
     this.#values.add(value);
     return value;
@@ -109,7 +121,7 @@ async function resolveCommand(argv: readonly string[]): Promise<string> {
     });
     const exitCode = await processHandle.exited;
     if (exitCode !== 0) {
-      throw new Error(`Secret command failed with exit code ${exitCode}`);
+      throw new SecretResolutionError(`Secret command failed with exit code ${exitCode}`);
     }
     return stdout.replace(/\r?\n$/, '');
   } finally {

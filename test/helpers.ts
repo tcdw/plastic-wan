@@ -1,7 +1,11 @@
 import { access, chmod, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { type Api, createModels, type FauxProviderHandle, type Model, type Models } from '@earendil-works/pi-ai';
 import { serve, type ServerType } from '@hono/node-server';
 import type { FileConfig, RawConfig } from '../src/platform/config.ts';
+import { buildModelRegistry } from '../src/platform/providers.ts';
+import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
+import { SecretStore } from '../src/platform/secrets.ts';
 import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from '../src/platform/system-resources.ts';
 import type {
   DirectImage,
@@ -256,6 +260,33 @@ export function testConfigJsonc(directory: string, transform?: (config: FileConf
 }
 
 export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** The registry half of a configuration snapshot, as a test builds it. */
+export interface TestRegistry {
+  readonly models: Models;
+  readonly visionModel: Model<Api>;
+}
+
+/** A registry whose only provider is the faux one: nothing here reaches a network. */
+export function fauxRegistry(faux: FauxProviderHandle): TestRegistry {
+  const models = createModels();
+  models.setProvider(faux.provider);
+  return { models, visionModel: faux.getModel() };
+}
+
+/**
+ * The configuration store tests run against. Without a registry it is built from
+ * the configuration exactly as `serve` builds it at startup; a test that drives
+ * the model with a faux provider passes `fauxRegistry(faux)` so the snapshot
+ * carries it.
+ */
+export async function testConfigStore(
+  initial: { readonly config: RawConfig; readonly hash: string },
+  registry?: TestRegistry,
+): Promise<RuntimeConfigurationStore> {
+  const resolved = registry ?? (await buildModelRegistry(initial.config, null, new SecretStore()));
+  return new RuntimeConfigurationStore({ ...initial, ...resolved });
+}
 
 export async function pathExists(path: string): Promise<boolean> {
   return access(path).then(

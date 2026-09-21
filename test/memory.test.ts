@@ -6,7 +6,7 @@ import type { Update } from 'grammy/types';
 import Compile from 'typebox/compile';
 import { AdminServer } from '../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
+import type { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { purgeExpiredData, SqliteStore } from '../src/store/database.ts';
 import {
   AddMemoryInputSchema,
@@ -16,7 +16,7 @@ import {
 } from '../src/context/memory.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { renderInvocationContext, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { renderInvocationContext, testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -40,7 +40,7 @@ async function fixture(): Promise<Fixture> {
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const scheduler = new BucketScheduler(store, configStore, async () => ({
@@ -275,7 +275,7 @@ test('admin panel manages memories with chat filter and long-TTL warnings', asyn
     }),
   );
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
   const server = new AdminServer({ store, configStore });
   const PASSWORD = 'correct-horse-battery';

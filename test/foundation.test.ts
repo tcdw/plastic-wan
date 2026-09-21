@@ -3,7 +3,7 @@ import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/platform/config.ts';
-import { createModelRegistry, requireModel } from '../src/platform/providers.ts';
+import { buildModelRegistry, requireModel } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { backupDatabase, SqliteStore } from '../src/store/database.ts';
 import { schemaMigrations } from '../src/store/schema.ts';
@@ -36,7 +36,7 @@ describe('configuration', () => {
       throw new Error('Expected the custom agent provider');
     }
     expect(agentProvider.models[0]?.compat?.supports_developer_role).toBe(false);
-    const registry = await createModelRegistry(loaded.config, new SecretStore());
+    const registry = await buildModelRegistry(loaded.config, null, new SecretStore());
     expect(requireModel(registry.models, 'agent', 'agent-model', ['text']).compat).toMatchObject({
       supportsDeveloperRole: false,
     });
@@ -138,7 +138,7 @@ describe('configuration', () => {
     });
     await writeFile(configPath, config);
     const loaded = await loadConfig(configPath);
-    const registry = await createModelRegistry(loaded.config, new SecretStore());
+    const registry = await buildModelRegistry(loaded.config, null, new SecretStore());
     expect(requireModel(registry.models, 'agent', 'agent-model', ['text']).input).toEqual(['text']);
   });
 

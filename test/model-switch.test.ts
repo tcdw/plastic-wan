@@ -3,11 +3,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type FileConfig, loadConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
+import type { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
-import { createModelRegistry } from '../src/platform/providers.ts';
-import { SecretStore } from '../src/platform/secrets.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -29,9 +27,8 @@ async function switcherWith(transform?: (config: FileConfig) => void): Promise<S
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath, testConfigJsonc(directory, transform));
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
-  const registry = await createModelRegistry(loaded.config, new SecretStore());
-  return { switcher: new AgentModelSwitcher(configStore, registry.models), configStore, loaded };
+  const configStore = await testConfigStore(loaded);
+  return { switcher: new AgentModelSwitcher(configStore), configStore, loaded };
 }
 
 function addImageOnlyModel(config: FileConfig): void {
@@ -87,6 +84,8 @@ test('current and model follow the published configuration', async () => {
       agent: { ...loaded.config.agent, provider: 'vision', model: 'vision-model' },
     },
     hash: 'published',
+    models: configStore.current().models,
+    visionModel: configStore.current().visionModel,
   });
   expect(switcher.current()).toMatchObject({ provider: 'vision', model: 'vision-model' });
   expect(switcher.model().id).toBe('vision-model');

@@ -2,22 +2,27 @@ import { afterAll, expect, test } from 'vitest';
 import { copyFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai';
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai';
 import type { Update } from 'grammy/types';
 import sharp from 'sharp';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
 import { MediaService } from '../src/capabilities/media/media.ts';
-import type { ModelRegistry } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { createSendTool, type TelegramSendApi } from '../src/capabilities/send-tool.ts';
 import { StickerService } from '../src/capabilities/stickers.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { invocationCapabilities, renderInvocationContext, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import {
+  fauxRegistry,
+  invocationCapabilities,
+  renderInvocationContext,
+  testConfigJsonc,
+  testConfigStore,
+  writeTestConfig,
+} from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -36,16 +41,16 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const faux = fauxProvider({
+    provider: 'vision',
+    models: [{ id: 'vision-model', input: ['text', 'image'], contextWindow: 128_000, maxTokens: 8_192 }],
+  });
+  const configStore = await testConfigStore(loaded, fauxRegistry(faux));
   const store = await SqliteStore.open(loaded.config);
   const fixturePath = join(directory, 'sticker.webp');
   await sharp({ create: { width: 64, height: 64, channels: 4, background: { r: 0, g: 0, b: 255, alpha: 1 } } })
     .webp()
     .toFile(fixturePath);
-  const faux = fauxProvider({
-    provider: 'vision',
-    models: [{ id: 'vision-model', input: ['text', 'image'], contextWindow: 128_000, maxTokens: 8_192 }],
-  });
   faux.setResponses([
     (context) => {
       expect(context.tools?.map((tool) => tool.name)).toEqual(['report_sticker_analysis']);
@@ -60,10 +65,6 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
       );
     },
   ]);
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const model = faux.getModel();
-  const registry: ModelRegistry = { models, visionModel: model };
   const downloadedFileIds: string[] = [];
   const downloader: MediaDownloader = {
     download: async (fileId, destination, signal) => {
@@ -76,7 +77,6 @@ test('sync, representative-frame indexing, search, and sticker send share scoped
     store,
     configStore,
     secrets: new SecretStore(),
-    registry,
     mediaClient: downloader,
     modelGate: new KeyedSemaphore(),
   });

@@ -11,18 +11,16 @@ import sharp from 'sharp';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { previewContext } from '../src/platform/invocation-context.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
 import { MediaService } from '../src/capabilities/media/media.ts';
-import type { ModelRegistry } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { capability } from '../src/capabilities/execute-tool.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { fauxRegistry, testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
 import { SystemResources } from '../src/platform/system-resources.ts';
 
 const directories: string[] = [];
@@ -39,7 +37,11 @@ test('a fresh Agent publishes only through send and audits model usage', async (
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const faux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  const configStore = await testConfigStore(loaded, fauxRegistry(faux));
   const store = await SqliteStore.open(loaded.config);
   const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const update: Update = {
@@ -63,10 +65,6 @@ test('a fresh Agent publishes only through send and audits model usage', async (
     throw new Error('Expected a due invocation');
   }
 
-  const faux = fauxProvider({
-    provider: 'agent',
-    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
-  });
   faux.setResponses([
     (context, options) => {
       // The faux provider never touches the network, so the snapshot hooks are
@@ -85,9 +83,6 @@ test('a fresh Agent publishes only through send and audits model usage', async (
     },
     fauxAssistantMessage('private assistant text'),
   ]);
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
   let messageId = 500;
   const api: TelegramSendApi = {
     sendMessage: async () => ({ message_id: ++messageId, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -97,7 +92,6 @@ test('a fresh Agent publishes only through send and audits model usage', async (
     store,
     configStore,
     secrets: new SecretStore(),
-    registry,
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),
@@ -155,7 +149,11 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const faux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  const configStore = await testConfigStore(loaded, fauxRegistry(faux));
   const store = await SqliteStore.open(loaded.config);
   const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const update: Update = {
@@ -189,10 +187,6 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
   // 6 tool turns x 3 calls = 18 tool calls: the former max_tool_calls cap of 12
   // is gone, so only the per-injection turn budget (8) bounds the run. That
   // budget stops the run at the 8th turn, which is what 'turn_budget' records.
-  const faux = fauxProvider({
-    provider: 'agent',
-    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
-  });
   faux.setResponses([
     ...Array.from({ length: 6 }, () =>
       fauxAssistantMessage([fauxToolCall('noop', {}), fauxToolCall('noop', {}), fauxToolCall('noop', {})], {
@@ -202,14 +196,10 @@ test('an invocation keeps running past the removed per-invocation tool-call cap 
     fauxAssistantMessage('done'),
     fauxAssistantMessage(''),
   ]);
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
   const runtime = new AgentRuntime({
     store,
     configStore,
     secrets: new SecretStore(),
-    registry,
     telegramApi: {
       sendMessage: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
@@ -233,22 +223,18 @@ test('counts tool descriptions in registry limits', async () => {
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
-  const store = await SqliteStore.open(loaded.config);
-  const models = createModels();
   const faux = fauxProvider({
     provider: 'agent',
     // The id must match `agent.model`: the registry is validated against the
     // model the run's configuration snapshot names.
     models: [{ id: 'agent-model', input: ['text'], contextWindow: 1_000, maxTokens: 100 }],
   });
-  models.setProvider(faux.provider);
-  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
+  const configStore = await testConfigStore(loaded, fauxRegistry(faux));
+  const store = await SqliteStore.open(loaded.config);
   const runtime = new AgentRuntime({
     store,
     configStore,
     secrets: new SecretStore(),
-    registry,
     telegramApi: {
       sendMessage: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 1, date: 1, chat: { id: 123456789 } }),
@@ -264,9 +250,9 @@ test('counts tool descriptions in registry limits', async () => {
     execute: async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} }),
   };
 
-  expect(() =>
-    runtime.validateAdditionalTools(previewContext(), [oversizedDescriptionTool], registry.visionModel),
-  ).toThrow('Tool registry exceeds 10%');
+  expect(() => runtime.validateAdditionalTools(previewContext(), [oversizedDescriptionTool], faux.getModel())).toThrow(
+    'Tool registry exceeds 10%',
+  );
   store.close();
 });
 
@@ -276,7 +262,11 @@ test('audits complete redacted model error details', async () => {
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const faux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  const configStore = await testConfigStore(loaded, fauxRegistry(faux));
   const store = await SqliteStore.open(loaded.config);
   const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const received = new Date('2026-08-15T00:00:00.000Z');
@@ -303,21 +293,13 @@ test('audits complete redacted model error details', async () => {
   }
 
   const errorDetail = 'Provider request failed with telegram-secret\nstatus=500\nbody={"error":"upstream exploded"}';
-  const faux = fauxProvider({
-    provider: 'agent',
-    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
-  });
   faux.setResponses([fauxAssistantMessage('', { stopReason: 'error', errorMessage: errorDetail })]);
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
   const secrets = new SecretStore();
   await secrets.resolve(loaded.config.telegram.token);
   const runtime = new AgentRuntime({
     store,
     configStore,
     secrets,
-    registry,
     telegramApi: {
       sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -350,7 +332,11 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const faux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  const configStore = await testConfigStore(loaded, fauxRegistry(faux));
   const store = await SqliteStore.open(loaded.config);
   const fixturePath = join(directory, 'fixture.png');
   await sharp({
@@ -392,10 +378,6 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
     throw new Error('Expected a due invocation');
   }
 
-  const faux = fauxProvider({
-    provider: 'agent',
-    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
-  });
   const inlineImageBytes = Buffer.from('provider inline image bytes');
   const inlineImageDataUrl = `data:image/jpeg;base64,${inlineImageBytes.toString('base64')}`;
   faux.setResponses([
@@ -421,9 +403,6 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
     // Non-empty draft triggers the send nudge; the model then stays silent.
     fauxAssistantMessage(''),
   ]);
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
   const downloader: MediaDownloader = {
     download: async (fileId, destination, signal) => {
       signal.throwIfAborted();
@@ -435,7 +414,6 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
     store,
     configStore,
     secrets: new SecretStore(),
-    registry,
     mediaClient: downloader,
     modelGate: new KeyedSemaphore(),
   });
@@ -447,7 +425,6 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
     store,
     configStore,
     secrets: new SecretStore(),
-    registry,
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),
@@ -501,7 +478,18 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const agentFaux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  const visionFaux = fauxProvider({
+    provider: 'vision',
+    models: [{ id: 'vision-model', input: ['text', 'image'], contextWindow: 128_000, maxTokens: 8_192 }],
+  });
+  const models = createModels();
+  models.setProvider(agentFaux.provider);
+  models.setProvider(visionFaux.provider);
+  const configStore = await testConfigStore(loaded, { models, visionModel: visionFaux.getModel() });
   const store = await SqliteStore.open(loaded.config);
   const fixturePath = join(directory, 'fixture.png');
   await sharp({ create: { width: 16, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } } })
@@ -559,10 +547,6 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
     throw new Error('Expected the second invocation');
   }
 
-  const agentFaux = fauxProvider({
-    provider: 'agent',
-    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
-  });
   let historyRef: string | undefined;
   agentFaux.setResponses([
     (context) => {
@@ -589,20 +573,11 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
     // Non-empty draft triggers the send nudge; the model then stays silent.
     fauxAssistantMessage(''),
   ]);
-  const visionFaux = fauxProvider({
-    provider: 'vision',
-    models: [{ id: 'vision-model', input: ['text', 'image'], contextWindow: 128_000, maxTokens: 8_192 }],
-  });
   visionFaux.setResponses([fauxAssistantMessage('A dark rectangle.')]);
-  const models = createModels();
-  models.setProvider(agentFaux.provider);
-  models.setProvider(visionFaux.provider);
-  const registry: ModelRegistry = { models, visionModel: visionFaux.getModel() };
   const media = new MediaService({
     store,
     configStore,
     secrets: new SecretStore(),
-    registry,
     mediaClient: {
       download: async (fileId, destination, signal) => {
         signal.throwIfAborted();
@@ -616,7 +591,6 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
     store,
     configStore,
     secrets: new SecretStore(),
-    registry,
     telegramApi: {
       sendMessage: async () => ({ message_id: 601, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 602, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -661,7 +635,19 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
   });
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const agentFaux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  const visionFaux = fauxProvider({
+    provider: 'vision',
+    models: [{ id: 'vision-model', input: ['text', 'image'], contextWindow: 128_000, maxTokens: 8_192 }],
+  });
+  const models = createModels();
+  models.setProvider(agentFaux.provider);
+  models.setProvider(visionFaux.provider);
+  const visionModel = visionFaux.getModel();
+  const configStore = await testConfigStore(loaded, { models, visionModel });
   const store = await SqliteStore.open(loaded.config);
   const fixturePath = join(directory, 'fixture.png');
   await sharp({ create: { width: 16, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } } })
@@ -691,10 +677,6 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
     throw new Error('Expected a due invocation');
   }
 
-  const agentFaux = fauxProvider({
-    provider: 'agent',
-    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
-  });
   let photoRef: string | undefined;
   agentFaux.setResponses([
     (context) => {
@@ -716,21 +698,11 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
     // Non-empty draft triggers the send nudge; the model then stays silent.
     fauxAssistantMessage(''),
   ]);
-  const visionFaux = fauxProvider({
-    provider: 'vision',
-    models: [{ id: 'vision-model', input: ['text', 'image'], contextWindow: 128_000, maxTokens: 8_192 }],
-  });
   visionFaux.setResponses([fauxAssistantMessage('A dark rectangle.')]);
-  const models = createModels();
-  models.setProvider(agentFaux.provider);
-  models.setProvider(visionFaux.provider);
-  const visionModel = visionFaux.getModel();
-  const registry: ModelRegistry = { models, visionModel };
   const media = new MediaService({
     store,
     configStore,
     secrets: new SecretStore(),
-    registry,
     mediaClient: {
       download: async (fileId, destination, signal) => {
         signal.throwIfAborted();
@@ -744,7 +716,6 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
     store,
     configStore,
     secrets: new SecretStore(),
-    registry,
     telegramApi: {
       sendMessage: async () => ({ message_id: 601, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 602, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -789,7 +760,11 @@ test('nudges the model once to use send when it drafts a private reply and never
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const faux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  const configStore = await testConfigStore(loaded, fauxRegistry(faux));
   const store = await SqliteStore.open(loaded.config);
   const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const update: Update = {
@@ -818,10 +793,6 @@ test('nudges the model once to use send when it drafts a private reply and never
   // to swallow them). Turn 2: after the nudge, the model still forgets send —
   // proving no re-nudge.
   let sawNudge = false;
-  const faux = fauxProvider({
-    provider: 'agent',
-    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
-  });
   faux.setResponses([
     fauxAssistantMessage('short private reply'),
     (context) => {
@@ -834,9 +805,6 @@ test('nudges the model once to use send when it drafts a private reply and never
       return fauxAssistantMessage('still no send');
     },
   ]);
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
   const api: TelegramSendApi = {
     sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
     sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -845,7 +813,6 @@ test('nudges the model once to use send when it drafts a private reply and never
     store,
     configStore,
     secrets: new SecretStore(),
-    registry,
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),
@@ -869,7 +836,11 @@ test('does not nudge when the model ends without any draft text', async () => {
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const faux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  const configStore = await testConfigStore(loaded, fauxRegistry(faux));
   const store = await SqliteStore.open(loaded.config);
   const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const update: Update = {
@@ -894,19 +865,11 @@ test('does not nudge when the model ends without any draft text', async () => {
   }
 
   // The model deliberately stays silent: no tool call and only blank drafts.
-  const faux = fauxProvider({
-    provider: 'agent',
-    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
-  });
   faux.setResponses([fauxAssistantMessage('   ')]);
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const registry: ModelRegistry = { models, visionModel: faux.getModel() };
   const runtime = new AgentRuntime({
     store,
     configStore,
     secrets: new SecretStore(),
-    registry,
     telegramApi: {
       sendMessage: async () => ({ message_id: 500, date: 1_700_000_100, chat: { id: 123456789 } }),
       sendSticker: async () => ({ message_id: 501, date: 1_700_000_100, chat: { id: 123456789 } }),

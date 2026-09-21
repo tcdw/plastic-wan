@@ -97,15 +97,16 @@ test('classifies hot, restart and outside-serve fields', async () => {
     'agent.rate_limits.turns_per_injection',
     'agent.send_max_text_length',
     'agent.thinking_level',
+    'vision.max_output_tokens',
   ]);
   expect(paths(diff.changes, 'outside_serve')).toEqual(['paths.backups', 'retention.online_days']);
-  expect(paths(diff.changes, 'restart')).toEqual(['telegram.bucket_window_seconds', 'vision.max_output_tokens']);
+  expect(paths(diff.changes, 'restart')).toEqual(['telegram.bucket_window_seconds']);
   // Hot and outside-serve values come from the file; restart-only values stay.
   expect(diff.candidate.file.agent.thinking_level).toBe('high');
   expect(diff.candidate.file.agent.history_messages).toBe(5);
   expect(diff.candidate.file.retention.online_days).toBe(7);
   expect(diff.candidate.file.telegram.bucket_window_seconds).toBe(15);
-  expect(diff.candidate.file.vision.max_output_tokens).toBe(2048);
+  expect(diff.candidate.file.vision.max_output_tokens).toBe(4096);
   expect(diff.candidate.raw.agent.thinking_level).toBe('high');
 });
 
@@ -179,14 +180,14 @@ test('adds, removes and edits provider models as hot changes in file order', asy
   ]);
 });
 
-test('keeps the definition of a model the candidate still uses', async () => {
+test('takes the file definition of a model the candidate still uses', async () => {
   const { active, file } = await loadBoth(undefined, (config) => {
     const provider = config.providers.agent;
     if (provider?.kind !== 'custom') {
       throw new Error('Expected a custom provider fixture');
     }
     provider.models[0]!.context_window = 100_000;
-    // The vision model is in use too, and vision stays on the active value.
+    // The vision model is in use too, and its definition is as hot as any other.
     const vision = config.providers.vision;
     if (vision?.kind !== 'custom') {
       throw new Error('Expected a custom vision provider fixture');
@@ -194,12 +195,13 @@ test('keeps the definition of a model the candidate still uses', async () => {
     vision.models[0]!.max_tokens = 4096;
   });
   const diff = diffConfig({ file: active.fileConfig, raw: active.config }, { file: file.fileConfig, raw: file.config });
-  expect(paths(diff.changes, 'restart')).toEqual([
+  expect(paths(diff.changes, 'hot')).toEqual([
     'providers.agent.models[agent-model]',
     'providers.vision.models[vision-model]',
   ]);
-  expect(customModels(diff.candidate.file, 'agent').map((model) => model.context_window)).toEqual([200_000]);
-  expect(customModels(diff.candidate.file, 'vision').map((model) => model.max_tokens)).toEqual([8_192]);
+  expect(paths(diff.changes, 'restart')).toEqual([]);
+  expect(customModels(diff.candidate.file, 'agent').map((model) => model.context_window)).toEqual([100_000]);
+  expect(customModels(diff.candidate.file, 'vision').map((model) => model.max_tokens)).toEqual([4096]);
 });
 
 test('a model is hot once the agent points at another one', async () => {
@@ -255,7 +257,7 @@ test('editing the model the agent switches to in the same change is hot', async 
   ]);
 });
 
-test('an agent pointing at a new provider waits for a restart', async () => {
+test('an agent pointing at a new provider is hot', async () => {
   const { active, file } = await loadBoth(undefined, (config) => {
     config.providers.extra = {
       kind: 'custom',
@@ -278,12 +280,65 @@ test('an agent pointing at a new provider waits for a restart', async () => {
     config.agent.thinking_level = 'high';
   });
   const diff = diffConfig({ file: active.fileConfig, raw: active.config }, { file: file.fileConfig, raw: file.config });
-  expect(paths(diff.changes, 'restart')).toEqual(['agent.model', 'agent.provider', 'providers.extra']);
-  expect(paths(diff.changes, 'hot')).toEqual(['agent.thinking_level']);
-  expect(diff.candidate.file.agent).toMatchObject({ provider: 'agent', model: 'agent-model' });
+  expect(paths(diff.changes, 'hot')).toEqual([
+    'agent.model',
+    'agent.provider',
+    'agent.thinking_level',
+    'providers.extra',
+  ]);
+  expect(paths(diff.changes, 'restart')).toEqual([]);
+  expect(diff.candidate.file.agent).toMatchObject({ provider: 'extra', model: 'extra-model' });
+  expect(diff.candidate.file.providers.extra).toMatchObject({ kind: 'custom', base_url: 'https://example.test/v1' });
 });
 
-test('a provider connection change is restart-only and keeps the active provider', async () => {
+test('removes a provider as a hot change', async () => {
+  const { active, file } = await loadBoth(
+    (config) => {
+      config.providers.spare = {
+        kind: 'custom',
+        base_url: 'https://example.test/v1',
+        api: 'openai-responses',
+        api_key: 'spare-secret',
+        models: [spareModel()],
+      };
+    },
+    (config) => {
+      delete config.providers.spare;
+    },
+  );
+  const diff = diffConfig({ file: active.fileConfig, raw: active.config }, { file: file.fileConfig, raw: file.config });
+  expect(paths(diff.changes, 'hot')).toEqual(['providers.spare']);
+  expect(paths(diff.changes, 'restart')).toEqual([]);
+  expect(diff.candidate.file.providers.spare).toBeUndefined();
+});
+
+test('re-kinding a provider is hot and takes the file definition', async () => {
+  const { active, file } = await loadBoth(
+    (config) => {
+      config.providers.spare = {
+        kind: 'custom',
+        base_url: 'https://example.test/v1',
+        api: 'openai-responses',
+        api_key: 'spare-secret',
+        models: [spareModel()],
+      };
+    },
+    (config) => {
+      config.providers.spare = {
+        kind: 'builtin',
+        provider: 'deepseek',
+        api_key: 'spare-secret',
+        models: [spareModel()],
+      };
+    },
+  );
+  const diff = diffConfig({ file: active.fileConfig, raw: active.config }, { file: file.fileConfig, raw: file.config });
+  expect(paths(diff.changes, 'hot')).toEqual(['providers.spare']);
+  expect(paths(diff.changes, 'restart')).toEqual([]);
+  expect(diff.candidate.file.providers.spare).toMatchObject({ kind: 'builtin', provider: 'deepseek' });
+});
+
+test('a provider connection change is hot and takes the file provider', async () => {
   const { active, file } = await loadBoth(undefined, (config) => {
     const provider = config.providers.agent;
     if (provider?.kind !== 'custom') {
@@ -292,6 +347,7 @@ test('a provider connection change is restart-only and keeps the active provider
     provider.base_url = 'https://other.test/v1';
   });
   const diff = diffConfig({ file: active.fileConfig, raw: active.config }, { file: file.fileConfig, raw: file.config });
-  expect(paths(diff.changes, 'restart')).toEqual(['providers.agent.base_url']);
-  expect(diff.candidate.file.providers.agent).toMatchObject({ base_url: 'https://example.test/v1' });
+  expect(paths(diff.changes, 'hot')).toEqual(['providers.agent.base_url']);
+  expect(paths(diff.changes, 'restart')).toEqual([]);
+  expect(diff.candidate.file.providers.agent).toMatchObject({ base_url: 'https://other.test/v1' });
 });

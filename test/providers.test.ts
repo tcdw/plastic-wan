@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Api, type Context, getSupportedThinkingLevels, type Model } from '@earendil-works/pi-ai';
 import { findBuiltinProvider } from '../src/platform/builtin-providers.ts';
-import { type FileConfig, type RawConfig, loadConfig } from '../src/platform/config.ts';
-import { createModelRegistry, mapCompat, rebuildBuiltinProvider } from '../src/platform/providers.ts';
+import { type FileConfig, type LoadedConfig, loadConfig, type RawConfig } from '../src/platform/config.ts';
+import { buildModelRegistry, mapCompat } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { supportedThinkingLevels, THINKING_LEVELS } from '../src/platform/thinking-levels.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
@@ -16,12 +16,30 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-async function loadFixture(transform: (config: FileConfig) => void): Promise<RawConfig> {
+async function loadFixture(transform: (config: FileConfig) => void): Promise<LoadedConfig> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-providers-'));
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath, testConfigJsonc(directory, transform));
-  return (await loadConfig(configPath)).config;
+  return await loadConfig(configPath);
+}
+
+/** Counts SecretRef resolutions, so a rebuild can be shown to skip them. */
+class CountingSecrets extends SecretStore {
+  resolutions = 0;
+
+  override async resolve(reference: Parameters<SecretStore['resolve']>[0]): Promise<string> {
+    this.resolutions += 1;
+    return await super.resolve(reference);
+  }
+}
+
+function deepseekConfig(loaded: LoadedConfig): Extract<RawConfig['providers'][string], { kind: 'builtin' }> {
+  const provider = loaded.config.providers.deepseek;
+  if (provider === undefined || provider.kind !== 'builtin') {
+    throw new Error('Expected the deepseek builtin provider fixture');
+  }
+  return provider;
 }
 
 const BUILTIN_MODEL = {
@@ -36,7 +54,7 @@ const BUILTIN_MODEL = {
 
 describe('model registry', () => {
   test('registers only the models a builtin provider lists in the configuration', async () => {
-    const config = await loadFixture((draft) => {
+    const loaded = await loadFixture((draft) => {
       draft.providers.deepseek = {
         kind: 'builtin',
         provider: 'deepseek',
@@ -47,7 +65,7 @@ describe('model registry', () => {
       draft.agent.model = 'deepseek-chat';
       draft.agent.thinking_level = 'off';
     });
-    const registry = await createModelRegistry(config, new SecretStore());
+    const registry = await buildModelRegistry(loaded.config, null, new SecretStore());
     const registered = registry.models.getModels('deepseek');
     expect(registered.map((model) => model.id)).toEqual(['deepseek-chat']);
     // Pi's catalog carries this id; the configuration does not enable it.
@@ -62,7 +80,7 @@ describe('model registry', () => {
   });
 
   test('sends builtin requests under Pi’s own provider id', async () => {
-    const config = await loadFixture((draft) => {
+    const loaded = await loadFixture((draft) => {
       draft.providers.mine = {
         kind: 'builtin',
         provider: 'deepseek',
@@ -73,7 +91,7 @@ describe('model registry', () => {
       draft.agent.model = 'deepseek-chat';
       draft.agent.thinking_level = 'off';
     });
-    const registry = await createModelRegistry(config, new SecretStore());
+    const registry = await buildModelRegistry(loaded.config, null, new SecretStore());
     const provider = registry.models.getProvider('mine');
     const model = registry.models.getModel('mine', 'deepseek-chat');
     expect(provider).toBeDefined();
@@ -106,8 +124,9 @@ describe('model registry', () => {
     expect(observed).toBe('deepseek');
   });
 
-  test('rebuilds a builtin provider without touching the registry auth', async () => {
-    const config = await loadFixture((draft) => {
+  test('keeps a provider whose connection is unchanged and re-resolves no secret', async () => {
+    const secrets = new CountingSecrets();
+    const loaded = await loadFixture((draft) => {
       draft.providers.deepseek = {
         kind: 'builtin',
         provider: 'deepseek',
@@ -118,19 +137,89 @@ describe('model registry', () => {
       draft.agent.model = 'deepseek-chat';
       draft.agent.thinking_level = 'off';
     });
-    const registry = await createModelRegistry(config, new SecretStore());
+    const registry = await buildModelRegistry(loaded.config, null, secrets);
+    const resolvedAtStartup = secrets.resolutions;
+    expect(resolvedAtStartup).toBeGreaterThan(0);
     const before = registry.models.getProvider('deepseek');
-    const rebuilt = rebuildBuiltinProvider(registry.models, 'deepseek', {
-      ...config.providers.deepseek,
-      models: [
-        BUILTIN_MODEL,
-        { ...BUILTIN_MODEL, id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', reasoning: true },
-      ],
-    } as Extract<RawConfig['providers'][string], { kind: 'builtin' }>);
-    expect(rebuilt.auth).toBe(before?.auth);
-    expect(rebuilt.baseUrl).toBe('https://api.deepseek.com');
-    expect(rebuilt.getModels().map((model) => model.id)).toEqual(['deepseek-chat', 'deepseek-reasoner']);
-    expect(rebuilt.getModels()[0]?.provider).toBe('deepseek');
+
+    // Same alias, same connection, a longer model list: the provider object is
+    // reused, so a `command` SecretRef never runs a second time.
+    const extended: RawConfig = {
+      ...loaded.config,
+      providers: {
+        ...loaded.config.providers,
+        deepseek: {
+          ...deepseekConfig(loaded),
+          models: [
+            BUILTIN_MODEL,
+            { ...BUILTIN_MODEL, id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', reasoning: true },
+          ],
+        },
+      },
+    };
+    const rebuilt = await buildModelRegistry(extended, { file: loaded.fileConfig, models: registry.models }, secrets);
+    expect(secrets.resolutions).toBe(resolvedAtStartup);
+    const after = rebuilt.models.getProvider('deepseek');
+    expect(after?.auth).toBe(before?.auth);
+    expect(after?.baseUrl).toBe('https://api.deepseek.com');
+    expect(after?.getModels().map((model) => model.id)).toEqual(['deepseek-chat', 'deepseek-reasoner']);
+    expect(after?.getModels()[0]?.provider).toBe('deepseek');
+  });
+
+  test('rebuilds a provider whose connection changed and resolves its secret again', async () => {
+    const secrets = new CountingSecrets();
+    const loaded = await loadFixture((draft) => {
+      draft.providers.deepseek = {
+        kind: 'builtin',
+        provider: 'deepseek',
+        api_key: 'builtin-secret',
+        models: [BUILTIN_MODEL],
+      };
+      draft.agent.provider = 'deepseek';
+      draft.agent.model = 'deepseek-chat';
+      draft.agent.thinking_level = 'off';
+    });
+    const registry = await buildModelRegistry(loaded.config, null, secrets);
+    const resolvedAtStartup = secrets.resolutions;
+
+    const rotated: RawConfig = {
+      ...loaded.config,
+      providers: {
+        ...loaded.config.providers,
+        deepseek: { ...deepseekConfig(loaded), api_key: 'rotated-secret' },
+      },
+    };
+    const rebuilt = await buildModelRegistry(rotated, { file: loaded.fileConfig, models: registry.models }, secrets);
+    expect(secrets.resolutions).toBe(resolvedAtStartup + 1);
+    const after = rebuilt.models.getProvider('deepseek');
+    expect(after).not.toBe(registry.models.getProvider('deepseek'));
+    expect(after?.auth).not.toBe(registry.models.getProvider('deepseek')?.auth);
+  });
+
+  test('treats a changed builtin provider id as a new connection', async () => {
+    const secrets = new CountingSecrets();
+    const loaded = await loadFixture((draft) => {
+      draft.providers.deepseek = {
+        kind: 'builtin',
+        provider: 'deepseek',
+        api_key: 'builtin-secret',
+        models: [BUILTIN_MODEL],
+      };
+      draft.agent.provider = 'deepseek';
+      draft.agent.model = 'deepseek-chat';
+      draft.agent.thinking_level = 'off';
+    });
+    const registry = await buildModelRegistry(loaded.config, null, secrets);
+    const resolvedAtStartup = secrets.resolutions;
+
+    // Pi's own provider id decides the adapter, so it counts as the connection.
+    const swapped: RawConfig = {
+      ...loaded.config,
+      providers: { ...loaded.config.providers, deepseek: { ...deepseekConfig(loaded), provider: 'openai' } },
+    };
+    const rebuilt = await buildModelRegistry(swapped, { file: loaded.fileConfig, models: registry.models }, secrets);
+    expect(secrets.resolutions).toBe(resolvedAtStartup + 1);
+    expect(rebuilt.models.getProvider('deepseek')).not.toBe(registry.models.getProvider('deepseek'));
   });
 
   test('maps the selected compat fields onto Pi’s camelCase names', () => {
@@ -154,7 +243,7 @@ describe('model registry', () => {
 
   test('hands Pi the same thinking levels the configuration validates against', async () => {
     const declared = [['off', 'low', 'high', 'max'], ['low', 'medium', 'xhigh'], ['high', 'off'], ['max']] as const;
-    const config = await loadFixture((draft) => {
+    const loaded = await loadFixture((draft) => {
       const provider = draft.providers.agent;
       if (provider?.kind !== 'custom') {
         throw new Error('Expected custom agent provider fixture');
@@ -170,8 +259,8 @@ describe('model registry', () => {
       ];
       draft.agent.model = 'undeclared';
     });
-    const registry = await createModelRegistry(config, new SecretStore());
-    const configured = config.providers.agent?.models ?? [];
+    const registry = await buildModelRegistry(loaded.config, null, new SecretStore());
+    const configured = loaded.config.providers.agent?.models ?? [];
     expect(configured).toHaveLength(2 + declared.length);
     for (const model of configured) {
       const registered = registry.models.getModel('agent', model.id);
@@ -194,7 +283,7 @@ describe('model registry', () => {
   });
 
   test('registers custom models with their compat overrides', async () => {
-    const config = await loadFixture((draft) => {
+    const loaded = await loadFixture((draft) => {
       draft.providers.agent = {
         kind: 'custom',
         base_url: 'https://relay.example.test/v1/',
@@ -213,7 +302,7 @@ describe('model registry', () => {
         ],
       };
     });
-    const registry = await createModelRegistry(config, new SecretStore());
+    const registry = await buildModelRegistry(loaded.config, null, new SecretStore());
     const model = registry.models.getModel('agent', 'agent-model');
     expect(model).toMatchObject({
       api: 'openai-completions',

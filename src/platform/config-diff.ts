@@ -51,14 +51,18 @@ const HOT_PATHS: ReadonlySet<string> = new Set([
   'agent.history_messages',
   'agent.context.max_wall_clock_seconds',
   'agent.context.idle_grace_seconds',
+  'vision.provider',
+  'vision.model',
+  'vision.max_output_tokens',
 ]);
 
 /**
  * `agent.rate_limits` is hot as a whole; its three fields are listed for the
- * report. A provider's model list is hot for both kinds, and its per-model paths
- * are built dynamically, so neither appears here.
+ * report. Every provider field is hot — connection fields, the model list and
+ * per-model paths, which are built dynamically — because a reload rebuilds the
+ * model registry and publishes it with the configuration.
  */
-const HOT_PREFIXES: readonly string[] = ['agent.rate_limits.'];
+const HOT_PREFIXES: readonly string[] = ['agent.rate_limits.', 'providers.'];
 
 /**
  * `serve` reads these only through `backup` and the pre-migration backup, so
@@ -89,8 +93,7 @@ function classify(path: string): ConfigChangeKind {
  * longer carries is dropped when it is hot, and kept when it is restart-only.
  * No I/O happens here: prompt texts come from the two already-loaded raw forms,
  * so a chat and its instructions file can disappear together without failing.
- */
-export function diffConfig(active: ConfigSource, file: ConfigSource): ConfigDiff {
+ */ export function diffConfig(active: ConfigSource, file: ConfigSource): ConfigDiff {
   const recorder = new ChangeRecorder();
   const candidateFile = mergeFileConfig(active, file, recorder);
   return {
@@ -133,18 +136,6 @@ class ChangeRecorder {
   }
 }
 
-/**
- * The models a candidate may not redefine: those in use now that the candidate
- * keeps using. A model the agent is switching to is not in use yet, so editing
- * it in the same change is hot.
- */
-interface InUseModels {
-  /** The active agent model, or `null` when the candidate points the agent elsewhere. */
-  readonly agent: { readonly provider: string; readonly model: string } | null;
-  /** Vision stays on the active configuration: it is a restart-only field. */
-  readonly vision: { readonly provider: string; readonly model: string };
-}
-
 function mergeFileConfig(active: ConfigSource, file: ConfigSource, recorder: ChangeRecorder): FileConfig {
   const result = structuredClone(active.file);
   const activeRecord = active.file as unknown as Record<string, unknown>;
@@ -182,22 +173,9 @@ function mergeAgent(active: ConfigSource, file: ConfigSource, recorder: ChangeRe
   const activeRecord = active.file.agent as unknown as Record<string, unknown>;
   const fileRecord = file.file.agent as unknown as Record<string, unknown>;
   const target = result as unknown as Record<string, unknown>;
-  // An agent pointing at a provider the process never registered cannot be
-  // adopted: both fields wait for the restart that registers it.
-  const providerIsNew = !Object.hasOwn(active.file.providers, file.file.agent.provider);
   for (const key of unionKeys(activeRecord, fileRecord)) {
     if (key === 'system_prompt_file') {
       target[key] = mergeSystemPromptFile(active, file, recorder);
-      continue;
-    }
-    if (key === 'provider' || key === 'model') {
-      const path = `agent.${key}`;
-      if (!deepEqual(activeRecord[key], fileRecord[key])) {
-        recorder.add(path, providerIsNew ? 'restart' : 'hot');
-        if (!providerIsNew) {
-          target[key] = fileRecord[key];
-        }
-      }
       continue;
     }
     mergeField(activeRecord, fileRecord, target, key, `agent.${key}`, recorder);
@@ -279,21 +257,15 @@ function mergeChat(
 
 function mergeProviders(active: ConfigSource, file: ConfigSource, recorder: ChangeRecorder): FileConfig['providers'] {
   const result: Record<string, ProviderFileConfig> = {};
-  const activeAgent = active.file.agent;
-  const keepsAgent =
-    candidateAgentProvider(active, file) === activeAgent.provider &&
-    candidateAgentModel(active, file) === activeAgent.model;
-  const inUse: InUseModels = {
-    agent: keepsAgent ? { provider: activeAgent.provider, model: activeAgent.model } : null,
-    vision: { provider: active.file.vision.provider, model: active.file.vision.model },
-  };
   for (const [alias, activeProvider] of Object.entries(active.file.providers)) {
     const fileProvider = file.file.providers[alias];
     if (fileProvider === undefined || fileProvider.kind !== activeProvider.kind) {
-      // Adding, removing or re-kinding a provider needs a restart: the registry
-      // holds one provider object per alias, built at startup.
-      recorder.add(`providers.${alias}`, 'restart');
-      result[alias] = structuredClone(activeProvider);
+      // Adding, removing or re-kinding a provider is hot: the reload rebuilds the
+      // registry and publishes it with the configuration.
+      recorder.add(`providers.${alias}`, 'hot');
+      if (fileProvider !== undefined) {
+        result[alias] = structuredClone(fileProvider);
+      }
       continue;
     }
     const activeRecord = activeProvider as unknown as Record<string, unknown>;
@@ -307,12 +279,13 @@ function mergeProviders(active: ConfigSource, file: ConfigSource, recorder: Chan
     }
     // Both kinds carry `models`: for a builtin provider the list is the enabled
     // subset of Pi's catalog, and changing it is as hot as it is for custom.
-    merged.models = mergeModels(alias, activeProvider.models, fileProvider.models, inUse, recorder);
+    merged.models = mergeModels(alias, activeProvider.models, fileProvider.models, recorder);
     result[alias] = merged as unknown as ProviderFileConfig;
   }
-  for (const alias of Object.keys(file.file.providers)) {
+  for (const [alias, fileProvider] of Object.entries(file.file.providers)) {
     if (!Object.hasOwn(active.file.providers, alias)) {
-      recorder.add(`providers.${alias}`, 'restart');
+      recorder.add(`providers.${alias}`, 'hot');
+      result[alias] = structuredClone(fileProvider);
     }
   }
   return result;
@@ -322,67 +295,25 @@ function mergeModels(
   alias: string,
   activeModels: readonly ModelFileConfig[],
   fileModels: readonly ModelFileConfig[],
-  inUse: InUseModels,
   recorder: ChangeRecorder,
 ): ModelFileConfig[] {
   const activeById = new Map(activeModels.map((model) => [model.id, model]));
-  const fileById = new Map(fileModels.map((model) => [model.id, model]));
   const result: ModelFileConfig[] = [];
   // The file order wins: it is the order the provider is rebuilt in.
   for (const model of fileModels) {
     const path = `providers.${alias}.models[${model.id}]`;
     const activeModel = activeById.get(model.id);
-    if (activeModel === undefined) {
+    if (activeModel === undefined || !deepEqual(activeModel, model)) {
       recorder.add(path, 'hot');
-      result.push(structuredClone(model));
-      continue;
     }
-    if (deepEqual(activeModel, model)) {
-      result.push(structuredClone(model));
-      continue;
-    }
-    if (isInUse(inUse, alias, model.id)) {
-      // Editing a model that is in use and stays in use would change a live
-      // model's definition; the candidate keeps the active one instead.
-      recorder.add(path, 'restart');
-      result.push(structuredClone(activeModel));
-      continue;
-    }
-    recorder.add(path, 'hot');
     result.push(structuredClone(model));
   }
   for (const model of activeModels) {
-    if (fileById.has(model.id)) {
-      continue;
+    if (!fileModels.some((candidate) => candidate.id === model.id)) {
+      recorder.add(`providers.${alias}.models[${model.id}]`, 'hot');
     }
-    const path = `providers.${alias}.models[${model.id}]`;
-    if (isInUse(inUse, alias, model.id)) {
-      recorder.add(path, 'restart');
-      result.push(structuredClone(model));
-      continue;
-    }
-    recorder.add(path, 'hot');
   }
   return result;
-}
-
-function isInUse(inUse: InUseModels, alias: string, model: string): boolean {
-  return (
-    (inUse.agent !== null && inUse.agent.provider === alias && inUse.agent.model === model) ||
-    (inUse.vision.provider === alias && inUse.vision.model === model)
-  );
-}
-
-function candidateAgentProvider(active: ConfigSource, file: ConfigSource): string {
-  return Object.hasOwn(active.file.providers, file.file.agent.provider)
-    ? file.file.agent.provider
-    : active.file.agent.provider;
-}
-
-function candidateAgentModel(active: ConfigSource, file: ConfigSource): string {
-  return Object.hasOwn(active.file.providers, file.file.agent.provider)
-    ? file.file.agent.model
-    : active.file.agent.model;
 }
 
 /**

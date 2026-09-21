@@ -2,19 +2,12 @@ import { afterAll, expect, test } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  createModels,
-  type FauxProviderHandle,
-  fauxAssistantMessage,
-  fauxProvider,
-  fauxToolCall,
-} from '@earendil-works/pi-ai';
+import { type FauxProviderHandle, fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai';
 import type { Update } from 'grammy/types';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
-import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
+import type { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
-import type { ModelRegistry } from '../src/platform/providers.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
@@ -22,7 +15,7 @@ import { activeSleepUntil, enterSleep, SLEEP_STATE_KEY } from '../src/store/slee
 import { SLEEP_STATE_PROMPT } from '../src/context/context-builder.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import { SystemResources } from '../src/platform/system-resources.ts';
-import { writeTestConfig } from './helpers.ts';
+import { fauxRegistry, testConfigStore, writeTestConfig, type TestRegistry } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -45,13 +38,14 @@ afterAll(async () => {
 
 async function openStore(
   prefix = 'plasticwan-sleep-',
+  registry?: TestRegistry,
 ): Promise<{ loaded: LoadedConfig; configStore: RuntimeConfigurationStore; store: SqliteStore }> {
   const directory = await mkdtemp(join(tmpdir(), prefix));
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath);
   const loaded = await loadConfig(configPath);
-  const configStore = new RuntimeConfigurationStore(loaded);
+  const configStore = await testConfigStore(loaded, registry);
   return { loaded, configStore, store: await SqliteStore.open(loaded.config) };
 }
 
@@ -65,7 +59,11 @@ async function runtimeSetup(
   invocationId: bigint;
   faux: FauxProviderHandle;
 }> {
-  const { configStore, store } = await openStore();
+  const faux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  const { configStore, store } = await openStore('plasticwan-sleep-', fauxRegistry(faux));
   const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const received = new Date('2026-08-15T00:00:00.000Z');
   ingestion.ingest(update, received);
@@ -84,14 +82,6 @@ async function runtimeSetup(
     )
     .run(now.slice(0, 10), usageResource, usedTokens, now);
 
-  const faux = fauxProvider({
-    provider: 'agent',
-    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
-  });
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const model = faux.getModel();
-  const registry: ModelRegistry = { models, visionModel: model };
   let messageId = 500;
   const api: TelegramSendApi = {
     sendMessage: async () => ({ message_id: ++messageId, date: 1_700_000_100, chat: { id: 123456789 } }),
@@ -101,7 +91,6 @@ async function runtimeSetup(
     store,
     configStore,
     secrets: new SecretStore(),
-    registry,
     telegramApi: api,
     bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     systemResources: SystemResources.empty(),

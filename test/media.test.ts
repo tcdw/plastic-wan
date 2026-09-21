@@ -81,12 +81,13 @@ test('a switched vision model analyzes under its own cache version', async () =>
       await copyFile(fixturePath, destination);
     },
   };
+  const modelGate = new KeyedSemaphore();
   const media = new MediaService({
     store,
     configStore,
     secrets: new SecretStore(),
     mediaClient: downloader,
-    modelGate: new KeyedSemaphore(),
+    modelGate,
   });
   const tool = media.createReadImageTool(context, capabilities, Date.now() + 60_000);
   faux.setResponses([() => fauxAssistantMessage('described by the first model')]);
@@ -124,6 +125,45 @@ test('a switched vision model analyzes under its own cache version', async () =>
     'vision/vision-alt/prompt-1',
   ]);
   expect(rows.map((row) => row.model)).toEqual(['vision-model', 'vision-alt']);
+
+  // A switch published while an analysis waits for its model slot reaches the
+  // next analysis only: the waiting one keeps its model and the output limit
+  // that was validated against it, never the new model's larger limit.
+  const small = fauxProvider({
+    provider: 'vision',
+    models: [{ id: 'vision-small', input: ['text', 'image'], contextWindow: 128_000, maxTokens: 1_024 }],
+  });
+  let seenMaxTokens: number | undefined;
+  small.setResponses([
+    (_context, options) => {
+      seenMaxTokens = options?.maxTokens;
+      return fauxAssistantMessage('described by the small model');
+    },
+  ]);
+  const smallModels = createModels();
+  smallModels.setProvider(small.provider);
+  const pinnedConfig = structuredClone(configStore.current().config);
+  pinnedConfig.vision.max_output_tokens = 1_000;
+  configStore.publish({ config: pinnedConfig, hash: 'small', models: smallModels, visionModel: small.getModel() });
+  const release = await modelGate.acquire('123456789', AbortSignal.timeout(5_000));
+  const waiting = tool.execute('read-3', { image_ref: imageRef });
+  await expect
+    .poll(
+      () =>
+        store.db
+          .prepare<[], { count: bigint }>(
+            "SELECT COUNT(*) AS count FROM media_analyses WHERE analysis_version = 'vision/vision-small/prompt-1'",
+          )
+          .get()?.count,
+    )
+    .toBe(1n);
+  const largerConfig = structuredClone(pinnedConfig);
+  largerConfig.vision.max_output_tokens = 4_000;
+  configStore.publish({ config: largerConfig, hash: 'larger', models, visionModel: switched.getModel() });
+  release();
+  const third = await waiting;
+  expect(third.content).toEqual([{ type: 'text', text: 'described by the small model' }]);
+  expect(seenMaxTokens).toBe(1_000);
   store.close();
 });
 test('builds an executable Lottie command for the host platform', () => {

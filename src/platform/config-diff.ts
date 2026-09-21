@@ -93,7 +93,8 @@ function classify(path: string): ConfigChangeKind {
  * longer carries is dropped when it is hot, and kept when it is restart-only.
  * No I/O happens here: prompt texts come from the two already-loaded raw forms,
  * so a chat and its instructions file can disappear together without failing.
- */ export function diffConfig(active: ConfigSource, file: ConfigSource): ConfigDiff {
+ */
+export function diffConfig(active: ConfigSource, file: ConfigSource): ConfigDiff {
   const recorder = new ChangeRecorder();
   const candidateFile = mergeFileConfig(active, file, recorder);
   return {

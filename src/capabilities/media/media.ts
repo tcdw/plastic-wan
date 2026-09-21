@@ -59,6 +59,8 @@ interface VisionRun {
   readonly models: Models;
   readonly model: Model<Api>;
   readonly analysisVersion: string;
+  /** Checked against `model.maxTokens` when the snapshot was built, so it must travel with `model`. */
+  readonly maxOutputTokens: number;
 }
 
 export class MediaService {
@@ -96,6 +98,7 @@ export class MediaService {
       models: snapshot.models,
       model,
       analysisVersion: `${model.provider}/${model.id}/prompt-${this.#visionPromptVersion}`,
+      maxOutputTokens: snapshot.config.vision.max_output_tokens,
     };
   }
 
@@ -432,7 +435,7 @@ export class MediaService {
             {
               ...(run.model.reasoning ? { reasoning: 'low' as const } : {}),
               signal,
-              maxTokens: this.#configStore.current().config.vision.max_output_tokens,
+              maxTokens: run.maxOutputTokens,
               maxRetries: 2,
               maxRetryDelayMs: 30_000,
             },

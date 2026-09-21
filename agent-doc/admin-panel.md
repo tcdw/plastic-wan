@@ -179,7 +179,7 @@ Overview 的 Bot status 卡片显示当前 `sleeping`/`awake`、`sleep_until`，
 
 Settings 页有一张 `Configuration file` 卡片：显示 generation、active hash 与 file hash、待重启字段列表与 last error，并提供 `Apply config file` 按钮（调用 `POST /config/apply`），成功或失败后都刷新配置状态。
 
-Models 页是 Provider 与模型的管理器：左栏 Provider 列表（搜索、Agent/Vision 在用徽章、待重启徽章），右栏连接字段与模型列表。连接区里 builtin 只读展示 Pi 的供应商名与 baseUrl，custom 可编辑 `base_url` 与 `api`；API Key 与 header 值一律 `type="password"` 且没有查看按钮，提示「已设置，留空以保持当前设置」；`base_url` 一改动，key 与所有 header 值立刻变成必填。模型区显示 👁/💡/context/max output 与在用徽章，支持「获取模型列表」（发现 + 元数据预览，待重启时改用临时模式并要求再填一次 key）、「手动添加」与编辑弹窗（元数据字段带来源标签与匹配来源，compat 三态放在折叠的「高级设置」里，只显示当前 API 适用的字段）。带「需确认」的草稿不能直接提交：字段齐全的可以用「按列出的值确认 N 个」一次接受列表里显示的值，有空缺的必须进编辑弹窗填写。有待重启字段时页面顶部出现横幅与「立即重启」按钮（部署方未声明进程监督时隐藏），点击后界面会断开并轮询等待服务恢复。保存反馈区分「已生效」与「已保存，待重启」。
+Models 页是 Provider 与模型的管理器：左栏 Provider 列表（搜索、Agent/Vision 在用徽章、待重启徽章），右栏连接字段与模型列表。三个区域都是 `Panel`（左栏、Connection、Models），列表项与表格都不再套自己的边框，保持「一个区域一个边框」。连接区里 builtin 只读展示 Pi 的供应商名与 baseUrl，custom 可编辑 `base_url` 与 `api`；API Key 与 header 值一律 `type="password"` 且没有查看按钮，提示「已设置，留空以保持当前设置」；`base_url` 一改动，key 与所有 header 值立刻变成必填。模型区是一个 flush 面板：表格贴边、只保留标题下那条线，行内用图标标出 image / reasoning 能力（带 sr-only 文本），并显示 context / max output 与在用徽章，行末是「设为 Agent」「设为 Vision」与编辑 / 删除图标按钮。面板标题栏放「获取模型列表」（发现 + 元数据预览，待重启时改用临时模式并要求再填一次 key）与「手动添加」；编辑弹窗里元数据字段带来源标签与匹配来源，compat 三态放在折叠的「高级设置」里，只显示当前 API 适用的字段。带「需确认」的草稿不能直接提交：字段齐全的可以用「按列出的值确认 N 个」一次接受列表里显示的值，有空缺的必须进编辑弹窗填写。有待重启字段时页面顶部出现横幅与「立即重启」按钮（部署方未声明进程监督时隐藏），点击后界面会断开并轮询等待服务恢复。保存反馈区分「已生效」与「已保存，待重启」。
 
 Tool session 详情默认打开 Overview 时间线：按时间合并冻结消息、Invocation 生命周期、Model Call、Tool Call 与 Agent transcript；消息正文和 `send` 参数中的发送内容直接展示，Tool 结果与完整参数按需展开。失败的 Model Call 同时展示稳定错误码，并可展开查看经密钥脱敏的完整 Provider 错误详情。Assistant 文本显式标注为私有推理，只有 `send` Tool 会发往 Telegram。
 

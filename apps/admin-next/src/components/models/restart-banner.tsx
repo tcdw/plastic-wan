@@ -1,5 +1,4 @@
 import { AlertTriangle } from 'lucide-react';
-import { MonoValue } from '@/components/business';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 
@@ -28,10 +27,16 @@ export function RestartBanner({
       <AlertTitle>有 {paths.length} 处配置等待重启</AlertTitle>
       <AlertDescription>
         <div className="space-y-2">
-          <p className="text-xs">
-            这些字段已经写入 config.jsonc，但运行中的进程仍在使用旧值：
-            <MonoValue value={paths.join(', ')} />
-          </p>
+          <p className="text-xs">这些字段已经写入 config.jsonc，但运行中的进程仍在使用旧值：</p>
+          {/* One chip per path: a long joined line wraps into an unreadable
+              paragraph as soon as a few fields are waiting. */}
+          <ul className="flex flex-wrap gap-1.5">
+            {paths.map((path) => (
+              <li key={path} className="bg-muted text-muted-foreground rounded-md px-2 py-0.5 font-mono text-xs">
+                {path}
+              </li>
+            ))}
+          </ul>
           {supervised ? (
             <Button type="button" size="sm" disabled={pending} onClick={onRestart}>
               {pending ? '重启中…' : '立即重启'}

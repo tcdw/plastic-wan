@@ -82,7 +82,7 @@ test.describe('agent model hot-switch', () => {
     await page.goto(await adminUrl('/models'));
 
     await page.getByRole('button', { name: 'Provider vision' }).click();
-    await page.locator('tr', { hasText: 'vision-model' }).getByRole('button', { name: '设为 Agent 模型' }).click();
+    await page.locator('tr', { hasText: 'vision-model' }).getByRole('button', { name: '设为 Agent' }).click();
     // The toast only appears once the write and the reload succeeded.
     await expect(page.getByText('已生效').first()).toBeVisible();
     // Wait for the refreshed view before the next write: a switch has to be
@@ -98,7 +98,7 @@ test.describe('agent model hot-switch', () => {
 
     // There is no default to restore: the way back is another switch.
     await page.getByRole('button', { name: 'Provider agent' }).click();
-    await page.locator('tr', { hasText: 'agent-model' }).getByRole('button', { name: '设为 Agent 模型' }).click();
+    await page.locator('tr', { hasText: 'agent-model' }).getByRole('button', { name: '设为 Agent' }).click();
     await expect(page.getByRole('button', { name: 'Provider agent' }).getByText('Agent 在用')).toBeVisible();
 
     const restored = (await (await page.request.get(await adminUrl('/api/providers'))).json()) as {

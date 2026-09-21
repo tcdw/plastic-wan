@@ -155,7 +155,7 @@ export function ModelPickerDialog({
           {mode === 'discover' ? (
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => setTempMode((previous) => !previous)}>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setTempMode((previous) => !previous)}>
                   {tempMode ? '改用已保存的连接' : '改用临时模式（用请求体里的 API Key）'}
                 </Button>
                 {endpoint === null ? null : (
@@ -187,6 +187,8 @@ export function ModelPickerDialog({
               ) : null}
               <Button
                 type="button"
+                size="sm"
+                variant="outline"
                 disabled={fetchPending}
                 onClick={() => {
                   discover.mutate();
@@ -209,6 +211,8 @@ export function ModelPickerDialog({
               </div>
               <Button
                 type="button"
+                size="sm"
+                variant="outline"
                 disabled={fetchPending}
                 onClick={() => {
                   lookup.mutate();

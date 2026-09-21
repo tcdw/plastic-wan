@@ -8,8 +8,8 @@ import {
   type HeaderRow,
   removedHeaderNames,
 } from '@/components/models/header-fields';
+import { Panel } from '@/components/layout/panel';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -119,11 +119,20 @@ export function ProviderConnectionCard({
   const error = localError;
 
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm">Connection</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <Panel
+      title="Connection"
+      action={
+        <div className="flex items-center gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={onDetect}>
+            检测
+          </Button>
+          <Button type="button" size="sm" disabled={!dirty || save.isPending} onClick={submit}>
+            {save.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-4">
         {custom ? (
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
@@ -166,22 +175,24 @@ export function ProviderConnectionCard({
           />
         )}
 
-        <div className="space-y-2">
-          <Label htmlFor="provider-api-key">API Key</Label>
-          <Input
-            id="provider-api-key"
-            type="password"
-            autoComplete="new-password"
-            value={apiKey}
-            onChange={(event) => {
-              setApiKey(event.target.value);
-              setLocalError(null);
-            }}
-          />
-          <p className="text-muted-foreground text-xs">
-            已设置，留空以保持当前设置
-            {baseUrlChanged ? ' · 修改 base_url 后必须重新填写' : ''}
-          </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="provider-api-key">API Key</Label>
+            <Input
+              id="provider-api-key"
+              type="password"
+              autoComplete="new-password"
+              value={apiKey}
+              onChange={(event) => {
+                setApiKey(event.target.value);
+                setLocalError(null);
+              }}
+            />
+            <p className="text-muted-foreground text-xs">
+              已设置，留空以保持当前设置
+              {baseUrlChanged ? ' · 修改 base_url 后必须重新填写' : ''}
+            </p>
+          </div>
         </div>
 
         {custom ? (
@@ -204,16 +215,8 @@ export function ProviderConnectionCard({
         ) : null}
         {error !== null ? <p className="text-destructive text-sm break-words">{error}</p> : null}
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" onClick={onDetect}>
-            检测
-          </Button>
-          <Button type="button" disabled={!dirty || save.isPending} onClick={submit}>
-            {save.isPending ? 'Saving…' : 'Save'}
-          </Button>
-          <span className="text-muted-foreground text-xs">连接字段保存后需要重启才生效</span>
-        </div>
-      </CardContent>
-    </Card>
+        <p className="text-muted-foreground text-xs">连接字段保存后需要重启才生效。</p>
+      </div>
+    </Panel>
   );
 }

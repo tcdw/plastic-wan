@@ -304,6 +304,7 @@ export function ProviderWizard({
                 <Button
                   type="button"
                   variant="outline"
+                  size="sm"
                   disabled={fetchPending}
                   onClick={() => {
                     discover.mutate();

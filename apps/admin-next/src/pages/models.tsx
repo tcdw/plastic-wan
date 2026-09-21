@@ -1,9 +1,10 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { Eye, Lightbulb, Pencil, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
   ConfirmDialog,
-  LIST_TABLE_CLASS,
+  FLUSH_TABLE_CLASS,
   MonoValue,
   TableShell,
   ToneBadge,
@@ -14,10 +15,12 @@ import { ModelPickerDialog, type ModelPickerMode } from '@/components/models/mod
 import { ProviderConnectionCard } from '@/components/models/provider-connection-card';
 import { ProviderWizard } from '@/components/models/provider-wizard';
 import { RestartBanner } from '@/components/models/restart-banner';
+import { Panel } from '@/components/layout/panel';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
+import { cn } from '@/lib/utils';
 import {
   deleteProvider,
   deleteProviderModel,
@@ -169,9 +172,9 @@ export default function ModelsPage(): React.ReactElement {
 
   if (providers.isPending) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-6">
         <Skeleton className="h-20 w-full rounded-xl" />
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
           <Skeleton className="h-64 w-full rounded-xl" />
           <Skeleton className="h-64 w-full rounded-xl" />
         </div>
@@ -211,9 +214,19 @@ export default function ModelsPage(): React.ReactElement {
       key: 'flags',
       title: 'Flags',
       render: (row) => (
-        <span className="flex items-center gap-1 text-xs">
-          {isImageCapable(row.model) ? <span title="accepts image input">👁</span> : null}
-          {row.model.reasoning ? <span title="reasoning model">💡</span> : null}
+        <span className="text-muted-foreground flex items-center gap-1.5">
+          {isImageCapable(row.model) ? (
+            <>
+              <Eye className="size-[1.15em]" aria-hidden="true" />
+              <span className="sr-only">accepts image input</span>
+            </>
+          ) : null}
+          {row.model.reasoning ? (
+            <>
+              <Lightbulb className="size-[1.15em]" aria-hidden="true" />
+              <span className="sr-only">reasoning model</span>
+            </>
+          ) : null}
           {modelPendingRestart(restartPaths, row.alias, row.model.id) ? (
             <ToneBadge tone="warning">待重启</ToneBadge>
           ) : null}
@@ -224,12 +237,14 @@ export default function ModelsPage(): React.ReactElement {
       key: 'context',
       title: 'Context',
       align: 'right',
+      className: 'tabular-nums',
       render: (row) => formatNumber(row.model.context_window),
     },
     {
       key: 'max_tokens',
       title: 'Max output',
       align: 'right',
+      className: 'tabular-nums',
       render: (row) => formatNumber(row.model.max_tokens),
     },
     {
@@ -251,44 +266,48 @@ export default function ModelsPage(): React.ReactElement {
     {
       key: 'actions',
       title: 'Actions',
+      align: 'right',
       render: (row) => {
         const usage = modelUsage(view, row.alias, row.model.id);
         return (
-          <div className="flex flex-wrap items-center gap-1">
+          <div className="flex items-center justify-end gap-1">
             <Button
               type="button"
-              size="sm"
-              variant="outline"
+              size="xs"
+              variant="ghost"
               disabled={!isTextCapable(row.model) || usage === 'agent' || usage === 'both' || switchAgent.isPending}
               onClick={() => switchAgent.mutate({ alias: row.alias, model: row.model.id })}
             >
-              设为 Agent 模型
+              设为 Agent
             </Button>
             <Button
               type="button"
-              size="sm"
-              variant="outline"
+              size="xs"
+              variant="ghost"
               disabled={!isImageCapable(row.model) || usage === 'vision' || usage === 'both' || switchVision.isPending}
               onClick={() => switchVision.mutate({ alias: row.alias, model: row.model.id })}
             >
-              设为 Vision 模型
+              设为 Vision
             </Button>
             <Button
               type="button"
-              size="sm"
-              variant="outline"
+              size="icon-sm"
+              variant="ghost"
+              aria-label={`Edit ${row.model.id}`}
               onClick={() => setEditing({ alias: row.alias, model: row.model })}
             >
-              Edit
+              <Pencil />
             </Button>
             <Button
               type="button"
-              size="sm"
-              variant="destructive"
+              size="icon-sm"
+              variant="ghost"
+              className="text-muted-foreground hover:text-destructive"
+              aria-label={`Delete ${row.model.id}`}
               disabled={usage !== null}
               onClick={() => setDeletingModel({ alias: row.alias, model: row.model.id })}
             >
-              Delete
+              <Trash2 />
             </Button>
           </div>
         );
@@ -299,7 +318,7 @@ export default function ModelsPage(): React.ReactElement {
   const pickerProvider = picker === null ? null : (view.providers.find((p) => p.alias === picker.alias) ?? null);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <RestartBanner
         paths={restartPaths}
         supervised={view.supervised}
@@ -307,60 +326,70 @@ export default function ModelsPage(): React.ReactElement {
         onRestart={() => restart.mutate()}
       />
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
-        <Card className="self-start">
-          <CardHeader className="gap-3 pb-2">
-            <CardTitle className="text-sm">Providers</CardTitle>
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+        <Panel
+          title="Providers"
+          className="self-start"
+          action={
+            <Button type="button" size="sm" onClick={() => setWizardOpen(true)}>
+              新建 Provider
+            </Button>
+          }
+        >
+          <div className="space-y-3">
             <Input
               aria-label="Search providers"
               placeholder="Search providers"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
-            <Button type="button" size="sm" onClick={() => setWizardOpen(true)}>
-              新建 Provider
-            </Button>
-          </CardHeader>
-          <CardContent className="space-y-1">
             {view.providers.length === 0 ? (
               <p className="text-muted-foreground text-sm">还没有配置任何 Provider。</p>
             ) : listed.length === 0 ? (
               <p className="text-muted-foreground text-sm">没有匹配的 Provider。</p>
             ) : (
-              listed.map((provider) => {
-                const pendingRestart = providerPendingRestart(restartPaths, provider.alias);
-                const active = selected !== null && selected.alias === provider.alias;
-                return (
-                  <button
-                    key={provider.alias}
-                    type="button"
-                    aria-label={`Provider ${provider.alias}`}
-                    aria-current={active ? 'true' : undefined}
-                    className={`w-full rounded-md border px-3 py-2 text-left transition-colors ${
-                      active ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
-                    }`}
-                    onClick={() => setSelectedAlias(provider.alias)}
-                  >
-                    <span className="flex items-center justify-between gap-2">
-                      <MonoValue value={provider.alias} />
-                      <span className="text-muted-foreground text-xs">{provider.kind}</span>
-                    </span>
-                    <span className="text-muted-foreground block truncate text-xs">
-                      {provider.provider ?? provider.base_url}
-                    </span>
-                    <span className="mt-1 flex flex-wrap items-center gap-1">
-                      <ProviderBadges view={view} provider={provider} />
-                      {pendingRestart ? <ToneBadge tone="warning">待重启</ToneBadge> : null}
-                      <span className="text-muted-foreground text-xs">{provider.models.length} models</span>
-                    </span>
-                  </button>
-                );
-              })
+              <ul className="space-y-0.5">
+                {listed.map((provider) => {
+                  const pendingRestart = providerPendingRestart(restartPaths, provider.alias);
+                  const active = selected !== null && selected.alias === provider.alias;
+                  return (
+                    <li key={provider.alias}>
+                      {/* No border: the panel is already the frame, and a box per
+                          row would nest one inside it. */}
+                      <button
+                        type="button"
+                        aria-label={`Provider ${provider.alias}`}
+                        aria-current={active ? 'true' : undefined}
+                        className={cn(
+                          'w-full space-y-1 rounded-lg px-3 py-2 text-left transition-colors',
+                          active ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50',
+                        )}
+                        onClick={() => setSelectedAlias(provider.alias)}
+                      >
+                        <span className="flex items-baseline justify-between gap-2">
+                          <MonoValue value={provider.alias} />
+                          <span className="text-muted-foreground text-xs">{provider.kind}</span>
+                        </span>
+                        <span className="text-muted-foreground block truncate text-xs">
+                          {provider.provider ?? provider.base_url}
+                        </span>
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <ProviderBadges view={view} provider={provider} />
+                          {pendingRestart ? <ToneBadge tone="warning">待重启</ToneBadge> : null}
+                          <span className="text-muted-foreground text-xs tabular-nums">
+                            {provider.models.length} {provider.models.length === 1 ? 'model' : 'models'}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </Panel>
 
-        <div className="space-y-4">
+        <div className="space-y-6">
           {selected === null ? (
             <Card>
               <CardContent className="text-muted-foreground py-8 text-center text-sm">
@@ -369,19 +398,21 @@ export default function ModelsPage(): React.ReactElement {
             </Card>
           ) : (
             <>
-              <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <MonoValue value={selected.alias} />
+                  <h2 className="font-mono text-base font-semibold">{selected.alias}</h2>
                   <span className="text-muted-foreground text-xs">{selected.kind}</span>
                   <ProviderBadges view={view} provider={selected} />
                 </div>
                 <Button
                   type="button"
                   size="sm"
-                  variant="destructive"
+                  variant="ghost"
+                  className="text-muted-foreground hover:text-destructive"
                   disabled={providerUsage(view, selected.alias).agent || providerUsage(view, selected.alias).vision}
                   onClick={() => setDeletingProvider(selected)}
                 >
+                  <Trash2 />
                   删除 Provider
                 </Button>
               </div>
@@ -393,9 +424,10 @@ export default function ModelsPage(): React.ReactElement {
                 onDetect={() => setPicker({ mode: 'discover', alias: selected.alias, nonce: Date.now() })}
               />
 
-              <section className="space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="font-semibold">Models</h2>
+              <Panel
+                title="Models"
+                flush
+                action={
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
                       type="button"
@@ -414,16 +446,18 @@ export default function ModelsPage(): React.ReactElement {
                       手动添加
                     </Button>
                   </div>
-                </div>
-                {/* The table is the card surface here, so no border is nested. */}
+                }
+              >
+                {/* Flush: the panel is the frame, so the table only keeps the
+                    rule under the header. */}
                 <TableShell
                   columns={columns}
                   data={rows}
                   rowKey={(row) => `${row.alias}/${row.model.id}`}
-                  className={LIST_TABLE_CLASS}
+                  className={FLUSH_TABLE_CLASS}
                   emptyText="填写 API Key 后获取模型列表"
                 />
-              </section>
+              </Panel>
             </>
           )}
         </div>

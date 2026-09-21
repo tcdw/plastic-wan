@@ -4,7 +4,7 @@ import { Heading } from '../ui/heading';
 
 function PageSkeleton() {
   return (
-    <div className="flex flex-1 animate-pulse flex-col gap-4 p-4 md:px-6">
+    <div className="flex flex-1 animate-pulse flex-col gap-4 p-4 md:p-6">
       <div className="flex items-center justify-between">
         <div>
           <div className="bg-muted mb-2 h-8 w-48 rounded" />
@@ -38,7 +38,7 @@ export default function PageContainer({
 }) {
   if (!access) {
     return (
-      <div className="flex flex-1 items-center justify-center p-4 md:px-6">
+      <div className="flex flex-1 items-center justify-center p-4 md:p-6">
         {accessFallback ?? (
           <div className="text-muted-foreground text-center text-lg">You do not have access to this page.</div>
         )}
@@ -51,7 +51,7 @@ export default function PageContainer({
   const hasHeader = pageTitle || pageHeaderAction;
 
   return (
-    <div className="flex flex-1 flex-col p-4 md:px-6">
+    <div className="flex flex-1 flex-col p-4 md:p-6">
       {hasHeader && (
         <div className="mb-4 flex items-start justify-between gap-4">
           <Heading

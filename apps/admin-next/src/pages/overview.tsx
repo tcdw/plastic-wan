@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import {
   ChartPanel,
   ConfirmDialog,
+  FLUSH_TABLE_CLASS,
   StateBadge,
   TableShell,
   TimeSeriesChart,
@@ -46,10 +47,6 @@ const USAGE_COLUMNS: readonly ColumnSpec<UsageEntry>[] = [
   { key: 'scope', title: 'Scope', render: (row) => row.scope },
   { key: 'amount', title: 'Amount', align: 'right', render: (row) => formatNumber(row.amount) },
 ];
-
-/** Tables inside a flush panel keep only the top rule under the panel header. */
-const FLUSH_TABLE =
-  'rounded-none border-x-0 border-b-0 [&_td:first-child]:ps-6 [&_td:last-child]:pe-6 [&_th:first-child]:ps-6 [&_th:last-child]:pe-6';
 
 function Stat({ title, value }: { readonly title: string; readonly value: React.ReactNode }): React.ReactElement {
   return (
@@ -266,7 +263,7 @@ export default function OverviewPage(): React.ReactElement {
             columns={COUNT_COLUMNS}
             data={data.invocation_states}
             rowKey={(row) => row.label}
-            className={FLUSH_TABLE}
+            className={FLUSH_TABLE_CLASS}
           />
         </Panel>
         <Panel title="Configured sticker index states" flush>
@@ -274,7 +271,7 @@ export default function OverviewPage(): React.ReactElement {
             columns={COUNT_COLUMNS}
             data={data.sticker_index_states}
             rowKey={(row) => row.label}
-            className={FLUSH_TABLE}
+            className={FLUSH_TABLE_CLASS}
           />
         </Panel>
         <Panel title="Top tools" flush>
@@ -282,7 +279,7 @@ export default function OverviewPage(): React.ReactElement {
             columns={TOOL_COLUMNS}
             data={data.top_tools}
             rowKey={(row) => row.label}
-            className={FLUSH_TABLE}
+            className={FLUSH_TABLE_CLASS}
           />
         </Panel>
       </div>
@@ -292,7 +289,7 @@ export default function OverviewPage(): React.ReactElement {
           columns={USAGE_COLUMNS}
           data={data.daily_usage}
           rowKey={(row) => `${row.resource}|${row.metric}|${row.scope}`}
-          className={FLUSH_TABLE}
+          className={FLUSH_TABLE_CLASS}
         />
       </Panel>
 

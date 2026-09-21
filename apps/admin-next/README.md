@@ -83,9 +83,11 @@ models.dev 目录缓存——`GET /providers/discover` 与 `lookup-metadata` 因
 - 凭据只写不读：`api_key` 与 header 值永远是 `type="password"`、`autocomplete="new-password"`
   的空输入框，没有查看按钮；提交后用 `mutation.reset()` 立刻把带明文 key 的请求体
   从 mutation cache 里丢掉。页面不写 localStorage，也不把 key 放进任何持久结构。
-- 元数据草稿（`ModelMetadataDraft`）带 `sources` 与 `needs_confirmation`：`null` 或只有
-  `models.dev-fuzzy` 匹配的字段必须由管理员在编辑弹窗里填写/确认后才能保存，
-  面板不替模型填默认值；「高级设置」只显示当前 API 真正支持的 compat 字段。
+- 元数据草稿（`ModelMetadataDraft`）带 `sources` 与 `needs_confirmation`：`null`、或只有
+  猜出来的匹配（`models.dev-cross-provider` / `models.dev-fuzzy`，见 `match.confidence`）
+  支撑的字段必须由管理员确认后才能保存——字段齐全的可以用「按列出的值确认 N 个」一次接受，
+  有空缺的要进编辑弹窗填写。面板不替模型填默认值；「高级设置」只显示当前 API 真正支持的
+  compat 字段。
 
 ## 共享业务组件契约
 
@@ -97,9 +99,15 @@ import {
   ChartPanel, ConfirmDialog, CursorList, FilterToolbar, JsonViewer, KvList,
   LazyDetails, MonoValue, PrivateReasoningNote, PrivateReasoningTag,
   SelectFilter, StateBadge, TableShell, TextValue, TimeSeriesChart, flatPages,
+  FLUSH_TABLE_CLASS, LIST_TABLE_CLASS,
   type ColumnSpec, type CursorQueryFactory, type CursorQueryOptions,
 } from '@/components/business';
 ```
+
+页面区块统一用 `@/components/layout/panel` 的 `Panel`（卡片 + 标题 + 可选尾部操作，
+`min-h-9` 让同一行的面板标题与首行内容对齐）。**一个区域一个边框**：面板里不再套第二层
+边框——表格传 `flush` 并用 `FLUSH_TABLE_CLASS`（只保留标题下那条线、首尾单元格与标题同
+inset），图表无边框，列表项不要自己的 border。`LIST_TABLE_CLASS` 只给不在面板里的独立表格。
 
 ### 游标列表容器 `cursor-list.tsx`
 

@@ -19,6 +19,6 @@ export { LazyDetails, type LazyDetailsProps } from './lazy-details';
 export { KvList, MonoValue, TextValue, type KvItem } from './kv-list';
 export { ConfirmDialog, type ConfirmDialogProps } from './confirm-dialog';
 export { DetailError, DetailSkeleton, type DetailErrorProps } from './detail-state';
-export { LIST_TABLE_CLASS, TableShell, type ColumnSpec, type TableShellProps } from './table-shell';
+export { FLUSH_TABLE_CLASS, LIST_TABLE_CLASS, TableShell, type ColumnSpec, type TableShellProps } from './table-shell';
 export { ChartPanel, TimeSeriesChart, type ChartDatum, type ChartSeries } from './chart-card';
 export { PrivateReasoningNote, PrivateReasoningTag } from './private-reasoning';

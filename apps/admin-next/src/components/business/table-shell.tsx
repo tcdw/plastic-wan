@@ -13,6 +13,13 @@ import { cn } from '@/lib/utils';
  */
 
 /** Standalone list-page table: a card surface whose cell insets match the card edge. */
+/**
+ * A table inside a flush `Panel`: no frame of its own, only the rule under the
+ * panel header, with its first and last cells aligned to the header inset.
+ */
+export const FLUSH_TABLE_CLASS =
+  'rounded-none border-x-0 border-b-0 [&_td:first-child]:ps-6 [&_td:last-child]:pe-6 [&_th:first-child]:ps-6 [&_th:last-child]:pe-6';
+
 export const LIST_TABLE_CLASS =
   'bg-card rounded-xl shadow-xs [&_td:first-child]:ps-4 [&_td:last-child]:pe-4 [&_th]:text-muted-foreground [&_th:first-child]:ps-4 [&_th:last-child]:pe-4';
 

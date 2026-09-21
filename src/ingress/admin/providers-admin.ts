@@ -14,12 +14,15 @@ import {
   ModelConfigSchema,
   PROVIDER_ALIAS_PATTERN,
   type ProviderApi,
+  type ThinkingLevelConfig,
+  ThinkingLevelSchema,
 } from '../../platform/config.ts';
 import type { ConfigEdit } from '../../platform/config-file.ts';
 import { type ModelMetadataDraft, resolveModelDrafts } from '../../platform/model-metadata.ts';
 import { loadModelsDevCatalog, type ModelsDevCatalog } from '../../platform/models-dev.ts';
 import { type DiscoveredProviderModel, fetchProviderModels } from '../../platform/provider-models.ts';
 import type { SecretStore } from '../../platform/secrets.ts';
+import { supportedThinkingLevels } from '../../platform/thinking-levels.ts';
 import { AdminQueryError } from './audit.ts';
 
 /** Panel bodies carry whole model lists, so they are larger than audit filters. */
@@ -95,6 +98,7 @@ const VisionBodySchema = Type.Object(
   { provider: Type.String({ minLength: 1 }), model: Type.String({ minLength: 1 }) },
   Strict,
 );
+const ThinkingLevelBodySchema = Type.Object({ thinking_level: ThinkingLevelSchema }, Strict);
 
 export type CreateProviderBody = Static<typeof CreateProviderBodySchema>;
 export type UpdateProviderBody = Static<typeof UpdateProviderBodySchema>;
@@ -115,7 +119,7 @@ export interface ProvidersView {
   readonly revision: string;
   /** Whether the deployment declares an external supervisor that restarts `serve`. */
   readonly supervised: boolean;
-  readonly agent: { readonly provider: string; readonly model: string };
+  readonly agent: { readonly provider: string; readonly model: string; readonly thinking_level: ThinkingLevelConfig };
   readonly vision: { readonly provider: string; readonly model: string };
   readonly restart_required: readonly string[];
   readonly providers: readonly ProviderView[];
@@ -165,6 +169,7 @@ const modelValidator = Compile(ModelConfigSchema);
 const discoverValidator = Compile(DiscoverBodySchema);
 const lookupValidator = Compile(LookupMetadataBodySchema);
 const visionValidator = Compile(VisionBodySchema);
+const thinkingLevelValidator = Compile(ThinkingLevelBodySchema);
 
 export function supervisedRestartEnabled(): boolean {
   return process.env.PLASTICWAN_SUPERVISED === '1';
@@ -174,7 +179,7 @@ export function listProviders(file: FileConfig, revision: string, restartRequire
   return {
     revision,
     supervised: supervisedRestartEnabled(),
-    agent: { provider: file.agent.provider, model: file.agent.model },
+    agent: { provider: file.agent.provider, model: file.agent.model, thinking_level: file.agent.thinking_level },
     vision: { provider: file.vision.provider, model: file.vision.model },
     restart_required: [...restartRequired],
     providers: Object.entries(file.providers).map(([alias, provider]) => {
@@ -257,6 +262,10 @@ export function parseLookupMetadataBody(value: unknown): LookupMetadataBody {
 
 export function parseVisionBody(value: unknown): { readonly provider: string; readonly model: string } {
   return parseWith(visionValidator, value);
+}
+
+export function parseThinkingLevelBody(value: unknown): { readonly thinking_level: ThinkingLevelConfig } {
+  return parseWith(thinkingLevelValidator, value);
 }
 
 type Validator<T extends TSchema> = import('typebox/compile').Validator<import('typebox').TProperties, T>;
@@ -553,6 +562,30 @@ export function visionEdits(
     { path: ['vision', 'provider'], value: body.provider },
     { path: ['vision', 'model'], value: body.model },
   ];
+}
+
+/**
+ * Sets the agent's thinking level. The level has to be one the agent model in
+ * the file accepts, which is the same check the configuration runs on load.
+ */
+export function thinkingLevelEdits(
+  context: ProviderWriteContext,
+  body: { readonly thinking_level: ThinkingLevelConfig },
+): ConfigEdit[] {
+  const { provider, model: modelId } = context.file.agent;
+  const model = context.file.providers[provider]?.models.find((candidate) => candidate.id === modelId);
+  if (model === undefined) {
+    throw new AdminQueryError('unknown_model', `Agent model ${provider}/${modelId} is absent from the configuration`);
+  }
+  const supported = supportedThinkingLevels(model);
+  if (!supported.includes(body.thinking_level)) {
+    throw new AdminQueryError(
+      'unsupported_thinking_level',
+      `${provider}/${modelId} does not accept thinking level ${body.thinking_level} (supported: ${supported.join(', ')})`,
+      422,
+    );
+  }
+  return [{ path: ['agent', 'thinking_level'], value: body.thinking_level }];
 }
 
 export async function discover(context: ProviderWriteContext, body: DiscoverBody): Promise<DiscoverResponse> {

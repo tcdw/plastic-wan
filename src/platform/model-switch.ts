@@ -1,4 +1,4 @@
-import type { Api, Model, Models } from '@earendil-works/pi-ai';
+import type { Api, Model, Models, ModelThinkingLevel } from '@earendil-works/pi-ai';
 import type { RuntimeConfigurationStore } from './runtime-config.ts';
 
 export class ModelSwitchError extends Error {
@@ -39,6 +39,11 @@ export class AgentModelSwitcher {
   current(): AgentModelOption {
     const config = this.#configStore.current().config;
     return this.option(config.agent.provider, config.agent.model);
+  }
+
+  /** The live thinking level; a model switch resets it (`ConfigReloader.setAgentModel`). */
+  thinkingLevel(): ModelThinkingLevel {
+    return this.#configStore.current().config.agent.thinking_level;
   }
 
   model(): Model<Api> {

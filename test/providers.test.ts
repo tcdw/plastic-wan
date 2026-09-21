@@ -2,11 +2,12 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Api, Context, Model } from '@earendil-works/pi-ai';
+import { type Api, type Context, getSupportedThinkingLevels, type Model } from '@earendil-works/pi-ai';
 import { findBuiltinProvider } from '../src/platform/builtin-providers.ts';
 import { type FileConfig, type RawConfig, loadConfig } from '../src/platform/config.ts';
 import { createModelRegistry, mapCompat, rebuildBuiltinProvider } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
+import { supportedThinkingLevels, THINKING_LEVELS } from '../src/platform/thinking-levels.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
@@ -44,6 +45,7 @@ describe('model registry', () => {
       };
       draft.agent.provider = 'deepseek';
       draft.agent.model = 'deepseek-chat';
+      draft.agent.thinking_level = 'off';
     });
     const registry = await createModelRegistry(config, new SecretStore());
     const registered = registry.models.getModels('deepseek');
@@ -69,6 +71,7 @@ describe('model registry', () => {
       };
       draft.agent.provider = 'mine';
       draft.agent.model = 'deepseek-chat';
+      draft.agent.thinking_level = 'off';
     });
     const registry = await createModelRegistry(config, new SecretStore());
     const provider = registry.models.getProvider('mine');
@@ -113,6 +116,7 @@ describe('model registry', () => {
       };
       draft.agent.provider = 'deepseek';
       draft.agent.model = 'deepseek-chat';
+      draft.agent.thinking_level = 'off';
     });
     const registry = await createModelRegistry(config, new SecretStore());
     const before = registry.models.getProvider('deepseek');
@@ -146,6 +150,47 @@ describe('model registry', () => {
       cacheControlFormat: 'anthropic',
     });
     expect(mapCompat({})).toBeUndefined();
+  });
+
+  test('hands Pi the same thinking levels the configuration validates against', async () => {
+    const declared = [['off', 'low', 'high', 'max'], ['low', 'medium', 'xhigh'], ['high', 'off'], ['max']] as const;
+    const config = await loadFixture((draft) => {
+      const provider = draft.providers.agent;
+      if (provider?.kind !== 'custom') {
+        throw new Error('Expected custom agent provider fixture');
+      }
+      const base = provider.models[0];
+      if (base === undefined) {
+        throw new Error('Expected an agent model fixture');
+      }
+      provider.models = [
+        { ...base, id: 'undeclared' },
+        { ...base, id: 'plain', reasoning: false },
+        ...declared.map((levels, index) => ({ ...base, id: `declared-${index}`, thinking_levels: [...levels] })),
+      ];
+      draft.agent.model = 'undeclared';
+    });
+    const registry = await createModelRegistry(config, new SecretStore());
+    const configured = config.providers.agent?.models ?? [];
+    expect(configured).toHaveLength(2 + declared.length);
+    for (const model of configured) {
+      const registered = registry.models.getModel('agent', model.id);
+      if (registered === undefined) {
+        throw new Error(`Expected ${model.id} to be registered`);
+      }
+      expect(getSupportedThinkingLevels(registered)).toEqual(supportedThinkingLevels(model));
+    }
+    // Declared levels come back weakest first, whatever order the file uses.
+    expect(supportedThinkingLevels({ reasoning: true, thinking_levels: ['high', 'off'] })).toEqual(['off', 'high']);
+    // Supported levels other than xhigh / max keep the adapter's own wire value.
+    expect(registry.models.getModel('agent', 'declared-0')?.thinkingLevelMap).toEqual({
+      minimal: null,
+      medium: null,
+      xhigh: null,
+      max: 'max',
+    });
+    expect(registry.models.getModel('agent', 'undeclared')?.thinkingLevelMap).toBeUndefined();
+    expect(THINKING_LEVELS).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
   });
 
   test('registers custom models with their compat overrides', async () => {

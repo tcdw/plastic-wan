@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { ModelMetadataDraft, ProviderModelConfig } from './api.ts';
 import {
+  agentModelConfig,
   applyFeedback,
   compatConfigFromState,
   compatFieldsForApi,
@@ -10,11 +11,13 @@ import {
   matchLabel,
   metadataSourceLabel,
   modelFormFromConfig,
+  modelFormToConfig,
   modelFromDraft,
   modelPendingRestart,
   modelUsage,
   parseModelIds,
   providerPendingRestart,
+  supportedThinkingLevels,
   unconfirmedFields,
   validateModelForm,
   writeErrorMessage,
@@ -25,6 +28,7 @@ function draft(overrides: Partial<ModelMetadataDraft> = {}): ModelMetadataDraft 
     id: 'vendor/model',
     name: 'Model',
     reasoning: true,
+    thinking_levels: null,
     input: ['text'],
     context_window: 128_000,
     max_tokens: 8_192,
@@ -33,6 +37,7 @@ function draft(overrides: Partial<ModelMetadataDraft> = {}): ModelMetadataDraft 
     sources: {
       name: 'openrouter',
       reasoning: 'openrouter',
+      thinking_levels: 'missing',
       input: 'openrouter',
       context_window: 'openrouter',
       max_tokens: 'openrouter',
@@ -74,6 +79,7 @@ describe('draft confirmation', () => {
       sources: {
         name: 'models.dev-fuzzy',
         reasoning: 'models.dev-fuzzy',
+        thinking_levels: 'missing',
         input: 'models.dev',
         context_window: 'models.dev',
         max_tokens: 'models.dev',
@@ -91,13 +97,21 @@ describe('draft confirmation', () => {
       sources: {
         name: 'models.dev-cross-provider',
         reasoning: 'models.dev-cross-provider',
+        thinking_levels: 'models.dev-cross-provider',
         input: 'models.dev-cross-provider',
         context_window: 'models.dev-cross-provider',
         max_tokens: 'models.dev-cross-provider',
         cost: 'models.dev-cross-provider',
       },
     });
-    expect(unconfirmedFields(borrowed)).toEqual(['reasoning', 'input', 'context_window', 'max_tokens', 'cost']);
+    expect(unconfirmedFields({ ...borrowed, thinking_levels: ['low', 'high'] })).toEqual([
+      'reasoning',
+      'thinking_levels',
+      'input',
+      'context_window',
+      'max_tokens',
+      'cost',
+    ]);
     expect(isDraftFieldUnconfirmed(borrowed, 'name')).toBe(false);
   });
 
@@ -105,6 +119,14 @@ describe('draft confirmation', () => {
     const missing = draft({ reasoning: null });
     expect(isDraftFieldUnconfirmed(missing, 'reasoning')).toBe(true);
     expect(unconfirmedFields(missing)).toEqual(['reasoning']);
+  });
+
+  test('missing thinking levels block nothing: the model runs on Pi default', () => {
+    expect(isDraftFieldUnconfirmed(draft({ thinking_levels: null }), 'thinking_levels')).toBe(false);
+    expect(modelFromDraft(draft({ thinking_levels: null }))).not.toHaveProperty('thinking_levels');
+    expect(modelFromDraft(draft({ thinking_levels: ['off', 'high'] }))).toMatchObject({
+      thinking_levels: ['off', 'high'],
+    });
   });
 
   test('a complete draft converts to a model config', () => {
@@ -123,6 +145,65 @@ describe('draft confirmation', () => {
     expect(modelFromDraft(draft({ max_tokens: null }))).toBeUndefined();
     expect(modelFromDraft(draft({ cost: null }))).toBeUndefined();
     expect(modelFromDraft(draft({ input: null }))).toBeUndefined();
+  });
+});
+
+describe('thinking levels', () => {
+  test('follow the server rule: off only, Pi default, or the declared list in order', () => {
+    expect(supportedThinkingLevels({ reasoning: false })).toEqual(['off']);
+    expect(supportedThinkingLevels({ reasoning: true })).toEqual(['off', 'minimal', 'low', 'medium', 'high']);
+    expect(supportedThinkingLevels({ reasoning: true, thinking_levels: ['max', 'off', 'high'] })).toEqual([
+      'off',
+      'high',
+      'max',
+    ]);
+  });
+
+  test('the form writes declared levels in order and drops them with reasoning', () => {
+    const base = modelFormFromConfig(
+      {
+        id: 'm',
+        reasoning: true,
+        thinking_levels: ['off', 'high'],
+        input: ['text'],
+        context_window: 1_000,
+        max_tokens: 100,
+        cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+      },
+      'openai-completions',
+    );
+    expect(base.thinking_levels).toEqual(['off', 'high']);
+    expect(modelFormToConfig({ ...base, thinking_levels: ['max', 'low'] }, 'openai-completions')).toMatchObject({
+      thinking_levels: ['low', 'max'],
+    });
+    // None checked means "leave it out".
+    expect(modelFormToConfig({ ...base, thinking_levels: [] }, 'openai-completions')).not.toHaveProperty(
+      'thinking_levels',
+    );
+    expect(modelFormToConfig({ ...base, reasoning: false }, 'openai-completions')).not.toHaveProperty(
+      'thinking_levels',
+    );
+  });
+
+  test('finds the agent model in the file view', () => {
+    const model: ProviderModelConfig = {
+      id: 'agent-model',
+      reasoning: true,
+      input: ['text'],
+      context_window: 1_000,
+      max_tokens: 100,
+      cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+    };
+    const provider = {
+      alias: 'agent',
+      kind: 'custom' as const,
+      api: 'openai-completions' as const,
+      base_url: 'https://example.test/v1',
+      header_names: [],
+      models: [model],
+    };
+    expect(agentModelConfig({ agent: { provider: 'agent', model: 'agent-model' }, providers: [provider] })).toBe(model);
+    expect(agentModelConfig({ agent: { provider: 'agent', model: 'gone' }, providers: [provider] })).toBeNull();
   });
 });
 

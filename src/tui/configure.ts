@@ -1,9 +1,8 @@
 import { confirm, select } from '@inquirer/prompts';
 import { readFile, writeFile } from 'node:fs/promises';
-import { loadConfig, type FileConfig } from '../platform/config.ts';
+import { loadConfig, type FileConfig, type ThinkingLevelConfig } from '../platform/config.ts';
+import { supportedThinkingLevels } from '../platform/thinking-levels.ts';
 import { runProviderWizard } from './provider-wizard.ts';
-
-const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 
 export async function runConfigure(configPath: string): Promise<void> {
   if (!process.stdin.isTTY) {
@@ -41,9 +40,9 @@ export async function runConfigure(configPath: string): Promise<void> {
         config = await runProviderWizard(config);
         break;
       case 'thinking': {
-        const level = await select<(typeof THINKING_LEVELS)[number]>({
-          message: 'Agent thinking level',
-          choices: THINKING_LEVELS.map((value) => ({ value, name: value })),
+        const level = await select<ThinkingLevelConfig>({
+          message: `Agent thinking level (${config.agent.provider}/${config.agent.model})`,
+          choices: agentThinkingLevels(config).map((value) => ({ value, name: value })),
         });
         config = { ...config, agent: { ...config.agent, thinking_level: level } };
         break;
@@ -64,6 +63,14 @@ export async function runConfigure(configPath: string): Promise<void> {
       }
     }
   }
+}
+
+/** Only the levels the agent model accepts are offered; saving validates the rest. */
+function agentThinkingLevels(config: FileConfig): readonly ThinkingLevelConfig[] {
+  const model = config.providers[config.agent.provider]?.models.find(
+    (candidate) => candidate.id === config.agent.model,
+  );
+  return model === undefined ? [config.agent.thinking_level] : supportedThinkingLevels(model);
 }
 
 async function saveConfig(path: string, config: FileConfig, originalSource: string): Promise<boolean> {

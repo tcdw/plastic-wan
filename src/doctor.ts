@@ -2,7 +2,15 @@ import Database from 'better-sqlite3';
 import { mkdir, mkdtemp, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import type { Api, AssistantMessage, Context, Model, ModelThinkingLevel, ThinkingLevel } from '@earendil-works/pi-ai';
+import {
+  type Api,
+  type AssistantMessage,
+  type Context,
+  getSupportedThinkingLevels,
+  type Model,
+  type ModelThinkingLevel,
+  type ThinkingLevel,
+} from '@earendil-works/pi-ai';
 import { Bot } from 'grammy';
 import sharp from 'sharp';
 import Type from 'typebox';
@@ -202,11 +210,21 @@ async function runDoctorChecks(
   }
 }
 
+/**
+ * The probe still reasons when the agent runs with `off`: at `low` where the
+ * model offers it, otherwise at the weakest level it does offer.
+ */
 function doctorReasoning(model: Model<Api>, level: ModelThinkingLevel): ThinkingLevel | undefined {
   if (!model.reasoning) {
     return undefined;
   }
-  return level === 'off' ? 'low' : level;
+  if (level !== 'off') {
+    return level;
+  }
+  const levels = getSupportedThinkingLevels(model).filter(
+    (candidate): candidate is ThinkingLevel => candidate !== 'off',
+  );
+  return levels.includes('low') ? 'low' : levels[0];
 }
 
 async function completeDoctorCall(

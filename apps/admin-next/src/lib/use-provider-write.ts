@@ -7,8 +7,11 @@ import { providersQuery } from './queries.ts';
 export interface ProviderWriteFeedback {
   /** Re-reads `GET /providers`; every write changes what that view shows. */
   readonly refresh: () => void;
-  /** Reports what actually happened: applied, or saved but waiting for a restart. */
-  readonly succeeded: (apply: ModelApplySummary) => void;
+  /**
+   * Reports what actually happened: applied, or saved but waiting for a restart.
+   * `note` adds what the write changed on its own, such as a reset level.
+   */
+  readonly succeeded: (apply: ModelApplySummary, note?: string) => void;
   /**
    * Keeps the caller's inline error as the primary message, but refreshes the
    * view when the file changed under us — the stale revision is exactly what the
@@ -24,9 +27,11 @@ export function useProviderWrite(): ProviderWriteFeedback {
   };
   return {
     refresh,
-    succeeded: (apply) => {
+    succeeded: (apply, note) => {
       const feedback = applyFeedback(apply);
-      toast.success(feedback.title, { description: feedback.description });
+      toast.success(feedback.title, {
+        description: note === undefined ? feedback.description : `${feedback.description}. ${note}`,
+      });
       refresh();
     },
     failed: (error) => {

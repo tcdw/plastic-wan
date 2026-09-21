@@ -13,6 +13,7 @@ import {
 } from './builtin-providers.ts';
 import { stripHtmlComments } from './prompt-markdown.ts';
 import { validatePromptTemplate } from './prompt-template.ts';
+import { supportedThinkingLevels } from './thinking-levels.ts';
 
 const Strict = { additionalProperties: false } as const;
 const PositiveInteger = Type.Integer({ minimum: 1 });
@@ -32,6 +33,16 @@ const COMPAT_FIELDS_BY_API: Readonly<Record<ProviderApi, readonly string[]>> = {
   'anthropic-messages': [],
   'google-generative-ai': [],
 };
+/** Pi's thinking levels; `thinking-levels.ts` holds their order. */
+export const ThinkingLevelSchema = Type.Union([
+  Type.Literal('off'),
+  Type.Literal('minimal'),
+  Type.Literal('low'),
+  Type.Literal('medium'),
+  Type.Literal('high'),
+  Type.Literal('xhigh'),
+  Type.Literal('max'),
+]);
 export const SecretRefSchema = Type.Union([
   Type.String({ minLength: 1 }),
   Type.Object({ env: Type.String({ pattern: '^[A-Za-z_][A-Za-z0-9_]*$' }) }, Strict),
@@ -80,6 +91,11 @@ export const ModelConfigSchema = Type.Object(
     id: Type.String({ minLength: 1 }),
     name: Type.Optional(Type.String({ minLength: 1 })),
     reasoning: Type.Boolean(),
+    /**
+     * The thinking levels this model accepts. Only a reasoning model may declare
+     * them; leaving the list out keeps Pi's default (`off` through `high`).
+     */
+    thinking_levels: Type.Optional(Type.Array(ThinkingLevelSchema, { minItems: 1, uniqueItems: true })),
     compat: Type.Optional(ModelCompatSchema),
     input: Type.Array(Type.Union([Type.Literal('text'), Type.Literal('image')]), {
       minItems: 1,
@@ -230,14 +246,7 @@ export const ConfigSchema = Type.Object(
         provider: Type.String({ minLength: 1 }),
         model: Type.String({ minLength: 1 }),
         daily_budget: Type.Object({ max_tokens: PositiveInteger }, Strict),
-        thinking_level: Type.Union([
-          Type.Literal('off'),
-          Type.Literal('minimal'),
-          Type.Literal('low'),
-          Type.Literal('medium'),
-          Type.Literal('high'),
-          Type.Literal('xhigh'),
-        ]),
+        thinking_level: ThinkingLevelSchema,
         system_prompt_file: Type.String({ minLength: 1 }),
         send_max_text_length: Type.Optional(Type.Integer({ minimum: 1, maximum: 4096 })),
         send_disallow_blank_lines: Type.Optional(Type.Boolean()),
@@ -299,6 +308,7 @@ export const ConfigSchema = Type.Object(
 export type SecretRef = Static<typeof SecretRefSchema>;
 export type ProviderApi = Static<typeof CustomProviderApiSchema>;
 export type ModelCompatConfig = Static<typeof ModelCompatSchema>;
+export type ThinkingLevelConfig = Static<typeof ThinkingLevelSchema>;
 export type ModelFileConfig = Static<typeof ModelConfigSchema>;
 export type FileConfig = Static<typeof ConfigSchema>;
 export type FileChat = FileConfig['telegram']['chats'][number];
@@ -531,6 +541,7 @@ export function validateSemantics(config: FileConfig): void {
       validateEndpoint(provider.base_url, `provider ${alias} base_url`);
     }
   }
+  validateAgentThinkingLevel(config);
   const servers = config.mcp?.servers ?? [];
   assertUnique(servers, (server) => server.alias, 'MCP server alias');
   for (const server of servers) {
@@ -614,10 +625,31 @@ export function assertModelConfig(api: ProviderApi, model: ModelFileConfig, labe
   if (model.max_tokens > model.context_window) {
     throw new Error(`${label} max_tokens exceeds context_window`);
   }
+  if (!model.reasoning && model.thinking_levels !== undefined) {
+    throw new Error(`${label} declares thinking_levels but is not a reasoning model`);
+  }
   for (const field of Object.keys(model.compat ?? {})) {
     if (!COMPAT_FIELDS_BY_API[api].includes(field)) {
       throw new Error(`${label} cannot set ${field} for api ${api}`);
     }
+  }
+}
+
+/**
+ * The configured level has to be one the agent model accepts: Pi would otherwise
+ * clamp it on some adapters and send it unchanged on others.
+ */
+function validateAgentThinkingLevel(config: FileConfig): void {
+  const { provider, model: modelId, thinking_level: level } = config.agent;
+  const model = config.providers[provider]?.models.find((candidate) => candidate.id === modelId);
+  if (model === undefined) {
+    return;
+  }
+  const supported = supportedThinkingLevels(model);
+  if (!supported.includes(level)) {
+    throw new Error(
+      `agent.thinking_level ${level} is not supported by ${provider}/${modelId} (supported: ${supported.join(', ')})`,
+    );
   }
 }
 

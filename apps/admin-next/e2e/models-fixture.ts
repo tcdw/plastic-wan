@@ -42,6 +42,7 @@ export const E2E_MODELS_DEV_CATALOG = {
         id: E2E_RELAY_COMPLETE_MODEL,
         name: 'Relay Model A',
         reasoning: true,
+        reasoning_options: [{ type: 'toggle' }, { type: 'effort', values: ['low', 'high', 'max'] }],
         modalities: { input: ['text', 'image'], output: ['text'] },
         limit: { context: 200_000, output: 32_768 },
         cost: { input: 0.5, output: 1.5, cache_read: 0.05, cache_write: 0.5 },

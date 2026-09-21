@@ -1,5 +1,7 @@
+import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 import Compile from 'typebox/compile';
 import Type, { type Static } from 'typebox';
+import { isThinkingLevel, THINKING_LEVELS } from './thinking-levels.ts';
 
 export const MODELS_DEV_URL = 'https://models.dev/api.json';
 
@@ -26,6 +28,11 @@ const ModalitiesSchema = Type.Object({
   output: Type.Optional(Type.Array(Type.String())),
 });
 
+/**
+ * How a model's reasoning can be controlled: `toggle` switches it on and off,
+ * `effort` lists effort values, `budget_tokens` takes a token budget. An empty
+ * list means the model always reasons and offers no control.
+ */
 const ReasoningOptionSchema = Type.Object({
   type: Type.String(),
   values: Type.Optional(Type.Array(Type.Union([Type.String(), Type.Null()]))),
@@ -205,13 +212,50 @@ export function extractInputCapabilities(model: ModelsDevModel): Array<'text' | 
   return capabilities;
 }
 
-export function extractReasoningEffortOptions(model: ModelsDevModel): string[] {
-  for (const option of model.reasoning_options ?? []) {
-    if (option.type === 'effort' && option.values !== undefined) {
-      return option.values.filter((value): value is string => value !== null);
+/** The levels Pi turns into a token budget for a budget-only model. */
+const BUDGET_THINKING_LEVELS: readonly ModelThinkingLevel[] = ['minimal', 'low', 'medium', 'high'];
+
+/**
+ * A model's `reasoning_options` as Pi thinking levels, weakest first, or `null`
+ * when the catalog names no level: the model is not a reasoning model, has no
+ * options, always reasons without a control (an empty list), or can only be
+ * switched on and off. Pi needs a level to switch thinking on, so a bare toggle
+ * leaves the choice to Pi's default rather than offering `off` alone.
+ *
+ * Effort values and budgets define the levels; `off` comes from the effort
+ * value `none` or from a toggle, never from a budget — models.dev lists the
+ * toggle separately where thinking can be turned off. Values Pi has no level
+ * for are dropped.
+ */
+export function extractThinkingLevels(model: ModelsDevModel): ModelThinkingLevel[] | null {
+  if (!model.reasoning || model.reasoning_options === undefined) {
+    return null;
+  }
+  const levels = new Set<ModelThinkingLevel>();
+  let toggle = false;
+  for (const option of model.reasoning_options) {
+    if (option.type === 'toggle') {
+      toggle = true;
+    } else if (option.type === 'effort') {
+      for (const value of option.values ?? []) {
+        const level = value === 'none' ? 'off' : value;
+        if (level !== null && isThinkingLevel(level)) {
+          levels.add(level);
+        }
+      }
+    } else if (option.type === 'budget_tokens') {
+      for (const level of BUDGET_THINKING_LEVELS) {
+        levels.add(level);
+      }
     }
   }
-  return [];
+  if ([...levels].every((level) => level === 'off')) {
+    return null;
+  }
+  if (toggle) {
+    levels.add('off');
+  }
+  return THINKING_LEVELS.filter((level) => levels.has(level));
 }
 
 export function toModelDefaults(model: ModelsDevModel): {
@@ -221,7 +265,7 @@ export function toModelDefaults(model: ModelsDevModel): {
   context_window: number;
   max_tokens: number;
   cost: { input: number; output: number; cache_read: number; cache_write: number };
-  reasoning_effort_options: string[];
+  thinking_levels: ModelThinkingLevel[] | null;
 } {
   const limit = model.limit ?? {};
   const cost = model.cost ?? {};
@@ -239,6 +283,6 @@ export function toModelDefaults(model: ModelsDevModel): {
       cache_read: cost.cache_read ?? 0,
       cache_write: cost.cache_write ?? 0,
     },
-    reasoning_effort_options: extractReasoningEffortOptions(model),
+    thinking_levels: extractThinkingLevels(model),
   };
 }

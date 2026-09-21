@@ -265,7 +265,7 @@ test('an agent pointing at a new provider waits for a restart', async () => {
       models: [
         {
           id: 'extra-model',
-          reasoning: false,
+          reasoning: true,
           input: ['text'],
           context_window: 64_000,
           max_tokens: 4_096,

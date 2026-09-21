@@ -290,6 +290,64 @@ describe('configuration', () => {
     expect(loaded.fileConfig.providers.agent?.models[0]?.compat).toMatchObject({ thinking_format: 'openrouter' });
   });
 
+  test('rejects thinking levels on a model that does not reason', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        const model = config.providers.vision?.models[0];
+        if (model === undefined) {
+          throw new Error('Expected a vision model fixture');
+        }
+        model.thinking_levels = ['off', 'low'];
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('declares thinking_levels but is not a reasoning model');
+  });
+
+  test('rejects an agent thinking level the agent model does not accept', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        const model = config.providers.agent?.models[0];
+        if (model === undefined) {
+          throw new Error('Expected an agent model fixture');
+        }
+        model.thinking_levels = ['off', 'high', 'max'];
+        config.agent.thinking_level = 'low';
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow(
+      'agent.thinking_level low is not supported by agent/agent-model (supported: off, high, max)',
+    );
+  });
+
+  test('offers xhigh and max only to a model that declares them', async () => {
+    const { directory, configPath } = await fixture();
+    // Undeclared, a reasoning model gets Pi's default, which stops at high.
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        config.agent.thinking_level = 'max';
+      }),
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow('(supported: off, minimal, low, medium, high)');
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        const model = config.providers.agent?.models[0];
+        if (model === undefined) {
+          throw new Error('Expected an agent model fixture');
+        }
+        model.thinking_levels = ['max', 'high'];
+        config.agent.thinking_level = 'max';
+      }),
+    );
+    const loaded = await loadConfig(configPath);
+    expect(loaded.config.agent.thinking_level).toBe('max');
+  });
+
   test('rejects a provider alias that cannot survive a URL path or restart string', async () => {
     const { directory, configPath } = await fixture();
     await writeFile(

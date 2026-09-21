@@ -37,6 +37,7 @@ function catalog(): ModelsDevCatalog {
           id: 'deepseek/deepseek-v4-flash',
           name: 'DeepSeek V4 Flash',
           reasoning: true,
+          reasoning_options: [{ type: 'toggle' }, { type: 'effort', values: ['low', 'high', 'max'] }],
           interleaved: { field: 'reasoning_content' },
           limit: { context: 1048576, output: 384000 },
           cost: { input: 0.03612, output: 0.07224, cache_read: 0.007224 },
@@ -389,6 +390,39 @@ describe('metadata resolution', () => {
     // models.dev records reasoning_content replay for this id.
     expect(draft.requires_reasoning_content).toBe(true);
     expect(draft.requires_reasoning_content_source).toBe('models.dev');
+    // OpenRouter's listing says nothing about effort levels; models.dev does.
+    expect(draft.thinking_levels).toEqual(['off', 'low', 'high', 'max']);
+    expect(draft.sources.thinking_levels).toBe('models.dev');
+    expect(draft.needs_confirmation).toEqual([]);
+  });
+
+  test('keeps thinking levels off a model the listing does not call a reasoning model', () => {
+    const drafts = resolveModelDrafts(
+      {
+        kind: 'builtin',
+        builtinProvider: 'openrouter',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        api: 'openai-completions',
+      },
+      [
+        openRouterModel({
+          id: 'deepseek/deepseek-v4-flash',
+          name: 'DeepSeek: DeepSeek V4 Flash',
+          context_length: 1048576,
+          top_provider: { max_completion_tokens: 384000 },
+          architecture: { input_modalities: ['text'] },
+          supported_parameters: ['tools'],
+          pricing: { prompt: '0.00000004', completion: '0.00000008' },
+        }),
+      ],
+      catalog(),
+    );
+    const draft = draftOf(drafts, 'deepseek/deepseek-v4-flash');
+    expect(draft.reasoning).toBe(false);
+    // The configuration rejects levels on a model that does not reason, so the
+    // catalog's levels are not carried over.
+    expect(draft.thinking_levels).toBeNull();
+    expect(draft.sources.thinking_levels).toBe('missing');
     expect(draft.needs_confirmation).toEqual([]);
   });
 
@@ -561,7 +595,17 @@ describe('metadata resolution', () => {
     });
     expect(draft.context_window).toBe(1048576);
     expect(draft.sources.context_window).toBe('models.dev-cross-provider');
-    expect(draft.needs_confirmation).toEqual(['reasoning', 'input', 'context_window', 'max_tokens', 'cost']);
+    // Levels are a property of the deployment too: OpenRouter and DeepSeek do
+    // not offer the same ones for the same model.
+    expect(draft.thinking_levels).toEqual(['off', 'low', 'high', 'max']);
+    expect(draft.needs_confirmation).toEqual([
+      'reasoning',
+      'thinking_levels',
+      'input',
+      'context_window',
+      'max_tokens',
+      'cost',
+    ]);
     // The same id under the provider the catalog knows is taken as it is.
     const exact = resolveModelDrafts(
       {
@@ -590,6 +634,8 @@ describe('metadata resolution', () => {
     const draft = draftOf(drafts, 'unknown-model');
     expect(draft.name).toBeNull();
     expect(draft.match).toBeNull();
+    // Missing levels leave the model on Pi's default, so they block nothing.
+    expect(draft.thinking_levels).toBeNull();
     expect(draft.needs_confirmation).toEqual(['name', 'reasoning', 'input', 'context_window', 'max_tokens', 'cost']);
     expect(draft.sources.context_window).toBe('missing');
   });

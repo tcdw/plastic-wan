@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto';
-import type { Api, Model, MutableModels, Provider } from '@earendil-works/pi-ai';
+import {
+  type Api,
+  getSupportedThinkingLevels,
+  type Model,
+  type MutableModels,
+  type Provider,
+} from '@earendil-works/pi-ai';
 import {
   assertConfigPermissions,
   type FileConfig,
@@ -155,6 +161,10 @@ export class ConfigReloader {
    * applies the file. The model must be usable before anything is written, so a
    * rejected switch leaves the file untouched; once it is written, a failed
    * apply reports `fileWritten` instead of pretending nothing happened.
+   *
+   * The switch also resets `agent.thinking_level` to the weakest level the new
+   * model accepts: models do not share one set of levels, and the level chosen
+   * for the old model may not exist on the new one.
    */
   setAgentModel(provider: string, model: string, expectedRevision?: string): Promise<ConfigApplyResult> {
     return this.#withLock(async () => {
@@ -176,10 +186,12 @@ export class ConfigReloader {
       } catch (error) {
         return this.#rejected('model_unusable', messageOf(error));
       }
+      const [weakest = 'off'] = getSupportedThinkingLevels(resolved);
       return await this.#writeAndApply(
         [
           { path: ['agent', 'provider'], value: provider },
           { path: ['agent', 'model'], value: model },
+          { path: ['agent', 'thinking_level'], value: weakest },
         ],
         expectedRevision,
         'model_switch_failed',

@@ -1,5 +1,12 @@
+import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 import type { ProviderApi } from './config.ts';
-import { extractInputCapabilities, findModel, type ModelsDevCatalog, type ModelsDevModel } from './models-dev.ts';
+import {
+  extractInputCapabilities,
+  extractThinkingLevels,
+  findModel,
+  type ModelsDevCatalog,
+  type ModelsDevModel,
+} from './models-dev.ts';
 import type { DiscoveredProviderModel, GeminiModel, OpenRouterModel, VercelModel } from './provider-models.ts';
 
 /**
@@ -36,11 +43,12 @@ function isGuessedSource(source: MetadataSource): boolean {
   return source === 'models.dev-cross-provider' || source === 'models.dev-fuzzy';
 }
 
-export type DraftField = 'name' | 'reasoning' | 'input' | 'context_window' | 'max_tokens' | 'cost';
+export type DraftField = 'name' | 'reasoning' | 'thinking_levels' | 'input' | 'context_window' | 'max_tokens' | 'cost';
 
 export const DRAFT_FIELDS: readonly DraftField[] = [
   'name',
   'reasoning',
+  'thinking_levels',
   'input',
   'context_window',
   'max_tokens',
@@ -64,6 +72,8 @@ export interface ModelMetadataDraft {
   readonly id: string;
   readonly name: string | null;
   readonly reasoning: boolean | null;
+  /** Only ever set on a reasoning model; `null` leaves the model on Pi's default. */
+  readonly thinking_levels: readonly ModelThinkingLevel[] | null;
   readonly input: readonly ('text' | 'image')[] | null;
   readonly context_window: number | null;
   readonly max_tokens: number | null;
@@ -176,11 +186,19 @@ function resolveModelDraft(model: DiscoveredProviderModel, lookup: ModelsDevLook
     values[field] = null;
     sources[field] = 'missing';
   }
+  if (values.reasoning !== true) {
+    // Levels belong to reasoning models only; the configuration rejects them on
+    // any other model, whatever the catalog says.
+    values.thinking_levels = null;
+    sources.thinking_levels = 'missing';
+  }
   const contextWindow = values.context_window as number | null;
   const maxTokens = values.max_tokens as number | null;
   const inconsistent = contextWindow !== null && maxTokens !== null && maxTokens > contextWindow;
-  const needsConfirmation = DRAFT_FIELDS.filter(
-    (field) => values[field] === null || (isGuessedSource(sources[field]) && field !== 'name'),
+  // Missing thinking levels are not a gap: the configuration leaves them out and
+  // the model runs on Pi's default. Guessed ones are, like any guessed value.
+  const needsConfirmation = DRAFT_FIELDS.filter((field) =>
+    values[field] === null ? field !== 'thinking_levels' : isGuessedSource(sources[field]) && field !== 'name',
   );
   if (inconsistent && !needsConfirmation.includes('max_tokens')) {
     needsConfirmation.push('max_tokens');
@@ -190,6 +208,7 @@ function resolveModelDraft(model: DiscoveredProviderModel, lookup: ModelsDevLook
     id: model.id,
     name: (values.name as string | null) ?? null,
     reasoning: (values.reasoning as boolean | null) ?? null,
+    thinking_levels: (values.thinking_levels as readonly ModelThinkingLevel[] | null) ?? null,
     input: (values.input as readonly ('text' | 'image')[] | null) ?? null,
     context_window: contextWindow,
     max_tokens: maxTokens,
@@ -268,6 +287,7 @@ function readModelsDev(model: ModelsDevModel): DraftFields {
   return {
     name: model.name,
     reasoning: model.reasoning,
+    thinking_levels: extractThinkingLevels(model),
     input: extractInputCapabilities(model),
     context_window: model.limit?.context ?? model.limit?.input ?? null,
     max_tokens: model.limit?.output ?? null,

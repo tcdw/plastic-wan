@@ -825,8 +825,17 @@ test('model API lists and switches the agent model through the config file', asy
     expect(await readJson(withoutRevision)).toMatchObject({ error: 'revision_required' });
 
     const switched = await readJson(await server.handle(switchModel({ provider: 'vision', model: 'vision-model' })));
-    expect(switched.current).toMatchObject({ provider: 'vision', model: 'vision-model', max_tokens: 8_192 });
-    expect(switched.apply).toEqual({ applied: ['agent.model', 'agent.provider'], restart_required: [] });
+    // The vision model does not reason, so the switch resets the level to `off`.
+    expect(switched.current).toMatchObject({
+      provider: 'vision',
+      model: 'vision-model',
+      max_tokens: 8_192,
+      thinking_level: 'off',
+    });
+    expect(switched.apply).toEqual({
+      applied: ['agent.model', 'agent.provider', 'agent.thinking_level'],
+      restart_required: [],
+    });
 
     const malformed = await server.handle(switchModel({ provider: 'vision' }));
     expect(malformed.status).toBe(400);

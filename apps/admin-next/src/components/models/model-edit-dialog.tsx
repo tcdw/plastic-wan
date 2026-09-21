@@ -12,15 +12,23 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import type { DraftField, ModelInput, ModelMetadataDraft, ProviderApi, ProviderModelConfig } from '@/lib/api.ts';
+import {
+  type DraftField,
+  type ModelInput,
+  type ModelMetadataDraft,
+  type ProviderApi,
+  type ProviderModelConfig,
+  THINKING_LEVELS,
+  type ThinkingLevel,
+} from '@/lib/api.ts';
 import {
   AUTO_COMPAT,
   compatFieldsForApi,
   fieldSourceLabel,
   isDraftFieldUnconfirmed,
+  type ModelFormState,
   matchLabel,
   modelFormToConfig,
-  type ModelFormState,
   unconfirmedFields,
   validateModelForm,
 } from '@/lib/model-manager.ts';
@@ -98,6 +106,15 @@ export function ModelEditDialog({
   const showAdvanced = compatFields.length > 0;
   const confirmations = draft === null ? [] : unconfirmedFields(draft);
   const matchNote = draft === null ? null : matchLabel(draft.match);
+
+  const toggleThinkingLevel = (level: ThinkingLevel): void => {
+    setForm((previous) => ({
+      ...previous,
+      thinking_levels: previous.thinking_levels.includes(level)
+        ? previous.thinking_levels.filter((value) => value !== level)
+        : [...previous.thinking_levels, level],
+    }));
+  };
 
   const toggleInput = (modality: ModelInput): void => {
     setForm((previous) => ({
@@ -204,6 +221,31 @@ export function ModelEditDialog({
             </div>
             {touched && errors.input !== undefined ? <p className="text-destructive text-sm">{errors.input}</p> : null}
           </div>
+
+          {/* Levels only exist on a reasoning model; saving without reasoning
+              drops them, so the row goes away with the checkbox. */}
+          {form.reasoning ? (
+            <div className="space-y-2">
+              <FieldLabel htmlFor="model-thinking-off" label="thinking levels" draft={draft} field="thinking_levels" />
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                {THINKING_LEVELS.map((level) => (
+                  <label key={level} className="flex items-center gap-2 text-sm" htmlFor={`model-thinking-${level}`}>
+                    <input
+                      id={`model-thinking-${level}`}
+                      type="checkbox"
+                      className="size-4 rounded border-input"
+                      checked={form.thinking_levels.includes(level)}
+                      onChange={() => toggleThinkingLevel(level)}
+                    />
+                    {level}
+                  </label>
+                ))}
+              </div>
+              <p className="text-muted-foreground text-xs">
+                The levels this model accepts. Leave all unchecked to use Pi's default: off, minimal, low, medium, high.
+              </p>
+            </div>
+          ) : null}
 
           <div className="space-y-2">
             <FieldLabel htmlFor="model-cost-input" label="cost (USD per 1M tokens)" draft={draft} field="cost" />

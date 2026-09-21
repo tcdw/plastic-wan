@@ -88,6 +88,9 @@ models.dev 目录缓存——`GET /providers/discover` 与 `lookup-metadata` 因
   支撑的字段必须由管理员确认后才能保存——字段齐全的可以用 “Accept listed values (N)” 一次接受，
   有空缺的要进编辑弹窗填写。面板不替模型填默认值；“Advanced” 折叠区只显示当前 API 真正支持的
   compat 字段。
+- thinking 级别：`thinking_levels` 缺失不算空缺（沿用 Pi 默认），猜出来的照样要确认。
+  模型接受哪些级别由 `supportedThinkingLevels` 计算，与服务端
+  `src/platform/thinking-levels.ts` 是同一条规则，改一边必须改另一边。
 
 面板 UI 文案一律英文（与 Memories / Bot admins / Overview 一致）；本文档引用界面文案时用英文原文。
 

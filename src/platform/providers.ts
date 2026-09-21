@@ -17,6 +17,7 @@ import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.l
 import { builtinProviderApi, findBuiltinProvider } from './builtin-providers.ts';
 import type { ModelCompatConfig, ModelFileConfig, RawConfig } from './config.ts';
 import type { SecretStore } from './secrets.ts';
+import { thinkingLevelMap } from './thinking-levels.ts';
 
 export type CustomProviderConfig = Extract<RawConfig['providers'][string], { kind: 'custom' }>;
 export type BuiltinProviderConfig = Extract<RawConfig['providers'][string], { kind: 'builtin' }>;
@@ -177,6 +178,10 @@ function providerModels(alias: string, api: Api, baseUrl: string, models: readon
         cacheWrite: model.cost.cache_write,
       },
     };
+    const levels = thinkingLevelMap(model);
+    if (levels !== undefined) {
+      built.thinkingLevelMap = levels;
+    }
     const compat = model.compat === undefined ? undefined : mapCompat(model.compat);
     return compat === undefined ? built : { ...built, compat };
   });

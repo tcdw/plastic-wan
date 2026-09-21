@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { serve, type ServerType } from '@hono/node-server';
-import type { Models } from '@earendil-works/pi-ai';
+import type { Models, ModelThinkingLevel } from '@earendil-works/pi-ai';
 import { assertConfigPermissions, loadConfig, type RawConfig } from '../../platform/config.ts';
 import type { ConfigErrorCode, ConfigReloader } from '../../platform/config-reload.ts';
 import { type ConfigEdit, readConfigRevision } from '../../platform/config-file.ts';
@@ -57,12 +57,14 @@ import {
   parseModelBody,
   parseModelsBody,
   parseUpdateProviderBody,
+  parseThinkingLevelBody,
   parseVisionBody,
   type ProviderWriteContext,
   PROVIDER_BODY_MAX_BYTES,
   replaceModel,
   supervisedRestartEnabled,
   updateProvider,
+  thinkingLevelEdits,
   visionEdits,
 } from './providers-admin.ts';
 
@@ -379,6 +381,10 @@ export class AdminServer {
       const body = parseVisionBody(await readJsonObject(request));
       return await this.#providerWrite(request, (context) => visionEdits(context, body));
     }
+    if (route === 'thinking-level' && request.method === 'PUT') {
+      const body = parseThinkingLevelBody(await readJsonObject(request));
+      return await this.#providerWrite(request, (context) => thinkingLevelEdits(context, body));
+    }
     if (route === 'restart' && request.method === 'POST') {
       return await this.#restart();
     }
@@ -684,6 +690,7 @@ export class AdminServer {
       readonly name: string;
       readonly context_window: number;
       readonly max_tokens: number;
+      readonly thinking_level: ModelThinkingLevel;
     };
     readonly options: readonly { readonly provider: string; readonly model: string; readonly name: string }[];
   } {
@@ -694,6 +701,7 @@ export class AdminServer {
         name: current.name,
         context_window: current.contextWindow,
         max_tokens: current.maxTokens,
+        thinking_level: switcher.thinkingLevel(),
       },
       options: switcher.list().map((option) => ({
         provider: option.provider,

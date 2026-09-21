@@ -351,6 +351,8 @@ export interface ModelOption {
 export interface CurrentModel extends ModelOption {
   readonly context_window: number;
   readonly max_tokens: number;
+  /** Live level; switching the agent model resets it to the new model's weakest one. */
+  readonly thinking_level: ThinkingLevel;
 }
 
 export interface ModelState {
@@ -409,7 +411,12 @@ export interface ModelsDevMatch {
   readonly confidence: ModelsDevConfidence;
 }
 
-export type DraftField = 'name' | 'reasoning' | 'input' | 'context_window' | 'max_tokens' | 'cost';
+export type DraftField = 'name' | 'reasoning' | 'thinking_levels' | 'input' | 'context_window' | 'max_tokens' | 'cost';
+
+/** Pi's thinking levels, weakest first. */
+export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 export type ThinkingFormat = 'openai' | 'openrouter' | 'deepseek' | 'together' | 'zai' | 'qwen' | 'string-thinking';
 
@@ -434,6 +441,8 @@ export interface ProviderModelConfig {
   readonly id: string;
   readonly name?: string;
   readonly reasoning: boolean;
+  /** Reasoning models only; absent means Pi's default (`off` through `high`). */
+  readonly thinking_levels?: readonly ThinkingLevel[];
   readonly compat?: ModelCompatConfig;
   readonly input: readonly ModelInput[];
   readonly context_window: number;
@@ -458,12 +467,17 @@ export interface ProviderModelReference {
   readonly model: string;
 }
 
+export interface AgentModelReference extends ProviderModelReference {
+  /** The level every invocation runs with; it has to be one the agent model accepts. */
+  readonly thinking_level: ThinkingLevel;
+}
+
 export interface ProvidersView {
   /** SHA-256 of config.jsonc; every write has to echo it back via `If-Match`. */
   readonly revision: string;
   /** Whether the deployment declares an external supervisor that restarts `serve`. */
   readonly supervised: boolean;
-  readonly agent: ProviderModelReference;
+  readonly agent: AgentModelReference;
   readonly vision: ProviderModelReference;
   /** Config paths whose new value is on disk but not live yet. */
   readonly restart_required: readonly string[];
@@ -481,6 +495,8 @@ export interface ModelMetadataDraft {
   readonly id: string;
   readonly name: string | null;
   readonly reasoning: boolean | null;
+  /** Only ever set on a reasoning model; `null` leaves the model on Pi's default. */
+  readonly thinking_levels: readonly ThinkingLevel[] | null;
   readonly input: readonly ModelInput[] | null;
   readonly context_window: number | null;
   readonly max_tokens: number | null;
@@ -929,6 +945,15 @@ export function lookupModelMetadata(body: LookupMetadataRequest): Promise<Lookup
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
+  });
+}
+
+/** Hot: the next invocation runs with the new level. */
+export function setAgentThinkingLevel(thinkingLevel: ThinkingLevel, revision: string): Promise<ProviderWriteResponse> {
+  return call<ProviderWriteResponse>('/thinking-level', {
+    method: 'PUT',
+    headers: writeHeaders(revision),
+    body: JSON.stringify({ thinking_level: thinkingLevel }),
   });
 }
 

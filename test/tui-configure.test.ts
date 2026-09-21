@@ -7,7 +7,7 @@ import { loadConfig } from '../src/platform/config.ts';
 import { renderDoctorAgentPrompt } from '../src/doctor.ts';
 import {
   extractInputCapabilities,
-  extractReasoningEffortOptions,
+  extractThinkingLevels,
   type ModelsDevModel,
   toModelDefaults,
 } from '../src/platform/models-dev.ts';
@@ -65,15 +65,32 @@ describe('models.dev client', () => {
     expect(extractInputCapabilities(model)).toEqual(['text']);
   });
 
-  test('extracts reasoning effort options', () => {
-    const model: ModelsDevModel = {
-      id: 'reasoning-model',
-      name: 'Reasoning Model',
-      reasoning: true,
-      reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high'] }],
-      modalities: { input: ['text'], output: ['text'] },
-    };
-    expect(extractReasoningEffortOptions(model)).toEqual(['low', 'medium', 'high']);
+  test('turns reasoning options into Pi thinking levels, weakest first', () => {
+    const levels = (reasoning_options: ModelsDevModel['reasoning_options'], reasoning = true) =>
+      extractThinkingLevels({
+        id: 'reasoning-model',
+        name: 'Reasoning Model',
+        reasoning,
+        ...(reasoning_options === undefined ? {} : { reasoning_options }),
+        modalities: { input: ['text'], output: ['text'] },
+      });
+    // `none` is Pi's `off`; values Pi has no level for are dropped.
+    expect(levels([{ type: 'effort', values: ['max', 'none', 'low', 'default', null] }])).toEqual([
+      'off',
+      'low',
+      'max',
+    ]);
+    // A toggle adds `off` to the effort levels.
+    expect(levels([{ type: 'toggle' }, { type: 'effort', values: ['high', 'max'] }])).toEqual(['off', 'high', 'max']);
+    // Pi turns these four levels into token budgets; a budget alone never means `off`.
+    expect(levels([{ type: 'budget_tokens' }])).toEqual(['minimal', 'low', 'medium', 'high']);
+    // Nothing to choose from: no options, an always-on model, a bare toggle, or
+    // a model that does not reason at all.
+    expect(levels(undefined)).toBeNull();
+    expect(levels([])).toBeNull();
+    expect(levels([{ type: 'toggle' }])).toBeNull();
+    expect(levels([{ type: 'effort', values: ['none'] }])).toBeNull();
+    expect(levels([{ type: 'effort', values: ['low'] }], false)).toBeNull();
   });
 
   test('toModelDefaults maps limit and cost', () => {

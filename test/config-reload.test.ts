@@ -411,7 +411,7 @@ test('refuses a candidate whose model cannot run the tool registry', async () =>
     fixture.runtimeWith(faux);
     await fixture.patch((config) => {
       builtinProvider(config.providers, 'faux').models.push(
-        model('tiny-model', { context_window: 1_000, max_tokens: 512 }),
+        model('tiny-model', { reasoning: true, context_window: 1_000, max_tokens: 512 }),
       );
       config.agent.model = 'tiny-model';
     });
@@ -951,7 +951,12 @@ test('/model writes the file, keeps its comments and applies from the next run',
     const index = options.findIndex((option) => option.provider === 'faux' && option.model === SECOND_MODEL) + 1;
     expect(index).toBeGreaterThan(0);
     const reply = await fixture.commands.run({ name: 'model', argument: String(index) }, BigInt(CHAT_ID), ADMIN);
-    expect(reply).toBe(`已切换: faux / ${SECOND_MODEL}，已写入 config.jsonc，将在下一次 agent session 生效。`);
+    expect(reply).toBe(
+      [
+        `已切换: faux / ${SECOND_MODEL}，已写入 config.jsonc，将在下一次 agent session 生效。`,
+        '思考强度已重置为该模型最弱的一档: off',
+      ].join('\n'),
+    );
 
     const text = await fixture.readText();
     expect(text).toContain('// Keep this comment.');
@@ -1299,8 +1304,12 @@ test('admin config endpoints apply the file and report status', async () => {
         }),
       ),
     );
-    expect(switched.current).toMatchObject({ provider: 'agent', model: 'agent-model' });
-    expect(switched.apply).toEqual({ applied: ['agent.model', 'agent.provider'], restart_required: [] });
+    // The switch resets the level to the weakest one `agent-model` has.
+    expect(switched.current).toMatchObject({ provider: 'agent', model: 'agent-model', thinking_level: 'off' });
+    expect(switched.apply).toEqual({
+      applied: ['agent.model', 'agent.provider', 'agent.thinking_level'],
+      restart_required: [],
+    });
 
     // There is no default to restore: the request falls through to the 405.
     const removed = await server.handle(call('/api/model', { method: 'DELETE', headers: { cookie } }));
@@ -1371,6 +1380,39 @@ test('a write with a stale revision is refused and leaves the file unchanged', a
     expect(fixture.configStore.current().config.agent.thinking_level).toBe('high');
     // Leaf edits keep the comments the test configuration was written with.
     expect(await fixture.readText()).toBe(before.replace('"thinking_level": "low"', '"thinking_level": "high"'));
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('setAgentModel resets the thinking level to the weakest one the new model accepts', async () => {
+  const fixture = await setup({
+    transform: (config) => {
+      // `low` is valid on the current model but does not exist on the target.
+      customProvider(config.providers, 'agent').models.push(
+        model('agent-extra', { reasoning: true, thinking_levels: ['max', 'high'] }),
+      );
+    },
+  });
+  try {
+    expect(fixture.configStore.current().config.agent.thinking_level).toBe('low');
+    const result = await fixture.reloader.setAgentModel('agent', 'agent-extra');
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.message);
+    }
+    expect(result.applied).toEqual(['agent.model', 'agent.provider', 'agent.thinking_level']);
+    expect(fixture.configStore.current().config.agent).toMatchObject({
+      provider: 'agent',
+      model: 'agent-extra',
+      thinking_level: 'high',
+    });
+    expect(await fixture.readText()).toContain('"thinking_level": "high"');
+
+    // Switching back does not restore the old level: it resets again.
+    const back = await fixture.reloader.setAgentModel('faux', AGENT_MODEL);
+    expect(back.ok).toBe(true);
+    expect(fixture.configStore.current().config.agent.thinking_level).toBe('off');
   } finally {
     fixture.store.close();
   }
@@ -1468,7 +1510,12 @@ test('a new model on an existing custom provider is hot and immediately selectab
 
     const switched = await fixture.reloader.setAgentModel('agent', 'agent-extra');
     expect(switched.ok).toBe(true);
-    expect(fixture.configStore.current().config.agent).toMatchObject({ provider: 'agent', model: 'agent-extra' });
+    // `agent-extra` does not reason, so `off` is the only level it has.
+    expect(fixture.configStore.current().config.agent).toMatchObject({
+      provider: 'agent',
+      model: 'agent-extra',
+      thinking_level: 'off',
+    });
 
     await fixture.patch((config) => {
       customProvider(config.providers, 'agent').base_url = 'https://other.test/v1';
@@ -1524,6 +1571,8 @@ test('editing a model the agent just left is hot', async () => {
     await fixture.patch((config) => {
       config.agent.provider = 'vision';
       config.agent.model = 'vision-model';
+      // The vision model does not reason, so `off` is the only level it takes.
+      config.agent.thinking_level = 'off';
       customProvider(config.providers, 'agent').models[0]!.context_window = 100_000;
     });
     const result = await fixture.reloader.reloadFromFile();
@@ -1531,7 +1580,12 @@ test('editing a model the agent just left is hot', async () => {
     if (!result.ok) {
       throw new Error(result.message);
     }
-    expect(result.applied).toEqual(['agent.model', 'agent.provider', 'providers.agent.models[agent-model]']);
+    expect(result.applied).toEqual([
+      'agent.model',
+      'agent.provider',
+      'agent.thinking_level',
+      'providers.agent.models[agent-model]',
+    ]);
     expect(result.restartRequired).toEqual([]);
     expect(customProvider(fixture.configStore.current().config.providers, 'agent').models[0]?.context_window).toBe(
       100_000,
@@ -1569,7 +1623,7 @@ test('an agent pointing at a brand new provider waits for a restart', async () =
         base_url: 'https://example.test/v1',
         api: 'openai-responses',
         api_key: 'extra-secret',
-        models: [model('extra-model')],
+        models: [model('extra-model', { reasoning: true })],
       };
       config.agent.provider = 'extra';
       config.agent.model = 'extra-model';

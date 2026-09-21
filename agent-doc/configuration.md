@@ -219,6 +219,7 @@ participation 放行 = 未配置 participation || 处于活跃时段 || 更新�
         {
           "id": "gemini-3.7-flash",
           "reasoning": true,
+          "thinking_levels": ["low", "medium", "high"],
           "input": ["text", "image"],
           "context_window": 1048576,
           "max_tokens": 65536,
@@ -268,6 +269,24 @@ Provider alias 必须匹配 `^[A-Za-z][A-Za-z0-9_-]{0,63}$`：它出现在 Admin
 
 `agent` 模型必须支持 text；若同时支持 image，用户 Photo/图片 Document 直接作为多模态输入，否则保留为 `read_image` capability 并由独立 `vision` 模型按需解析。`vision` 模型必须支持 image，也负责 Sticker 的按需理解与后台索引；配置输出上限不能超过注册模型上限。
 
+### 模型 thinking 级别
+
+`thinking_levels`（可选）列出这个模型接受的 thinking 级别，取值是 Pi 的 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，按这个顺序从弱到强；列表至少一项、不能重复，写入顺序无所谓。只有 `reasoning: true` 的模型可以写，非推理模型写了直接拒绝。
+
+| 模型 | 接受的级别 |
+| --- | --- |
+| `reasoning: false` | 只有 `off` |
+| `reasoning: true`，没写 `thinking_levels` | Pi 的默认：`off` 到 `high`；`xhigh` 与 `max` 必须显式声明 |
+| `reasoning: true`，写了 `thinking_levels` | 列表里的级别 |
+
+注册模型时声明的列表转成 Pi 的 `thinkingLevelMap`（`src/platform/thinking-levels.ts`）：没列的级别映射为 `null`，`xhigh` / `max` 映射为同名值，其余列出的级别不写映射，由各 API 适配器发送自己的取值（例如 Gemini 的 `LOW`）。这样 Pi 的 `getSupportedThinkingLevels` 与配置校验得到的是同一张表。
+
+`agent.thinking_level` 必须是 agent 模型接受的级别，否则 `validateSemantics` 拒绝（`agent.thinking_level … is not supported by … (supported: …)`）。因此把 agent 模型的级别列表改得不再包含当前级别，会在写入前被拒绝：要先调整 `thinking_level`，再改模型。
+
+Admin Panel 从 models.dev 的 `reasoning_options` 预填级别（`src/platform/models-dev.ts` 的 `extractThinkingLevels`）：`effort` 的取值直接对应 Pi 级别，其中 `none` 是 `off`；`toggle` 额外提供 `off`；只有 `budget_tokens` 时取 Pi 能换算成预算的 `minimal`–`high`，预算本身不代表能关闭。models.dev 没有给出可选级别时（没有 `reasoning_options`、空列表即始终推理、只有开关）不预填，模型沿用 Pi 默认。与其它元数据一样，跨 Provider 或模糊匹配得来的级别需要管理员确认；缺失的级别不需要确认。
+
+**已知限制（暂缓修复）：Anthropic 原生接口没有 adaptive thinking。** Pi 的 `anthropic-messages` 适配器只在模型带 `compat.forceAdaptiveThinking === true` 时按 effort 发送 thinking（`low`–`max` 原样传给 API），否则走 token 预算：`clampReasoning` 把 `xhigh` / `max` 折成 `high`，预算固定为 16384。Pi 的模型目录给 Opus 4.6+、Sonnet 4.6+ 与 Fable 5 标了这个字段，但本项目不使用 Pi 的模型目录（模型只来自配置 `models[]`），而 `anthropic-messages` 的 compat 白名单是空的（`src/platform/config.ts` 的 `COMPAT_FIELDS_BY_API`），配置里也写不进这个字段。结果是：经 builtin `anthropic` 或 `api: "anthropic-messages"` 的 custom Provider 调用这些 Claude 模型时，即使声明并选了 `xhigh` / `max`，实际也只按 `high` 的预算思考；这些模型是否仍接受预算模式，尚未用真实 API 验证。经 OpenRouter 等 `openai-completions` 路径调用不受影响，effort 会原样发送。同一原因还让这些模型丢了 Pi 目录里的 `supportsTemperature: false` 与 `supportsStrictTools`。Claude API 价格高，项目暂不直连，需要时再修：给 `anthropic-messages` 开放 `force_adaptive_thinking` compat 字段并在 `mapCompat` 映射，或在注册 builtin `anthropic` 模型时继承 Pi 目录里同 id 模型的 compat。
+
 ### 模型 compat
 
 「OpenAI 兼容接口」在细节上各有方言，`compat` 是 Pi 自动检测的覆盖开关。每个字段都可以省略，省略即「自动」（由 Pi 按 provider id 与 baseUrl 检测），因此升级 Pi 后检测改进会自动生效；写死一个值等于冻结它。
@@ -296,11 +315,11 @@ Provider alias 必须匹配 `^[A-Za-z][A-Za-z0-9_-]{0,63}$`：它出现在 Admin
 - `send_disallow_blank_lines`（可选，默认 `false`）：开启后，文本包含任何空行（两个换行符之间只有空格/Tab 也算空行）时 Tool Call 记为 `send_blank_lines` 错误，不消耗发送配额、不调用 Telegram；段落只能用单个换行分隔。Sticker 不受影响。
 - `memory_ttl_warning_days`（可选，默认 30）：Agent 记忆剩余寿命超过该天数时，Admin Panel 显示 warning，提示管理员判断保留、删除或提升进 `agents.md`。系统不禁止长 TTL。
 - `send_nudge_enabled`（可选，默认 `false`）：开启后，当 agent 即将自然停止、本轮未调用任何工具且产生了去除首尾空白后非空的普通 Assistant 文本，又从未调用过 `send` 时，注入一条 harness 级 user 消息提醒其用 `send` 发送面向群聊的文本。判定排在「注入下一批」与空闲等待之前，因此该提醒按**注入批次**计数（每个批次至多触发一次），而不是按 Invocation 计数；触发与提醒文本记录在 `agent_messages` 中，role 为 `harness_nudge`。用于稳定性不足、偶尔把回复写成私文本却忘记调用 `send` 的模型。
-- `thinking_level`: Provider 仍可能限制具体模型支持的级别，Schema 通过不代表模型接受。
+- `thinking_level`: 每次 Invocation 使用的 thinking 级别，取值同上，必须是 agent 模型接受的级别（见「模型 thinking 级别」）。切换 agent 模型（Admin Panel 或 `/model`）时一并重置为新模型接受的最弱级别；可在 Admin Panel「Models」页的 In use 面板单独修改，热应用。
 
 Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用目标模型在 provider 中声明的 `max_tokens`。Provider 注册的模型必须满足 `max_tokens ≤ context_window`，且 agent 模型必须支持 text。
 
-运行时热切换：Admin Panel「Models」页面（`GET /api/providers` 与 `PUT /api/model`）与 Telegram 的 `/model 序号` 可在已配置的 provider/模型之间切换 agent 模型。切换把 `agent.provider` / `agent.model` 写入 `config.jsonc` 并重新加载配置，因此重启 `serve` 后仍然生效，也没有「恢复默认」操作（`/model reset` 不再是有效命令）。切换对后续启动的 agent session（Invocation）生效，不影响进行中的会话。若稳定系统提示的渲染结果因此变化（模板里出现 `{{ agent.provider }}`/`{{ agent.model }}`，或模型的图片能力改变了图片处理说明），该 Conversation 的 Context 会在下一次运行时重建，见「Conversation Context」。`/status` 命令展示当前生效模型。
+运行时热切换：Admin Panel「Models」页面（`GET /api/providers` 与 `PUT /api/model`）与 Telegram 的 `/model 序号` 可在已配置的 provider/模型之间切换 agent 模型。切换把 `agent.provider` / `agent.model` 写入 `config.jsonc`，同时把 `agent.thinking_level` 重置为新模型接受的最弱级别（各模型的级别不同，旧模型的级别新模型未必有），然后重新加载配置，因此重启 `serve` 后仍然生效，也没有「恢复默认」操作（`/model reset` 不再是有效命令）。切换对后续启动的 agent session（Invocation）生效，不影响进行中的会话。若稳定系统提示的渲染结果因此变化（模板里出现 `{{ agent.provider }}`/`{{ agent.model }}`，或模型的图片能力改变了图片处理说明），该 Conversation 的 Context 会在下一次运行时重建，见「Conversation Context」。`/status` 命令展示当前生效模型。
 
 `vision` 约束：
 

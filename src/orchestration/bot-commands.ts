@@ -53,6 +53,8 @@ export interface CommandSender {
   readonly username: string | null;
 }
 
+/** What `/model` itself writes; any other applied path came from the file. */
+const SWITCH_PATHS: ReadonlySet<string> = new Set(['agent.provider', 'agent.model', 'agent.thinking_level']);
 const COMMAND_NAMES = new Set<ParsedCommand['name']>(['pause', 'resume', 'status', 'model', 'cut_topic']);
 const DENIED_REPLY = '该命令仅对本 Bot 的管理员可用。';
 const MODEL_PAGE_SIZE = 20;
@@ -324,8 +326,9 @@ export class BotCommandService {
     }
     const lines = [
       `已切换: ${option.provider} / ${option.model}，已写入 config.jsonc，将在下一次 agent session 生效。`,
+      `思考强度已重置为该模型最弱的一档: ${this.#configStore.current().config.agent.thinking_level}`,
     ];
-    const other = result.applied.filter((path) => path !== 'agent.provider' && path !== 'agent.model');
+    const other = result.applied.filter((path) => !SWITCH_PATHS.has(path));
     if (other.length > 0) {
       lines.push(`同时应用了配置文件中的其它修改: ${other.join(', ')}`);
     }

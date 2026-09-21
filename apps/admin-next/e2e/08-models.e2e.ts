@@ -101,6 +101,8 @@ test.describe('models page', () => {
     const incompleteRow = page.locator('li').filter({ hasText: E2E_RELAY_INCOMPLETE_MODEL });
     await expect(completeRow).toBeVisible();
     await expect(incompleteRow).toBeVisible();
+    // models.dev lists a toggle plus three efforts for the known model.
+    await expect(completeRow.getByText('off / low / high / max')).toBeVisible();
     // The relay's own host is unknown to models.dev, so even the model it does
     // know was matched under another provider and has to be confirmed.
     await expect(completeRow.getByText('to confirm', { exact: false })).toBeVisible();
@@ -138,7 +140,62 @@ test.describe('models page', () => {
     expect(relay.models.map((model: { id: string }) => model.id)).toEqual(
       expect.arrayContaining([E2E_RELAY_COMPLETE_MODEL, E2E_RELAY_INCOMPLETE_MODEL]),
     );
+    const complete = relay.models.find((model: { id: string }) => model.id === E2E_RELAY_COMPLETE_MODEL);
+    expect(complete.thinking_levels).toEqual(['off', 'low', 'high', 'max']);
     await expect(page.locator('table tbody tr', { hasText: E2E_RELAY_COMPLETE_MODEL })).toBeVisible();
+  });
+
+  test('switching the agent resets its thinking effort, which the In use panel then sets', async ({ page }) => {
+    const agentOf = async (): Promise<{ provider: string; model: string; thinking_level: string }> =>
+      (await (await page.request.get(await adminUrl('/api/providers'))).json()).agent;
+    await page.goto(await adminUrl('/models'));
+    // "In use" also names a table column and a provider badge, so the panel is
+    // found by the one control only it has.
+    const effort = page.getByRole('combobox', { name: 'Thinking effort' });
+    const inUse = page.locator('[data-slot="card"]', { has: effort });
+
+    // Added by the discovery test with the levels models.dev listed.
+    await page.getByRole('button', { name: `Provider ${E2E_RELAY_ALIAS}` }).click();
+    await page
+      .locator('tr', { hasText: E2E_RELAY_COMPLETE_MODEL })
+      .getByRole('button', { name: 'Set as agent' })
+      .click();
+    await expect(page.getByText('Thinking effort reset to off', { exact: false }).first()).toBeVisible();
+    await expect(inUse.getByText(`${E2E_RELAY_ALIAS} / ${E2E_RELAY_COMPLETE_MODEL}`)).toBeVisible();
+    await expect(effort).toHaveText('off');
+    expect(await agentOf()).toMatchObject({ model: E2E_RELAY_COMPLETE_MODEL, thinking_level: 'off' });
+
+    // Only the levels the model declares are offered.
+    await effort.click();
+    await expect(page.getByRole('option')).toHaveText(['off', 'low', 'high', 'max']);
+    await page.getByRole('option', { name: 'max' }).click();
+    await expect(effort).toHaveText('max');
+    expect(await agentOf()).toMatchObject({ model: E2E_RELAY_COMPLETE_MODEL, thinking_level: 'max' });
+
+    // Put the fixture agent back for the tests that follow.
+    await page.getByRole('button', { name: 'Provider agent' }).click();
+    await page.locator('tr', { hasText: 'agent-model' }).getByRole('button', { name: 'Set as agent' }).click();
+    await expect(inUse.getByText('agent / agent-model')).toBeVisible();
+    expect(await agentOf()).toMatchObject({ provider: 'agent', model: 'agent-model', thinking_level: 'off' });
+  });
+
+  test('declares thinking levels in the edit dialog only for a reasoning model', async ({ page }) => {
+    await page.goto(await adminUrl('/models'));
+    await page.getByRole('button', { name: `Provider ${E2E_RELAY_ALIAS}` }).click();
+    await page.getByRole('button', { name: 'Edit relay-existing-model' }).click();
+
+    // Not a reasoning model: there are no levels to declare.
+    await expect(page.locator('#model-thinking-off')).toHaveCount(0);
+    await page.locator('#model-reasoning').check();
+    await page.locator('#model-thinking-low').check();
+    await page.locator('#model-thinking-xhigh').check();
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByText('Applied').first()).toBeVisible();
+
+    const view = await (await page.request.get(await adminUrl('/api/providers'))).json();
+    const relay = view.providers.find((provider: { alias: string }) => provider.alias === E2E_RELAY_ALIAS);
+    const edited = relay.models.find((model: { id: string }) => model.id === 'relay-existing-model');
+    expect(edited).toMatchObject({ reasoning: true, thinking_levels: ['low', 'xhigh'] });
   });
 
   test('adds a model by id through lookup-metadata', async ({ page }) => {

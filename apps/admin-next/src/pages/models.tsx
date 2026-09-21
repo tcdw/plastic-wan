@@ -10,6 +10,7 @@ import {
   ToneBadge,
   type ColumnSpec,
 } from '@/components/business';
+import { InUsePanel } from '@/components/models/in-use-panel';
 import { ModelEditDialog } from '@/components/models/model-edit-dialog';
 import { ModelPickerDialog, type ModelPickerMode } from '@/components/models/model-picker-dialog';
 import { ProviderConnectionCard } from '@/components/models/provider-connection-card';
@@ -97,7 +98,8 @@ export default function ModelsPage(): React.ReactElement {
     mutationFn: ({ alias, model }: { readonly alias: string; readonly model: string }) =>
       switchAgentModel({ provider: alias, model }, revision),
     onSuccess: (result) => {
-      write.succeeded(result.apply);
+      // Models do not share one set of levels, so the switch always resets it.
+      write.succeeded(result.apply, `Thinking effort reset to ${result.current.thinking_level}.`);
     },
     onError: (error) => {
       toast.error(writeErrorMessage(error));
@@ -176,7 +178,7 @@ export default function ModelsPage(): React.ReactElement {
     return (
       <div className="space-y-6">
         <Skeleton className="h-20 w-full rounded-xl" />
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
           <Skeleton className="h-64 w-full rounded-xl" />
           <Skeleton className="h-64 w-full rounded-xl" />
         </div>
@@ -328,7 +330,11 @@ export default function ModelsPage(): React.ReactElement {
         onRestart={() => restart.mutate()}
       />
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+      <InUsePanel view={view} revision={revision} />
+
+      {/* `grid-cols-1` on a phone: an implicit `auto` track grows to the model
+          table's min-content and scrolls the whole page sideways. */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
         <Panel
           title="Providers"
           className="self-start"

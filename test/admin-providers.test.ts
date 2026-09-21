@@ -215,7 +215,7 @@ test('lists providers without leaking keys or header values', async () => {
     const view = await readJson(response);
     expect(view.revision).toMatch(/^[0-9a-f]{64}$/);
     expect(view.supervised).toBe(false);
-    expect(view.agent).toEqual({ provider: 'agent', model: 'agent-model' });
+    expect(view.agent).toEqual({ provider: 'agent', model: 'agent-model', thinking_level: 'low' });
     expect(view.vision).toEqual({ provider: 'vision', model: 'vision-model' });
     expect(view.restart_required).toEqual([]);
     const agent = view.providers.find((entry: any) => entry.alias === 'agent');
@@ -484,7 +484,7 @@ test('protects the providers and models that are in use', async () => {
       fixture,
       '/api/providers/agent/models/agent-model',
       'PUT',
-      model('agent-model', { context_window: 300_000 }),
+      model('agent-model', { reasoning: true, context_window: 300_000 }),
       await revisionOf(fixture),
     );
     expect(replaced.status).toBe(200);
@@ -651,6 +651,69 @@ test('checks the vision model before writing it', async () => {
     expect(fixture.file().vision).toMatchObject({ provider: 'agent', model: 'agent-model' });
     // The running process keeps the old vision model until it restarts.
     expect(fixture.configStore.current().config.vision).toMatchObject({ provider: 'vision', model: 'vision-model' });
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('sets the agent thinking level only to a level the agent model accepts', async () => {
+  const fixture = await adminFixture({
+    transform: (config) => {
+      const model = config.providers.agent?.models[0];
+      if (model === undefined) {
+        throw new Error('Expected an agent model fixture');
+      }
+      model.thinking_levels = ['off', 'low', 'high', 'max'];
+    },
+  });
+  try {
+    const view = await readJson(await call(fixture, '/api/providers'));
+    expect(view).toMatchObject({ agent: { provider: 'agent', model: 'agent-model', thinking_level: 'low' } });
+    const revision = await revisionOf(fixture);
+
+    const unknown = await write(fixture, '/api/thinking-level', 'PUT', { thinking_level: 'turbo' }, revision);
+    expect(unknown.status).toBe(400);
+    expect(await readJson(unknown)).toMatchObject({ error: 'invalid_body' });
+
+    const unsupported = await write(fixture, '/api/thinking-level', 'PUT', { thinking_level: 'medium' }, revision);
+    expect(unsupported.status).toBe(422);
+    expect(await readJson(unsupported)).toMatchObject({
+      error: 'unsupported_thinking_level',
+      message: 'agent/agent-model does not accept thinking level medium (supported: off, low, high, max)',
+    });
+    expect(fixture.file().agent.thinking_level).toBe('low');
+
+    const missingRevision = await write(fixture, '/api/thinking-level', 'PUT', { thinking_level: 'max' });
+    expect(missingRevision.status).toBe(400);
+    expect(await readJson(missingRevision)).toMatchObject({ error: 'revision_required' });
+
+    const ok = await write(fixture, '/api/thinking-level', 'PUT', { thinking_level: 'max' }, revision);
+    expect(ok.status).toBe(200);
+    expect(await readJson(ok)).toMatchObject({
+      agent: { thinking_level: 'max' },
+      apply: { applied: ['agent.thinking_level'], restart_required: [] },
+    });
+    expect(fixture.file().agent.thinking_level).toBe('max');
+    // A whitelisted field: the next invocation already runs with it.
+    expect(fixture.configStore.current().config.agent.thinking_level).toBe('max');
+
+    // Editing the agent model so that it loses the level in use is refused
+    // before anything is written; the level has to move first.
+    const before = await readFile(fixture.configPath, 'utf8');
+    const narrowed = await write(
+      fixture,
+      '/api/providers/agent/models/agent-model',
+      'PUT',
+      { ...fixture.file().providers.agent?.models[0], thinking_levels: ['off', 'high'] },
+      await revisionOf(fixture),
+    );
+    expect(narrowed.status).toBe(422);
+    const refusal = (await readJson(narrowed)) as { error: string; message: string };
+    expect(refusal.error).toBe('config_invalid');
+    expect(refusal.message).toContain(
+      'agent.thinking_level max is not supported by agent/agent-model (supported: off, high)',
+    );
+    expect(await readFile(fixture.configPath, 'utf8')).toBe(before);
   } finally {
     fixture.store.close();
   }

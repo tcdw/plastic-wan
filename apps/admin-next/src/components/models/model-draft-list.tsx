@@ -93,6 +93,12 @@ export function ModelDraftList({
                     />
                     <Metric label="input" value={draft.input === null ? '—' : draft.input.join('+')} />
                     <Metric label="reasoning" value={draft.reasoning === null ? '—' : draft.reasoning ? 'yes' : 'no'} />
+                    {draft.reasoning === true ? (
+                      <Metric
+                        label="thinking"
+                        value={draft.thinking_levels === null ? 'Pi default' : draft.thinking_levels.join(' / ')}
+                      />
+                    ) : null}
                   </p>
                   {/* Where the row came from, once — instead of repeating the
                       same source after every value. It wraps rather than

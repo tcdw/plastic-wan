@@ -457,7 +457,10 @@ describe('bot command service', () => {
     test('keeps a numeric argument as a global model selection', async () => {
       const { store, commands, switcher } = await commandSetup(manyModelTransform(40));
       expect(await commands.run({ name: 'model', argument: '21' }, 123456789n, ALICE, FIXED_NOW)).toBe(
-        '已切换: agent / agent-extra-20，已写入 config.jsonc，将在下一次 agent session 生效。',
+        [
+          '已切换: agent / agent-extra-20，已写入 config.jsonc，将在下一次 agent session 生效。',
+          '思考强度已重置为该模型最弱的一档: off',
+        ].join('\n'),
       );
       expect(switcher.current()).toMatchObject({ provider: 'agent', model: 'agent-extra-20' });
       store.close();
@@ -477,9 +480,16 @@ describe('bot command service', () => {
     test('switches by index and the status command reflects it', async () => {
       const { store, commands, switcher } = await commandSetup();
       const reply = await commands.run({ name: 'model', argument: '2' }, 123456789n, ALICE, FIXED_NOW);
-      expect(reply).toBe('已切换: vision / vision-model，已写入 config.jsonc，将在下一次 agent session 生效。');
+      expect(reply).toBe(
+        [
+          '已切换: vision / vision-model，已写入 config.jsonc，将在下一次 agent session 生效。',
+          '思考强度已重置为该模型最弱的一档: off',
+        ].join('\n'),
+      );
       expect(switcher.current()).toMatchObject({ provider: 'vision', model: 'vision-model' });
-      expect(await commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain('vision / vision-model');
+      const status = await commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW);
+      expect(status).toContain('vision / vision-model');
+      expect(status).toContain('思考强度: off');
       store.close();
     });
 

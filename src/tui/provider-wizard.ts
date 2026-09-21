@@ -1,6 +1,6 @@
 import { confirm, input, search, select } from '@inquirer/prompts';
 import { supportedBuiltinApi, findBuiltinProvider, listBuiltinPresets } from '../platform/builtin-providers.ts';
-import type { FileConfig, ModelCompatConfig, SecretRef } from '../platform/config.ts';
+import type { FileConfig, ModelCompatConfig, SecretRef, ThinkingLevelConfig } from '../platform/config.ts';
 import { SecretStore } from '../platform/secrets.ts';
 import {
   fetchModelsDevCatalog,
@@ -49,6 +49,7 @@ type ModelConfig = {
   id: string;
   name?: string;
   reasoning: boolean;
+  thinking_levels?: ThinkingLevelConfig[];
   compat?: ModelCompatConfig;
   input: Array<'text' | 'image'>;
   context_window: number;
@@ -529,6 +530,7 @@ async function addModel(initialId?: string): Promise<ModelConfig | undefined> {
         context_window: number;
         max_tokens: number;
         cost: { input: number; output: number; cache_read: number; cache_write: number };
+        thinking_levels: ThinkingLevelConfig[] | null;
       }
     | undefined;
   if (useModelsDev) {
@@ -550,10 +552,16 @@ async function addModel(initialId?: string): Promise<ModelConfig | undefined> {
     'Cache write cost per 1M tokens',
     defaults?.cost.cache_write ?? 0,
   );
+  // Levels come from models.dev only; without them the model runs on Pi's default.
+  const thinkingLevels = reasoning ? (defaults?.thinking_levels ?? null) : null;
+  if (thinkingLevels !== null) {
+    console.log(`Thinking levels from models.dev: ${thinkingLevels.join(', ')}`);
+  }
   return {
     id,
     name,
     reasoning,
+    ...(thinkingLevels === null ? {} : { thinking_levels: thinkingLevels }),
     input: capabilities,
     context_window: contextWindow,
     max_tokens: maxTokens,
@@ -581,7 +589,12 @@ async function editModel(model: ModelConfig): Promise<ModelConfig | undefined> {
     }
     case 'reasoning': {
       const reasoning = await confirm({ message: 'Supports reasoning', default: model.reasoning });
-      return { ...model, reasoning };
+      if (reasoning) {
+        return { ...model, reasoning };
+      }
+      // Only a reasoning model may declare thinking levels.
+      const { thinking_levels: _dropped, ...rest } = model;
+      return { ...rest, reasoning };
     }
     case 'input': {
       const capabilities = await promptInputCapabilities(model.input);
@@ -622,6 +635,7 @@ async function lookupModelDefaults(id: string): Promise<
       context_window: number;
       max_tokens: number;
       cost: { input: number; output: number; cache_read: number; cache_write: number };
+      thinking_levels: ThinkingLevelConfig[] | null;
     }
   | undefined
 > {

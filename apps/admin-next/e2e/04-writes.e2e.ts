@@ -85,6 +85,8 @@ test.describe('agent model hot-switch', () => {
     await page.locator('tr', { hasText: 'vision-model' }).getByRole('button', { name: 'Set as agent' }).click();
     // The toast only appears once the write and the reload succeeded.
     await expect(page.getByText('Applied').first()).toBeVisible();
+    // The vision model does not reason, so the switch leaves it only `off`.
+    await expect(page.getByText('Thinking effort reset to off', { exact: false }).first()).toBeVisible();
     // Wait for the refreshed view before the next write: a switch has to be
     // built on the revision the previous one produced.
     await expect(page.getByRole('button', { name: 'Provider vision' }).getByText('Agent in use')).toBeVisible();
@@ -92,9 +94,9 @@ test.describe('agent model hot-switch', () => {
     // `GET /model` is gone with the old Model page; the live model is read back
     // from the provider view, which is what the page itself renders.
     const switched = (await (await page.request.get(await adminUrl('/api/providers'))).json()) as {
-      agent: { provider: string; model: string };
+      agent: { provider: string; model: string; thinking_level: string };
     };
-    expect(switched.agent).toEqual({ provider: 'vision', model: 'vision-model' });
+    expect(switched.agent).toEqual({ provider: 'vision', model: 'vision-model', thinking_level: 'off' });
 
     // There is no default to restore: the way back is another switch.
     await page.getByRole('button', { name: 'Provider agent' }).click();
@@ -102,9 +104,10 @@ test.describe('agent model hot-switch', () => {
     await expect(page.getByRole('button', { name: 'Provider agent' }).getByText('Agent in use')).toBeVisible();
 
     const restored = (await (await page.request.get(await adminUrl('/api/providers'))).json()) as {
-      agent: { provider: string; model: string };
+      agent: { provider: string; model: string; thinking_level: string };
     };
-    expect(restored.agent).toEqual({ provider: 'agent', model: 'agent-model' });
+    // Switching back resets again rather than restoring the old level.
+    expect(restored.agent).toEqual({ provider: 'agent', model: 'agent-model', thinking_level: 'off' });
   });
 });
 

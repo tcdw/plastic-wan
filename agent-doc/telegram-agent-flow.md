@@ -344,7 +344,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 `/pause` 与 `/resume` 仅对 Bot 管理员开放（`bot_admins` 表，见下文）；`/status` 对任何成员开放。非管理员或匿名身份执行会收到拒绝回复，不产生任何状态变更。管理员执行命令时其显示名会刷新到 `bot_admins`。
 
-`/model` 同样仅限管理员，用于运行时切换 agent 模型（与 Admin Panel「Model」页共享同一 `AgentModelSwitcher` 与 `ConfigReloader`）：`/model` 按每页 20 条列出当前模型与第一页可切换序号；`/model page 页码` 翻页，所有页面保留全局序号；`/model 纯数字序号` 把 `agent.provider` / `agent.model` 写入 `config.jsonc` 并重新加载配置，成功回复「已切换: …，已写入 config.jsonc，将在下一次 agent session 生效。」，因此重启后仍然生效，没有「恢复默认」（`/model reset` 按无效序号处理）。写入与加载共用同一把锁，两个并发的切换不会交错；配置文件是符号链接、权限不允许或写后校验失败时回复错误，文件与当前配置都不变；文件已写入但应用失败时回复「已写入 config.jsonc，但应用失败: …」。越界页码或无效参数返回提示且不改状态。切换对后续启动的 Invocation 生效，不影响进行中的会话；清单与语义见 [configuration.md](configuration.md#运行时配置热更新)。
+`/model` 同样仅限管理员，用于运行时切换 agent 模型（与 Admin Panel「Model」页共享同一 `AgentModelSwitcher` 与 `ConfigReloader`）：`/model` 按每页 20 条列出当前模型与第一页可切换序号；`/model page 页码` 翻页，所有页面保留全局序号；`/model 纯数字序号` 把 `agent.provider` / `agent.model` 写入 `config.jsonc`，同时把 `agent.thinking_level` 重置为新模型接受的最弱级别，再重新加载配置，成功回复「已切换: …，已写入 config.jsonc，将在下一次 agent session 生效。」与「思考强度已重置为该模型最弱的一档: <级别>」两行，因此重启后仍然生效，没有「恢复默认」（`/model reset` 按无效序号处理）。写入与加载共用同一把锁，两个并发的切换不会交错；配置文件是符号链接、权限不允许或写后校验失败时回复错误，文件与当前配置都不变；文件已写入但应用失败时回复「已写入 config.jsonc，但应用失败: …」。越界页码或无效参数返回提示且不改状态。切换对后续启动的 Invocation 生效，不影响进行中的会话；清单与语义见 [configuration.md](configuration.md#运行时配置热更新)。
 
 `/pause` 立即生效（与 scheduler 同一事件循环，无竞态）：
 

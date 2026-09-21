@@ -12,6 +12,8 @@ import {
   type ProviderApi,
   type ProviderModelConfig,
   type ProviderView,
+  THINKING_LEVELS,
+  type ThinkingLevel,
 } from './api.ts';
 import { errorMessage } from './errors.ts';
 
@@ -22,7 +24,21 @@ import { errorMessage } from './errors.ts';
  * without a DOM lives here.
  */
 
-const DRAFT_FIELDS: readonly DraftField[] = ['name', 'reasoning', 'input', 'context_window', 'max_tokens', 'cost'];
+const DRAFT_FIELDS: readonly DraftField[] = [
+  'name',
+  'reasoning',
+  'thinking_levels',
+  'input',
+  'context_window',
+  'max_tokens',
+  'cost',
+];
+
+/**
+ * Fields the configuration may leave out. A missing name shows the id; missing
+ * thinking levels leave the model on Pi's default.
+ */
+const OPTIONAL_FIELDS: readonly DraftField[] = ['name', 'thinking_levels'];
 
 const SOURCE_LABELS: Record<MetadataSource, string> = {
   openrouter: 'OpenRouter',
@@ -48,8 +64,8 @@ export function fieldSourceLabel(draft: ModelMetadataDraft, field: DraftField): 
 /**
  * A field the admin has to look at before saving: the value is missing, only a
  * guessed models.dev match backs it, or the server flagged it (for example a
- * `max_tokens` above `context_window`). `name` is optional, so a missing name is
- * not a reason to block the model.
+ * `max_tokens` above `context_window`). A missing optional field is not a
+ * reason to block the model, and a guessed name is cosmetic.
  */
 export function isDraftFieldUnconfirmed(draft: ModelMetadataDraft, field: DraftField): boolean {
   if (draft.needs_confirmation.includes(field)) {
@@ -58,7 +74,7 @@ export function isDraftFieldUnconfirmed(draft: ModelMetadataDraft, field: DraftF
   if (GUESSED_SOURCES.includes(draft.sources[field]) && field !== 'name') {
     return true;
   }
-  return field !== 'name' && draft[field] === null;
+  return !OPTIONAL_FIELDS.includes(field) && draft[field] === null;
 }
 
 const CONFIDENCE_NOTES: Record<ModelsDevConfidence, string> = {
@@ -102,11 +118,53 @@ export function modelFromDraft(draft: ModelMetadataDraft): ProviderModelConfig |
     id: draft.id,
     ...(draft.name === null ? {} : { name: draft.name }),
     reasoning: draft.reasoning,
+    ...(draft.reasoning && draft.thinking_levels !== null ? { thinking_levels: draft.thinking_levels } : {}),
     input: draft.input,
     context_window: draft.context_window,
     max_tokens: draft.max_tokens,
     cost: draft.cost,
   };
+}
+
+// --- thinking levels -------------------------------------------------------
+
+/** What Pi offers a reasoning model that declares no levels. */
+const UNDECLARED_REASONING_LEVELS: readonly ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high'];
+
+/**
+ * The levels a configured model accepts, weakest first — the same rule the
+ * server validates `agent.thinking_level` with (`src/platform/thinking-levels.ts`).
+ */
+export function supportedThinkingLevels(model: {
+  readonly reasoning: boolean;
+  readonly thinking_levels?: readonly ThinkingLevel[];
+}): readonly ThinkingLevel[] {
+  if (!model.reasoning) {
+    return ['off'];
+  }
+  const declared = model.thinking_levels;
+  if (declared === undefined) {
+    return UNDECLARED_REASONING_LEVELS;
+  }
+  return THINKING_LEVELS.filter((level) => declared.includes(level));
+}
+
+export function isThinkingLevel(value: string): value is ThinkingLevel {
+  return (THINKING_LEVELS as readonly string[]).includes(value);
+}
+
+/** Levels in Pi's order, whatever order they were picked in. */
+export function sortThinkingLevels(levels: readonly ThinkingLevel[]): readonly ThinkingLevel[] {
+  return THINKING_LEVELS.filter((level) => levels.includes(level));
+}
+
+/** The agent model's entry in the file view, or `null` if the file lost it. */
+export function agentModelConfig(view: {
+  readonly agent: { readonly provider: string; readonly model: string };
+  readonly providers: readonly ProviderView[];
+}): ProviderModelConfig | null {
+  const provider = view.providers.find((candidate) => candidate.alias === view.agent.provider);
+  return provider?.models.find((model) => model.id === view.agent.model) ?? null;
 }
 
 // --- model edit form -------------------------------------------------------
@@ -122,6 +180,8 @@ export interface ModelFormState {
   readonly id: string;
   readonly name: string;
   readonly reasoning: boolean;
+  /** Declared levels; none checked means "leave it out" and use Pi's default. */
+  readonly thinking_levels: readonly ThinkingLevel[];
   readonly input: readonly ModelInput[];
   readonly context_window: string;
   readonly max_tokens: string;
@@ -145,6 +205,7 @@ export function emptyModelForm(api: ProviderApi): ModelFormState {
     id: '',
     name: '',
     reasoning: false,
+    thinking_levels: [],
     input: [],
     context_window: '',
     max_tokens: '',
@@ -158,6 +219,7 @@ export function modelFormFromConfig(model: ProviderModelConfig, api: ProviderApi
     id: model.id,
     name: model.name ?? '',
     reasoning: model.reasoning,
+    thinking_levels: model.thinking_levels ?? [],
     input: model.input,
     context_window: String(model.context_window),
     max_tokens: String(model.max_tokens),
@@ -177,6 +239,7 @@ export function modelFormFromDraft(draft: ModelMetadataDraft, api: ProviderApi):
     id: draft.id,
     name: draft.name ?? '',
     reasoning: draft.reasoning ?? false,
+    thinking_levels: draft.thinking_levels ?? [],
     input: draft.input ?? [],
     context_window: draft.context_window === null ? '' : String(draft.context_window),
     max_tokens: draft.max_tokens === null ? '' : String(draft.max_tokens),
@@ -247,10 +310,13 @@ export function modelFormToConfig(form: ModelFormState, api: ProviderApi): Provi
     cache_write: parseNonNegativeNumber(form.cost.cache_write) ?? 0,
   };
   const compat = compatConfigFromState(api, form.compat);
+  // Levels only exist on a reasoning model; unchecking reasoning drops them.
+  const thinkingLevels = form.reasoning ? sortThinkingLevels(form.thinking_levels) : [];
   return {
     id: form.id.trim(),
     ...(form.name.trim().length === 0 ? {} : { name: form.name.trim() }),
     reasoning: form.reasoning,
+    ...(thinkingLevels.length === 0 ? {} : { thinking_levels: thinkingLevels }),
     ...(compat === undefined ? {} : { compat }),
     input: form.input,
     context_window: parsePositiveInteger(form.context_window) ?? 0,

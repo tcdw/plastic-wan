@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { adminUrl, authStoragePath } from './helpers.ts';
+import { adminUrl, appliedToast, authStoragePath } from './helpers.ts';
 import {
   E2E_BUILTIN_ALIAS,
   E2E_RELAY_ALIAS,
@@ -13,7 +13,7 @@ import {
  * The Models page against the real `AdminServer`: provider list and detail,
  * write-only credentials, the discovery dialog (saved mode against a loopback
  * upstream started by `e2e/server.ts`), manual metadata lookup, and the
- * pending-restart feedback. Every write goes through the UI and is verified
+ * global restart banner. Every write goes through the UI and is verified
  * against the API afterwards.
  */
 test.use({ storageState: authStoragePath() });
@@ -64,27 +64,27 @@ test.describe('models page', () => {
     expect(view.providers.map((provider: { alias: string }) => provider.alias)).toContain(E2E_RELAY_ALIAS);
   });
 
-  test('saving a builtin key reports a pending restart and offers it', async ({ page }) => {
+  test('saving a builtin key applies it without a restart', async ({ page }) => {
     await page.goto(await adminUrl('/models'));
     await page.getByRole('button', { name: `Provider ${E2E_BUILTIN_ALIAS}` }).click();
     await page.getByLabel('API Key').fill('e2e-rotated-builtin-key');
     await page.getByRole('button', { name: 'Save' }).click();
 
-    // A connection field is restart-only: the feedback must not claim it is live.
-    await expect(page.getByText('Saved, restart required')).toBeVisible();
-    await expect(page.getByRole('alert').getByText(`providers.${E2E_BUILTIN_ALIAS}.api_key`)).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Restart now' })).toBeVisible();
+    // The rotated key is applied to the running process right away.
+    await expect(appliedToast(page).first()).toBeVisible();
 
     const view = await (await page.request.get(await adminUrl('/api/providers'))).json();
     expect(view.supervised).toBe(true);
-    expect(view.restart_required).toContain(`providers.${E2E_BUILTIN_ALIAS}.api_key`);
+    // No provider field waits for a restart. (Settings-side restart-only fields
+    // such as `admin.port` may still be pending from earlier specs.)
+    expect(view.restart_required.filter((path: string) => path.startsWith('providers.'))).toEqual([]);
     expect(JSON.stringify(view)).not.toContain('e2e-rotated-builtin-key');
 
-    // The provider is not in the running registry while its connection waits, so
-    // discovery asks for the key once and says a restart removes the need.
+    // The applied connection is live in the running registry, so the discovery
+    // dialog opens in saved mode instead of demanding the key again.
     await page.getByRole('button', { name: 'Fetch models' }).click();
-    await expect(page.locator('#picker-api-key')).toBeVisible();
-    await expect(page.getByText('After the restart it is no longer needed', { exact: false })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Use temporary mode (key from this form)' })).toBeVisible();
+    await expect(page.locator('#picker-api-key')).toHaveCount(0);
     await page.getByRole('button', { name: 'Cancel' }).click();
   });
 
@@ -132,7 +132,7 @@ test.describe('models page', () => {
 
     await expect(incompleteRow.getByText('Confirmed')).toBeVisible();
     await page.getByRole('button', { name: /Add \d+ models/ }).click();
-    await expect(page.getByText('Applied').first()).toBeVisible();
+    await expect(appliedToast(page).first()).toBeVisible();
 
     // The write went through the real server: both models are in the file now.
     const view = await (await page.request.get(await adminUrl('/api/providers'))).json();
@@ -190,7 +190,8 @@ test.describe('models page', () => {
     await page.locator('#model-thinking-low').check();
     await page.locator('#model-thinking-xhigh').check();
     await page.getByRole('button', { name: 'Save' }).click();
-    await expect(page.getByText('Applied').first()).toBeVisible();
+    // The toast only appears once the write and the reload succeeded.
+    await expect(appliedToast(page).first()).toBeVisible();
 
     const view = await (await page.request.get(await adminUrl('/api/providers'))).json();
     const relay = view.providers.find((provider: { alias: string }) => provider.alias === E2E_RELAY_ALIAS);
@@ -214,14 +215,14 @@ test.describe('models page', () => {
     const row = page.locator('li').filter({ hasText: E2E_RELAY_MANUAL_MODEL });
     await expect(row.getByText('Confirmed')).toBeVisible();
     await page.getByRole('button', { name: 'Add 1 model' }).click();
-    await expect(page.getByText('Applied').first()).toBeVisible();
+    await expect(appliedToast(page).first()).toBeVisible();
 
     const view = await (await page.request.get(await adminUrl('/api/providers'))).json();
     const relay = view.providers.find((provider: { alias: string }) => provider.alias === E2E_RELAY_ALIAS);
     expect(relay.models.map((model: { id: string }) => model.id)).toContain(E2E_RELAY_MANUAL_MODEL);
   });
 
-  test('creates a custom provider through the wizard and reports the pending restart', async ({ page }) => {
+  test('creates a custom provider through the wizard and applies it immediately', async ({ page }) => {
     // The wizard has to reach the same loopback upstream as the relay provider.
     const before = await (await page.request.get(await adminUrl('/api/providers'))).json();
     const relayBaseUrl = before.providers.find((provider: { alias: string }) => provider.alias === E2E_RELAY_ALIAS)
@@ -239,8 +240,8 @@ test.describe('models page', () => {
     await page.locator('#wizard-api-key').fill(E2E_SECRETS.wizard);
     await page.getByRole('button', { name: 'Next' }).click();
 
-    // The provider is not in the running registry yet, so the listing is fetched
-    // in temporary mode with the key that was just typed.
+    // The provider is not saved yet, so the listing is fetched in temporary mode
+    // with the key that was just typed.
     await page.getByRole('button', { name: 'Fetch models' }).click();
     const row = page.locator('li').filter({ hasText: E2E_RELAY_COMPLETE_MODEL });
     await expect(row).toBeVisible();
@@ -248,15 +249,30 @@ test.describe('models page', () => {
     await page.getByRole('button', { name: 'Accept listed values (1)' }).click();
     await page.getByRole('button', { name: 'Create provider' }).click();
 
-    await expect(page.getByRole('dialog').getByText('Saved, restart required')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Restart now' })).toBeVisible();
-    await page.getByRole('button', { name: 'Done' }).click();
-
+    // A create is applied immediately like every other write: the wizard closes
+    // and the new provider is selected in the list.
+    await expect(appliedToast(page).first()).toBeVisible();
     await expect(page.getByRole('button', { name: 'Provider relay2' })).toBeVisible();
+
+    // The running registry already knows the new connection, so saved-mode
+    // discovery fetches the listing without asking for the key again.
+    await page.getByRole('button', { name: 'Fetch models' }).click();
+    await page.getByRole('button', { name: 'Fetch', exact: true }).click();
+    await expect(page.getByText('endpoint:')).toBeVisible();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+
+    // The fetched model can be set as the agent model right away.
+    await page
+      .locator('tr', { hasText: E2E_RELAY_COMPLETE_MODEL })
+      .getByRole('button', { name: 'Set as agent' })
+      .click();
+    await expect(page.getByText('Thinking effort reset to off', { exact: false }).first()).toBeVisible();
+
     const after = await (await page.request.get(await adminUrl('/api/providers'))).json();
     const created = after.providers.find((provider: { alias: string }) => provider.alias === 'relay2');
     expect(created.models.map((model: { id: string }) => model.id)).toEqual([E2E_RELAY_COMPLETE_MODEL]);
-    expect(after.restart_required).toContain('providers.relay2');
+    expect(after.agent).toMatchObject({ provider: 'relay2', model: E2E_RELAY_COMPLETE_MODEL });
+    expect(after.restart_required.filter((path: string) => path.startsWith('providers.'))).toEqual([]);
     expect(JSON.stringify(after)).not.toContain(E2E_SECRETS.wizard);
   });
 

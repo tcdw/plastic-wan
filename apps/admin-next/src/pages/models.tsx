@@ -39,10 +39,8 @@ import {
   isImageCapable,
   isTextCapable,
   modelFormFromConfig,
-  modelPendingRestart,
   modelUsage,
   providerMatchesSearch,
-  providerPendingRestart,
   providerUsage,
   writeErrorMessage,
 } from '@/lib/model-manager.ts';
@@ -231,9 +229,6 @@ export default function ModelsPage(): React.ReactElement {
               <span className="sr-only">reasoning model</span>
             </>
           ) : null}
-          {modelPendingRestart(restartPaths, row.alias, row.model.id) ? (
-            <ToneBadge tone="warning">Restart pending</ToneBadge>
-          ) : null}
         </span>
       ),
     },
@@ -358,7 +353,6 @@ export default function ModelsPage(): React.ReactElement {
             ) : (
               <ul className="space-y-0.5">
                 {listed.map((provider) => {
-                  const pendingRestart = providerPendingRestart(restartPaths, provider.alias);
                   const active = selected !== null && selected.alias === provider.alias;
                   return (
                     <li key={provider.alias}>
@@ -383,7 +377,6 @@ export default function ModelsPage(): React.ReactElement {
                         </span>
                         <span className="flex flex-wrap items-center gap-1.5">
                           <ProviderBadges view={view} provider={provider} />
-                          {pendingRestart ? <ToneBadge tone="warning">Restart pending</ToneBadge> : null}
                           <span className="text-muted-foreground text-xs tabular-nums">
                             {provider.models.length} {provider.models.length === 1 ? 'model' : 'models'}
                           </span>
@@ -474,9 +467,8 @@ export default function ModelsPage(): React.ReactElement {
       {wizardOpen ? (
         <ProviderWizard
           revision={revision}
-          supervised={view.supervised}
           onClose={() => setWizardOpen(false)}
-          onRestart={() => restart.mutate()}
+          onCreated={(alias) => setSelectedAlias(alias)}
         />
       ) : null}
 
@@ -486,7 +478,6 @@ export default function ModelsPage(): React.ReactElement {
           mode={picker.mode}
           provider={pickerProvider}
           revision={revision}
-          restartPending={providerPendingRestart(restartPaths, picker.alias)}
           onClose={() => setPicker(null)}
         />
       )}
@@ -502,7 +493,7 @@ export default function ModelsPage(): React.ReactElement {
           }}
           api={view.providers.find((provider) => provider.alias === editing.alias)?.api ?? 'openai-completions'}
           title={`Edit ${editing.model.id}`}
-          description="Editing replaces this model's whole definition in config.jsonc; a change to a model in use takes effect after a restart."
+          description="Editing replaces this model's whole definition in config.jsonc; the change is applied right away, and a run already in flight keeps the definition it started with."
           initial={modelFormFromConfig(
             editing.model,
             view.providers.find((provider) => provider.alias === editing.alias)?.api ?? 'openai-completions',

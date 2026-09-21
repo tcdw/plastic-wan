@@ -108,3 +108,12 @@ export function watchPageIssues(page: Page): () => PageIssues {
 export function tableBodyRows(page: Page): ReturnType<Page['locator']> {
   return page.locator('table tbody tr');
 }
+
+/**
+ * The "Applied" toast of a successful config write, scoped to Sonner's
+ * container: dialog copy that also contains the word would otherwise satisfy
+ * the assertion while the write is still in flight.
+ */
+export function appliedToast(page: Page): ReturnType<Page['locator']> {
+  return page.locator('[data-sonner-toast]').filter({ hasText: 'Applied' });
+}

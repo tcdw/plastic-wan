@@ -41,21 +41,17 @@ export function ModelPickerDialog({
   mode,
   provider,
   revision,
-  restartPending,
   onClose,
 }: {
   readonly mode: ModelPickerMode;
   readonly provider: ProviderView;
   readonly revision: string;
-  readonly restartPending: boolean;
   readonly onClose: () => void;
 }): React.ReactElement {
   const write = useProviderWrite();
   const selection = useDraftSelection();
   const [endpoint, setEndpoint] = useState<string | null>(null);
-  // A provider whose connection fields wait for a restart is not in the running
-  // registry, so discovery has to carry its own credentials.
-  const [tempMode, setTempMode] = useState(mode === 'discover' && restartPending);
+  const [tempMode, setTempMode] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [headers, setHeaders] = useState<readonly HeaderRow[]>(() => headerRowsFromNames(provider.header_names));
   const [ids, setIds] = useState('');
@@ -168,10 +164,6 @@ export function ModelPickerDialog({
               </div>
               {tempMode ? (
                 <div className="space-y-3 rounded-md border p-3">
-                  <p className="text-muted-foreground text-xs">
-                    This provider has connection fields waiting for a restart, so the running process does not know them
-                    yet: enter the API key once more here. After the restart it is no longer needed.
-                  </p>
                   <div className="space-y-1">
                     <Label htmlFor="picker-api-key">API Key</Label>
                     <Input

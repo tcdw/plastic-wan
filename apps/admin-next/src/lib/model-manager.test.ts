@@ -13,10 +13,8 @@ import {
   modelFormFromConfig,
   modelFormToConfig,
   modelFromDraft,
-  modelPendingRestart,
   modelUsage,
   parseModelIds,
-  providerPendingRestart,
   supportedThinkingLevels,
   unconfirmedFields,
   validateModelForm,
@@ -293,18 +291,6 @@ describe('model form validation', () => {
       cost: { input: '1', output: '', cache_read: '0', cache_write: '0' },
     };
     expect(validateModelForm(form).cost).toBeDefined();
-  });
-});
-
-describe('restart paths', () => {
-  test('matches connection and model paths of one provider only', () => {
-    const paths = ['providers.oproxy.base_url', 'providers.relay.models[vendor/model]'];
-    expect(providerPendingRestart(paths, 'oproxy')).toBe(true);
-    expect(providerPendingRestart(paths, 'relay')).toBe(true);
-    expect(providerPendingRestart(paths, 'relay2')).toBe(false);
-    expect(modelPendingRestart(paths, 'relay', 'vendor/model')).toBe(true);
-    expect(modelPendingRestart(paths, 'relay', 'other')).toBe(false);
-    expect(modelPendingRestart(paths, 'oproxy', 'vendor/model')).toBe(false);
   });
 });
 

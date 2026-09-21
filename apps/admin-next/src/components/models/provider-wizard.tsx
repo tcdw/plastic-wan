@@ -36,30 +36,28 @@ import { useProviderWrite } from '@/lib/use-provider-write.ts';
 
 const ALIAS_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 
-type WizardStep = 'connection' | 'credentials' | 'models' | 'saved';
+type WizardStep = 'connection' | 'credentials' | 'models';
 
 const STEP_TITLES: Record<WizardStep, string> = {
   connection: 'Connection',
   credentials: 'Credentials',
   models: 'Models',
-  saved: 'Done',
 };
 
 /**
- * New-provider wizard: connection → credentials → models → saved. The model
+ * New-provider wizard: connection → credentials → models. The model
  * list is never prefilled (C8): it comes from the provider's own listing with
  * the key that was just typed, or from ids the admin enters by hand.
  */
 export function ProviderWizard({
   revision,
-  supervised,
   onClose,
-  onRestart,
+  onCreated,
 }: {
   readonly revision: string;
-  readonly supervised: boolean;
   readonly onClose: () => void;
-  readonly onRestart: () => void;
+  /** Runs after a successful create, so the page can select the new provider. */
+  readonly onCreated: (alias: string) => void;
 }): React.ReactElement {
   const write = useProviderWrite();
   const presets = useQuery(providerPresetsQuery);
@@ -75,7 +73,6 @@ export function ProviderWizard({
   const [headers, setHeaders] = useState<readonly HeaderRow[]>(() => headerRowsFromNames([]));
   const [ids, setIds] = useState('');
   const [editing, setEditing] = useState<DiscoveredModel | null>(null);
-  const [savedPaths, setSavedPaths] = useState<readonly string[]>([]);
   const [createError, setCreateError] = useState<string | null>(null);
 
   const preset = (presets.data?.presets ?? []).find((candidate) => candidate.id === presetId) ?? null;
@@ -125,9 +122,11 @@ export function ProviderWizard({
   const create = useMutation({
     mutationFn: (body: CreateProviderRequest) => createProvider(body, revision),
     onSuccess: (result) => {
-      setSavedPaths(result.apply.restart_required);
-      setStep('saved');
+      // A create is applied immediately like every other write, so the same
+      // feedback shows and the wizard hands the new provider to the page.
       write.succeeded(result.apply);
+      onCreated(alias);
+      onClose();
       // The body carries the plaintext key; resetting drops it from the
       // mutation cache once the request is over.
       create.reset();
@@ -176,9 +175,7 @@ export function ProviderWizard({
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>New provider - {STEP_TITLES[step]}</DialogTitle>
-          <DialogDescription>
-            Adding a provider and its connection fields take effect after a server restart.
-          </DialogDescription>
+          <DialogDescription>The new provider is written to config.jsonc and applied immediately.</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -303,9 +300,8 @@ export function ProviderWizard({
           {step === 'models' ? (
             <div className="space-y-4">
               <p className="text-muted-foreground text-xs">
-                A new provider is not in the running registry until a restart, so the listing is fetched in temporary
-                mode with the key above. There is no preset model list: only what you select is written to the
-                configuration.
+                The provider is not saved yet, so the listing is fetched in temporary mode with the key above. There is
+                no preset model list: only what you select is written to the configuration.
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -368,59 +364,32 @@ export function ProviderWizard({
             </div>
           ) : null}
 
-          {step === 'saved' ? (
-            <div className="space-y-3">
-              <p className="text-sm font-medium">Saved, restart required</p>
-              <p className="text-muted-foreground text-xs">
-                The new provider joins the registry only after the server restarts:{' '}
-                {savedPaths.length === 0 ? '(no field is waiting)' : <MonoValue value={savedPaths.join(', ')} />}
-              </p>
-              {supervised ? (
-                <Button type="button" onClick={onRestart}>
-                  Restart now
-                </Button>
-              ) : (
-                <p className="text-muted-foreground text-xs">
-                  This deployment does not declare a supervisor (PLASTICWAN_SUPERVISED=1); restart the server by hand.
-                </p>
-              )}
-            </div>
-          ) : null}
-
           {createError === null ? null : <p className="text-destructive text-sm break-words">{createError}</p>}
         </div>
 
         <DialogFooter>
-          {step === 'saved' ? (
-            <Button type="button" onClick={onClose}>
-              Done
+          <Button type="button" variant="outline" disabled={create.isPending} onClick={onClose}>
+            Cancel
+          </Button>
+          {step === 'connection' ? (
+            <Button
+              type="button"
+              disabled={!aliasValid || (kind === 'builtin' ? presetId.length === 0 : baseUrl.trim().length === 0)}
+              onClick={() => setStep('credentials')}
+            >
+              Next
             </Button>
-          ) : (
-            <>
-              <Button type="button" variant="outline" disabled={create.isPending} onClick={onClose}>
-                Cancel
-              </Button>
-              {step === 'connection' ? (
-                <Button
-                  type="button"
-                  disabled={!aliasValid || (kind === 'builtin' ? presetId.length === 0 : baseUrl.trim().length === 0)}
-                  onClick={() => setStep('credentials')}
-                >
-                  Next
-                </Button>
-              ) : null}
-              {step === 'credentials' ? (
-                <Button type="button" disabled={apiKey.length === 0} onClick={() => setStep('models')}>
-                  Next
-                </Button>
-              ) : null}
-              {step === 'models' ? (
-                <Button type="button" disabled={create.isPending || selection.models === null} onClick={submit}>
-                  {create.isPending ? 'Saving…' : 'Create provider'}
-                </Button>
-              ) : null}
-            </>
-          )}
+          ) : null}
+          {step === 'credentials' ? (
+            <Button type="button" disabled={apiKey.length === 0} onClick={() => setStep('models')}>
+              Next
+            </Button>
+          ) : null}
+          {step === 'models' ? (
+            <Button type="button" disabled={create.isPending || selection.models === null} onClick={submit}>
+              {create.isPending ? 'Saving…' : 'Create provider'}
+            </Button>
+          ) : null}
         </DialogFooter>
       </DialogContent>
 

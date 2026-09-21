@@ -24,7 +24,7 @@ import { ConfigReloader } from '../../../src/platform/config-reload.ts';
 import { AgentModelSwitcher } from '../../../src/platform/model-switch.ts';
 import { loadModelsDevCatalog } from '../../../src/platform/models-dev.ts';
 import { RuntimeConfigurationStore } from '../../../src/platform/runtime-config.ts';
-import { createModelRegistry } from '../../../src/platform/providers.ts';
+import { buildModelRegistry } from '../../../src/platform/providers.ts';
 import { SecretStore } from '../../../src/platform/secrets.ts';
 import { asRunResult, SqliteStore } from '../../../src/store/database.ts';
 import { adminSessions, alarms } from '../../../src/store/schema.ts';
@@ -257,13 +257,12 @@ async function main(): Promise<void> {
   seedAdminBulkRows(store);
 
   const secrets = new SecretStore();
-  const registry = await createModelRegistry(loaded.config, secrets);
-  const configStore = new RuntimeConfigurationStore(loaded);
-  const modelSwitcher = new AgentModelSwitcher(configStore, registry.models);
+  const registry = await buildModelRegistry(loaded.config, null, secrets);
+  const configStore = new RuntimeConfigurationStore({ config: loaded.config, hash: loaded.hash, ...registry });
+  const modelSwitcher = new AgentModelSwitcher(configStore);
   const configReloader = new ConfigReloader({
     loaded,
     store: configStore,
-    models: registry.models,
     modelSwitcher,
     secrets,
     // This fixture runs no agent runtime, so there is no tool registry to fit
@@ -277,7 +276,6 @@ async function main(): Promise<void> {
     modelSwitcher,
     configReloader,
     secrets,
-    models: registry.models,
     // The E2E process has to outlive the suite, so a restart request is recorded
     // instead of shutting the process down. `POST /api/restart` itself (the
     // config check and the 202) is exercised by test/admin-providers.test.ts.

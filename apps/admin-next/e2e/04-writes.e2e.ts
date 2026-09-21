@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { adminUrl, authStoragePath, e2eFetch } from './helpers.ts';
+import { adminUrl, appliedToast, authStoragePath, e2eFetch } from './helpers.ts';
 
 /**
  * Controlled admin operations against the real backend. Every write goes
@@ -84,7 +84,7 @@ test.describe('agent model hot-switch', () => {
     await page.getByRole('button', { name: 'Provider vision' }).click();
     await page.locator('tr', { hasText: 'vision-model' }).getByRole('button', { name: 'Set as agent' }).click();
     // The toast only appears once the write and the reload succeeded.
-    await expect(page.getByText('Applied').first()).toBeVisible();
+    await expect(appliedToast(page).first()).toBeVisible();
     // The vision model does not reason, so the switch leaves it only `off`.
     await expect(page.getByText('Thinking effort reset to off', { exact: false }).first()).toBeVisible();
     // Wait for the refreshed view before the next write: a switch has to be

@@ -19,7 +19,7 @@ import { errorMessage } from './errors.ts';
 
 /**
  * Pure helpers for the Models page: metadata source labels, draft → config
- * conversion, compat tri-state, restart-path matching and write feedback. The
+ * conversion, compat tri-state and write feedback. The
  * page keeps only React state and mutations; every decision that can be tested
  * without a DOM lives here.
  */
@@ -418,23 +418,6 @@ export function compatConfigFromState(
     compat[spec.field] = spec.kind === 'boolean' ? value === 'on' : value;
   }
   return Object.keys(compat).length === 0 ? undefined : (compat as ModelCompatConfig);
-}
-
-// --- restart paths ---------------------------------------------------------
-
-function providerPathPrefix(alias: string): string {
-  return `providers.${alias}`;
-}
-
-/** True when anything of this provider (connection or a model) waits for a restart. */
-export function providerPendingRestart(paths: readonly string[], alias: string): boolean {
-  const prefix = providerPathPrefix(alias);
-  return paths.some((path) => path === prefix || path.startsWith(`${prefix}.`) || path.startsWith(`${prefix}[`));
-}
-
-/** A single model waits for a restart only when its own path is listed. */
-export function modelPendingRestart(paths: readonly string[], alias: string, modelId: string): boolean {
-  return paths.includes(`${providerPathPrefix(alias)}.models[${modelId}]`);
 }
 
 // --- in-use lookups --------------------------------------------------------

@@ -218,8 +218,6 @@ export function ProviderConnectionCard({
           </p>
         ) : null}
         {error !== null ? <p className="text-destructive text-sm break-words">{error}</p> : null}
-
-        <p className="text-muted-foreground text-xs">Connection fields take effect after a restart.</p>
       </div>
     </Panel>
   );

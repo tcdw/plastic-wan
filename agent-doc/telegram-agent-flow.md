@@ -308,8 +308,8 @@ Tool 只返回文本、JSON、XML 或 JavaScript 响应，拒绝压缩和二进�
 2. 从 Telegram 下载到 `paths.media_cache` 下的临时目录。
 3. 检查下载大小、图片格式、像素数和标准化输出大小。
 4. 提取 Sticker 代表帧。
-5. 调用 Vision 模型并审计 Token/图片预算。
-6. 按 `file_unique_id + analysis_version` 缓存。
+5. 调用 Vision 模型并审计 Token/图片预算。分析开始时取一次当前配置快照：这一份的 vision 模型与缓存版本在整次分析里不变，运行期间发布的换模型不会改变这次分析的结果。
+6. 按 `file_unique_id + analysis_version` 缓存，`analysis_version = <provider>/<model>/prompt-<prompt_version>`：换 vision 模型或 prompt 版本后旧行不会被命中。
 7. 删除临时文件。
 
 Sticker 代表帧：

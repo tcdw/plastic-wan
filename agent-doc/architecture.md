@@ -9,7 +9,7 @@ Config + SecretStore
         │
         ├─ ServeLock + SqliteStore
         ├─ grammY Bot / Telegram API
-        ├─ Pi AI Model Registry
+        ├─ Pi AI Model Registry（随配置快照发布）
         ├─ TelegramIngestion
         ├─ MediaService ── FFmpeg / FFprobe / python-lottie / Sharp
         ├─ StickerService
@@ -87,7 +87,7 @@ send Tool → Telegram API → 审计
 - 不是所有 Agent Tool 都在 `capabilities/`：`zzz` 定义在 `store/sleep.ts`，`add_memory`/`delete_memory` 定义在 `context/memory.ts`，各自与所属状态放在一起。找某个 Tool 的实现时按名字 grep，别只翻 `capabilities/`。
 - `store/invocation-snapshot.ts` 是 Invocation 消息快照的冻结边界；`orchestration/invocation-queue.ts` 负责 Bucket/Alarm → Invocation 的同步状态转换、attach、恢复与 Startup Catch-up。这两个名字容易和 `scheduler.ts` 混淆——Scheduler 只管事件循环与并发。
 - `platform/invocation-context.ts` 是无依赖的叶子类型模块，存在的唯一目的是打断 import 环，不要往里加逻辑；它同时定义 `CapabilityRefResolver`（引用解析边界）与 `InvocationContextState`（一次运行中可被新批次刷新的可变上下文）。
-- `platform/config-reload.ts` 的 `ConfigReloader` 是配置热更新的唯一入口：`reloadFromFile()` 与 `setAgentModel()` 把 `config.jsonc` 中白名单字段的变化发布到 `RuntimeConfigurationStore`（generation + 1），其余字段只报告为待重启。白名单只定义在 `platform/config-diff.ts`；写配置文件走 `platform/config-file.ts`（保留注释，先写同目录临时文件并校验再 rename）。语义见 [配置：运行时配置热更新](configuration.md#运行时配置热更新)。
+- `platform/config-reload.ts` 的 `ConfigReloader` 是配置热更新的唯一入口：`reloadFromFile()` 与 `setAgentModel()` 把 `config.jsonc` 中白名单字段的变化发布到 `RuntimeConfigurationStore`（generation + 1），其余字段只报告为待重启。每次发布都带着这一代的模型注册表（`platform/providers.ts` 的 `buildModelRegistry`）：连接字段没变的 Provider 沿用进程里已有的对象，新增或连接变化的 Provider 重新解析 SecretRef，所以一次 reload 会重建注册表并把注册表与配置一起发布。白名单只定义在 `platform/config-diff.ts`；写配置文件走 `platform/config-file.ts`（保留注释，先写同目录临时文件并校验再 rename）。语义见 [配置：运行时配置热更新](configuration.md#运行时配置热更新)。
 
 ## 并发模型
 

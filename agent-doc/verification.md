@@ -50,7 +50,7 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | `skills.test.ts` | Skill 索引注入 system prompt、原语不经 execute、`execute` search/help/call、`{text, refs}` 封套驱动 `search_stickers → send` 贴纸链路、记忆经 execute 写入、原语/未知能力拒绝的审计 |
 | `system-resources.test.ts` | Skill manifest 校验与启动失败、`system:///` 绝对/相对 URI 解析、越界与非 Markdown 拒绝、32 KiB 截断、progressive disclosure fixture |
 | `model-request-audit.test.ts` | `request_json` 中 inline base64 图片被结构化摘要替换、其余请求数据保留、重复清洗幂等 |
-| `media.test.ts` | 图片标准化、缓存和 Vision reasoning |
+| `media.test.ts` | 图片标准化、缓存和 Vision reasoning、换 vision 模型后按新 `analysis_version` 重新分析 |
 | `stickers.test.ts` | Set 同步、结构化视觉 Tool Call、索引、搜索、发送 |
 | `mcp.test.ts` | stdio/HTTP transport、策略、Header、重定向和审计 |
 | `web-fetch.test.ts` | 有界不可信文本结果与审计、私网/合成地址拒绝（含跳转目标） |
@@ -58,8 +58,8 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | `admin.test.ts` | Admin 首次设置、登录、Session、只读审计 API（含 Conversation Context 列表/详情与写入尝试被拒）、静态托管 |
 | `model-switch.test.ts` | 可切换模型仅列 text 能力、当前模型取配置值、`option()` 只校验不应用（未知 provider/model 与 image-only 拒绝）、`current()` 跟随 `store.publish` 变化 |
 | `bot-commands.test.ts` | 命令解析与 mention 匹配、`setMyCommands` 注册一致性、`/pause` 中止与阻断、`/resume` 恢复、`/status` 用量与 Context 行口径、`/model` 分页与切换（写配置文件并 reload）、管理员鉴权与匿名拒绝、命令只审计不入库 |
-| `config-diff.test.ts` | 热更新白名单分类（hot/restart/outside_serve）、candidate 构造、在用模型保护、custom Provider `models[]` 对齐、新增 Chat 与 Prompt 内容比较 |
-| `config-reload.test.ts` | `ConfigReloader` 外部契约：generation 与两个 hash、`config_reloaded`/`config_reload_failed`/`model_switch_failed` 日志、待重启字段撤销与只改注释后 active hash 跟上文件 hash、两遍校验与 `candidate_invalid`、待重启列表、`/model` 写入文件（保留注释、`0600`、符号链接拒绝）、`invocations.config_hash` 在 `queued → running` 写入、Admin `POST /config/apply` 与 `PUT /model` 的响应体 |
+| `config-diff.test.ts` | 热更新白名单分类（hot/restart/outside_serve）、candidate 构造、Provider 的增删/改 kind/连接字段/模型定义全部取文件值、custom Provider `models[]` 对齐、新增 Chat 与 Prompt 内容比较 |
+| `config-reload.test.ts` | `ConfigReloader` 外部契约：generation 与两个 hash、`config_reloaded`/`config_reload_failed`/`model_switch_failed` 日志、待重启字段撤销与只改注释后 active hash 跟上文件 hash、两遍校验与 `candidate_invalid`、`secret_unresolved` 的整次拒绝、待重启列表、运行中 Invocation 钉住模型与 Provider 连接（两个本地端点验证换地址后的下一轮仍走旧地址）、`/model` 写入文件（保留注释、`0600`、符号链接拒绝）、`invocations.config_hash` 在 `queued → running` 写入、Admin `POST /config/apply` 与 `PUT /model` 的响应体 |
 | `memory.test.ts` | 记忆持久化与 TTL、Conversation 隔离、Tool 审计、注入批次内 `<memory_list>` 的顺序与作用域、Admin 记忆 CRUD |
 | `alarm.test.ts` / `alarm-internal-context.test.ts` | Alarm 创建/触发/取消、creator-vs-target ownership、latest-new caller 解析、跨 invocation hidden mapping、状态变化安全失败、send 不泄漏、重启后 durable internal context |
 | `prompt-template.test.ts` | Prompt 模板白名单变量渲染、未知与格式错误表达式拒绝 |

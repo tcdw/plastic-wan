@@ -47,7 +47,7 @@
 | [20260913 连续 Context 与长活 Invocation 设计计划](design/20260913%20连续%20Context%20与长活%20Invocation%20设计计划.md) | Conversation Context、checkpoint 丢弃式 GC、Invocation 内消息热注入 | 已实现，见 [telegram-agent-flow.md](telegram-agent-flow.md#context-生命周期)、[configuration.md](configuration.md)、[data-layer.md](data-layer.md) |
 | [20260918 内置 Agent 插件化计划与结论](design/20260918%20内置能力插件化计划与结论.md) | 区分 IM 接入与 Agent 两条插件渠道；仅计划 Agent 插件的 ESM / definePlugin、三个 Epic、存储与固定前端边界 | 已明确范围，未实施；IM 接入插件仅为远期方向，暂不做用户插件平台、独立 migration 或前端插件机制 |
 | [20260920 Admin 模型管理器设计计划](design/20260920%20Admin%20模型管理器设计计划.md) | Admin「模型服务」页：屏蔽 Pi 模型目录改由配置 `models[]` 启用、元数据来源、compat 高级设置、SecretRef 只写不读 | 已实现（见 [交付报告](design/20260920%20Admin%20模型管理器交付报告.md)、[admin-panel.md](admin-panel.md)）；「改完要重启」部分由下一行取代 |
-| [20260921 Models 页全量热切换设计计划](design/20260921%20Models%20页全量热切换设计计划.md) | Models 页全部操作热切换：模型注册表进入配置快照、每个 Invocation 钉住模型与 Provider 连接 | 已完成设计，未实施 |
+| [20260921 Models 页全量热切换设计计划](design/20260921%20Models%20页全量热切换设计计划.md) | Models 页全部操作热切换：模型注册表进入配置快照、每个 Invocation 钉住模型与 Provider 连接 | 已实现（2026-09-21），见 [交付报告](design/20260921%20Models%20页全量热切换交付报告.md)、[configuration.md](configuration.md#运行时配置热更新)、[admin-panel.md](admin-panel.md) |
 
 ## 文档边界
 

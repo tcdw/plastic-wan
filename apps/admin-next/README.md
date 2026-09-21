@@ -77,9 +77,10 @@ models.dev 目录缓存——`GET /providers/discover` 与 `lookup-metadata` 因
 - 每个写请求都带 `GET /api/providers` 返回的 `revision`（`If-Match`）。
   `409 config_conflict` 表示 config.jsonc 在编辑期间被改动：提示 “config.jsonc changed…”、
   重新拉取，再让用户重试（`lib/model-manager.ts` 的 `writeErrorMessage`）。
-- 保存反馈必须区分 “Applied” 与 “Saved, restart required”：只要 `apply.restart_required` 非空，
-  就不能显示成已应用（`applyFeedback`），待重启横幅与 “Restart now” 按钮由
-  `restart_required` + `supervised` 驱动（未声明 `PLASTICWAN_SUPERVISED=1` 时只列字段）。
+- 保存反馈区分 “Applied” 与 “Saved, restart required”：只要 `apply.restart_required` 非空，
+  就不能显示成已应用（`applyFeedback`）。Models 页自己的写入现在全部热应用，所以那里只会看到
+  “Applied”；待重启横幅与 “Restart now” 按钮由全局 `restart_required` + `supervised` 驱动，
+  服务于其它 restart 字段（未声明 `PLASTICWAN_SUPERVISED=1` 时只列字段）。
 - 凭据只写不读：`api_key` 与 header 值永远是 `type="password"`、`autocomplete="new-password"`
   的空输入框，没有查看按钮；提交后用 `mutation.reset()` 立刻把带明文 key 的请求体
   从 mutation cache 里丢掉。页面不写 localStorage，也不把 key 放进任何持久结构。

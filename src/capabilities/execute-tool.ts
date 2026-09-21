@@ -13,18 +13,30 @@ const TEXT_MAX_BYTES = 30_720;
 const INPUT_MAX_BYTES = 32_768;
 const SEARCH_RESULT_LIMIT = 8;
 
-const ExecuteInputSchema = Type.Union([
-  Type.Object({ action: Type.Literal('search'), query: Type.String({ minLength: 1, maxLength: 200 }) }, Strict),
-  Type.Object({ action: Type.Literal('help'), tool: Type.String({ pattern: ToolNamePattern }) }, Strict),
-  Type.Object(
-    {
-      action: Type.Literal('call'),
-      tool: Type.String({ pattern: ToolNamePattern }),
-      input: Type.Record(Type.String(), Type.Unknown()),
-    },
-    Strict,
-  ),
-]);
+/**
+ * Provider-facing input contract. OpenAI-compatible endpoints reject a tool whose
+ * `parameters` is not a root object schema: as a top-level union this one made
+ * gpt-4o answer every request with 400 invalid_function_parameters, failing the
+ * whole invocation. The actions therefore share one flattened object, and the
+ * per-action requiredness a flat schema cannot express is enforced by
+ * `parseExecuteRequest` before dispatch.
+ */
+const ExecuteInputSchema = Type.Object(
+  {
+    action: Type.Enum({ search: 'search', help: 'help', call: 'call' }),
+    query: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+    tool: Type.Optional(Type.String({ pattern: ToolNamePattern })),
+    input: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  },
+  Strict,
+);
+const ExecuteInputValidator = Compile(ExecuteInputSchema);
+
+/** One action of the flattened contract, with the fields that action requires. */
+type ExecuteRequest =
+  | { readonly action: 'search'; readonly query: string }
+  | { readonly action: 'help'; readonly tool: string }
+  | { readonly action: 'call'; readonly tool: string; readonly input: Record<string, unknown> };
 
 /** Runtime primitives are registered by the runtime itself and never callable through execute. */
 export const EXECUTE_PRIMITIVES: ReadonlySet<string> = new Set(['read', 'send', 'execute', 'zzz']);
@@ -90,15 +102,46 @@ export function createExecuteTool(
     executionMode: 'sequential',
     execute: async (toolCallId, input, signal) => {
       const startedAt = performance.now();
-      if (input.action === 'search') {
-        return executeSearch(options, registered, toolCallId, input.query, startedAt);
+      const parsed = parseExecuteRequest(input);
+      if ('error' in parsed) {
+        rejectExecute(options, toolCallId, input, 'invalid_arguments');
+        throw new Error(parsed.error);
       }
-      if (input.action === 'help') {
-        return executeHelp(options, registered, toolCallId, input.tool, startedAt);
+      const request = parsed.request;
+      if (request.action === 'search') {
+        return executeSearch(options, registered, toolCallId, request.query, startedAt);
       }
-      return executeCall(options, registered, toolCallId, input.tool, input.input, signal, startedAt);
+      if (request.action === 'help') {
+        return executeHelp(options, registered, toolCallId, request.tool, startedAt);
+      }
+      return executeCall(options, registered, toolCallId, request.tool, request.input, signal, startedAt);
     },
   };
+}
+
+/**
+ * Restores the per-action contract of the flattened provider input: the schema
+ * cannot require `query` for search alone or `tool` for help and call alone, and
+ * a lenient endpoint may hand over input the schema forbids.
+ */
+function parseExecuteRequest(input: unknown): { readonly request: ExecuteRequest } | { readonly error: string } {
+  if (!ExecuteInputValidator.Check(input)) {
+    return { error: 'execute input does not match the tool schema' };
+  }
+  if (input.action === 'search') {
+    return input.query === undefined
+      ? { error: 'execute.search requires a query string' }
+      : { request: { action: 'search', query: input.query } };
+  }
+  if (input.tool === undefined) {
+    return { error: `execute.${input.action} requires a capability name` };
+  }
+  if (input.action === 'help') {
+    return { request: { action: 'help', tool: input.tool } };
+  }
+  return input.input === undefined
+    ? { error: 'execute.call requires an input object' }
+    : { request: { action: 'call', tool: input.tool, input: input.input } };
 }
 
 function executeSearch(

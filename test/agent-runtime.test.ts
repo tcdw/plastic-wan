@@ -73,6 +73,14 @@ test('a fresh Agent publishes only through send and audits model usage', async (
       // triggered manually to mirror what real adapters do.
       options?.onPayload?.({ model: 'agent-model', messages: context.messages }, faux.getModel());
       void options?.onResponse?.({ status: 200, headers: {} }, faux.getModel());
+      // OpenAI-compatible endpoints reject a tool whose `parameters` is not a root
+      // object schema; the top-level union `execute` used to carry failed every
+      // gpt-4o invocation with 400 invalid_function_parameters.
+      const tools = context.tools ?? [];
+      expect(tools.map((tool) => tool.name)).toEqual(['read', 'send', 'execute']);
+      for (const tool of tools) {
+        expect(tool.parameters).toMatchObject({ type: 'object' });
+      }
       return fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'published' }), { stopReason: 'toolUse' });
     },
     fauxAssistantMessage('private assistant text'),

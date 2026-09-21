@@ -417,3 +417,77 @@ test('execute refuses primitives and unknown capabilities while memory calls sti
   expect(memories).toEqual(['owner likes cats']);
   store.close();
 });
+
+test('execute rejects a half-filled action before dispatch and audits the rejection', async () => {
+  const setup = await setupInvocation('plasticwan-skills-invalid-', false);
+  const { store } = setup;
+  const agentFaux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  agentFaux.setResponses([
+    // The flattened provider schema cannot require `input` for call alone, so a
+    // lenient endpoint can hand this over; the runtime must reject it.
+    fauxAssistantMessage(fauxToolCall('execute', { action: 'call', tool: 'add_memory' }), { stopReason: 'toolUse' }),
+    (context) => {
+      const missingInput = lastToolResult(context.messages);
+      expect(missingInput.isError).toBe(true);
+      expect(toolResultText(missingInput)).toContain('execute.call requires an input object');
+      return fauxAssistantMessage(fauxToolCall('execute', { action: 'search' }), { stopReason: 'toolUse' });
+    },
+    (context) => {
+      const missingQuery = lastToolResult(context.messages);
+      expect(missingQuery.isError).toBe(true);
+      expect(toolResultText(missingQuery)).toContain('execute.search requires a query string');
+      return fauxAssistantMessage(fauxToolCall('execute', { action: 'help', tool: 'add_memory' }), {
+        stopReason: 'toolUse',
+      });
+    },
+    (context) => {
+      const help = lastToolResult(context.messages);
+      expect(help.isError).toBe(false);
+      expect(toolResultText(help)).toContain('add_memory');
+      return fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'nothing to save' }), {
+        stopReason: 'toolUse',
+      });
+    },
+    fauxAssistantMessage('done'),
+  ]);
+  const models = createModels();
+  models.setProvider(agentFaux.provider);
+  const model = agentFaux.getModel();
+  const registry: ModelRegistry = { models, visionModel: model };
+  const memoryStore = new MemoryStore(store.orm);
+  const runtime = new AgentRuntime({
+    store,
+    configStore: setup.configStore,
+    secrets: new SecretStore(),
+    registry,
+    telegramApi: {
+      sendMessage: async () => ({ message_id: 500, date: 1, chat: { id: 123456789 } }),
+      sendSticker: async () => ({ message_id: 501, date: 1, chat: { id: 123456789 } }),
+    },
+    bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+    systemResources: await bundledSystemResources(),
+    capabilityTools: (context) => [...createMemoryTools(memoryStore, context).map((tool) => capability(tool, true))],
+  });
+  expect(
+    await runtime.run(setup.invocationId, setup.configStore.beginInvocation(), new AbortController().signal),
+  ).toEqual({
+    state: 'completed',
+    reason: 'completed',
+  });
+  const rows = store.db
+    .prepare<[], { tool_name: string; state: string; error_code: string | null }>(
+      'SELECT tool_name, state, error_code FROM tool_calls ORDER BY id',
+    )
+    .all();
+  expect(rows).toEqual([
+    { tool_name: 'execute', state: 'error', error_code: 'invalid_arguments' },
+    { tool_name: 'execute', state: 'error', error_code: 'invalid_arguments' },
+    { tool_name: 'execute', state: 'success', error_code: null },
+    { tool_name: 'send', state: 'success', error_code: null },
+  ]);
+  expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM memories').get()?.count).toBe(0n);
+  store.close();
+});

@@ -29,6 +29,7 @@ import { buildModelRegistry } from './platform/providers.ts';
 import { RuntimeConfigurationStore } from './platform/runtime-config.ts';
 import { BucketScheduler } from './orchestration/scheduler.ts';
 import { ConversationRuntime } from './orchestration/conversation-runtime.ts';
+import { keyJarPath } from './platform/key-jar.ts';
 import { SecretStore } from './platform/secrets.ts';
 import { runStartupCatchUp } from './startup-catch-up.ts';
 import { appState } from './store/schema.ts';
@@ -50,7 +51,7 @@ export const RESTART_EXIT_CODE = 75;
 export async function serve(configPath: string): Promise<void> {
   const loaded = await loadConfig(configPath);
   await assertConfigPermissions(loaded.configPath);
-  const secrets = new SecretStore();
+  const secrets = new SecretStore(keyJarPath(loaded.configPath));
   let lock: ServeLock | undefined;
   let store: SqliteStore | undefined;
   let bot: Bot | undefined;

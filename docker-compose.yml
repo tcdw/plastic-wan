@@ -2,7 +2,7 @@
 #
 # Quick start:
 #   1. mkdir -p config data
-#   2. Place your config.jsonc in ./config/   (the entrypoint sets chmod 600)
+#   2. Place your config.jsonc and key.json in ./config/   (the entrypoint sets chmod 600)
 #   3. Place system-prompt.md and any chat instruction files in ./config/
 #   4. docker compose up -d
 #

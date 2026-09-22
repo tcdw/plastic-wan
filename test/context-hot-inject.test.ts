@@ -90,9 +90,7 @@ async function fixture(transform?: (config: FileConfig) => void): Promise<Fixtur
         ? loaded.config
         : { ...loaded.config, agent: { ...loaded.config.agent, system_prompt: overrides.systemPrompt } };
     const runtimeConfigStore =
-      overrides.systemPrompt === undefined
-        ? configStore
-        : await testConfigStore({ config, hash: loaded.hash }, registry);
+      overrides.systemPrompt === undefined ? configStore : await testConfigStore({ ...loaded, config }, registry);
     const runtime = new AgentRuntime({
       store,
       configStore: runtimeConfigStore,

@@ -15,6 +15,7 @@ import { SqliteStore } from '../src/store/database.ts';
 import { previewContext } from '../src/platform/invocation-context.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
 import { MediaService } from '../src/capabilities/media/media.ts';
+import { keyJarPath } from '../src/platform/key-jar.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
@@ -294,7 +295,7 @@ test('audits complete redacted model error details', async () => {
 
   const errorDetail = 'Provider request failed with telegram-secret\nstatus=500\nbody={"error":"upstream exploded"}';
   faux.setResponses([fauxAssistantMessage('', { stopReason: 'error', errorMessage: errorDetail })]);
-  const secrets = new SecretStore();
+  const secrets = new SecretStore(keyJarPath(loaded.configPath));
   await secrets.resolve(loaded.config.telegram.token);
   const runtime = new AgentRuntime({
     store,

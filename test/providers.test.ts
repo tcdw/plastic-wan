@@ -5,10 +5,11 @@ import { join } from 'node:path';
 import { type Api, type Context, getSupportedThinkingLevels, type Model } from '@earendil-works/pi-ai';
 import { findBuiltinProvider } from '../src/platform/builtin-providers.ts';
 import { type FileConfig, type LoadedConfig, loadConfig, type RawConfig } from '../src/platform/config.ts';
+import { keyJarPath } from '../src/platform/key-jar.ts';
 import { buildModelRegistry, mapCompat } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { supportedThinkingLevels, THINKING_LEVELS } from '../src/platform/thinking-levels.ts';
-import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { testConfigJsonc, writeTestConfig, writeTestKeyJar } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -21,6 +22,7 @@ async function loadFixture(transform: (config: FileConfig) => void): Promise<Loa
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath, testConfigJsonc(directory, transform));
+  await writeTestKeyJar(directory, { builtin: 'builtin-secret', custom: 'custom-secret', rotated: 'rotated-secret' });
   return await loadConfig(configPath);
 }
 
@@ -58,14 +60,14 @@ describe('model registry', () => {
       draft.providers.deepseek = {
         kind: 'builtin',
         provider: 'deepseek',
-        api_key: 'builtin-secret',
+        api_key: { jar: 'builtin' },
         models: [BUILTIN_MODEL],
       };
       draft.agent.provider = 'deepseek';
       draft.agent.model = 'deepseek-chat';
       draft.agent.thinking_level = 'off';
     });
-    const registry = await buildModelRegistry(loaded.config, null, new SecretStore());
+    const registry = await buildModelRegistry(loaded.config, null, new SecretStore(keyJarPath(loaded.configPath)));
     const registered = registry.models.getModels('deepseek');
     expect(registered.map((model) => model.id)).toEqual(['deepseek-chat']);
     // Pi's catalog carries this id; the configuration does not enable it.
@@ -84,14 +86,14 @@ describe('model registry', () => {
       draft.providers.mine = {
         kind: 'builtin',
         provider: 'deepseek',
-        api_key: 'builtin-secret',
+        api_key: { jar: 'builtin' },
         models: [BUILTIN_MODEL],
       };
       draft.agent.provider = 'mine';
       draft.agent.model = 'deepseek-chat';
       draft.agent.thinking_level = 'off';
     });
-    const registry = await buildModelRegistry(loaded.config, null, new SecretStore());
+    const registry = await buildModelRegistry(loaded.config, null, new SecretStore(keyJarPath(loaded.configPath)));
     const provider = registry.models.getProvider('mine');
     const model = registry.models.getModel('mine', 'deepseek-chat');
     expect(provider).toBeDefined();
@@ -125,18 +127,18 @@ describe('model registry', () => {
   });
 
   test('keeps a provider whose connection is unchanged and re-resolves no secret', async () => {
-    const secrets = new CountingSecrets();
     const loaded = await loadFixture((draft) => {
       draft.providers.deepseek = {
         kind: 'builtin',
         provider: 'deepseek',
-        api_key: 'builtin-secret',
+        api_key: { jar: 'builtin' },
         models: [BUILTIN_MODEL],
       };
       draft.agent.provider = 'deepseek';
       draft.agent.model = 'deepseek-chat';
       draft.agent.thinking_level = 'off';
     });
+    const secrets = new CountingSecrets(keyJarPath(loaded.configPath));
     const registry = await buildModelRegistry(loaded.config, null, secrets);
     const resolvedAtStartup = secrets.resolutions;
     expect(resolvedAtStartup).toBeGreaterThan(0);
@@ -167,18 +169,18 @@ describe('model registry', () => {
   });
 
   test('rebuilds a provider whose connection changed and resolves its secret again', async () => {
-    const secrets = new CountingSecrets();
     const loaded = await loadFixture((draft) => {
       draft.providers.deepseek = {
         kind: 'builtin',
         provider: 'deepseek',
-        api_key: 'builtin-secret',
+        api_key: { jar: 'builtin' },
         models: [BUILTIN_MODEL],
       };
       draft.agent.provider = 'deepseek';
       draft.agent.model = 'deepseek-chat';
       draft.agent.thinking_level = 'off';
     });
+    const secrets = new CountingSecrets(keyJarPath(loaded.configPath));
     const registry = await buildModelRegistry(loaded.config, null, secrets);
     const resolvedAtStartup = secrets.resolutions;
 
@@ -186,7 +188,7 @@ describe('model registry', () => {
       ...loaded.config,
       providers: {
         ...loaded.config.providers,
-        deepseek: { ...deepseekConfig(loaded), api_key: 'rotated-secret' },
+        deepseek: { ...deepseekConfig(loaded), api_key: { jar: 'rotated' } },
       },
     };
     const rebuilt = await buildModelRegistry(rotated, { file: loaded.fileConfig, models: registry.models }, secrets);
@@ -197,18 +199,18 @@ describe('model registry', () => {
   });
 
   test('treats a changed builtin provider id as a new connection', async () => {
-    const secrets = new CountingSecrets();
     const loaded = await loadFixture((draft) => {
       draft.providers.deepseek = {
         kind: 'builtin',
         provider: 'deepseek',
-        api_key: 'builtin-secret',
+        api_key: { jar: 'builtin' },
         models: [BUILTIN_MODEL],
       };
       draft.agent.provider = 'deepseek';
       draft.agent.model = 'deepseek-chat';
       draft.agent.thinking_level = 'off';
     });
+    const secrets = new CountingSecrets(keyJarPath(loaded.configPath));
     const registry = await buildModelRegistry(loaded.config, null, secrets);
     const resolvedAtStartup = secrets.resolutions;
 
@@ -259,7 +261,7 @@ describe('model registry', () => {
       ];
       draft.agent.model = 'undeclared';
     });
-    const registry = await buildModelRegistry(loaded.config, null, new SecretStore());
+    const registry = await buildModelRegistry(loaded.config, null, new SecretStore(keyJarPath(loaded.configPath)));
     const configured = loaded.config.providers.agent?.models ?? [];
     expect(configured).toHaveLength(2 + declared.length);
     for (const model of configured) {
@@ -288,7 +290,7 @@ describe('model registry', () => {
         kind: 'custom',
         base_url: 'https://relay.example.test/v1/',
         api: 'openai-completions',
-        api_key: 'custom-secret',
+        api_key: { jar: 'custom' },
         models: [
           {
             id: 'agent-model',
@@ -302,7 +304,7 @@ describe('model registry', () => {
         ],
       };
     });
-    const registry = await buildModelRegistry(loaded.config, null, new SecretStore());
+    const registry = await buildModelRegistry(loaded.config, null, new SecretStore(keyJarPath(loaded.configPath)));
     const model = registry.models.getModel('agent', 'agent-model');
     expect(model).toMatchObject({
       api: 'openai-completions',

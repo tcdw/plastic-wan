@@ -1,4 +1,5 @@
 import type { SecretRef } from './config.ts';
+import { readKeyJar } from './key-jar.ts';
 import { pickEnv, readBoundedOutput, spawnProcess } from './subprocess.ts';
 
 const MAX_SECRET_BYTES = 4_096;
@@ -18,8 +19,9 @@ const MAX_SUBMITTED_SECRETS = 64;
 
 /**
  * A SecretRef that cannot be turned into a value: a missing environment
- * variable, a failing command, or an empty result. Callers that can report it as
- * a configuration problem rather than a crash distinguish it by type.
+ * variable or key jar entry, a failing command, or an empty result. Callers
+ * that can report it as a configuration problem rather than a crash
+ * distinguish it by type.
  */
 export class SecretResolutionError extends Error {
   constructor(message: string) {
@@ -29,13 +31,23 @@ export class SecretResolutionError extends Error {
 }
 
 export class SecretStore {
+  readonly #keyJarPath: string | undefined;
   readonly #values = new Set<string>();
   readonly #submitted: string[] = [];
 
+  /**
+   * `keyJarPath` is the jar of the configuration being served (`keyJarPath()` in
+   * `key-jar.ts`); a store without one only redacts and resolves no jar entry.
+   * The jar is read on every resolve, so a reload sees entries added since.
+   */
+  constructor(keyJarPath?: string) {
+    this.#keyJarPath = keyJarPath;
+  }
+
   async resolve(reference: SecretRef): Promise<string> {
     let value: string;
-    if (typeof reference === 'string') {
-      value = reference;
+    if ('jar' in reference) {
+      value = await this.#resolveJar(reference.jar);
     } else if ('env' in reference) {
       const resolved = process.env[reference.env];
       if (resolved === undefined) {
@@ -49,6 +61,26 @@ export class SecretStore {
       throw new SecretResolutionError('Resolved secret is empty');
     }
     this.#values.add(value);
+    return value;
+  }
+
+  async #resolveJar(name: string): Promise<string> {
+    if (this.#keyJarPath === undefined) {
+      throw new SecretResolutionError(`No key jar is configured to resolve entry ${name}`);
+    }
+    let jar: Awaited<ReturnType<typeof readKeyJar>>;
+    try {
+      jar = await readKeyJar(this.#keyJarPath);
+    } catch (error) {
+      throw new SecretResolutionError(error instanceof Error ? error.message : String(error));
+    }
+    if (jar === null) {
+      throw new SecretResolutionError(`Key jar does not exist: ${this.#keyJarPath}`);
+    }
+    const value = Object.hasOwn(jar, name) ? jar[name] : undefined;
+    if (value === undefined) {
+      throw new SecretResolutionError(`Key jar has no entry ${name}: ${this.#keyJarPath}`);
+    }
     return value;
   }
 

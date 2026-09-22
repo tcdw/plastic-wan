@@ -10,7 +10,7 @@ export const E2E_BUILTIN_PROVIDER = 'openrouter';
 export const E2E_RELAY_ALIAS = 'relay';
 
 export const E2E_SECRETS = {
-  /** Builtin provider key (config.jsonc only, never returned by the API). */
+  /** Builtin provider key (key.json only, never returned by the API). */
   builtin: 'e2e-builtin-openrouter-secret',
   /** Custom relay key, also used as the temporary-mode key in the dialog. */
   relay: 'e2e-relay-secret',

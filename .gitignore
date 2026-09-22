@@ -10,3 +10,4 @@ test-tmp/
 dev-data/
 .env
 .env.local
+key.json

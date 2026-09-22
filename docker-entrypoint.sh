@@ -13,10 +13,12 @@ if [ "$(id -u plasticwan)" != "$PUID" ] || [ "$(id -g plasticwan)" != "$PGID" ];
 fi
 
 # Fix ownership and permissions for mounted volumes.
-# assertConfigPermissions requires: config parent dir 0700, config file 0600.
+# assertConfigPermissions requires: config parent dir 0700, config file 0600;
+# the key jar next to it must be 0600 as well.
 chown -R plasticwan:plasticwan /data /config 2>/dev/null || true
 chmod 700 /config /data 2>/dev/null || true
 [ -f /config/config.jsonc ] && chmod 600 /config/config.jsonc 2>/dev/null || true
+[ -f /config/key.json ] && chmod 600 /config/key.json 2>/dev/null || true
 
 # Drop to non-root user and execute
 exec gosu plasticwan node /app/src/cli.ts "$@"

@@ -29,13 +29,14 @@ import { MediaService } from './capabilities/media/media.ts';
 import { type PromptTemplateValues, renderPromptTemplate } from './platform/prompt-template.ts';
 import { buildModelRegistry, requireModel } from './platform/providers.ts';
 import { RuntimeConfigurationStore } from './platform/runtime-config.ts';
+import { keyJarPath } from './platform/key-jar.ts';
 import { SecretStore } from './platform/secrets.ts';
 import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from './platform/system-resources.ts';
 
 export async function runDoctor(configPath: string, outputAgentPrompt = false): Promise<void> {
   const loaded = await loadConfig(configPath);
   await assertConfigPermissions(loaded.configPath);
-  const secrets = new SecretStore();
+  const secrets = new SecretStore(keyJarPath(loaded.configPath));
   try {
     await runDoctorChecks(loaded.config, loaded.hash, secrets, outputAgentPrompt);
   } catch (error) {

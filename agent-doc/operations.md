@@ -43,7 +43,7 @@ node src/cli.ts check-config --config dev-data/config.jsonc
 node src/cli.ts doctor --config dev-data/config.jsonc
 ```
 
-`dev-data/config.jsonc`、数据库、媒体和备份已由 `.gitignore` 排除。不要把 Secret 复制到受版本控制的示例或文档。
+`dev-data/config.jsonc`、`dev-data/key.json`、数据库、媒体和备份已由 `.gitignore` 排除（任意位置的 `key.json` 也被排除）。`config.jsonc` 不含 Secret，排查配置时读它即可；Secret 值只在 `key.json`、环境变量或外部命令里，不要读取或复制到受版本控制的示例或文档。
 
 ## 启动与停止
 
@@ -193,6 +193,7 @@ node src/cli.ts backup --config dev-data/config.jsonc
 | 容器路径 | 用途 |
 | --- | --- |
 | `/config/config.jsonc` | 配置文件（bind mount） |
+| `/config/key.json` | key jar：配置里 `{ "jar": "<name>" }` 引用的 Secret，面板写入的 key 也在这里；见[配置：SecretRef](configuration.md#secretref) |
 | `/config/*.md` | Prompt 文件；`system_prompt_file`、`instructions_file` 相对配置文件解析，必须和 `config.jsonc` 放在一起 |
 | `/data` | `data_dir`、SQLite、媒体缓存与备份 |
 
@@ -223,7 +224,7 @@ docker compose logs -f          # 确认 serve_started 与 config_hash
 `docker-entrypoint.sh` 以 root 启动，做三件事后才降权：
 
 1. 按 `PUID`/`PGID`（默认 `1000`）重映射容器内 `plasticwan` 用户，避免 bind mount 的属主冲突。
-2. `chown -R` 挂载卷，并把 `/config`、`/data` 设为 `0700`、`/config/config.jsonc` 设为 `0600` —— 这是为了满足 `assertConfigPermissions` 的权限检查，宿主机上不必手动 chmod。
+2. `chown -R` 挂载卷，并把 `/config`、`/data` 设为 `0700`、`/config/config.jsonc` 与 `/config/key.json` 设为 `0600` —— 这是为了满足 `assertConfigPermissions` 与 key jar 的权限检查，宿主机上不必手动 chmod。
 3. `exec gosu plasticwan node /app/src/cli.ts "$@"`。
 
 因为最后一步把参数原样传给 CLI，其它子命令都能用同一镜像跑：

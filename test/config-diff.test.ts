@@ -150,7 +150,7 @@ test('adds, removes and edits provider models as hot changes in file order', asy
         kind: 'custom',
         base_url: 'https://example.test/v1',
         api: 'openai-responses',
-        api_key: 'spare-secret',
+        api_key: { jar: 'spare' },
         models: [
           { ...spareModel(), id: 'spare-a' },
           { ...spareModel(), id: 'spare-b' },
@@ -263,7 +263,7 @@ test('an agent pointing at a new provider is hot', async () => {
       kind: 'custom',
       base_url: 'https://example.test/v1',
       api: 'openai-responses',
-      api_key: 'extra-secret',
+      api_key: { jar: 'extra' },
       models: [
         {
           id: 'extra-model',
@@ -298,7 +298,7 @@ test('removes a provider as a hot change', async () => {
         kind: 'custom',
         base_url: 'https://example.test/v1',
         api: 'openai-responses',
-        api_key: 'spare-secret',
+        api_key: { jar: 'spare' },
         models: [spareModel()],
       };
     },
@@ -319,7 +319,7 @@ test('re-kinding a provider is hot and takes the file definition', async () => {
         kind: 'custom',
         base_url: 'https://example.test/v1',
         api: 'openai-responses',
-        api_key: 'spare-secret',
+        api_key: { jar: 'spare' },
         models: [spareModel()],
       };
     },
@@ -327,7 +327,7 @@ test('re-kinding a provider is hot and takes the file definition', async () => {
       config.providers.spare = {
         kind: 'builtin',
         provider: 'deepseek',
-        api_key: 'spare-secret',
+        api_key: { jar: 'spare' },
         models: [spareModel()],
       };
     },

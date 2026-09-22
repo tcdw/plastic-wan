@@ -1,8 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { lstat, open, readFile, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { applyEdits, type JSONPath, modify } from 'jsonc-parser';
-import { assertConfigPermissions, loadConfig } from './config.ts';
+import { applyEdits, type JSONPath, modify, parse } from 'jsonc-parser';
+import { assertConfigPermissions, type LoadedConfig, loadConfig } from './config.ts';
+import { type KeyJar, keyJarPath, newKeyJarName, referencedJarNames, updateKeyJar } from './key-jar.ts';
 
 export type ConfigWriteErrorCode =
   | 'config_symlink'
@@ -25,6 +26,14 @@ export class ConfigWriteError extends Error {
 export interface ConfigEdit {
   readonly path: JSONPath;
   readonly value: unknown;
+  /** Key jar entries that `value` references by name; they are stored with the edit. */
+  readonly keys?: KeyJar;
+}
+
+/** Sets `path` to a secret: the plaintext goes into the key jar, the file only names it. */
+export function secretEdit(path: JSONPath, plaintext: string): ConfigEdit {
+  const name = newKeyJarName();
+  return { path, value: { jar: name }, keys: { [name]: plaintext } };
 }
 
 /**
@@ -51,6 +60,10 @@ export async function readConfigRevision(configPath: string): Promise<string> {
  * revision is stale. Panel writes are already serialized by `ConfigReloader`, so
  * the remaining window between that comparison and the rename only matters for
  * hand edits landing in the same instant.
+ *
+ * Key jar entries carried by the edits are added before the rename, so the new
+ * file never names a missing entry, and the entries the new file no longer
+ * references are removed after it, so the old file never does either.
  */
 export async function writeConfigEdits(
   configPath: string,
@@ -76,7 +89,10 @@ export async function writeConfigEdits(
   }
   const bom = source.charCodeAt(0) === 0xfeff;
   let text = bom ? source.slice(1) : source;
+  const previouslyReferenced = referencedJarNames(parse(text, [], { allowTrailingComma: true }));
+  const added: Record<string, string> = {};
   for (const edit of edits) {
+    Object.assign(added, edit.keys);
     const valueEdits = modify(text, edit.path, edit.value, {
       formattingOptions: { insertSpaces: true, tabSize: 2 },
     });
@@ -98,19 +114,40 @@ export async function writeConfigEdits(
     await removeQuietly(temporary);
     throw new ConfigWriteError('config_write_failed', describe('Cannot write config', error));
   }
+  let written: LoadedConfig;
   try {
     // Prompt paths resolve against the containing directory, so this is the same
     // validation the next `serve` would run.
-    await loadConfig(temporary);
+    written = await loadConfig(temporary);
   } catch (error) {
     await removeQuietly(temporary);
     throw new ConfigWriteError('config_invalid', describe('Edited config is invalid', error));
+  }
+  const jar = keyJarPath(target);
+  const addedNames = Object.keys(added);
+  if (addedNames.length > 0) {
+    try {
+      await updateKeyJar(jar, { add: added });
+    } catch (error) {
+      await removeQuietly(temporary);
+      throw new ConfigWriteError('config_write_failed', describe('Cannot write key jar', error));
+    }
   }
   try {
     await rename(temporary, target);
   } catch (error) {
     await removeQuietly(temporary);
+    if (addedNames.length > 0) {
+      await updateKeyJar(jar, { remove: addedNames }).catch(() => undefined);
+    }
     throw new ConfigWriteError('config_write_failed', describe('Cannot replace config', error));
+  }
+  const stillReferenced = referencedJarNames(written.fileConfig);
+  const released = [...previouslyReferenced].filter((name) => !stillReferenced.has(name));
+  if (released.length > 0) {
+    // The new file is in place and the edit succeeded; an entry left behind only
+    // keeps a secret nothing uses, which is not worth reporting a failed write.
+    await updateKeyJar(jar, { remove: released }).catch(() => undefined);
   }
 }
 

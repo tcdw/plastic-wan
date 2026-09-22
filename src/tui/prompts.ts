@@ -1,5 +1,6 @@
-import { checkbox, input, select } from '@inquirer/prompts';
+import { checkbox, input, password, select } from '@inquirer/prompts';
 import type { ProviderApi, SecretRef } from '../platform/config.ts';
+import { newKeyJarName, updateKeyJar } from '../platform/key-jar.ts';
 
 export type ApiAdapter = ProviderApi;
 
@@ -10,26 +11,28 @@ const API_ADAPTER_LABELS: Record<ApiAdapter, string> = {
   'google-generative-ai': 'Google Generative AI API (base URL must include the version path)',
 };
 
-export async function promptSecretRef(message: string, allowLiteral = true): Promise<SecretRef> {
-  type SecretKind = 'env' | 'command' | 'literal';
-  const choices: { value: SecretKind; name: string; description?: string }[] = [
-    {
-      value: 'env',
-      name: 'Environment variable',
-      description: 'Recommended: reads from an environment variable at runtime',
-    },
-    { value: 'command', name: 'External command', description: 'Runs a fixed argv and uses stdout as the secret' },
-  ];
-  if (allowLiteral) {
-    choices.push({
-      value: 'literal',
-      name: 'Literal value',
-      description: 'Not recommended: the secret will be written into the config file',
-    });
-  }
+/**
+ * A typed value goes into the key jar right away, so fetching models can resolve
+ * it before the configuration is saved; `configure` prunes it again if the saved
+ * file ends up not using it.
+ */
+export async function promptSecretRef(message: string, keyJar: string): Promise<SecretRef> {
+  type SecretKind = 'env' | 'command' | 'jar';
   const kind = await select<SecretKind>({
     message: `${message}: source`,
-    choices,
+    choices: [
+      {
+        value: 'env',
+        name: 'Environment variable',
+        description: 'Recommended: reads from an environment variable at runtime',
+      },
+      { value: 'command', name: 'External command', description: 'Runs a fixed argv and uses stdout as the secret' },
+      {
+        value: 'jar',
+        name: 'Value in key.json',
+        description: 'Stores the value in key.json next to the config file; the config only names it',
+      },
+    ],
   });
   switch (kind) {
     case 'env': {
@@ -47,11 +50,14 @@ export async function promptSecretRef(message: string, allowLiteral = true): Pro
       return { command: commandString.trim().split(/\s+/) };
     }
     default: {
-      const literal = await input({
+      const value = await password({
         message: `${message}: value`,
-        validate: (value) => value.length > 0 || 'Secret cannot be empty',
+        mask: true,
+        validate: (candidate) => candidate.length > 0 || 'Secret cannot be empty',
       });
-      return literal;
+      const name = newKeyJarName();
+      await updateKeyJar(keyJar, { add: { [name]: value } });
+      return { jar: name };
     }
   }
 }

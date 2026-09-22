@@ -21,6 +21,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { AdminServer } from '../../../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../../../src/platform/config.ts';
 import { ConfigReloader } from '../../../src/platform/config-reload.ts';
+import { keyJarPath } from '../../../src/platform/key-jar.ts';
 import { AgentModelSwitcher } from '../../../src/platform/model-switch.ts';
 import { loadModelsDevCatalog } from '../../../src/platform/models-dev.ts';
 import { RuntimeConfigurationStore } from '../../../src/platform/runtime-config.ts';
@@ -30,7 +31,13 @@ import { asRunResult, SqliteStore } from '../../../src/store/database.ts';
 import { adminSessions, alarms } from '../../../src/store/schema.ts';
 import { enterSleep, wakeFromSleep } from '../../../src/store/sleep.ts';
 import { seedAdminBulkRows, seedAdminFixture } from '../../../test/fixtures/admin-seed.ts';
-import { startFixtureServer, stopFixtureServer, testConfigJsonc, writeTestConfig } from '../../../test/helpers.ts';
+import {
+  startFixtureServer,
+  stopFixtureServer,
+  testConfigJsonc,
+  writeTestConfig,
+  writeTestKeyJar,
+} from '../../../test/helpers.ts';
 import {
   E2E_ACCEPTED_RELAY_KEYS,
   E2E_BUILTIN_ALIAS,
@@ -203,7 +210,7 @@ async function main(): Promise<void> {
       config.providers[E2E_BUILTIN_ALIAS] = {
         kind: 'builtin',
         provider: E2E_BUILTIN_PROVIDER,
-        api_key: E2E_SECRETS.builtin,
+        api_key: { jar: 'e2e-builtin' },
         models: [
           {
             id: 'openrouter/auto',
@@ -220,8 +227,8 @@ async function main(): Promise<void> {
         kind: 'custom',
         base_url: `http://127.0.0.1:${String(relay.port)}/v1`,
         api: 'openai-completions',
-        api_key: E2E_SECRETS.relay,
-        headers: { 'x-relay-token': E2E_SECRETS.relayHeader },
+        api_key: { jar: 'e2e-relay' },
+        headers: { 'x-relay-token': { jar: 'e2e-relay-header' } },
         models: [
           {
             id: 'relay-existing-model',
@@ -236,6 +243,11 @@ async function main(): Promise<void> {
       };
     }),
   );
+  await writeTestKeyJar(directory, {
+    'e2e-builtin': E2E_SECRETS.builtin,
+    'e2e-relay': E2E_SECRETS.relay,
+    'e2e-relay-header': E2E_SECRETS.relayHeader,
+  });
   // `discover` and `lookup-metadata` resolve metadata against the models.dev
   // catalog. Priming it with a fixture (the module's own test seam) keeps the
   // E2E server offline.
@@ -256,7 +268,7 @@ async function main(): Promise<void> {
   seedAdminFixture(store);
   seedAdminBulkRows(store);
 
-  const secrets = new SecretStore();
+  const secrets = new SecretStore(keyJarPath(configPath));
   const registry = await buildModelRegistry(loaded.config, null, secrets);
   const configStore = new RuntimeConfigurationStore({ config: loaded.config, hash: loaded.hash, ...registry });
   const modelSwitcher = new AgentModelSwitcher(configStore);

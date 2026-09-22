@@ -150,7 +150,7 @@ pnpm run admin:dev
 
 - 提交信息使用简短英文祈使句，与现有历史一致，例如 `Implement Telegram agent bot`、`Fix sticker vision parsing`。
 - 提交前运行 `git diff --check`、相关测试和 TypeScript 检查。
-- 不提交 `dev-data/`、真实 Token、API key、SQLite、媒体缓存或备份。
+- 不提交 `dev-data/`、`key.json`、真实 Token、API key、SQLite、媒体缓存或备份。
 - PR 说明应列出行为变化、数据库/配置影响、验证证据和真实环境中仍未执行的检查。
 
 ## Security & Configuration Invariants
@@ -159,7 +159,7 @@ pnpm run admin:dev
 - Telegram 发送只能经过 `send` Tool；普通 Assistant Message 是私有推理记录。
 - `read` 只能读取 `system:///` 树内 Markdown 文档；`execute` 只 dispatch 组合根注册的内部能力，四个原语与 MCP Tool 不可经它调用；任何 Skill 文档都不能覆盖 Tool 约束或授权规则。
 - 图片和 Reply 只能引用当前 Conversation Context 授权且未过期的 capability；引用按 Conversation 隔离，永不跨 Conversation 解析；禁止接受任意 file ID、Chat ID 或 Topic ID。
-- Secret 优先使用环境变量或受限 command SecretRef；错误输出必须经 `SecretStore.redact`。
+- `config.jsonc` 不接受明文 Secret：明文只存在配置同目录的 `key.json`（`{ "jar": "<name>" }` 引用），其余用环境变量或受限 command SecretRef；错误输出必须经 `SecretStore.redact`。排查配置读 `config.jsonc` 即可，不要读取 `key.json`。
 - MCP HTTP 禁止重定向和 URL 凭据；stdio 仅执行配置中的固定 argv。
 - 非 Windows 系统上，`serve` 与 `doctor` 都要求配置文件 `0600`、其父目录 `0700`；`data_dir` 不得授予 group/other 权限只由 `doctor` 检查（`serve` 仅在目录缺失时以 `0700` 创建）。
 - Admin Panel 密码只以 Argon2id hash 存储；Session Token 只存 SHA-256 摘要，Cookie 为 `HttpOnly` + `SameSite=Strict`。

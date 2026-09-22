@@ -14,6 +14,7 @@ import { type FileConfig, type LoadedConfig, loadConfig } from '../src/platform/
 import { readConfigRevision } from '../src/platform/config-file.ts';
 import { ConfigReloader } from '../src/platform/config-reload.ts';
 import { previewContext } from '../src/platform/invocation-context.ts';
+import { keyJarPath } from '../src/platform/key-jar.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import { buildModelRegistry } from '../src/platform/providers.ts';
 import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
@@ -22,7 +23,14 @@ import { SystemResources } from '../src/platform/system-resources.ts';
 import { seedConfigAdmins } from '../src/store/admins.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import type { TelegramSendApi } from '../src/capabilities/send-tool.ts';
-import { sleep, startFixtureServer, stopFixtureServer, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import {
+  sleep,
+  startFixtureServer,
+  stopFixtureServer,
+  testConfigJsonc,
+  writeTestConfig,
+  writeTestKeyJar,
+} from './helpers.ts';
 
 const directories: string[] = [];
 const CHAT_ID = 123456789;
@@ -135,7 +143,7 @@ function baseConfig(config: FileConfig): void {
   config.providers.faux = {
     kind: 'builtin',
     provider: 'deepseek',
-    api_key: 'faux-secret',
+    api_key: { jar: 'faux' },
     models: [
       model(AGENT_MODEL, { reasoning: true, input: ['text', 'image'], context_window: 200_000, max_tokens: 32_768 }),
       model(SECOND_MODEL, { reasoning: true }),
@@ -158,6 +166,7 @@ function fauxAgent(): ReturnType<typeof fauxProvider> {
 
 interface Fixture {
   readonly directory: string;
+  readonly secrets: SecretStore;
   readonly configPath: string;
   readonly loaded: LoadedConfig;
   readonly store: SqliteStore;
@@ -184,7 +193,8 @@ interface Fixture {
 async function setup(
   options: {
     readonly transform?: (config: FileConfig) => void;
-    readonly secrets?: SecretStore;
+    /** Builds the process-wide store over the fixture's key jar. */
+    readonly secrets?: (keyJar: string) => SecretStore;
     /** Extra files written before the configuration is loaded. */
     readonly files?: Readonly<Record<string, string>>;
   } = {},
@@ -200,6 +210,13 @@ async function setup(
       options.transform?.(config);
     }),
   );
+  await writeTestKeyJar(directory, {
+    faux: 'faux-secret',
+    extra: 'extra-secret',
+    'key-a': 'key-a',
+    'key-b': 'key-b',
+    'agent-rotated': 'agent-rotated',
+  });
   for (const [name, content] of Object.entries(options.files ?? {})) {
     await writeFile(join(directory, name), content);
   }
@@ -211,7 +228,7 @@ async function setup(
   // wires it: credentials are resolved once, at startup. The fixture keeps the
   // mutable handle the registry was built from so a test can stand in a faux
   // provider; a published registry is read-only by type.
-  const secrets = options.secrets ?? new SecretStore();
+  const secrets = (options.secrets ?? ((keyJar) => new SecretStore(keyJar)))(keyJarPath(configPath));
   const registry = await buildModelRegistry(loaded.config, null, secrets);
   const models = registry.models as MutableModels;
   const configStore = new RuntimeConfigurationStore({ config: loaded.config, hash: loaded.hash, ...registry });
@@ -247,6 +264,7 @@ async function setup(
   });
   return {
     directory,
+    secrets,
     configPath,
     loaded,
     store,
@@ -866,7 +884,7 @@ test('a running invocation keeps the connection it started with', async () => {
     }
     await active.patch((config) => {
       customProvider(config.providers, 'agent').base_url = `${second.baseUrl}/`;
-      customProvider(config.providers, 'agent').api_key = 'key-b';
+      customProvider(config.providers, 'agent').api_key = { jar: 'key-b' };
     });
     const result = await active.reloader.reloadFromFile();
     reloaded = result.ok ? 'ok' : `${result.code}: ${result.message}`;
@@ -878,7 +896,7 @@ test('a running invocation keeps the connection it started with', async () => {
         kind: 'custom',
         base_url: `${running.baseUrl}/`,
         api: 'openai-completions',
-        api_key: 'key-a',
+        api_key: { jar: 'key-a' },
         models: [
           model('agent-model', {
             reasoning: false,
@@ -929,14 +947,14 @@ test('a running invocation keeps the connection it started with', async () => {
 });
 
 test('a connection change re-resolves exactly one provider secret', async () => {
-  const secrets = new CountingSecrets();
-  const fixture = await setup({ secrets });
+  const fixture = await setup({ secrets: (keyJar) => new CountingSecrets(keyJar) });
+  const secrets = fixture.secrets as CountingSecrets;
   try {
     const resolvedAtStartup = secrets.resolutions;
     expect(resolvedAtStartup).toBeGreaterThan(0);
     await fixture.patch((config) => {
       // One provider changes its connection, another only its model list.
-      customProvider(config.providers, 'agent').api_key = 'agent-rotated';
+      customProvider(config.providers, 'agent').api_key = { jar: 'agent-rotated' };
       builtinProvider(config.providers, 'faux').models.push(model('deepseek-reasoner'));
     });
     const result = await fixture.reloader.reloadFromFile();
@@ -957,7 +975,7 @@ test('a reload that cannot resolve a new secret leaves the running configuration
     await fixture.patch((config) => {
       // Two providers change their connection in one edit; the second one's
       // SecretRef cannot be resolved, so nothing may be published.
-      customProvider(config.providers, 'agent').api_key = 'agent-rotated';
+      customProvider(config.providers, 'agent').api_key = { jar: 'agent-rotated' };
       customProvider(config.providers, 'vision').api_key = { env: 'PLASTICWAN_TEST_MISSING_SECRET' };
     });
     const result = await fixture.reloader.reloadFromFile();
@@ -971,7 +989,7 @@ test('a reload that cannot resolve a new secret leaves the running configuration
     // Neither the generation nor the registry moved: the whole candidate is
     // refused, not half applied.
     expect(fixture.configStore.current()).toBe(before);
-    expect(fixture.configStore.current().config.providers.agent).toMatchObject({ api_key: 'agent-secret' });
+    expect(fixture.configStore.current().config.providers.agent).toMatchObject({ api_key: { jar: 'agent' } });
   } finally {
     fixture.store.close();
   }
@@ -1331,9 +1349,13 @@ test('invocations.config_hash records the hash that was active when the run star
 }, 30_000);
 
 test('redacts secrets from reload errors and logs', async () => {
-  const secrets = new SecretStore();
-  await secrets.resolve('secret-prompt-name');
-  const fixture = await setup({ secrets });
+  const fixture = await setup({
+    secrets: (keyJar) => {
+      const secrets = new SecretStore(keyJar);
+      secrets.remember('secret-prompt-name');
+      return secrets;
+    },
+  });
   try {
     await fixture.patch((config) => {
       config.agent.system_prompt_file = 'secret-prompt-name.md';
@@ -1647,8 +1669,8 @@ test('setAgentModel refuses a stale revision before writing', async () => {
 });
 
 test('a new model on an existing builtin provider is hot, rebuilds the registry, and re-resolves no secret', async () => {
-  const secrets = new CountingSecrets();
-  const fixture = await setup({ secrets });
+  const fixture = await setup({ secrets: (keyJar) => new CountingSecrets(keyJar) });
+  const secrets = fixture.secrets as CountingSecrets;
   try {
     const resolvedAtStartup = secrets.resolutions;
     expect(resolvedAtStartup).toBeGreaterThan(0);
@@ -1876,7 +1898,7 @@ test('an agent pointing at a brand new provider switches in the same reload', as
         kind: 'custom',
         base_url: 'https://example.test/v1',
         api: 'openai-responses',
-        api_key: 'extra-secret',
+        api_key: { jar: 'extra' },
         models: [model('extra-model', { reasoning: true })],
       };
       config.agent.provider = 'extra';

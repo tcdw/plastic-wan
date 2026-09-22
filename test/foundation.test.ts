@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configuredToolSchemaKeywords, loadConfig } from '../src/platform/config.ts';
+import { secretEdit, writeConfigEdits } from '../src/platform/config-file.ts';
+import { keyJarPath } from '../src/platform/key-jar.ts';
 import { buildModelRegistry, requireModel } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { backupDatabase, SqliteStore } from '../src/store/database.ts';
 import { schemaMigrations } from '../src/store/schema.ts';
-import { pathExists, testConfigJsonc, writeTestConfig } from './helpers.ts';
+import { pathExists, testConfigJsonc, writeTestConfig, writeTestKeyJar } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -36,7 +38,7 @@ describe('configuration', () => {
       throw new Error('Expected the custom agent provider');
     }
     expect(agentProvider.models[0]?.compat?.supports_developer_role).toBe(false);
-    const registry = await buildModelRegistry(loaded.config, null, new SecretStore());
+    const registry = await buildModelRegistry(loaded.config, null, new SecretStore(keyJarPath(configPath)));
     expect(requireModel(registry.models, 'agent', 'agent-model', ['text']).compat).toMatchObject({
       supportsDeveloperRole: false,
     });
@@ -138,7 +140,7 @@ describe('configuration', () => {
     });
     await writeFile(configPath, config);
     const loaded = await loadConfig(configPath);
-    const registry = await buildModelRegistry(loaded.config, null, new SecretStore());
+    const registry = await buildModelRegistry(loaded.config, null, new SecretStore(keyJarPath(configPath)));
     expect(requireModel(registry.models, 'agent', 'agent-model', ['text']).input).toEqual(['text']);
   });
 
@@ -223,7 +225,7 @@ describe('configuration', () => {
         config.providers.builtin = {
           kind: 'builtin',
           provider: 'google',
-          api_key: 'secret',
+          api_key: { jar: 'agent' },
           models: [
             {
               id: 'gemini-3.7-flash',
@@ -389,7 +391,7 @@ describe('configuration', () => {
           kind: 'custom',
           base_url: 'https://example.test/v1',
           api: 'openai-completions',
-          api_key: 'secret',
+          api_key: { jar: 'agent' },
           models: [
             {
               id: 'model',
@@ -411,7 +413,7 @@ describe('configuration', () => {
     await writeFile(
       configPath,
       testConfigJsonc(directory, (config) => {
-        config.providers.builtin = { kind: 'builtin', provider: 'openrouter', api_key: 'secret' } as never;
+        config.providers.builtin = { kind: 'builtin', provider: 'openrouter', api_key: { jar: 'agent' } } as never;
       }),
     );
     await expect(loadConfig(configPath)).rejects.toThrow('Invalid config');
@@ -425,7 +427,7 @@ describe('configuration', () => {
         config.providers.unsupported = {
           kind: 'builtin',
           provider: 'mistral',
-          api_key: 'secret',
+          api_key: { jar: 'agent' },
           models: [
             {
               id: 'mistral-large-latest',
@@ -450,7 +452,7 @@ describe('configuration', () => {
         config.providers.builtin = {
           kind: 'builtin',
           provider: 'deepseek',
-          api_key: 'secret',
+          api_key: { jar: 'agent' },
           models: [
             {
               id: 'deepseek-chat',
@@ -632,6 +634,59 @@ describe('configuration', () => {
   });
 });
 
+describe('key jar', () => {
+  test('names every plaintext secret instead of failing a union', async () => {
+    const { directory, configPath } = await fixture();
+    await writeFile(
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        (config.telegram as { token: unknown }).token = 'telegram-literal';
+        const agent = config.providers.agent;
+        if (agent?.kind === 'custom') {
+          (agent as { headers: unknown }).headers = { 'x-route': 'header-literal', 'x-env': { env: 'ROUTE' } };
+        }
+      }),
+    );
+    const message = await loadConfig(configPath).then(
+      () => '',
+      (error: unknown) => (error as Error).message,
+    );
+    expect(message).toContain('plaintext secrets are not accepted');
+    expect(message).toContain('telegram.token, providers.agent.headers.x-route');
+    expect(message).not.toContain('x-env');
+    expect(message).not.toContain('literal');
+  });
+
+  test('stores secret edits in the jar and drops the entries the file stops using', async () => {
+    const { configPath } = await fixture();
+    const jar = keyJarPath(configPath);
+    await writeConfigEdits(configPath, [secretEdit(['providers', 'agent', 'api_key'], 'agent-rotated-key')]);
+    const text = await readFile(configPath, 'utf8');
+    expect(text).not.toContain('agent-rotated-key');
+    const { fileConfig } = await loadConfig(configPath);
+    const reference = fileConfig.providers.agent?.api_key as { jar: string };
+    expect(reference.jar).toMatch(/^[0-9a-f]{16}$/);
+    const stored = JSON.parse(await readFile(jar, 'utf8')) as Record<string, string>;
+    // The replaced `agent` entry is gone; the untouched ones stay.
+    expect(stored).toEqual({
+      telegram: 'telegram-secret',
+      vision: 'vision-secret',
+      [reference.jar]: 'agent-rotated-key',
+    });
+    expect(await new SecretStore(jar).resolve(reference)).toBe('agent-rotated-key');
+
+    // A rejected edit leaves neither file changed.
+    await expect(
+      writeConfigEdits(configPath, [
+        secretEdit(['providers', 'vision', 'api_key'], 'never-stored'),
+        { path: ['agent', 'model'], value: 'absent-model' },
+      ]),
+    ).rejects.toMatchObject({ code: 'config_invalid' });
+    expect(await readFile(configPath, 'utf8')).toBe(text);
+    expect(JSON.parse(await readFile(jar, 'utf8'))).toEqual(stored);
+  });
+});
+
 describe('secrets', () => {
   test('removes one trailing newline and redacts exact values', async () => {
     const store = new SecretStore();
@@ -641,8 +696,10 @@ describe('secrets', () => {
   });
 
   test('keeps submitted plaintext redactable without letting it accumulate', async () => {
-    const store = new SecretStore();
-    const configured = await store.resolve('configured-api-key');
+    const { directory, configPath } = await fixture();
+    await writeTestKeyJar(directory, { configured: 'configured-api-key' });
+    const store = new SecretStore(keyJarPath(configPath));
+    const configured = await store.resolve({ jar: 'configured' });
     store.remember('submitted-api-key');
     expect(configured).toBe('configured-api-key');
     expect(store.redact('sent submitted-api-key upstream')).toBe('sent [REDACTED] upstream');
@@ -654,6 +711,37 @@ describe('secrets', () => {
     expect(store.redact('sent submitted-api-key upstream')).toBe('sent submitted-api-key upstream');
     expect(store.redact('sent throwaway-key-199 upstream')).toBe('sent [REDACTED] upstream');
     expect(store.redact('sent configured-api-key upstream')).toBe('sent [REDACTED] upstream');
+  });
+
+  test('resolves key jar entries and redacts them', async () => {
+    const { directory, configPath } = await fixture();
+    await writeTestKeyJar(directory, { relay: 'relay-api-key' });
+    const store = new SecretStore(keyJarPath(configPath));
+    expect(await store.resolve({ jar: 'relay' })).toBe('relay-api-key');
+    expect(store.redact('sent relay-api-key upstream')).toBe('sent [REDACTED] upstream');
+    await expect(store.resolve({ jar: 'missing' })).rejects.toThrow('Key jar has no entry missing');
+    // Inherited object members are not entries.
+    await expect(store.resolve({ jar: 'constructor' })).rejects.toThrow('Key jar has no entry constructor');
+    await expect(new SecretStore().resolve({ jar: 'relay' })).rejects.toThrow('No key jar is configured');
+  });
+
+  test('reports a broken key jar without quoting it', async () => {
+    const { configPath } = await fixture();
+    const jar = keyJarPath(configPath);
+    const store = new SecretStore(jar);
+    await unlink(jar);
+    await expect(store.resolve({ jar: 'agent' })).rejects.toThrow('Key jar does not exist');
+    // A parse error would echo the text around the fault, which is a secret.
+    await writeFile(jar, '{ "agent": "sk-leaky-value" ', { mode: 0o600 });
+    const invalid = await store.resolve({ jar: 'agent' }).catch((error: unknown) => error as Error);
+    expect(invalid).toMatchObject({ name: 'SecretResolutionError', message: `Key jar is not valid JSON: ${jar}` });
+    await writeFile(jar, '{ "agent": 42 }');
+    await expect(store.resolve({ jar: 'agent' })).rejects.toThrow('JSON object of non-empty strings');
+    if (process.platform !== 'win32') {
+      await writeFile(jar, '{ "agent": "agent-secret" }');
+      await chmod(jar, 0o644);
+      await expect(store.resolve({ jar: 'agent' })).rejects.toThrow('Key jar must have mode 0600');
+    }
   });
 
   test('does not turn a very short value into a redaction pattern', () => {

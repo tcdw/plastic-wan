@@ -53,7 +53,7 @@ node src/cli.ts check-config --config dev-data/config.jsonc
 - 每次成功应用输出 `config_reloaded` 日志事件，带 `generation`、`active_hash`、`file_hash`、`applied`、`restart_required`、`outside_serve`；失败输出 `config_reload_failed`（`code` 与脱敏后的 `error`）。失败时 active 配置与注册表都不变，错误记录在 `ConfigReloader.status().lastError`；`code` 为 `config_invalid`、`candidate_invalid`、`model_unusable`（模型缺失或不可用，含 vision 输出上限越界）或 `secret_unresolved`（新增或连接字段变化的 Provider 无法解析 SecretRef，此时整次 reload 拒绝，不会半个生效）。
 - `/model` 在写入文件之前就被拒绝时（模型不存在、不可用，或文件无法写入），没有发生 reload：只输出 `model_switch_failed` 日志并把错误返回给调用方，不改变 `lastError`。写入之后应用失败才按上一条处理。
 - 没有任何待重启字段时 `active_hash` 等于文件哈希，可以直接与 `check-config` 的输出比对。只改注释或格式、或者把待重启字段改回原值后应用，都会发布一次内容相同的配置，让 `active_hash` 跟上新的文件哈希。有待重启字段时，`active_hash` 是 candidate RawConfig 的 JSON 序列化的 SHA-256；只有 restart 字段变化时它保持不变。
-- 写入配置文件（`/model`）由 `src/platform/config-file.ts` 完成：只替换 JSONC 的值，保留注释与格式；先写同目录临时文件并完整校验，再 rename 覆盖，因此读者只会看到旧文件或完整合法的新文件。配置文件是符号链接时拒绝写入（`config_symlink`）。
+- 写入配置文件（`/model`）由 `src/platform/config-file.ts` 完成：只替换 JSONC 的值，保留注释与格式；先写同目录临时文件并完整校验，再 rename 覆盖，因此读者只会看到旧文件或完整合法的新文件。配置文件是符号链接时拒绝写入（`config_symlink`）。带 Secret 的写入（`secretEdit`）把明文写进 key jar，文件里只留条目名，见 [SecretRef](#secretref)。
 - 端点、状态码与响应体见 [admin-panel.md](admin-panel.md#api)。
 
 ## SecretRef
@@ -62,14 +62,24 @@ Telegram Token、Provider API key、MCP Header/环境变量都使用同一 Secre
 
 ```jsonc
 [
-  // 字面量：仅适合已 gitignore 且权限受限的本地文件
-  "literal-secret",
-  // 环境变量：推荐
+  // key jar：值在配置文件同目录的 key.json 里，这里只写条目名
+  { "jar": "3f9a2c1d8e7b6a50" },
+  // 环境变量
   { "env": "GOOGLE_API_KEY" },
   // 固定 argv 的外部命令
   { "command": ["secret-tool", "lookup", "service", "plasticwan"] },
 ]
 ```
+
+`config.jsonc` 不接受明文字符串形式的 SecretRef：这样配置文件可以被阅读、比对、贴给别人或交给 agent 检查，而不会带出任何 Secret。`loadConfig` 遇到明文时直接报错，并列出还是明文的字段路径（`telegram.token`、`providers.<alias>.api_key` / `headers.*`、`mcp.servers[].env.*` / `headers.*`）。仓库的 `.claude/settings.json` 用 `Read(**/key.json)` 拒绝 Claude Code 读取 key jar；它只是 Claude Code 这一侧的护栏，管不到其他 agent 和进程，所以 AGENTS.md 里「不要读取 `key.json`」的约定仍然有效。
+
+key jar（`src/platform/key-jar.ts`）：
+
+- 固定为配置文件同目录下的 `key.json`，一个值全为非空字符串的 JSON 对象：`{ "<name>": "<secret>" }`。条目名匹配 `^[A-Za-z0-9_-]{1,64}$`。一个目录里的 `key.json` 只属于这个目录里的 `config.jsonc`。
+- 非 Windows 系统上文件必须是 `0600`，否则解析失败（与配置文件同一要求；Docker entrypoint 会顺手 `chmod`）。文件缺失、条目缺失、JSON 无效或权限不对都是 `SecretResolutionError`，reload 时报 `secret_unresolved`；错误信息只含路径和条目名，从不引用文件内容（JSON 解析错误本身会回显出错位置附近的文本）。
+- 每次 `resolve` 都重新读文件，所以面板刚写进去的条目下一次 reload 就能解析到。
+- 面板和 `configure` 录入的明文都进 key jar，名字是新生成的 16 位十六进制串；换 key 总是写**新条目**、换新名字，而不是覆盖旧条目的值。这是必须的：reload 按 SecretRef 判断连接是否变化，名字不变就不会重新解析。反过来，手工改 `key.json` 里某个现有条目的值不会被热应用识别，要么换一个新条目名再改配置，要么重启。`configure` 在输入时就写入条目（「获取模型列表」要能解析到它），退出时删掉本次新增或原文件用过、但最终留在磁盘上的文件不再引用的条目。
+- 写入顺序由 `writeConfigEdits` 保证：新条目在配置文件 rename 之前加入，新文件因此从不引用不存在的条目；新文件不再引用的旧条目在 rename 之后删除（尽力而为，删不掉只会留下一个没人用的值，不算写入失败）。没被当前配置引用过的手工条目不会被清理。
 
 command SecretRef：
 

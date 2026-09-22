@@ -10,6 +10,7 @@ import { loadConfig } from '../src/platform/config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { McpManager } from '../src/capabilities/mcp.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
+import { keyJarPath } from '../src/platform/key-jar.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import {
@@ -19,6 +20,7 @@ import {
   testConfigJsonc,
   testConfigStore,
   writeTestConfig,
+  writeTestKeyJar,
 } from './helpers.ts';
 
 const directories: string[] = [];
@@ -60,7 +62,7 @@ test('stdio MCP discovery, result bounds, audit, and unmetered repeat calls', as
   const loaded = await loadConfig(configPath);
   const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
-  const manager = new McpManager(store, loaded.config, new SecretStore());
+  const manager = new McpManager(store, loaded.config, new SecretStore(keyJarPath(loaded.configPath)));
   try {
     let validatedNames: string[] = [];
     manager.setRegistryValidator((tools) => {
@@ -172,7 +174,7 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
           tools: ['lookup'],
           payload_max_bytes: 1048576,
           result_max_bytes: 32768,
-          headers: { Authorization: 'Bearer static-secret' },
+          headers: { Authorization: { jar: 'mcp-auth' } },
           tool_policies: [
             {
               name: 'lookup',
@@ -185,10 +187,11 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
     };
   });
   await writeTestConfig(directory, configPath, jsonc);
+  await writeTestKeyJar(directory, { 'mcp-auth': 'Bearer static-secret' });
   const loaded = await loadConfig(configPath);
   const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
-  const manager = new McpManager(store, loaded.config, new SecretStore());
+  const manager = new McpManager(store, loaded.config, new SecretStore(keyJarPath(loaded.configPath)));
   try {
     await manager.start();
     const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
@@ -271,7 +274,11 @@ test('Streamable HTTP MCP preserves query parameters and static headers while re
         database: join(directory, 'redirect.sqlite'),
       },
     });
-    const redirectManager = new McpManager(redirectStore, redirectLoaded.config, new SecretStore());
+    const redirectManager = new McpManager(
+      redirectStore,
+      redirectLoaded.config,
+      new SecretStore(keyJarPath(redirectLoaded.configPath)),
+    );
     try {
       await expect(redirectManager.start()).rejects.toThrow('Required MCP server');
     } finally {
@@ -314,7 +321,7 @@ test('required stdio server failure reports the full underlying error', async ()
   await writeTestConfig(directory, configPath, jsonc);
   const loaded = await loadConfig(configPath);
   const store = await SqliteStore.open(loaded.config);
-  const manager = new McpManager(store, loaded.config, new SecretStore());
+  const manager = new McpManager(store, loaded.config, new SecretStore(keyJarPath(loaded.configPath)));
   try {
     // Regression: this used to collapse to "failed to initialize: Error"
     // (safeErrorName returned only the class name) and hid which variable

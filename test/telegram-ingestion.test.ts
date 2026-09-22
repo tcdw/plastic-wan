@@ -25,8 +25,9 @@ async function setup(
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
   await writeTestConfig(directory, configPath, testConfigJsonc(directory, transform));
-  const { config } = await loadConfig(configPath);
-  const configStore = await testConfigStore({ config, hash: 'hash' });
+  const loaded = await loadConfig(configPath);
+  const { config } = loaded;
+  const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(config);
   return { store, ingestion: new TelegramIngestion(store, configStore, { id: 999 }) };
 }

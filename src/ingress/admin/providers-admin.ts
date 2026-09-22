@@ -16,7 +16,8 @@ import {
   type ThinkingLevelConfig,
   ThinkingLevelSchema,
 } from '../../platform/config.ts';
-import type { ConfigEdit } from '../../platform/config-file.ts';
+import { type ConfigEdit, secretEdit } from '../../platform/config-file.ts';
+import { newKeyJarName } from '../../platform/key-jar.ts';
 import { type ModelMetadataDraft, resolveModelDrafts } from '../../platform/model-metadata.ts';
 import { loadModelsDevCatalog, type ModelsDevCatalog } from '../../platform/models-dev.ts';
 import { type DiscoveredProviderModel, fetchProviderModels } from '../../platform/provider-models.ts';
@@ -343,23 +344,33 @@ export async function createProvider(context: ProviderWriteContext, body: Create
     checkModel(api, model, `model ${model.id}`);
   }
   registerSecrets(context.secrets, [body.api_key, ...Object.values(body.headers ?? {})]);
+  const keys: Record<string, string> = {};
+  const toJar = (plaintext: string): { jar: string } => {
+    const name = newKeyJarName();
+    keys[name] = plaintext;
+    return { jar: name };
+  };
   const provider =
     body.kind === 'builtin'
       ? {
           kind: 'builtin' as const,
           provider: body.provider as string,
-          api_key: body.api_key,
+          api_key: toJar(body.api_key),
           models: body.models,
         }
       : {
           kind: 'custom' as const,
           base_url: (body.base_url as string).replace(/\/+$/, ''),
           api: body.api as ProviderApi,
-          api_key: body.api_key,
-          ...(body.headers === undefined ? {} : { headers: body.headers }),
+          api_key: toJar(body.api_key),
+          ...(body.headers === undefined
+            ? {}
+            : {
+                headers: Object.fromEntries(Object.entries(body.headers).map(([name, value]) => [name, toJar(value)])),
+              }),
           models: body.models,
         };
-  return [{ path: ['providers', body.alias], value: provider }];
+  return [{ path: ['providers', body.alias], value: provider, keys }];
 }
 
 async function resolveNewProviderApi(body: CreateProviderBody): Promise<ProviderApi> {
@@ -410,7 +421,7 @@ export async function updateProvider(
     }
     if (body.api_key !== undefined) {
       secretsToRegister.push(body.api_key);
-      edits.push({ path: ['providers', alias, 'api_key'], value: body.api_key });
+      edits.push(secretEdit(['providers', alias, 'api_key'], body.api_key));
     }
   } else {
     const baseUrl = body.base_url === undefined ? provider.base_url : body.base_url.replace(/\/+$/, '');
@@ -441,7 +452,7 @@ export async function updateProvider(
     }
     if (body.api_key !== undefined) {
       secretsToRegister.push(body.api_key);
-      edits.push({ path: ['providers', alias, 'api_key'], value: body.api_key });
+      edits.push(secretEdit(['providers', alias, 'api_key'], body.api_key));
     }
     for (const [name, value] of Object.entries(body.headers ?? {})) {
       if (value === null) {
@@ -452,7 +463,7 @@ export async function updateProvider(
         continue;
       }
       secretsToRegister.push(value);
-      edits.push({ path: ['providers', alias, 'headers', name], value });
+      edits.push(secretEdit(['providers', alias, 'headers', name], value));
     }
     const keptHeaders = Object.keys(provider.headers ?? {}).filter((name) => !removedHeaders.includes(name));
     const addedHeaders = Object.entries(body.headers ?? {}).filter(([, value]) => value !== null).length;

@@ -284,8 +284,8 @@ export function ProviderWizard({
                   onChange={(event) => setApiKey(event.target.value)}
                 />
                 <p className="text-muted-foreground text-xs">
-                  The panel can only write plaintext. This key fetches the model list and is written to the
-                  configuration file.
+                  This key fetches the model list and is stored in key.json next to the configuration file; config.jsonc
+                  only names its entry.
                 </p>
               </div>
               {kind === 'custom' ? (

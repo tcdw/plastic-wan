@@ -1,10 +1,11 @@
 import { access, chmod, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { type Api, createModels, type FauxProviderHandle, type Model, type Models } from '@earendil-works/pi-ai';
 import { serve, type ServerType } from '@hono/node-server';
 import type { FileConfig, RawConfig } from '../src/platform/config.ts';
 import { buildModelRegistry } from '../src/platform/providers.ts';
 import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
+import { KEY_JAR_FILE, keyJarPath } from '../src/platform/key-jar.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from '../src/platform/system-resources.ts';
 import type {
@@ -161,7 +162,7 @@ export function testConfigJsonc(directory: string, transform?: (config: FileConf
     data_dir: path('data'),
     timezone: 'UTC',
     telegram: {
-      token: 'telegram-secret',
+      token: { jar: 'telegram' },
       process_bot_messages: false,
       bucket_window_seconds: 15,
       chats: [
@@ -176,7 +177,7 @@ export function testConfigJsonc(directory: string, transform?: (config: FileConf
         kind: 'custom',
         base_url: 'https://example.test/v1',
         api: 'openai-responses',
-        api_key: 'agent-secret',
+        api_key: { jar: 'agent' },
         models: [
           {
             id: 'agent-model',
@@ -194,7 +195,7 @@ export function testConfigJsonc(directory: string, transform?: (config: FileConf
         kind: 'custom',
         base_url: 'https://example.test/v1',
         api: 'openai-responses',
-        api_key: 'vision-secret',
+        api_key: { jar: 'vision' },
         models: [
           {
             id: 'vision-model',
@@ -281,10 +282,11 @@ export function fauxRegistry(faux: FauxProviderHandle): TestRegistry {
  * carries it.
  */
 export async function testConfigStore(
-  initial: { readonly config: RawConfig; readonly hash: string },
+  initial: { readonly config: RawConfig; readonly hash: string; readonly configPath: string },
   registry?: TestRegistry,
 ): Promise<RuntimeConfigurationStore> {
-  const resolved = registry ?? (await buildModelRegistry(initial.config, null, new SecretStore()));
+  const resolved =
+    registry ?? (await buildModelRegistry(initial.config, null, new SecretStore(keyJarPath(initial.configPath))));
   return new RuntimeConfigurationStore({ ...initial, ...resolved });
 }
 
@@ -330,9 +332,27 @@ export async function writeTestConfig(
   await writeFile(join(directory, 'agent-system-prompt.md'), systemPrompt);
   await writeFile(join(directory, 'chat-instructions.md'), chatInstructions);
   await writeFile(configPath, jsonc);
+  await writeTestKeyJar(dirname(configPath));
   if (process.platform !== 'win32') {
     // Reload and the config writer demand mode 0600, like `serve` does. Tests
     // that exercise the permission check change this themselves.
     await chmod(configPath, 0o600);
   }
+}
+
+/** The entries `testConfigJsonc` references; a test adds its own through `entries`. */
+export const TEST_KEY_JAR: Readonly<Record<string, string>> = {
+  telegram: 'telegram-secret',
+  agent: 'agent-secret',
+  vision: 'vision-secret',
+};
+
+/** Writes `key.json` into a config directory with the mode the key jar demands. */
+export async function writeTestKeyJar(
+  directory: string,
+  entries: Readonly<Record<string, string>> = {},
+): Promise<void> {
+  const path = join(directory, KEY_JAR_FILE);
+  await writeFile(path, `${JSON.stringify({ ...TEST_KEY_JAR, ...entries }, null, 2)}\n`, { mode: 0o600 });
+  await chmod(path, 0o600);
 }

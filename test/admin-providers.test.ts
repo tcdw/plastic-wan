@@ -8,11 +8,19 @@ import { type FileConfig, type LoadedConfig, loadConfig, type ModelFileConfig } 
 import { ConfigReloader } from '../src/platform/config-reload.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import { loadModelsDevCatalog, resetModelsDevCatalogCache } from '../src/platform/models-dev.ts';
+import { keyJarPath } from '../src/platform/key-jar.ts';
 import { buildModelRegistry } from '../src/platform/providers.ts';
 import type { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { SqliteStore } from '../src/store/database.ts';
-import { startFixtureServer, stopFixtureServer, testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
+import {
+  startFixtureServer,
+  stopFixtureServer,
+  testConfigJsonc,
+  testConfigStore,
+  writeTestConfig,
+  writeTestKeyJar,
+} from './helpers.ts';
 
 const PASSWORD = 'correct-horse-battery';
 const directories: string[] = [];
@@ -65,6 +73,9 @@ interface Fixture {
   readonly restarts: () => number;
   read(): Promise<string>;
   file(): FileConfig;
+  /** The plaintext `key.json` holds for a `{ jar }` SecretRef read from the file. */
+  secret(reference: unknown): string | undefined;
+  jarNames(): string[];
 }
 
 interface FixtureOptions {
@@ -92,16 +103,17 @@ async function adminFixture(options: FixtureOptions = {}): Promise<Fixture> {
       };
       const agent = config.providers.agent;
       if (agent?.kind === 'custom') {
-        agent.headers = { 'x-route': 'header-secret-value' };
+        agent.headers = { 'x-route': { jar: 'header' } };
       }
       options.transform?.(config);
     }),
   );
+  await writeTestKeyJar(directory, { header: 'header-secret-value', builtin: 'builtin-secret' });
   const loaded = await loadConfig(configPath);
   // Kept so the restart test can restore a loadable file after breaking it.
   await writeFile(join(directory, 'original.jsonc'), await readFile(configPath, 'utf8'));
   const store = await SqliteStore.open(loaded.config);
-  const secrets = new SecretStore();
+  const secrets = new SecretStore(keyJarPath(configPath));
   const registry = await buildModelRegistry(loaded.config, null, secrets);
   const configStore = await testConfigStore(loaded, registry);
   const switcher = new AgentModelSwitcher(configStore);
@@ -144,7 +156,16 @@ async function adminFixture(options: FixtureOptions = {}): Promise<Fixture> {
     restarts: () => restarts,
     read: () => readFile(configPath, 'utf8'),
     file: () => JSON.parse(readFileSync(configPath, 'utf8')) as FileConfig,
+    secret: (reference) => {
+      const name = (reference as { jar?: unknown } | undefined)?.jar;
+      return typeof name === 'string' ? readJar(directory)[name] : undefined;
+    },
+    jarNames: () => Object.keys(readJar(directory)).sort(),
   };
+}
+
+function readJar(directory: string): Record<string, string> {
+  return JSON.parse(readFileSync(join(directory, 'key.json'), 'utf8')) as Record<string, string>;
 }
 
 function request(path: string, init: RequestInit = {}): Request {
@@ -325,11 +346,18 @@ test('creates, updates, and deletes a provider through the configuration file', 
       base_url: 'https://relay.example.test/v1',
       header_names: ['x-route'],
     });
-    // Plaintext keys are written as literals and never echoed back.
+    // Plaintext goes into key.json; the config file only names the entries, and
+    // neither is echoed back.
     const text = await fixture.read();
-    expect(text).toContain('relay-secret');
+    expect(text).not.toContain('relay-secret');
+    expect(text).not.toContain('relay-header');
+    const createdRelay = fixture.file().providers.relay;
+    expect(createdRelay?.api_key).toEqual({ jar: expect.stringMatching(/^[0-9a-f]{16}$/) });
+    expect(fixture.secret(createdRelay?.api_key)).toBe('relay-secret');
+    expect(createdRelay?.kind === 'custom' && fixture.secret(createdRelay.headers?.['x-route'])).toBe('relay-header');
     expect(JSON.stringify(createdView)).not.toContain('relay-secret');
     expect(JSON.stringify(createdView)).not.toContain('relay-header');
+    expect(JSON.stringify(createdView)).not.toContain(JSON.stringify(createdRelay?.api_key));
 
     const duplicate = await write(
       fixture,
@@ -376,16 +404,19 @@ test('creates, updates, and deletes a provider through the configuration file', 
     // and headers, and the registry serves them from now on.
     const withKeyView = await readJson(withKey);
     expect(withKeyView.apply).toMatchObject({
-      applied: ['providers.relay.api_key', 'providers.relay.base_url', 'providers.relay.headers.x-route'],
+      applied: ['providers.relay.api_key.jar', 'providers.relay.base_url', 'providers.relay.headers.x-route.jar'],
       restart_required: [],
     });
     expect(fixture.configStore.current().models.getProvider('relay')?.baseUrl).toBe('https://relay.example.test/v2');
     const updated = fixture.file().providers.relay;
-    expect(updated).toMatchObject({
-      base_url: 'https://relay.example.test/v2',
-      api_key: 'relay-secret-2',
-      headers: { 'x-route': 'relay-header-2' },
-    });
+    expect(updated).toMatchObject({ base_url: 'https://relay.example.test/v2' });
+    expect(fixture.secret(updated?.api_key)).toBe('relay-secret-2');
+    expect(updated?.kind === 'custom' && fixture.secret(updated.headers?.['x-route'])).toBe('relay-header-2');
+    // A replaced secret gets a new entry, and the one it replaced is gone.
+    expect(updated?.api_key).not.toEqual(createdRelay?.api_key);
+    expect(Object.values(JSON.parse(await readFile(join(fixture.directory, 'key.json'), 'utf8')))).not.toContain(
+      'relay-secret',
+    );
 
     // A header is dropped with `null`; the key stays when it is omitted.
     const dropped = await write(
@@ -397,11 +428,14 @@ test('creates, updates, and deletes a provider through the configuration file', 
     );
     expect(dropped.status).toBe(200);
     expect(fixture.file().providers.relay).not.toHaveProperty('headers');
-    expect(fixture.file().providers.relay).toMatchObject({ api_key: 'relay-secret-2' });
+    expect(fixture.file().providers.relay?.api_key).toEqual(updated?.api_key);
+    expect(fixture.secret(updated?.api_key)).toBe('relay-secret-2');
 
     const removed = await write(fixture, '/api/providers/relay', 'DELETE', {}, await revisionOf(fixture));
     expect(removed.status).toBe(200);
     expect(fixture.file().providers.relay).toBeUndefined();
+    // Only the entries the fixture configuration itself references are left.
+    expect(fixture.jarNames()).toEqual(['agent', 'builtin', 'header', 'telegram', 'vision']);
   } finally {
     fixture.store.close();
   }
@@ -413,7 +447,7 @@ test('refuses a builtin provider edit that is not its key', async () => {
       config.providers.builtin = {
         kind: 'builtin',
         provider: 'openrouter',
-        api_key: 'builtin-secret',
+        api_key: { jar: 'builtin' },
         models: [model('deepseek/deepseek-v4-flash-0731')],
       };
     },
@@ -447,7 +481,8 @@ test('refuses a builtin provider edit that is not its key', async () => {
       await revisionOf(fixture),
     );
     expect(key.status).toBe(200);
-    expect(fixture.file().providers.builtin).toMatchObject({ api_key: 'rotated' });
+    expect(fixture.secret(fixture.file().providers.builtin?.api_key)).toBe('rotated');
+    expect(fixture.jarNames()).not.toContain('builtin');
   } finally {
     fixture.store.close();
   }

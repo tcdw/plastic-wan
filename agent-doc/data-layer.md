@@ -115,7 +115,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 ### 每日用量
 
-`daily_usage` 只保留 Token 计量：`scope = 'chat'` / `metric = 'model_tokens'` 按 Chat 归属记录 Agent 与聊天触发 `read_image` 的 Token（全局求和后与 `agent.daily_budget.max_tokens` 比较），`scope = 'system'` / `resource = 'sticker_index'` 的 `vision_images`、`vision_tokens` 服务于后台 Sticker 索引的 `vision.daily_budget`。Chat 每日 Invocation 数与 MCP 每日调用数已经取消，不再有对应的 metric；Admin Panel 的 Invocation 与 Tool call 曲线直接 `COUNT` `invocations` 与 `tool_calls`，因此覆盖全部 Tool 而不只是 MCP。
+`daily_usage` 只保留 Token 计量：`scope = 'chat'` / `metric = 'model_tokens'` 按 Chat 归属记录 Agent 与聊天触发 `read_image` 的 Token（全局求和后与 `agent.daily_budget.max_tokens` 比较），`scope = 'system'` / `resource = 'sticker_index'` 的 `vision_images`、`vision_tokens` 服务于后台 Sticker 索引的 `vision.daily_budget`。Token 计量口径为「非缓存输入 + 生成」：`model_tokens` 与 `vision_tokens` 都不含 `cache_read_tokens` / `cache_write_tokens`（迁移 `018_token_usage_excludes_cache.sql` 按此口径从 `model_calls` 重建了历史行），缓存用量只在 `model_calls` 与 Admin Panel 的 Model call 明细里单列。Chat 每日 Invocation 数与 MCP 每日调用数已经取消，不再有对应的 metric；Admin Panel 的 Invocation 与 Tool call 曲线直接 `COUNT` `invocations` 与 `tool_calls`，因此覆盖全部 Tool 而不只是 MCP。
 
 ### MCP 与 Admin
 

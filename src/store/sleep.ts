@@ -20,6 +20,18 @@ export interface SleepTransition {
   readonly entered: boolean;
 }
 
+/**
+ * Tokens charged against the daily budget: the prompt tokens the provider had
+ * to process plus the tokens it generated. Cache reads are served from the
+ * provider's cached prefix and cache writes are tracked separately, so neither
+ * counts here — the meter must follow the work the run asked for, not how warm
+ * the provider's cache happened to be. `usage.input` already excludes both
+ * cache counters (`total = input + output + cacheRead + cacheWrite`).
+ */
+export function meteredTokens(usage: { readonly input: number | bigint; readonly output: number | bigint }): bigint {
+  return BigInt(usage.input) + BigInt(usage.output);
+}
+
 export function readDailyTokenBudget(orm: Orm, maxTokens: number, now = new Date()): DailyTokenBudget {
   const row = orm
     .all<{ amount: bigint }>(

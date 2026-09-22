@@ -142,6 +142,8 @@ function DetailHeader({ invocation }: { readonly invocation: InvocationDetail })
             { label: 'Started', value: formatTime(invocation.started_at) },
             { label: 'Finished', value: formatTime(invocation.finished_at) },
             { label: 'Tokens', value: formatNumber(invocation.total_tokens) },
+            { label: 'Cache read', value: formatNumber(invocation.cache_read_tokens) },
+            { label: 'Cache write', value: formatNumber(invocation.cache_write_tokens) },
             { label: 'Cost', value: formatCost(invocation.total_cost) },
             { label: 'Config hash', value: <MonoValue value={invocation.config_hash.slice(0, 16)} /> },
             { label: 'Prompt version', value: String(invocation.prompt_version) },
@@ -350,6 +352,8 @@ function ModelCallCard({ model }: { readonly model: ModelCallEntry }): React.Rea
       <div className="text-muted-foreground flex flex-wrap items-center gap-3 text-xs">
         <span>Attempt {model.attempt}</span>
         <span>Tokens {formatNumber(model.total_tokens)}</span>
+        <span>Cache read {formatNumber(model.cache_read_tokens)}</span>
+        <span>Cache write {formatNumber(model.cache_write_tokens)}</span>
         <span>Cost {formatCost(model.cost)}</span>
         <span>Duration {formatDuration(model.duration_ms)}</span>
         {model.error_code !== null ? <span className="text-destructive">Error {model.error_code}</span> : null}
@@ -530,6 +534,8 @@ const MODEL_CALL_COLUMNS: readonly ColumnSpec<ModelCallEntry>[] = [
   { key: 'state', title: 'State', render: (row) => <StateBadge state={row.state} /> },
   { key: 'input', title: 'Input', align: 'right', render: (row) => formatNumber(row.input_tokens) },
   { key: 'output', title: 'Output', align: 'right', render: (row) => formatNumber(row.output_tokens) },
+  { key: 'cache-read', title: 'Cache read', align: 'right', render: (row) => formatNumber(row.cache_read_tokens) },
+  { key: 'cache-write', title: 'Cache write', align: 'right', render: (row) => formatNumber(row.cache_write_tokens) },
   { key: 'total', title: 'Total', align: 'right', render: (row) => formatNumber(row.total_tokens) },
   { key: 'cost', title: 'Cost', align: 'right', render: (row) => formatCost(row.cost) },
   { key: 'duration', title: 'Duration', align: 'right', render: (row) => formatDuration(row.duration_ms) },
@@ -539,6 +545,11 @@ const MODEL_CALL_COLUMNS: readonly ColumnSpec<ModelCallEntry>[] = [
 function ModelCallsTab({ invocation }: { readonly invocation: InvocationDetail }): React.ReactNode {
   return (
     <TabContent count={invocation.model_calls.length} message="No model calls were recorded for this invocation.">
+      <p className="text-muted-foreground text-xs">
+        Total counts Input plus Output — the same definition the daily budget meters. Cache read and Cache write are
+        listed for audit and are never added to any total; the provider's raw total is exposed by the API as{' '}
+        <code className="font-mono">provider_total_tokens</code>.
+      </p>
       <TableShell
         columns={MODEL_CALL_COLUMNS}
         data={invocation.model_calls}

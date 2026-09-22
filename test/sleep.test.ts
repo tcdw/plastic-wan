@@ -105,6 +105,29 @@ function modelToolLists(store: SqliteStore): string[][] {
     .map((row) => JSON.parse(row.tools_json) as string[]);
 }
 
+test('charges the daily budget with processed and generated tokens only', async () => {
+  const { store, configStore, runtime, invocationId, faux } = await runtimeSetup(0n);
+  faux.setResponses([fauxAssistantMessage('   ')]);
+  await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
+  const call = store.db
+    .prepare<[], { input_tokens: bigint | null; output_tokens: bigint | null; total_tokens: bigint | null }>(
+      "SELECT input_tokens, output_tokens, total_tokens FROM model_calls WHERE role = 'agent'",
+    )
+    .get();
+  const row = store.db
+    .prepare<[string, string], { amount: bigint }>(
+      "SELECT amount FROM daily_usage WHERE utc_date = ? AND scope = 'chat' AND resource = ? AND metric = 'model_tokens'",
+    )
+    .get(new Date().toISOString().slice(0, 10), '123456789');
+  // The meter follows the budget definition — processed plus generated tokens —
+  // rather than the provider's cache-inclusive total. The faux provider reports
+  // no cache traffic, so this pins the definition, not the arithmetic; the
+  // cache-inclusive cases are covered by the migration and Admin API tests.
+  expect(row?.amount).toBe((call?.input_tokens ?? 0n) + (call?.output_tokens ?? 0n));
+  expect(row?.amount).toBeGreaterThan(0n);
+  store.close();
+});
+
 test('does not expose zzz while more than five percent remains', async () => {
   const { store, configStore, runtime, invocationId, faux } = await runtimeSetup(284_999n);
   // The model deliberately stays silent with a blank draft so the send nudge

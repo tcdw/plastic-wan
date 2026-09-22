@@ -15,7 +15,7 @@ import { MAX_DOWNLOAD_BYTES, type MediaRow, prepareMediaImage, stickerTelegramVa
 import type { MediaDownloader } from './media-download.ts';
 import { dailyUsage, mediaAnalyses, media as mediaTable, modelCalls, stickers } from '../../store/schema.ts';
 import type { SecretStore } from '../../platform/secrets.ts';
-import { isDailyTokenBudgetReached, readDailyTokenBudget } from '../../store/sleep.ts';
+import { isDailyTokenBudgetReached, meteredTokens, readDailyTokenBudget } from '../../store/sleep.ts';
 
 const ReadImageSchema = Type.Object({ image_ref: Type.String({ minLength: 1 }) }, { additionalProperties: false });
 const StickerAnalysisSchema = Type.Object(
@@ -567,7 +567,7 @@ export class MediaService {
             scope: 'chat',
             resource: scope.chatId.toString(),
             metric: 'model_tokens',
-            amount: BigInt(usage.totalTokens),
+            amount: meteredTokens(usage),
             updatedAt: now,
           })
           .onConflictDoUpdate({
@@ -583,7 +583,7 @@ export class MediaService {
             scope: 'system',
             resource: 'sticker_index',
             metric: 'vision_tokens',
-            amount: BigInt(usage.totalTokens),
+            amount: meteredTokens(usage),
             updatedAt: now,
           })
           .onConflictDoUpdate({

@@ -246,6 +246,10 @@ export default function OverviewPage(): React.ReactElement {
           <div className="grid gap-8 md:grid-cols-2 xl:grid-cols-3">
             <ChartPanel title="Tokens">
               <TimeSeriesChart data={chartData} series={TOKEN_SERIES} height={200} />
+              <p className="text-muted-foreground text-xs">
+                Token usage: prompt tokens processed plus generated tokens. Cache reads and writes are excluded from
+                this total and from the daily budget.
+              </p>
             </ChartPanel>
             <ChartPanel title="Invocations">
               <TimeSeriesChart data={chartData} series={INVOCATION_SERIES} height={200} />
@@ -291,6 +295,11 @@ export default function OverviewPage(): React.ReactElement {
           rowKey={(row) => `${row.resource}|${row.metric}|${row.scope}`}
           className={FLUSH_TABLE_CLASS}
         />
+        <p className="text-muted-foreground px-5 py-3 text-xs">
+          <code className="font-mono">model_tokens</code> is what the global daily budget meters, per chat:{' '}
+          <code className="font-mono">vision_tokens</code> is the same definition for the sticker index. Neither
+          includes cache reads or writes.
+        </p>
       </Panel>
 
       <p className="text-muted-foreground text-sm">Generated at {formatTime(data.generated_at)}</p>

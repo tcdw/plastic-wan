@@ -121,6 +121,10 @@ export default function InvocationsPage(): React.ReactElement {
         />
         <ChatFilter value={chat} onChange={setChat} />
       </FilterToolbar>
+      <p className="text-muted-foreground text-xs">
+        Tokens counts the prompt tokens a call had to process plus the tokens it generated. Cache reads and writes are
+        excluded from that total and from the daily budget; they are listed per model call on the invocation page.
+      </p>
       <CursorList
         factory={invocationsQuery}
         filters={filters}

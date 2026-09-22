@@ -18,7 +18,7 @@ import {
   telegramSends,
   toolCalls,
 } from '../../store/schema.ts';
-import { storedSleepUntil } from '../../store/sleep.ts';
+import { meteredTokens, storedSleepUntil } from '../../store/sleep.ts';
 
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 25;
@@ -82,7 +82,14 @@ interface InvocationListRow {
   readonly chat_username: string | null;
   readonly message_thread_id: bigint;
   readonly tool_call_count: bigint;
+  /**
+   * Tokens this invocation consumed under the daily-budget definition: prompt
+   * tokens processed plus generated tokens. Cache reads and writes are reported
+   * in their own fields and never folded into this total.
+   */
   readonly total_tokens: bigint;
+  readonly cache_read_tokens: bigint;
+  readonly cache_write_tokens: bigint;
   readonly total_cost: number | null;
 }
 
@@ -359,7 +366,9 @@ export function listInvocations(orm: Orm, query: ListQuery): Page<Record<string,
               ch.telegram_chat_id, ch.type AS chat_type, ch.title AS chat_title, ch.username AS chat_username,
               c.message_thread_id,
               (SELECT COUNT(*) FROM tool_calls tc WHERE tc.invocation_id = i.id) AS tool_call_count,
-              (SELECT COALESCE(SUM(mc.total_tokens), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS total_tokens,
+              (SELECT COALESCE(SUM(COALESCE(mc.input_tokens, 0) + COALESCE(mc.output_tokens, 0)), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS total_tokens,
+              (SELECT COALESCE(SUM(mc.cache_read_tokens), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS cache_read_tokens,
+              (SELECT COALESCE(SUM(mc.cache_write_tokens), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS cache_write_tokens,
               (SELECT SUM(mc.cost) FROM model_calls mc WHERE mc.invocation_id = i.id) AS total_cost
        FROM invocations i
        JOIN conversations c ON c.id = i.conversation_id
@@ -383,6 +392,8 @@ export function listInvocations(orm: Orm, query: ListQuery): Page<Record<string,
     chat: chatSummary(row),
     tool_call_count: Number(row.tool_call_count),
     total_tokens: Number(row.total_tokens),
+    cache_read_tokens: Number(row.cache_read_tokens),
+    cache_write_tokens: Number(row.cache_write_tokens),
     total_cost: row.total_cost,
   }));
 }
@@ -395,7 +406,9 @@ export function getInvocation(orm: Orm, id: bigint): Record<string, unknown> | n
               ch.telegram_chat_id, ch.type AS chat_type, ch.title AS chat_title, ch.username AS chat_username,
               c.message_thread_id,
               (SELECT COUNT(*) FROM tool_calls tc WHERE tc.invocation_id = i.id) AS tool_call_count,
-              (SELECT COALESCE(SUM(mc.total_tokens), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS total_tokens,
+              (SELECT COALESCE(SUM(COALESCE(mc.input_tokens, 0) + COALESCE(mc.output_tokens, 0)), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS total_tokens,
+              (SELECT COALESCE(SUM(mc.cache_read_tokens), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS cache_read_tokens,
+              (SELECT COALESCE(SUM(mc.cache_write_tokens), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS cache_write_tokens,
               (SELECT SUM(mc.cost) FROM model_calls mc WHERE mc.invocation_id = i.id) AS total_cost
        FROM invocations i
        JOIN conversations c ON c.id = i.conversation_id
@@ -510,6 +523,8 @@ export function getInvocation(orm: Orm, id: bigint): Record<string, unknown> | n
     tool_registry: parseToolRegistry(invocation.tool_registry_json),
     chat: chatSummary(invocation),
     total_tokens: Number(invocation.total_tokens),
+    cache_read_tokens: Number(invocation.cache_read_tokens),
+    cache_write_tokens: Number(invocation.cache_write_tokens),
     total_cost: invocation.total_cost,
     tool_calls: toolCallRows.map((row) => ({
       id: row.id.toString(),
@@ -535,7 +550,8 @@ export function getInvocation(orm: Orm, id: bigint): Record<string, unknown> | n
       output_tokens: num(row.outputTokens),
       cache_read_tokens: num(row.cacheReadTokens),
       cache_write_tokens: num(row.cacheWriteTokens),
-      total_tokens: num(row.totalTokens),
+      total_tokens: Number(meteredTokens({ input: row.inputTokens ?? 0n, output: row.outputTokens ?? 0n })),
+      provider_total_tokens: num(row.totalTokens),
       cost: row.cost,
       duration_ms: num(row.durationMs),
       error_code: row.errorCode,

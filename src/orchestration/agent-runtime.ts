@@ -48,6 +48,7 @@ import {
   type DailyTokenBudget,
   isDailyTokenBudgetReached,
   isLowDailyTokenBudget,
+  meteredTokens,
   readDailyTokenBudget,
 } from '../store/sleep.ts';
 import { ConversationRuntime, type CachedConversationAgent } from './conversation-runtime.ts';
@@ -1254,7 +1255,7 @@ export class AgentRuntime {
           scope: 'chat',
           resource: chatId.toString(),
           metric: 'model_tokens',
-          amount: BigInt(usage.totalTokens),
+          amount: meteredTokens(usage),
           updatedAt: now,
         })
         .onConflictDoUpdate({

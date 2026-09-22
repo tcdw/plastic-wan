@@ -226,6 +226,7 @@ pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.t
 - 被 GC 淘汰的消息携带的引用立即失效：引用旧 `img_`/`stk_`/reply 的 `send` 必须被拒绝，而不是照旧发出。
 - 睡眠状态只随注入批次下发：`zzz` 暴露前后两次请求的 system prompt 逐字节相同，睡眠状态出现在注入批次的 `<runtime_state>` 里；`zzz` 结束时 Invocation 的 `completion_reason` 是 `sleep`。
 - `send_nudge_enabled = true` 且模型持续只写私文本：每个批次的提醒紧跟该批次（`agent_messages` 里 `harness_nudge` 排在下一次注入的 batch 之前，`telegram_sends` 逐批出现），而不是整段运行只提醒一次、其余批次的回复全部丢掉。
+- `send_barrier_enabled = true` 且模型回复期间同一人补了一句：`tool_calls` 先出现一条 `error` / `send_barrier`，随后才有一条 `success`；`invocation_buckets` 里补话那批与开场批次属于同一 `invocation_id` 且 `injected_at` 非空；Telegram 上只有一条合并后的回复。自动化用例见 `test/context-hot-inject.test.ts` 的「send barrier」组（含每轮只拦一次、同一 turn 的第二次 `send` 也被拦、关闭时行为不变）。
 - `/cut_topic`：日志出现 `context_cleared`，`conversation_contexts.head_seq = next_seq` 且 `context_refs` 清空，下一条消息不再看到切点前的 transcript（Telegram 上切了历史、模型仍记得的旧故障形态不应再出现）。该 Conversation 正在运行的 Invocation 会以 `aborted` / `context_cut` 收尾；切点落在某一轮中途时，下一次运行日志出现 `context_realigned` 而不是 provider 400。
 - `/status` 的 Context 行显示该 Conversation 的保留消息数、保留 send 数与 `head_seq`，以及 `未 GC` 或上次 GC 时间；尚未建立 Context 时显示 `Context: 尚未建立`。
 

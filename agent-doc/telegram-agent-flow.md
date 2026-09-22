@@ -81,7 +81,7 @@ deadline = anchor + telegram.bucket_window_seconds
 
 deadline 不看「前一次运行是否仍在 queued/running」，但**运行中的批次不会在轮中途被交出去**：该轮还没结束时，该 Conversation 已到期的 collecting Bucket 只会留在 `collecting`（Scheduler 会把它的 deadline 至少推到 `now + bucket_window_seconds`，轮结束时再由运行时精确锚到轮结束），不会注入。若把「运行中」当成「立刻到期」，运行超过一个窗口后每条消息都会各自变成零长度 Bucket 并各自注入一批（实测：1.4 秒内 6 条消息 → 6 次注入），节拍就没有了。同理不把 deadline 吸附到 `前一次运行 started_at + bucket_window_seconds` 的网格点：那会让运行开始后一个窗口内到达的消息只收集几毫秒（实测 805 ms）就到期，表现为偶尔秒回。
 
-代价是明确接受的：一轮很长（例如 40 秒）时，该轮期间到达的**所有**消息会被并成一批，在该轮结束后满一个窗口才注入——活跃对话因此可能多等一个窗口，换来的是「一轮期间的消息不会把上下文切成若干碎片批次」。
+代价是明确接受的：一轮很长（例如 40 秒）时，该轮期间到达的**所有**消息会被并成一批，在该轮结束后满一个窗口才注入——活跃对话因此可能多等一个窗口，换来的是「一轮期间的消息不会把上下文切成若干碎片批次」。唯一的例外是开启 `agent.send_barrier_enabled` 时的 [send 屏障](#send-屏障)：它只在该轮第一次真正发送之前、由 `send` 自己把这批提前取走。
 
 配置了 `participation` 时，「可触发消息」还要先通过下一节的闸门。
 
@@ -274,6 +274,22 @@ Agent 通过 `alarm` 能力（经 `execute.call` 调用）创建一个绑定当�
 `agent.send_disallow_blank_lines` 开启（默认关闭）时，包含任何空行的文本同样在发送前被拒绝，错误码 `send_blank_lines`。
 
 `agent.rate_limits.sends_per_window` / `window_seconds` 限制同一 Chat 在滑动窗口内的 `telegram_sends` 行数，不区分状态（失败的尝试同样消耗额度，否则失败重试的循环就没有刹车）；超出时 Tool Call 记为 `error`/`send_rate_limited`，不写 `telegram_sends`。这是长活 Invocation 取代 per-Invocation `max_sends` 的刹车。
+
+### send 屏障
+
+`agent.send_barrier_enabled` 开启时，`send` 在所有输入校验都通过、即将写 pending 审计之前多做一次判断：模型组织回复期间，同一 Conversation 是否又开了 `collecting` Bucket。若有，就不发这条，而是：
+
+1. 在同一事务里把这个 Bucket attach 进当前 Invocation（与到期 attach 同一个 `attachBucketToInvocation`：写 `invocation_buckets`、Bucket 置 `running`、按 `sequence_no` 续写 `invocation_messages` 快照），再 `queueInjection`。
+2. 本次 Tool Call 记为 `error` / `send_barrier`，不写 `telegram_sends`、不消耗发送配额；Tool 结果告诉模型新消息紧随其后，请读完再决定发什么。
+3. 该 turn 结束时，turn 边界上既有的 `injectPending` 把这批 steer 进去（它本身就是一个 checkpoint），模型在下一次调用里同时看到被拦的原因与新批次。
+
+约束：
+
+- **每轮至多拦一次**：`barrierSpent` 只在 Agent 空下来（`freeAgent`：该轮结束或运行结束）时重置，屏障自己触发的注入不重置它。所以群里一直有人说话时，第二次 `send` 照常发出，之后到达的消息按原规则等下一轮。
+- 已排队、尚未注入的批次会拦下同一 turn 里之后的所有 `send`，直到模型读过它，不会出现「第一条被拦、第二条先发出去」。
+- 运行处于收尾（`context_stop_ratio` 的 send-only 轮，或已 `beginClosing`）时屏障放行：收尾之后不再注入，拦下只会丢掉这次回复。已 attach 未注入的批次按原规则在运行结束时由 `releaseUninjectedBuckets` 重新排队。
+- 只看已开 Bucket 的消息：被参与闸门拦下、其他 Bot 的消息、不开桶的单独 Sticker 都不会触发屏障。
+- 触发时日志输出 `send_barrier`（`invocation_id`、`bucket_id`、`conversation_id`、`chat_id`）。
 
 成功发送后：
 

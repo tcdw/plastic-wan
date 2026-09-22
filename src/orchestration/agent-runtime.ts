@@ -29,7 +29,14 @@ import {
 import { serializeModelRequestForAudit } from '../platform/model-request-audit.ts';
 import type { InvocationConfigSnapshot, RuntimeConfigurationStore } from '../platform/runtime-config.ts';
 import type { InvocationOutcome } from './scheduler.ts';
-import { agentMessages, dailyUsage, invocations, modelCalls, toolCalls as toolCallsTable } from '../store/schema.ts';
+import {
+  agentMessages,
+  buckets,
+  dailyUsage,
+  invocations,
+  modelCalls,
+  toolCalls as toolCallsTable,
+} from '../store/schema.ts';
 import type { SecretStore } from '../platform/secrets.ts';
 import { createExecuteTool, type ExecutableCapability } from '../capabilities/execute-tool.ts';
 import { createReadTool } from '../capabilities/read-tool.ts';
@@ -44,6 +51,7 @@ import {
   readDailyTokenBudget,
 } from '../store/sleep.ts';
 import { ConversationRuntime, type CachedConversationAgent } from './conversation-runtime.ts';
+import { attachBucketToInvocation } from './invocation-queue.ts';
 
 /**
  * Builds per-invocation tools. Used for the execute registry (runtime-internal
@@ -112,6 +120,12 @@ interface RunState {
   contextClosing: boolean;
   /** The one send-only turn closing mode promises has been handed out. */
   closingTurnGranted: boolean;
+  /**
+   * The send barrier already held one send back this round. Once per round, so
+   * a chat that never goes quiet still gets its reply out; reset when the agent
+   * becomes free, not by the injection the barrier itself caused.
+   */
+  barrierSpent: boolean;
   stopReason: StopReason;
 }
 
@@ -261,6 +275,7 @@ export class AgentRuntime {
       modelBudgetBlocked: false,
       contextClosing: false,
       closingTurnGranted: false,
+      barrierSpent: false,
       stopReason: 'completed',
     };
     const zzz = createZzzTool({
@@ -279,6 +294,66 @@ export class AgentRuntime {
     if (zzzExposed) {
       this.#logZzzExposure(invocationId, identity.chatId, initialBudget);
     }
+    /**
+     * Send barrier. Messages that arrive while the model works on its reply would
+     * otherwise wait for the next round and get a reply of their own. Before the
+     * first send of a round goes out, a batch collecting for this conversation is
+     * attached to this run instead, and the send is held back; the batch reaches
+     * the model at the next turn boundary through the ordinary injection path.
+     */
+    const holdForNewMessages = (): boolean => {
+      const conversationRuntime = this.#conversationRuntime;
+      const conversationId = identity.conversationId;
+      // A closing run never injects again, so holding its last send back would
+      // only lose that reply; an attached batch is re-queued when the run ends.
+      if (state.contextClosing || conversationRuntime.isClosing(conversationId)) {
+        return false;
+      }
+      // A batch the barrier already queued holds back every later send of the
+      // same turn too, so no reply goes out before the model has read it.
+      if (conversationRuntime.hasPendingInjections(conversationId)) {
+        return true;
+      }
+      if (state.barrierSpent) {
+        return false;
+      }
+      const now = new Date();
+      const bucketId = this.#store.transaction(() => {
+        const collecting = this.#store.orm
+          .select({ id: buckets.id })
+          .from(buckets)
+          .where(and(eq(buckets.conversationId, conversationId), eq(buckets.state, 'collecting')))
+          .get();
+        if (collecting === undefined) {
+          return undefined;
+        }
+        attachBucketToInvocation(
+          this.#store,
+          config.agent.history_messages,
+          invocationId,
+          collecting.id,
+          conversationId,
+          now,
+        );
+        return collecting.id;
+      });
+      if (bucketId === undefined) {
+        return false;
+      }
+      state.barrierSpent = true;
+      conversationRuntime.queueInjection(conversationId, bucketId);
+      console.log(
+        JSON.stringify({
+          event: 'send_barrier',
+          invocation_id: invocationId.toString(),
+          bucket_id: bucketId.toString(),
+          conversation_id: conversationId.toString(),
+          chat_id: identity.chatId.toString(),
+          at: now.toISOString(),
+        }),
+      );
+      return true;
+    };
     const buildTools = (target: InvocationContext, exposeZzz: boolean): readonly AgentTool[] => [
       createReadTool({ store: this.#store, context: target, resources: this.#systemResources }),
       createSendTool({
@@ -291,6 +366,7 @@ export class AgentRuntime {
         disallowBlankLines: config.agent.send_disallow_blank_lines === true,
         deadline,
         bot: this.#bot,
+        ...(config.agent.send_barrier_enabled === true ? { holdForNewMessages } : {}),
       }),
       createExecuteTool({
         store: this.#store,
@@ -436,6 +512,7 @@ export class AgentRuntime {
      */
     const freeAgent = (): void => {
       runtime.endRound(conversationId);
+      state.barrierSpent = false;
       this.#deferCollectingBucket(config, conversationId, Date.now());
     };
     const stop = (reason: StopReason): true => {

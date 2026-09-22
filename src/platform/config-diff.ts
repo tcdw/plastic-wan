@@ -46,6 +46,7 @@ const HOT_PATHS: ReadonlySet<string> = new Set([
   'agent.send_max_text_length',
   'agent.send_disallow_blank_lines',
   'agent.send_nudge_enabled',
+  'agent.send_barrier_enabled',
   'agent.daily_budget.max_tokens',
   'agent.max_concurrency',
   'agent.history_messages',

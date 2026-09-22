@@ -62,6 +62,30 @@ interface AlarmDueRow {
 }
 
 /**
+ * Moves one collecting bucket into a running invocation and freezes its
+ * messages there, so later edits never change the batch the model will see.
+ * Callers run it inside their transaction and then queue the injection. Shared
+ * by the due-bucket attach below and the send barrier in `AgentRuntime`.
+ */
+export function attachBucketToInvocation(
+  store: SqliteStore,
+  historyMessages: number,
+  invocationId: bigint,
+  bucketId: bigint,
+  conversationId: bigint,
+  now: Date,
+): void {
+  const timestamp = now.toISOString();
+  store.orm.insert(invocationBuckets).values({ invocationId, bucketId, attachedAt: timestamp }).run();
+  store.orm
+    .update(buckets)
+    .set({ state: 'running', startedAt: timestamp, updatedAt: timestamp })
+    .where(and(eq(buckets.id, bucketId), eq(buckets.state, 'collecting')))
+    .run();
+  snapshotInvocation(store, historyMessages, invocationId, bucketId, conversationId, false, { append: true });
+}
+
+/**
  * Synchronous state transitions that turn due buckets and alarms into queued
  * invocations, plus crash recovery and startup catch-up. No timers live here:
  * the scheduler drives these methods from its event loop.
@@ -343,23 +367,13 @@ export class InvocationQueueService {
       throw new Error(`Bucket ${bucket.id} has no chat`);
     }
     const timestamp = now.toISOString();
-    this.#store.orm
-      .insert(invocationBuckets)
-      .values({ invocationId, bucketId: bucket.id, attachedAt: timestamp })
-      .run();
-    this.#store.orm
-      .update(buckets)
-      .set({ state: 'running', startedAt: timestamp, updatedAt: timestamp })
-      .where(and(eq(buckets.id, bucket.id), eq(buckets.state, 'collecting')))
-      .run();
-    snapshotInvocation(
+    attachBucketToInvocation(
       this.#store,
       this.#configStore.current().config.agent.history_messages,
       invocationId,
       bucket.id,
       bucket.conversation_id,
-      false,
-      { append: true },
+      now,
     );
     if (sleepUntil !== null) {
       this.#logSleepingSkip(chat.telegram_chat_id, bucket.id, invocationId, sleepUntil);

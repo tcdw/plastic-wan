@@ -29,6 +29,13 @@ export const SendInputSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/**
+ * Tool error for a send held back by the barrier. The new batch is injected at
+ * the next turn boundary, so the model reads it right after this result.
+ */
+export const SEND_BARRIER_TEXT =
+  'Not sent: new messages arrived in this conversation before this reply went out. They follow as a new batch; read them, then decide again what, if anything, to send. One message can answer both batches.';
+
 export type SendToolInput =
   | {
       readonly kind: 'text';
@@ -94,6 +101,12 @@ export interface SendToolEnvironment {
   readonly disallowBlankLines: boolean;
   readonly deadline: number;
   readonly bot: { readonly id: bigint; readonly displayName: string; readonly username: string | null };
+  /**
+   * Send barrier: returns true when this send must not go out because newer
+   * messages of the conversation are about to be injected. Absent when the
+   * barrier is off.
+   */
+  readonly holdForNewMessages?: () => boolean;
 }
 
 function alarmMention(
@@ -186,6 +199,12 @@ export function createSendTool(
       if (send.kind === 'sticker' && stickerFileId === undefined) {
         recordRejectedSend(environment, toolCallId, input, 'sticker_ref_not_authorized');
         throw new Error('sticker_ref is not authorized in this conversation context');
+      }
+      // Checked last, so only a send that would otherwise go out is held back:
+      // an invalid one keeps its own error and the barrier stays unspent.
+      if (environment.holdForNewMessages?.() === true) {
+        recordRejectedSend(environment, toolCallId, input, 'send_barrier');
+        throw new Error(SEND_BARRIER_TEXT);
       }
       const pending = environment.store.transaction(() => {
         const now = new Date().toISOString();

@@ -192,7 +192,7 @@ participation 放行 = 未配置 participation || 处于活跃时段 || 更新�
 
 一次 Invocation 的模型输入由 `ContextBuilder` 的两半拼成：稳定的 `systemPrompt` 与一批注入消息，两者各含什么见 [Context 生命周期：system prompt 拆分](#context-生命周期)。项目里不再有「每次重新渲染全部历史」的 `userPrompt`——历史由 Conversation Context 的 transcript 承载。本节只记录拆分之外的组装产物与规则：
 
-- `directImages`：当 `agent` 模型支持 image 时，**本批**消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容，并按 `figure_N` 与消息媒体行中的引用对应。
+- `directImages`：当 `agent` 模型支持 image 时，**本批**消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容，并按 `figure_N` 与消息媒体行中的引用对应。媒体行同时带稳定的 `img_` 引用（`[photo figure_1 img_xxx WxH]`）：codec 落盘时丢弃内联图片块，重启或缓存丢弃后 replay 的 transcript 只剩文本，模型要靠这个 `img_` 用 `read_image` 再看；`read_image` 不接受 `figure_N`。
 - `visibleSenders`：本批及保留历史中可见的 Telegram user sender，供 `alarm` 校验目标。
 - `imageCapabilities`：Sticker 始终可用；Photo/图片 Document 在 `agent` 模型不支持 image 时全部可用，支持 image 时历史图片通过 `img_` 引用可用，供 `read_image` 使用。
 - `omittedNewMessages`：因 Context 上限省略的新消息数量。

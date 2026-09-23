@@ -253,7 +253,7 @@ export class ContextBuilder {
     const conversationMode =
       identity.chatType === 'private' ? 'Conversation mode: private chat.' : 'Conversation mode: group chat.';
     const imageHandling = supportsImages
-      ? 'Photos and supported image Documents from the newest injected messages are attached directly to the multimodal Agent input, in the same order as the [kind figure_N] media lines inside the messages. Treat each attached image as the media of the message that lists the matching figure_N. Older images are not attached; inspect them on demand with the read_image capability (called via execute) using their img_ refs. read_image never accepts figure_N refs.'
+      ? 'Photos and supported image Documents from the newest injected messages are attached directly to the multimodal Agent input, in the same order as the [kind figure_N img_ref] media lines inside the messages. Treat each attached image as the media of the message that lists the matching figure_N. Attachments are not kept: older images, including earlier figure_N images, are inspected on demand with the read_image capability (called via execute) using their img_ refs. read_image never accepts figure_N refs.'
       : 'Telegram images and Stickers are available through the read_image capability (called via execute). Call it when visual details are needed.';
     const stickerCatalog = this.#stickerCatalog();
     const stickerCatalogHandling =
@@ -371,8 +371,9 @@ export class ContextBuilder {
     // A reply to a message rendered in this same batch needs no quoted copy of it.
     const inlineReplies = new Set([...selectedHistory, ...selectedCurrent].map((entry) => entry.snapshot.message_id));
     // Attachments belong to the newest batch only: the model receives them once,
-    // paired with figure_N markers rendered inside that batch's messages.
-    // Older images stay reachable through their stable img_ refs.
+    // paired with figure_N markers rendered inside that batch's messages. The
+    // stored transcript drops the attachment, so each figure line also carries
+    // its stable img_ ref for read_image after a replay.
     const orderedFigureMedia: { imageRef: string; originalRef: string }[] = [];
     let nextFigureNumber = 1;
     const renderSnapshot = (entry: (typeof prepared)[number]): string => {
@@ -392,7 +393,7 @@ export class ContextBuilder {
           }
           const imageRef = `figure_${nextFigureNumber++}`;
           orderedFigureMedia.push({ imageRef, originalRef: media.image_ref });
-          return { ...media, image_ref: imageRef };
+          return { ...media, figure: imageRef };
         }),
       };
       return format(rendered, inlineReplies);
@@ -594,6 +595,7 @@ export class ContextBuilder {
 interface PreparedSnapshot extends Omit<MessageSnapshot, 'revision' | 'media'> {
   readonly media: readonly {
     readonly image_ref: string;
+    readonly figure?: string;
     readonly kind: string;
     readonly mime_type: string | null;
     readonly width: string | null;
@@ -662,7 +664,8 @@ function formatSnapshot(snapshot: PreparedSnapshot, options: FormatOptions): str
   }
   for (const media of snapshot.media) {
     const size = media.width === null || media.height === null ? '' : ` ${media.width}x${media.height}`;
-    body.push(`[${media.kind} ${media.image_ref}${size}]`);
+    const figure = media.figure === undefined ? '' : `${media.figure} `;
+    body.push(`[${media.kind} ${figure}${media.image_ref}${size}]`);
   }
   if (body.length === 0) {
     body.push(`[${snapshot.kind}]`);

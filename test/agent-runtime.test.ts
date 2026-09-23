@@ -469,6 +469,23 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
       },
     ],
   });
+  // The stored transcript drops the attachment, so a replay can only reach the
+  // photo through the img_ ref carried on its figure line.
+  const storedBatch = store.db
+    .prepare<[], { payload_json: string }>(
+      "SELECT payload_json FROM context_messages WHERE role = 'user' ORDER BY seq LIMIT 1",
+    )
+    .get()?.payload_json;
+  expect(storedBatch).not.toContain('"type":"image"');
+  const storedRef = /\[photo figure_1 (img_[^\s\]]+)/.exec(storedBatch ?? '')?.[1];
+  expect(storedRef).toBeDefined();
+  expect(
+    store.db
+      .prepare<[string], { kind: string }>(
+        "SELECT m.kind FROM context_refs r JOIN media m ON m.id = r.media_id WHERE r.ref = ? AND r.kind = 'media'",
+      )
+      .get(storedRef ?? ''),
+  ).toEqual({ kind: 'photo' });
   expect(await readdir(loaded.config.paths.media_cache)).toEqual([]);
   store.close();
 });

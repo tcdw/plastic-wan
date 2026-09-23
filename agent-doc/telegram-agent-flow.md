@@ -143,7 +143,8 @@ T+94   若期间再没有新 Bucket 到期，空闲等待耗尽，I 结束
 system prompt 拆分（文档中只在此处维护；`ContextBuilder.buildSystemPrompt` 产出稳定段，`renderInjection` 产出注入段）：
 
 - **稳定段**只包含不随 Invocation 变化的内容：Core Agent Protocol、System Skill 索引、图片/Sticker 说明、人格 Prompt、私聊/群聊模式、Chat instructions、记忆与 internal context 的使用说明。Core Protocol 规定消息分区、Tool 选择原则与副作用成功判定；人格 Prompt 只负责身份和表达风格；稳定段不写「什么时候该参与」——是否发言由模型按当前批次判断；群聊的消息准入由运行期 participation 闸门决定（配置了才生效）。它对一个 Conversation Context 保持逐字节稳定，这样每次请求的前缀能被 provider prefix cache 命中。Sticker 目录（`sticker_id:emoji`）是**不可信数据**，因此随批次注入，不进入稳定段；它只在与保留 transcript 里最新一份不同时才重新附带（被 GC 淘汰后也会重新附带），不是每批都带一份。
-- **注入段**是一条 `user` 消息，依次为：可信的 `<runtime_state>`（当前时间、睡眠状态、Alarm 任务、Startup catch-up 说明、`<memory_list>`、`<internal_context_history>`）、可选的 `<untrusted_sticker_catalog>`、可选的 `<untrusted_telegram_history>`（见下一条）、`<untrusted_new_messages>`（本批 Telegram 快照，格式与既有 `invocation_messages` 快照一致）。信任边界不变：`<untrusted_*>` 内的一切仍是数据。
+- **注入段**是一条 `user` 消息，依次为：可信的 `<runtime_state>`（当前时间、睡眠状态、Alarm 任务、Startup catch-up 说明、`<memory_list>`、`<internal_context_history>`）、可选的 `<untrusted_sticker_catalog>`、可选的 `<untrusted_telegram_history>`（见下一条）、`<untrusted_new_messages>`（本批 Telegram 快照）。信任边界不变：`<untrusted_*>` 内的一切仍是数据。
+- 消息不以 `invocation_messages` 的快照 JSON 发给模型，而由 `formatSnapshot` 渲染成省 Token 的紧凑文本：一行 `[message_id 本地时间 topic:N you re:N uid:N @username] 显示名` 头部，下面是两格缩进的正文（转发来源、回复引用、text/caption 各行、`[kind ref WxH]` 媒体行）；空字段、`revision`、`media_group_id`、mime 等不渲染，日期只在与本批 `current_time` 不同时显示，回复目标就在同一批时省略引用。头部方括号内只有 runtime 生成的 token，所有 Telegram 可控内容都在缩进行上，因此无法伪造头部或区块标签；`collectVisibleSenders`/`collectInjectedMessageIds` 只回读最后一个 `</runtime_state>` 之后的头部行。改动这个格式要同步改 `CORE_AGENT_PROTOCOL` 中的格式说明（system prompt 哈希变化会让所有 Context 重建）。
 - 历史不再被重新渲染成 `<untrusted_telegram_history>`；它由 transcript 本身承载。只有两种情况例外：该 Conversation Context 尚无历史（冷启动），以及历史区段里那些**从未进入 transcript 的消息**（例如被 participation 闸门拦下的消息）——它们仍然必须渲染，否则模型永远看不到。
 - 随 Invocation 变化的内容（当前时间、记忆、internal context、睡眠状态、Alarm 任务）都必须待在注入段：放进 system prompt 会让每次请求的前缀都不同，既失去前缀缓存，又违反「Context 可以稳定保留」的前提。
 - system prompt 变化（`system_prompt_hash` 不同）意味着 Context 重建：丢弃全部 canonical history 重新开始。Prompt 与 Chat `instructions_file` 属于配置热更新白名单：改完文件并在 Admin「Apply config file」或 `/model` 应用之后，该 Conversation 下一次运行就按新哈希重建；运行时切换模型若改变了模板渲染结果或图片说明，同样会重建。清单见 [configuration.md](configuration.md#运行时配置热更新)。
@@ -191,7 +192,7 @@ participation 放行 = 未配置 participation || 处于活跃时段 || 更新�
 
 一次 Invocation 的模型输入由 `ContextBuilder` 的两半拼成：稳定的 `systemPrompt` 与一批注入消息，两者各含什么见 [Context 生命周期：system prompt 拆分](#context-生命周期)。项目里不再有「每次重新渲染全部历史」的 `userPrompt`——历史由 Conversation Context 的 transcript 承载。本节只记录拆分之外的组装产物与规则：
 
-- `directImages`：当 `agent` 模型支持 image 时，**本批**消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容，并按 `figure_N` 与消息 JSON 中的引用对应。
+- `directImages`：当 `agent` 模型支持 image 时，**本批**消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容，并按 `figure_N` 与消息媒体行中的引用对应。
 - `visibleSenders`：本批及保留历史中可见的 Telegram user sender，供 `alarm` 校验目标。
 - `imageCapabilities`：Sticker 始终可用；Photo/图片 Document 在 `agent` 模型不支持 image 时全部可用，支持 image 时历史图片通过 `img_` 引用可用，供 `read_image` 使用。
 - `omittedNewMessages`：因 Context 上限省略的新消息数量。

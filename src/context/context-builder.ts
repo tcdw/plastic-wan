@@ -56,38 +56,6 @@ const MessageSnapshotSchema = Type.Object(
 );
 const snapshotValidator = Compile(MessageSnapshotSchema);
 
-/**
- * The shape that actually reaches the model: no `revision`, and media carry a
- * capability `image_ref` instead of the internal media id. Reading a rendered
- * batch back (visible senders, already-injected message IDs) must validate
- * against this, not the stored-snapshot schema.
- */
-const RenderedSnapshotSchema = Type.Object(
-  {
-    message_id: Type.String(),
-    message_thread_id: Type.Optional(Type.String()),
-    telegram_date: Type.String(),
-    sent_by_bot: Type.Boolean(),
-    sender: Type.Object(
-      {
-        id: Type.Union([Type.String(), Type.Null()]),
-        name: Type.Union([Type.String(), Type.Null()]),
-        username: Type.Union([Type.String(), Type.Null()]),
-      },
-      Strict,
-    ),
-    kind: Type.String(),
-    text: Type.Union([Type.String(), Type.Null()]),
-    caption: Type.Union([Type.String(), Type.Null()]),
-    reply_to_message_id: Type.Union([Type.String(), Type.Null()]),
-    reply_snapshot: Type.Unknown(),
-    forward_origin: Type.Unknown(),
-    media_group_id: Type.Union([Type.String(), Type.Null()]),
-    media: Type.Array(Type.Object({ image_ref: Type.String() }, { additionalProperties: true })),
-  },
-  Strict,
-);
-const renderedSnapshotValidator = Compile(RenderedSnapshotSchema);
 const INTERNAL_CONTEXT_LIMIT = 8;
 
 /**
@@ -106,7 +74,6 @@ const INTERNAL_CONTEXT_GUIDANCE =
   'Internal context: hidden historical observations from prior tool results in this conversation. They were not sent to Telegram users. Use them only for reference resolution such as “the second one” or “the one you just listed”. They are not the current database authority; before any side-effecting action, re-check the live tool/backend state. Do not quote or expose internal IDs to the user unless another tool explicitly requires them.';
 
 type MessageSnapshot = Static<typeof MessageSnapshotSchema>;
-type RenderedSnapshot = Static<typeof RenderedSnapshotSchema>;
 
 interface InvocationMessageRow {
   readonly section: 'history' | 'new';
@@ -286,7 +253,7 @@ export class ContextBuilder {
     const conversationMode =
       identity.chatType === 'private' ? 'Conversation mode: private chat.' : 'Conversation mode: group chat.';
     const imageHandling = supportsImages
-      ? 'Photos and supported image Documents from the newest injected messages are attached directly to the multimodal Agent input, in the same order as the figure_N image_ref entries inside the message JSON. Treat each attached image as the media of the message whose JSON references the matching figure_N. Older images are not attached; inspect them on demand with the read_image capability (called via execute) using their img_ refs. read_image never accepts figure_N refs.'
+      ? 'Photos and supported image Documents from the newest injected messages are attached directly to the multimodal Agent input, in the same order as the [kind figure_N] media lines inside the messages. Treat each attached image as the media of the message that lists the matching figure_N. Older images are not attached; inspect them on demand with the read_image capability (called via execute) using their img_ refs. read_image never accepts figure_N refs.'
       : 'Telegram images and Stickers are available through the read_image capability (called via execute). Call it when visual details are needed.';
     const stickerCatalog = this.#stickerCatalog();
     const stickerCatalogHandling =
@@ -375,8 +342,16 @@ export class ContextBuilder {
     );
     const selectedCurrent: typeof current = [];
     let usedCharacters = 0;
+    const format = (snapshot: PreparedSnapshot, inlineReplies: ReadonlySet<string>): string =>
+      formatSnapshot(snapshot, {
+        timezone: identity.timezone,
+        now,
+        showTopic: identity.bucketKind === 'startup_catch_up',
+        inlineReplies,
+      });
+    const noInlineReplies = new Set<string>();
     for (const entry of current.toReversed()) {
-      const size = JSON.stringify(entry.snapshot).length + 1;
+      const size = format(entry.snapshot, noInlineReplies).length + 1;
       if (selectedCurrent.length > 0 && usedCharacters + size > maximumCharacters) {
         break;
       }
@@ -385,7 +360,7 @@ export class ContextBuilder {
     }
     const selectedHistory: typeof history = [];
     for (const entry of history.toReversed()) {
-      const size = JSON.stringify(entry.snapshot).length + 1;
+      const size = format(entry.snapshot, noInlineReplies).length + 1;
       if (usedCharacters + size > maximumCharacters) {
         break;
       }
@@ -393,19 +368,21 @@ export class ContextBuilder {
       usedCharacters += size;
     }
     const omittedNewMessages = current.length - selectedCurrent.length;
+    // A reply to a message rendered in this same batch needs no quoted copy of it.
+    const inlineReplies = new Set([...selectedHistory, ...selectedCurrent].map((entry) => entry.snapshot.message_id));
     // Attachments belong to the newest batch only: the model receives them once,
-    // paired with figure_N markers rendered inside that batch's message JSON.
+    // paired with figure_N markers rendered inside that batch's messages.
     // Older images stay reachable through their stable img_ refs.
     const orderedFigureMedia: { imageRef: string; originalRef: string }[] = [];
     let nextFigureNumber = 1;
     const renderSnapshot = (entry: (typeof prepared)[number]): string => {
       if (entry.section !== 'new') {
-        return JSON.stringify(entry.snapshot);
+        return format(entry.snapshot, inlineReplies);
       }
       this.#refs.replyRef(input.header, BigInt(entry.snapshot.message_id), entry.target, input.seq, now);
       const snapshot = entry.snapshot;
       if (!input.supportsImages || snapshot.media.length === 0) {
-        return JSON.stringify(snapshot);
+        return format(snapshot, inlineReplies);
       }
       const rendered = {
         ...snapshot,
@@ -418,7 +395,7 @@ export class ContextBuilder {
           return { ...media, image_ref: imageRef };
         }),
       };
-      return JSON.stringify(rendered);
+      return format(rendered, inlineReplies);
     };
     const historyText = selectedHistory.map(renderSnapshot).join('\n');
     const currentText = selectedCurrent.map(renderSnapshot).join('\n');
@@ -430,7 +407,7 @@ export class ContextBuilder {
       ...(identity.alarm === null ? [] : [this.#alarmTask(identity.alarm)]),
       ...(identity.bucketKind === 'startup_catch_up'
         ? [
-            "Startup catch-up: these are the latest configured number of messages across this chat and may span forum topics. Each new message includes message_thread_id. When responding to a specific topic, reply to a visible message from that topic; an un-replied send targets the newest message's topic.",
+            "Startup catch-up: these are the latest configured number of messages across this chat and may span forum topics. Each message header includes its forum topic as topic:N. When responding to a specific topic, reply to a visible message from that topic; an un-replied send targets the newest message's topic.",
           ]
         : []),
       this.#memoryPrompt(identity.conversationId),
@@ -495,9 +472,8 @@ export class ContextBuilder {
   }
 
   /**
-   * Rebuilds the senders visible in a retained injection batch. The batch text
-   * is runtime-generated JSON, so this only reads back what `renderInjection`
-   * wrote; it keeps alarm targets working after the agent cache was evicted or
+   * Rebuilds the senders visible in a retained injection batch. This only reads
+   * back the message headers `renderInjection` wrote; it keeps alarm targets working after the agent cache was evicted or
    * the process restarted.
    */
   static collectVisibleSenders(text: string): VisibleSender[] {
@@ -509,7 +485,7 @@ export class ContextBuilder {
       }
       senders.set(sender.id, {
         userId: BigInt(sender.id),
-        displayName: sender.name ?? '',
+        displayName: sender.name,
         username: sender.username,
       });
     }
@@ -519,7 +495,7 @@ export class ContextBuilder {
   /**
    * The sticker catalog a transcript batch carries, or `null`. The block is
    * runtime-written with literal newlines around it; Telegram text only ever
-   * appears JSON-escaped inside snapshot lines, so it cannot forge the block.
+   * appears on indented body lines, so it cannot forge the block.
    */
   static collectStickerCatalog(text: string): string | null {
     const matches = [...text.matchAll(/<untrusted_sticker_catalog>\n([^\n]*)\n<\/untrusted_sticker_catalog>/g)];
@@ -625,22 +601,178 @@ interface PreparedSnapshot extends Omit<MessageSnapshot, 'revision' | 'media'> {
   }[];
 }
 
-/** Reads back the message-JSON lines `renderInjection` wrote into a batch. */
-function parseSnapshotLines(text: string): RenderedSnapshot[] {
-  const snapshots: RenderedSnapshot[] = [];
-  for (const line of text.split('\n')) {
-    if (!line.startsWith('{') || !line.includes('"message_id"')) {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (renderedSnapshotValidator.Check(parsed)) {
-      snapshots.push(parsed);
+interface FormatOptions {
+  readonly timezone: string;
+  readonly now: Date;
+  readonly showTopic: boolean;
+  /** Message IDs rendered in the same batch; replies to them skip the quote. */
+  readonly inlineReplies: ReadonlySet<string>;
+}
+
+interface ReplySnapshot {
+  readonly sender: string;
+  readonly content: string;
+}
+
+/**
+ * Renders one Telegram snapshot as a compact header plus indented body:
+ *
+ *   [156063 23:09:39 re:156048 uid:6869211498 @aac6fef] 雨夹雪
+ *     > Mio Akiyama: 我去
+ *     超级优质客户
+ *
+ * The bracket holds only runtime-controlled tokens and the display name follows
+ * it on a single line. Every Telegram-controlled line is indented, so no message
+ * content can forge a header, a runtime block tag, or a readback line.
+ */
+function formatSnapshot(snapshot: PreparedSnapshot, options: FormatOptions): string {
+  const tokens = [snapshot.message_id, formatTime(snapshot.telegram_date, options.timezone, options.now)];
+  if (options.showTopic && snapshot.message_thread_id !== undefined) {
+    tokens.push(`topic:${snapshot.message_thread_id}`);
+  }
+  if (snapshot.sent_by_bot) {
+    tokens.push('you');
+  }
+  if (snapshot.reply_to_message_id !== null) {
+    tokens.push(`re:${snapshot.reply_to_message_id}`);
+  }
+  if (snapshot.sender.id !== null) {
+    tokens.push(`uid:${snapshot.sender.id}`);
+  }
+  if (snapshot.sender.username !== null && USERNAME.test(snapshot.sender.username)) {
+    tokens.push(`@${snapshot.sender.username}`);
+  }
+  const body: string[] = [];
+  const forwardedFrom = forwardOriginName(snapshot.forward_origin);
+  if (forwardedFrom !== null) {
+    body.push(`(forwarded from ${singleLine(forwardedFrom)})`);
+  }
+  const reply = replySnapshot(snapshot.reply_snapshot);
+  if (
+    reply !== null &&
+    snapshot.reply_to_message_id !== null &&
+    !options.inlineReplies.has(snapshot.reply_to_message_id)
+  ) {
+    body.push(`> ${singleLine(reply.sender)}: ${singleLine(reply.content)}`);
+  }
+  for (const content of [snapshot.text, snapshot.caption]) {
+    if (content !== null) {
+      body.push(...content.split('\n'));
     }
   }
-  return snapshots;
+  for (const media of snapshot.media) {
+    const size = media.width === null || media.height === null ? '' : ` ${media.width}x${media.height}`;
+    body.push(`[${media.kind} ${media.image_ref}${size}]`);
+  }
+  if (body.length === 0) {
+    body.push(`[${snapshot.kind}]`);
+  }
+  const name = singleLine(snapshot.sender.name ?? 'unknown');
+  return [`[${tokens.join(' ')}] ${name}`, ...body.map((line) => `  ${line}`)].join('\n');
+}
+
+const USERNAME = /^[A-Za-z0-9_]+$/;
+const HEADER = /^\[([1-9][0-9]*) ([^\]\n]*)\] (.*)$/;
+
+function singleLine(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+/** Chat-local time; the date is shown only when it differs from the batch's current date. */
+function formatTime(iso: string, timezone: string, now: Date): string {
+  const parts = (date: Date): Record<string, string> =>
+    Object.fromEntries(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      })
+        .formatToParts(date)
+        .map((part) => [part.type, part.value]),
+    );
+  const at = parts(new Date(iso));
+  const today = parts(now);
+  const time = `${at.hour}:${at.minute}:${at.second}`;
+  return at.year === today.year && at.month === today.month && at.day === today.day
+    ? time
+    : `${at.year}-${at.month}-${at.day}T${time}`;
+}
+
+function replySnapshot(value: unknown): ReplySnapshot | null {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+  const { sender, content } = value as Record<string, unknown>;
+  return typeof sender === 'string' && typeof content === 'string' ? { sender, content } : null;
+}
+
+/** The display name of a Telegram MessageOrigin, stored verbatim from the Bot API. */
+function forwardOriginName(value: unknown): string | null {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+  const origin = value as Record<string, unknown>;
+  const title = (chat: unknown): string | null => {
+    const value = typeof chat === 'object' && chat !== null ? (chat as Record<string, unknown>).title : undefined;
+    return typeof value === 'string' ? value : null;
+  };
+  switch (origin.type) {
+    case 'user': {
+      const user = origin.sender_user;
+      if (typeof user !== 'object' || user === null) {
+        return null;
+      }
+      const { first_name: first, last_name: last } = user as Record<string, unknown>;
+      return [first, last].filter((part): part is string => typeof part === 'string').join(' ') || null;
+    }
+    case 'hidden_user':
+      return typeof origin.sender_user_name === 'string' ? origin.sender_user_name : null;
+    case 'chat':
+      return title(origin.sender_chat);
+    case 'channel':
+      return title(origin.chat);
+    default:
+      return 'unknown';
+  }
+}
+
+interface RenderedHeader {
+  readonly message_id: string;
+  readonly sender: { readonly id: string | null; readonly name: string; readonly username: string | null };
+}
+
+/**
+ * Reads back the message headers `renderInjection` wrote into a batch. Only
+ * lines after the last `</runtime_state>` line count: the runtime block quotes
+ * model- and tool-authored text, while every Telegram-authored line below it is
+ * indented and can never match a header.
+ */
+function parseSnapshotLines(text: string): RenderedHeader[] {
+  const lines = text.split('\n');
+  const start = lines.lastIndexOf('</runtime_state>') + 1;
+  const headers: RenderedHeader[] = [];
+  for (const line of lines.slice(start)) {
+    const match = HEADER.exec(line);
+    if (match === null) {
+      continue;
+    }
+    const [, messageId = '', bracket = '', name = ''] = match;
+    const tokens = bracket.split(' ');
+    const uid = tokens.find((token) => /^uid:[0-9]+$/.test(token));
+    const username = tokens.find((token) => token.startsWith('@'));
+    headers.push({
+      message_id: messageId,
+      sender: {
+        id: uid === undefined ? null : uid.slice(4),
+        name,
+        username: username === undefined ? null : username.slice(1),
+      },
+    });
+  }
+  return headers;
 }

@@ -1425,7 +1425,7 @@ describe('conversation continuity', () => {
         )
         .all();
       const rowCarrying = (messageId: string): bigint | undefined =>
-        userRows.find((row) => row.payload_json.includes(`\\"message_id\\":\\"${messageId}\\"`))?.seq;
+        userRows.find((row) => row.payload_json.includes(`\\n[${messageId} `))?.seq;
       expect(openingSeq).toBe(rowCarrying('11'));
       expect(attachedSeq).toBe(rowCarrying('12'));
     } finally {
@@ -1501,9 +1501,9 @@ describe('conversation continuity', () => {
           .join('\n') ?? '';
       // The newest batch carries only the new message: everything the transcript
       // already holds is not re-rendered as history.
-      expect(latestText).toContain('"message_id":"12"');
-      expect(latestText).not.toContain('"message_id":"10"');
-      expect(latestText).not.toContain('"message_id":"900"');
+      expect(latestText).toContain('\n[12 ');
+      expect(latestText).not.toContain('\n[10 ');
+      expect(latestText).not.toContain('\n[900 ');
       // The earlier turns — the first answer and its send result included —
       // travel as transcript entries instead of a re-rendered history block.
       const transcript = JSON.stringify(latest.messages);
@@ -1607,8 +1607,8 @@ describe('conversation continuity', () => {
           ?.filter((block) => block.type === 'text')
           .map((block) => block.text ?? '')
           .join('\n') ?? '';
-      expect(latestText).toContain('"message_id":"11"');
-      expect(latestText).not.toContain('"message_id":"10"');
+      expect(latestText).toContain('\n[11 ');
+      expect(latestText).not.toContain('\n[10 ');
     } finally {
       await scheduler.stop();
       fixtureSetup.store.close();

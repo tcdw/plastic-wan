@@ -398,7 +398,7 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
       expect(images).toHaveLength(1);
       expect(images[0]?.mimeType).toBe('image/jpeg');
       expect(user.content[0]).toMatchObject({ type: 'text' });
-      expect(user.content).toContainEqual({ type: 'text', text: expect.stringContaining('"image_ref":"figure_1"') });
+      expect(user.content).toContainEqual({ type: 'text', text: expect.stringContaining('[photo figure_1 ') });
       return fauxAssistantMessage('saw the photo');
     },
     // Non-empty draft triggers the send nudge; the model then stays silent.
@@ -558,9 +558,9 @@ test('keeps history photos as img_ refs for the multimodal agent while attaching
       }
       expect(user.content.filter((entry) => entry.type === 'image')).toHaveLength(0);
       const text = user.content.find((entry) => entry.type === 'text')?.text ?? '';
-      expect(text).toContain('"message_id":"40"');
-      expect(text).not.toContain('"image_ref":"figure_');
-      const match = /"image_ref":"(img_[^"]+)"/.exec(text);
+      expect(text).toContain('\n[40 ');
+      expect(text).not.toContain(' figure_');
+      const match = /\[photo (img_\S+)/.exec(text);
       historyRef = match?.[1];
       if (historyRef === undefined) {
         throw new Error('Multimodal agent context omitted the history img_ ref');
@@ -684,7 +684,7 @@ test('lets a text-only agent read a Telegram photo through read_image', async ()
       const content = context.messages[0]?.content;
       if (typeof content !== 'string') {
         const text = content?.find((entry) => entry.type === 'text')?.text ?? '';
-        const match = /"image_ref":"([^"]+)"/.exec(text);
+        const match = /\[photo (\S+)/.exec(text);
         photoRef = match?.[1];
       }
       if (photoRef === undefined) {

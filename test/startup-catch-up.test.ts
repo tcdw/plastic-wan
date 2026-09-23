@@ -325,8 +325,8 @@ describe('startup catch-up', () => {
     await tool.execute('reply-old-topic', { kind: 'text', text: 'old', reply_to_message_id: '10' });
     await tool.execute('default-latest-topic', { kind: 'text', text: 'latest' });
     expect(sentThreads).toEqual([100, 200]);
-    expect(context.userPrompt).toContain('"message_thread_id":"100"');
-    expect(context.userPrompt).toContain('"message_thread_id":"200"');
+    expect(context.userPrompt).toContain(' topic:100 ');
+    expect(context.userPrompt).toContain(' topic:200 ');
     const outgoingThreads = store.db
       .prepare<[], { message_thread_id: bigint }>(
         'SELECT v.message_thread_id FROM messages m JOIN conversations v ON v.id = m.conversation_id WHERE m.sent_by_bot = 1 ORDER BY m.id',

@@ -104,6 +104,8 @@ test('stdio MCP discovery, result bounds, audit, and unmetered repeat calls', as
       throw new Error('MCP tool was not exposed');
     }
 
+    expect(tool.description).toBe('MCP tool (read-only): Echo text with a server-side call count');
+
     const result = await tool.execute('mcp-1', { text: 'x'.repeat(400) });
     const text = result.content.find((entry) => entry.type === 'text');
     if (text === undefined || text.type !== 'text') {

@@ -301,11 +301,22 @@ export class InvocationQueueService {
       // open with this bucket, and a running invocation of a *different*
       // conversation in the same chat still owns the chat, because agent
       // sessions stay serialized per chat.
+      // No age ceiling here. A batch collects for as long as its Conversation is
+      // busy — the runtime pushes its deadline one window at a time while the
+      // round runs — so a batch that is entirely legitimate is older than
+      // `RECOVERY_MAX_AGE_MS` by the time it comes due. Filtering those out left
+      // them `collecting` forever: the run ends without taking them, nothing
+      // re-queues them, and every later message of that Conversation joins the
+      // same dead batch while the scheduler keeps waking on its already-passed
+      // deadline (observed: invocations/1320, where a 30-minute round left the
+      // next batch stranded and the chat went silent for good). The five-minute
+      // rule is a *startup* rule: `recover()` expires that work before this
+      // method is ever called, so nothing stale can reach the queue from here.
       const due = this.#store.orm.all<BucketRow>(
         sql`SELECT b.id, b.conversation_id, b.first_received_at, b.deadline_at
          FROM buckets b
          JOIN conversations v ON v.id = b.conversation_id
-         WHERE b.state = 'collecting' AND b.deadline_at <= ${now.toISOString()} AND b.first_received_at >= ${new Date(now.getTime() - RECOVERY_MAX_AGE_MS).toISOString()}
+         WHERE b.state = 'collecting' AND b.deadline_at <= ${now.toISOString()}
            AND NOT EXISTS (SELECT 1 FROM chat_pause p WHERE p.chat_id = v.chat_id)
            AND NOT EXISTS (
              SELECT 1 FROM invocations i

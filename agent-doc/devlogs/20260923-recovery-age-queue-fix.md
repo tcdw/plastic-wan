@@ -2,15 +2,15 @@
 
 ## 背景
 
-2026-09-23 上午，一个群从 07:26 之后连续三个小时没有收到任何回复，其中 08:05 到 10:26 之间的 24 条群消息一条都没触发 Invocation。翻审计库能看到完整的因果链：
+2026-09-23 上午，一个群从 07:26 之后连续三个小时没有收到任何回复，其中 07:37:13 到 08:49:11 到达的 24 条群消息一条都没触发 Invocation（08:05 中止之后到达的有 10 条）。翻审计库能看到完整的因果链：
 
 | 时间（UTC） | 事件 |
 | --- | --- |
 | 07:35:03.729 | Invocation 1320 开跑（开批的 Bucket 4303，1 条消息） |
 | 07:37:08.083 | 轮中途来了一条新消息 → Bucket 4304 开始 `collecting` |
 | 08:05:03.748 | Invocation 1320 撞上 `max_wall_clock_seconds`（30 分钟）以 `timeout` 中止；同一时刻 Bucket 4304 的 deadline 被推到轮结束 |
-| 08:05 之后 | Bucket 4304 一直是 `collecting`，再也没有 Invocation；后续 23 条消息全部并进这个死批次 |
-| 09:19:10.396 | 进程重启，`recover()` 把它标成 `expired` / `recovery_age`（24 条消息全部作废） |
+| 08:05 之后 | Bucket 4304 一直是 `collecting`，再也没有 Invocation；此后到达的 10 条消息（整批共 24 条）全部并进这个死批次 |
+| 09:19:10.396 | 进程重启，`recover()` 把它标成 `expired` / `recovery_age`（这 24 条不再单独成批，只作为后续 Invocation 的 history 出现） |
 | 10:25:46 | 重启后的第一条消息开出 Bucket 4327 → Invocation 1326，回复才恢复 |
 
 根因是 `processDue` 把「恢复年龄」当成了实时过滤条件：
@@ -81,7 +81,7 @@ git diff --check
 ```txt
 invocation 1320: state=aborted completion_reason=timeout 07:35:03.729Z → 08:05:03.748Z turns=1 sends=0
 bucket     4304: state=expired error_code=recovery_age first_received_at=07:37:08.083Z deadline_at=08:05:03.748Z
-                 started_at=NULL bucket_messages=24
+                 started_at=NULL bucket_messages=24（跨 07:37:13Z → 08:49:11Z，其中 08:05:03.748Z 之后 10 条）
 bot 消息:      07:26:09Z 之后下一条是 10:26:19Z（中间 3 小时无回复）
 ```
 

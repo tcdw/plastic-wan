@@ -108,7 +108,7 @@ Doctor 成功只证明连接与最小能力，不证明真实群聊调度、Repl
 1. 出现一次 `startup_catch_up_completed`，随后出现一次 `serve_started`。
 2. `bot_id` 与预期 Bot 一致，`config_hash` 与 `check-config` 一致。
 3. 运行 30 秒以上没有退出/重启。
-4. `serve.lock` 阻止第二实例。
+4. `serve.lock` 阻止第二实例；带 `--takeover` 启动会停掉它并在同一 `data_dir` 上接管（旧进程 `takeover_requested`、新进程 `takeover_completed`）。
 5. `Ctrl+C` 后 Scheduler、数据库和 lock 正常收尾。
 
 长期进程必须用进程监督器或人工前台运行；不要让测试命令无限阻塞。

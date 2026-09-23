@@ -4,6 +4,7 @@ interface CliOptions {
   readonly command: Command;
   readonly configPath: string;
   readonly outputAgentPrompt: boolean;
+  readonly takeover: boolean;
 }
 
 const COMMANDS: readonly string[] = ['serve', 'check-config', 'doctor', 'backup', 'configure'];
@@ -15,10 +16,15 @@ export function parseCli(argv: readonly string[]): CliOptions {
   }
   let configPath: string | undefined;
   let outputAgentPrompt = false;
+  let takeover = false;
   for (let index = 0; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
     if (argument === '--output-agent-prompt' && commandValue === 'doctor' && !outputAgentPrompt) {
       outputAgentPrompt = true;
+      continue;
+    }
+    if (argument === '--takeover' && commandValue === 'serve' && !takeover) {
+      takeover = true;
       continue;
     }
     if (argument !== '--config' || configPath !== undefined) {
@@ -33,7 +39,7 @@ export function parseCli(argv: readonly string[]): CliOptions {
   if (configPath === undefined) {
     throw new Error(usage());
   }
-  return { command: commandValue, configPath, outputAgentPrompt };
+  return { command: commandValue, configPath, outputAgentPrompt, takeover };
 }
 
 function isCommand(value: string): value is Command {
@@ -41,5 +47,5 @@ function isCommand(value: string): value is Command {
 }
 
 function usage(): string {
-  return 'Usage: plasticwan <serve|check-config|doctor|backup|configure> --config <path> [--output-agent-prompt]';
+  return 'Usage: plasticwan <serve|check-config|doctor|backup|configure> --config <path> [--output-agent-prompt] [--takeover]';
 }

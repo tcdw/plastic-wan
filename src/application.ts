@@ -18,7 +18,7 @@ import {
 import { KeyedSemaphore } from './platform/concurrency.ts';
 import { assertConfigPermissions, loadConfig } from './platform/config.ts';
 import { ConfigReloader } from './platform/config-reload.ts';
-import { ServeLock, SqliteStore } from './store/database.ts';
+import { ServeLock, SqliteStore, stopRunningInstance, watchStopRequests } from './store/database.ts';
 import { previewContext, unavailableCapabilities } from './platform/invocation-context.ts';
 import { McpManager } from './capabilities/mcp.ts';
 import { TelegramMediaClient } from './capabilities/media/media-download.ts';
@@ -48,11 +48,12 @@ const ALLOWED_UPDATES = ['message', 'edited_message', 'my_chat_member'] as const
  */
 export const RESTART_EXIT_CODE = 75;
 
-export async function serve(configPath: string): Promise<void> {
+export async function serve(configPath: string, takeover = false): Promise<void> {
   const loaded = await loadConfig(configPath);
   await assertConfigPermissions(loaded.configPath);
   const secrets = new SecretStore(keyJarPath(loaded.configPath));
   let lock: ServeLock | undefined;
+  let stopWatcher: (() => void) | undefined;
   let store: SqliteStore | undefined;
   let bot: Bot | undefined;
   let scheduler: BucketScheduler | undefined;
@@ -96,7 +97,17 @@ export async function serve(configPath: string): Promise<void> {
   process.once('SIGINT', shutdown);
   try {
     const token = await secrets.resolve(loaded.config.telegram.token);
+    if (takeover) {
+      // Stop the incumbent only once this process knows it can start at all:
+      // the config, its permissions and the bot token are checked by now.
+      const stoppedPid = await stopRunningInstance(loaded.config.data_dir);
+      logEvent('takeover_completed', { stopped_pid: stoppedPid });
+    }
     lock = await ServeLock.acquire(loaded.config.data_dir);
+    stopWatcher = watchStopRequests(loaded.config.data_dir, () => {
+      logEvent('takeover_requested');
+      shutdown();
+    });
     store = await SqliteStore.open(loaded.config);
     const webFetchStore = store;
     seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? []);
@@ -266,6 +277,7 @@ export async function serve(configPath: string): Promise<void> {
   } finally {
     process.off('SIGTERM', shutdown);
     process.off('SIGINT', shutdown);
+    stopWatcher?.();
     await admin?.stop();
     await scheduler?.stop(30_000);
     await stickers?.stop();

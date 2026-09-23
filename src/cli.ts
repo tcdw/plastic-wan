@@ -26,7 +26,7 @@ try {
       await runDoctor(options.configPath, options.outputAgentPrompt);
       break;
     case 'serve':
-      await serve(options.configPath);
+      await serve(options.configPath, options.takeover);
       break;
     case 'configure':
       await runConfigure(options.configPath);

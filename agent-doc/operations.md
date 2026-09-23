@@ -67,7 +67,22 @@ node src/cli.ts serve --config dev-data/config.jsonc
 5. 关闭 SQLite。
 6. 释放 `serve.lock`。
 
-不要启动第二份实例。同一 `data_dir` 的 `serve.lock` 会拒绝双实例；绕过锁会造成 Telegram long polling 竞争和未知副作用。
+不要启动第二份实例。同一 `data_dir` 的 `serve.lock` 会拒绝双实例；绕过锁会造成 Telegram long polling 竞争和未知副作用。需要替换运行中的实例时用下面的 `--takeover`。
+
+### 接管已运行的实例
+
+```bash
+node src/cli.ts serve --config dev-data/config.jsonc --takeover
+```
+
+`--takeover` 用于本地调试时替换同一个 `data_dir` 上的实例。它先完成启动流程中不需要锁的那部分校验（配置权限、完整 `loadConfig`、Telegram token 解析），通过后向 `data_dir` 写一个 `serve.stop` 请求文件，再等待对方释放 `serve.lock`，日志 `takeover_completed` 带被停实例的 PID。被接管的实例在轮询中看到请求后先记录 `takeover_requested`，然后走上面同一套优雅关闭流程（随后出现 `shutdown_requested`）。
+
+请求是文件而不是信号：Windows 没有可捕获的 `SIGTERM`，只有目标进程自己能跑关闭流程。对方 60 秒内没有释放锁（PID 被复用、进程卡住）时接管方报错退出，不会强杀；这一步也不会误伤其它进程——写下的请求文件只有持有该 `data_dir` 锁的进程会读，接管方在返回前把它清掉，下次启动时残留的请求文件会被丢弃而不是照做。
+
+两点边界：
+
+- 被接管的进程按正常退出结束（退出码 0，不是重启码 75）。有 supervisor 的部署不要用 `--takeover`：supervisor 会把退出的进程重新拉起，与新实例抢锁。
+- 只处理持有**同一 `data_dir` 锁**的实例。用其它 `data_dir`（例如另写一份配置）启动的实例不会被发现，它与新实例的冲突表现为 Telegram long polling 的 409。
 
 ### 立即重启与进程监督
 

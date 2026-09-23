@@ -1,14 +1,23 @@
 import { afterAll, expect, test } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
 import { loadConfig } from '../src/platform/config.ts';
-import { backupDatabase, purgeExpiredData, SqliteStore } from '../src/store/database.ts';
+import {
+  backupDatabase,
+  purgeExpiredData,
+  ServeLock,
+  SqliteStore,
+  stopRunningInstance,
+  watchStopRequests,
+} from '../src/store/database.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { writeTestConfig, pathExists, testConfigStore } from './helpers.ts';
+import { writeTestConfig, pathExists, sleep, testConfigStore } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -182,6 +191,68 @@ test('retention scrubs referenced history and backup keeps seven consistent copi
   const integrity = backup.prepare('PRAGMA integrity_check').get() as { integrity_check: string } | undefined;
   expect(integrity?.integrity_check).toBe('ok');
   backup.close();
+});
+
+test('takeover stops the instance holding the lock and leaves no stop request behind', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-takeover-'));
+  directories.push(directory);
+  const dataDir = join(directory, 'data');
+  const lockPath = join(dataDir, 'serve.lock');
+  const stopPath = join(dataDir, 'serve.stop');
+
+  // Nothing to stop.
+  expect(await stopRunningInstance(dataDir, 1_000)).toBeNull();
+
+  // A lock whose process is gone is not an instance: `ServeLock.acquire` unlinks
+  // it, and a stop request written for it would wait for nobody.
+  const exited = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  await once(exited, 'exit');
+  if (exited.pid === undefined) {
+    throw new Error('helper process did not start');
+  }
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(lockPath, `${exited.pid}\n`);
+  expect(await stopRunningInstance(dataDir, 1_000)).toBeNull();
+  expect(await pathExists(stopPath)).toBe(false);
+
+  // A live holder: the lock disappears only because the watcher saw the request.
+  const lock = await ServeLock.acquire(dataDir);
+  let requested = false;
+  const stopWatching = watchStopRequests(dataDir, () => {
+    requested = true;
+    void lock.release();
+  });
+  expect(await stopRunningInstance(dataDir, 5_000)).toBe(process.pid);
+  expect(requested).toBe(true);
+  expect(await pathExists(lockPath)).toBe(false);
+  expect(await pathExists(stopPath)).toBe(false);
+  stopWatching();
+});
+
+test('takeover gives up on an instance that ignores the request', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-takeover-'));
+  directories.push(directory);
+  const dataDir = join(directory, 'data');
+  const lock = await ServeLock.acquire(dataDir);
+  await expect(stopRunningInstance(dataDir, 500)).rejects.toThrow(/still holds/);
+  expect(await pathExists(join(dataDir, 'serve.stop'))).toBe(false);
+  await lock.release();
+});
+
+test('a stale stop request does not stop the instance that starts next', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-takeover-'));
+  directories.push(directory);
+  const dataDir = join(directory, 'data');
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(join(dataDir, 'serve.stop'), '4242\n');
+  let requested = false;
+  const stopWatching = watchStopRequests(dataDir, () => {
+    requested = true;
+  });
+  await sleep(600);
+  expect(requested).toBe(false);
+  expect(await pathExists(join(dataDir, 'serve.stop'))).toBe(false);
+  stopWatching();
 });
 
 function textUpdate(updateId: number, messageId: number, text: string): Update {

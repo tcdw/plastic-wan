@@ -194,6 +194,13 @@ describe('configure CLI option', () => {
     expect(options.command).toBe('doctor');
     expect(options.outputAgentPrompt).toBe(true);
   });
+
+  test('parses the serve takeover option and rejects it elsewhere', () => {
+    const options = parseCli(['serve', '--config', 'dev-data/config.jsonc', '--takeover']);
+    expect(options.command).toBe('serve');
+    expect(options.takeover).toBe(true);
+    expect(() => parseCli(['doctor', '--config', 'dev-data/config.jsonc', '--takeover'])).toThrow();
+  });
   test('renders the configured agent prompt templates', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'plasticwan-doctor-prompt-'));
     directories.push(directory);

@@ -1,5 +1,17 @@
 import Database from 'better-sqlite3';
-import { access, chmod, type FileHandle, mkdir, open, readdir, readFile, rename, stat, unlink } from 'node:fs/promises';
+import {
+  access,
+  chmod,
+  type FileHandle,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { and, eq, sql } from 'drizzle-orm';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
@@ -70,6 +82,69 @@ export class ServeLock {
       }
     });
   }
+}
+
+/** Cooperative stop request written next to `serve.lock`; see `stopRunningInstance`. */
+const STOP_REQUEST_FILE = 'serve.stop';
+
+/** Granularity of the stop-request watcher and of the takeover's wait loop. */
+const STOP_REQUEST_POLL_MS = 200;
+
+/**
+ * Gracefully stops the `serve` process that holds `dataDir`'s lock and returns
+ * its PID, or null when no live process holds it — a stale lock is left to
+ * `ServeLock.acquire`, which unlinks it.
+ *
+ * A stop request is a file, not a signal: Windows has no graceful `SIGTERM`,
+ * and only the target can run its own shutdown path. The target releases the
+ * lock as the last step of that path, so waiting for the lock to disappear also
+ * waits for its SQLite handle to be closed. A PID that is not a serve process
+ * (recycled PID) simply never reacts: this times out instead of killing it.
+ */
+export async function stopRunningInstance(dataDir: string, timeoutMs = 60_000): Promise<number | null> {
+  const lockPath = join(dataDir, 'serve.lock');
+  const pid = Number.parseInt(await readFile(lockPath, 'utf8').catch(() => ''), 10);
+  if (!Number.isInteger(pid) || !isProcessAlive(pid)) {
+    return null;
+  }
+  const stopPath = join(dataDir, STOP_REQUEST_FILE);
+  await writeFile(stopPath, `${process.pid}\n`, { encoding: 'utf8', mode: 0o600 });
+  const deadline = Date.now() + timeoutMs;
+  while (await fileExists(lockPath)) {
+    if (Date.now() >= deadline) {
+      await unlink(stopPath).catch(() => undefined);
+      throw new Error(`PID ${pid} still holds ${lockPath} after ${timeoutMs}ms`);
+    }
+    await delay(STOP_REQUEST_POLL_MS);
+  }
+  await unlink(stopPath).catch(() => undefined);
+  return pid;
+}
+
+/**
+ * Watches `dataDir` for a takeover's stop request and calls `onRequest` once.
+ * Polling rather than `fs.watch` because the file does not exist yet and the
+ * request has to be seen on every platform; the timer is unref'd so it never
+ * keeps the process alive on its own. A stop file that is already there when
+ * watching starts is stale — a takeover removes its own request before
+ * returning, so a leftover can only be a crash — and is dropped, not honored.
+ */
+export function watchStopRequests(dataDir: string, onRequest: () => void): () => void {
+  const stopPath = join(dataDir, STOP_REQUEST_FILE);
+  let watching = true;
+  void unlink(stopPath).catch(() => undefined);
+  const timer = setInterval(() => {
+    void fileExists(stopPath).then((found) => {
+      if (found && watching) {
+        onRequest();
+      }
+    });
+  }, STOP_REQUEST_POLL_MS);
+  timer.unref();
+  return () => {
+    watching = false;
+    clearInterval(timer);
+  };
 }
 
 export class SqliteStore {
@@ -462,4 +537,15 @@ function isProcessAlive(pid: number): boolean {
     const code = error instanceof Error && 'code' in error ? error.code : undefined;
     return code === 'EPERM';
   }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  return access(path).then(
+    () => true,
+    () => false,
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

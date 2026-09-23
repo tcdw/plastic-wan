@@ -162,7 +162,7 @@ pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.t
 - 覆盖契约（全部断言真实 UI 状态，非仅文案）：
   1. 认证：setup → shell；错误密码表单内显示 `invalid_credentials` 且 URL 不变；
      登出回登录页；会话撤销后受保护请求 401 → 登录页且无错误屏。
-  2. `src/routes.tsx` 注册的全部路由与深链接直接访问渲染真实内容（非错误边界、非空白）。
+  2. `src/routes/**` 声明的全部路由与深链接直接访问渲染真实内容（非错误边界、非空白）。
   3. 列表过滤与游标分页：Invocations、Messages、Contexts、Alarms、Memories、Stickers
      的过滤器真正改变结果集（各页可用过滤器以页面与 `02-lists-filters.e2e.ts` 为准）；
      `seedAdminBulkRows`（`test/fixtures/admin-seed.ts`）让每张列表的种子行数都超过

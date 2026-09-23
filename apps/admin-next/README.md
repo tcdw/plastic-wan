@@ -1,6 +1,6 @@
 # Plastic Wan Admin (Next)
 
-Plastic Wan 的 Admin Panel 前端。构建产物是**静态 SPA**（Vite + React + TanStack
+Plastic Wan 的 Admin Panel 前端。构建产物是**静态 SPA**（Rsbuild + React + TanStack
 Router/Query + Tailwind 4 + shadcn/Base UI），由后端 `AdminServer`（`serve` 进程内的
 `src/ingress/admin/server.ts`）**同源托管**，不依赖任何 Node/Nitro 运行时。`dist/`
 里的 `index.html` 由后端做深链接回退（未知路径回落到 SPA）。
@@ -10,7 +10,7 @@ Router/Query + Tailwind 4 + shadcn/Base UI），由后端 `AdminServer`（`serve
 ```bash
 pnpm --filter plasticwan-admin-next run check   # TypeScript 严格检查（tsc --noEmit）
 pnpm --filter plasticwan-admin-next run build   # 产出 dist/（静态 SPA）
-pnpm --filter plasticwan-admin-next run dev     # Vite dev server，监听 127.0.0.1:5273
+pnpm --filter plasticwan-admin-next run dev     # Rsbuild dev server，监听 127.0.0.1:5273
 pnpm --filter plasticwan-admin-next run test:e2e # Playwright 浏览器 E2E（见下文）
 ```
 
@@ -20,6 +20,23 @@ pnpm --filter plasticwan-admin-next run test:e2e # Playwright 浏览器 E2E（�
   origin；其它 Origin 原样转发，由后端拒绝。
 - 生产环境不需要 `ADMIN_API_TARGET`：`serve` 在同源托管静态文件与 `/api`。
 - Lint/格式检查走仓库根目录的 Biome（`pnpm exec biome check apps/admin-next`）。
+
+## 路由与代码切分
+
+路由是**文件路由**，由 TanStack Router 官方 Rsbuild 集成驱动（`rsbuild.config.ts`
+里 `tools.rspack.plugins` 的 `tanstackRouter({ target: 'react', autoCodeSplitting: true })`）：
+
+- `src/routes/**` 是路由文件（`__root.tsx` 是认证门与 Layout），`src/routeTree.gen.ts`
+  由构建期自动生成：**已提交进仓库、被 Biome 忽略、不要手改**；新增页面 = 在
+  `src/routes/` 加一个文件（组件本体仍放 `src/pages/`），然后在下次构建/`dev` 时
+  让插件重写路由树。
+- `autoCodeSplitting` 把每个路由的 `component` 切成独立 async chunk：首屏只加载
+  shell 与当前路由，其余页面按需拉取。`src/main.tsx` 只从 `./routeTree.gen`
+  取路由树，不要再手写 `createRoute` 路由表。
+- 详情页与列表页是**平级**路由、不互相嵌套：文件名带 `_` 后缀
+  （`invocations_.$invocationId.tsx` → `/invocations/$invocationId`，`createFileRoute`
+  的 id 同样带 `_`）。漏掉这个后缀，详情页就会变成列表页的子路由并渲染进列表页的
+  `<Outlet/>`——列表页没有 Outlet，页面会变成空白。
 
 ## 安全约定
 

@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { ThemeProvider } from '@/components/themes/theme-provider';
 import { Toaster } from '@/components/ui/sonner';
 import { getQueryClient } from '@/lib/query-client';
-import { routeTree } from './routes';
+import { routeTree } from './routeTree.gen';
 
 import '@/styles/globals.css';
 

@@ -8,6 +8,9 @@ dist
 build
 *.tsbuildinfo
 
+# TanStack Router plugin scratch files
+.tanstack
+
 # Environment variables
 .env
 .env*.local

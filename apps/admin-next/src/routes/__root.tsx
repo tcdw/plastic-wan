@@ -1,12 +1,5 @@
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  createRootRouteWithContext,
-  createRoute,
-  type ErrorComponentProps,
-  Outlet,
-  useNavigate,
-  useParams,
-} from '@tanstack/react-router';
+import { createRootRouteWithContext, type ErrorComponentProps, Outlet, useNavigate } from '@tanstack/react-router';
 import { Loader2 } from 'lucide-react';
 import AppSidebar from '@/components/layout/app-sidebar';
 import Header from '@/components/layout/header';
@@ -15,20 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { ApiError, logout, type SessionState } from '@/lib/api';
 import { sessionQuery } from '@/lib/queries';
-import AdminsPage from '@/pages/admins';
-import AlarmsPage from '@/pages/alarms';
 import { LoginForm, SetupForm } from '@/pages/auth';
-import { ContextDetailView } from '@/pages/context-detail';
-import ContextsPage from '@/pages/contexts';
-import { InvocationDetailView } from '@/pages/invocation-detail';
-import InvocationsPage from '@/pages/invocations';
-import MemoriesPage from '@/pages/memories';
-import { MessageDetailView } from '@/pages/message-detail';
-import MessagesPage from '@/pages/messages';
-import ModelsPage from '@/pages/models';
-import OverviewPage from '@/pages/overview';
-import SettingsPage from '@/pages/settings';
-import StickersPage from '@/pages/stickers';
 
 const UNAUTHENTICATED_SESSION: SessionState = {
   setup_required: false,
@@ -160,74 +140,7 @@ function RouteErrorFallback({ error }: ErrorComponentProps): React.ReactElement 
   );
 }
 
-const rootRoute = createRootRouteWithContext<RouterContext>()({
+export const Route = createRootRouteWithContext<RouterContext>()({
   component: AuthGate,
   errorComponent: RouteErrorFallback,
 });
-
-const overviewRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: OverviewPage });
-
-const invocationsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/invocations',
-  component: InvocationsPage,
-});
-
-const invocationDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/invocations/$invocationId',
-  component: function InvocationDetailRoute() {
-    const { invocationId } = useParams({ from: '/invocations/$invocationId' });
-    return <InvocationDetailView id={invocationId} />;
-  },
-});
-
-const contextsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/contexts', component: ContextsPage });
-
-const contextDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/contexts/$conversationId',
-  component: function ContextDetailRoute() {
-    const { conversationId } = useParams({ from: '/contexts/$conversationId' });
-    return <ContextDetailView id={conversationId} />;
-  },
-});
-
-const alarmsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/alarms', component: AlarmsPage });
-
-const messagesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/messages', component: MessagesPage });
-
-const messageDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/messages/$messageId',
-  component: function MessageDetailRoute() {
-    const { messageId } = useParams({ from: '/messages/$messageId' });
-    return <MessageDetailView id={messageId} />;
-  },
-});
-
-const memoriesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/memories', component: MemoriesPage });
-
-const adminsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/admins', component: AdminsPage });
-
-const modelsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/models', component: ModelsPage });
-
-const stickersRoute = createRoute({ getParentRoute: () => rootRoute, path: '/stickers', component: StickersPage });
-
-const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: SettingsPage });
-
-export const routeTree = rootRoute.addChildren([
-  overviewRoute,
-  invocationsRoute,
-  invocationDetailRoute,
-  contextsRoute,
-  contextDetailRoute,
-  alarmsRoute,
-  messagesRoute,
-  messageDetailRoute,
-  memoriesRoute,
-  adminsRoute,
-  modelsRoute,
-  stickersRoute,
-  settingsRoute,
-]);

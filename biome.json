@@ -2,7 +2,15 @@
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!!**/node_modules", "!!**/dist", "!!**/*.tsbuildinfo", "!!dev-data", "!!skills/**/examples"]
+    "includes": [
+      "**",
+      "!!**/node_modules",
+      "!!**/dist",
+      "!!**/*.tsbuildinfo",
+      "!!**/routeTree.gen.ts",
+      "!!dev-data",
+      "!!skills/**/examples"
+    ]
   },
   "formatter": {
     "enabled": true,

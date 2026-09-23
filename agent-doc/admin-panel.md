@@ -1,6 +1,6 @@
 # Admin Panel
 
-Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析、已配置 Sticker Set 的可搜索索引、Agent 短期记忆（`memories`）以及 Alarm（闹钟 / 延迟调用）。后端在 `src/ingress/admin/`，前端在 `apps/admin-next/`（Vite + React + Tailwind 4 + shadcn/Base UI + TanStack Query + TanStack Router），构建产物是**纯静态 SPA**，由 `AdminServer` 同源托管，不依赖任何 Node/Nitro 运行时。
+Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析、已配置 Sticker Set 的可搜索索引、Agent 短期记忆（`memories`）以及 Alarm（闹钟 / 延迟调用）。后端在 `src/ingress/admin/`，前端在 `apps/admin-next/`（Rsbuild + React + Tailwind 4 + shadcn/Base UI + TanStack Query + TanStack Router），构建产物是**纯静态 SPA**，由 `AdminServer` 同源托管，不依赖任何 Node/Nitro 运行时。
 
 审计数据只读；记忆管理、Bot 管理员列表管理、模型与 Provider 管理（Models 页）、配置文件应用、立即重启、解除睡眠、取消挂起会话与取消 pending Alarm 是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume`、`/cut_topic` 等 Bot 管理员命令的 Telegram 用户，在 Models 页维护 Provider 与模型列表（写回 `config.jsonc` 并重新加载）、切换 agent 与 vision 模型并设置 agent 的 thinking 级别，唤醒/取消挂起会话，取消尚未触发的 Alarm，把配置文件中的热更新白名单字段应用到运行中的进程，或在有待重启字段时直接重启 `serve`。写入只发生在 [API](#api) 白名单里的端点，且全部经过 `writeConfigEdits` 与 `ConfigReloader`（先写文件、再应用，可回滚到未写入状态）。
 
@@ -141,7 +141,7 @@ SQLite `bigint` ID 在 JSON 中字符串化，Token/计数等小整数转 `numbe
 
 ```bash
 pnpm run admin:build   # 生成 apps/admin-next/dist，供 serve 托管
-pnpm run admin:dev     # Vite dev server，监听 127.0.0.1:5273，/api 代理到 ADMIN_API_TARGET
+pnpm run admin:dev     # Rsbuild dev server，监听 127.0.0.1:5273，/api 代理到 ADMIN_API_TARGET
 pnpm run admin:test:e2e  # Playwright 浏览器 E2E（真实 AdminServer + 临时 SQLite + 合成数据）
 ```
 
@@ -154,7 +154,7 @@ pnpm run admin:test:e2e  # Playwright 浏览器 E2E（真实 AdminServer + 临�
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/routes.tsx` | 认证门（setup/login gate）、Layout 与显式路由表（一级页面与详情页）；新增页面在此注册 |
+| `src/routes/**` | 文件路由（TanStack Router 官方 Rsbuild 插件）：`__root.tsx` 是认证门（setup/login gate）与 Layout，其余文件对应一级页面与详情页；新增页面在这里加文件，`src/routeTree.gen.ts` 由构建自动生成 |
 | `src/lib/api.ts` | 类型化 fetch 封装与 `ApiError` |
 | `src/lib/queries.ts` | TanStack Query option 工厂（列表用 infinite query，keyset cursor 透传） |
 | `src/lib/format.ts` | 格式化与状态色映射 |

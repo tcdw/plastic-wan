@@ -1,5 +1,5 @@
 // Manual verification probe for the admin dev proxy Origin rewrite
-// (vite.config.ts ALLOWED_ORIGINS: only http://localhost:5273 and
+// (rsbuild.config.ts ALLOWED_ORIGINS: only http://localhost:5273 and
 // http://127.0.0.1:5273 get their Origin rewritten to the API target; any
 // other origin passes through untouched so the backend origin check rejects
 // cross-site writes).
@@ -8,12 +8,12 @@
 //   node scripts/admin-dev-proxy-probe.ts
 //
 // It starts an echo server (127.0.0.1:8891) that mirrors the Host/Origin
-// headers it receives, starts `vite dev` in apps/admin-next with
+// headers it receives, starts `rsbuild dev` in apps/admin-next with
 // ADMIN_API_TARGET=http://127.0.0.1:8891, then curls three cases through the
 // proxy and asserts the backend would accept/reject each one. Exits non-zero
-// on failure and kills the vite process tree when done.
+// on failure and kills the dev server process tree when done.
 //
-// Why not part of the default test run: it needs a real `vite dev` server
+// Why not part of the default test run: it needs a real `rsbuild dev` server
 // on a fixed port plus curl, so it is slow and flaky in CI/headless runs.
 // Browser-level dev-proxy behavior is covered manually; production serving
 // (no proxy) is what the automated tests exercise.
@@ -24,9 +24,9 @@ import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 
 const PROBE_PORT = 8891;
-const VITE_PORT = 5273;
+const DEV_PORT = 5273;
 const API_TARGET = `http://127.0.0.1:${PROBE_PORT}`;
-const VITE_BASE = `http://127.0.0.1:${VITE_PORT}`;
+const DEV_BASE = `http://127.0.0.1:${DEV_PORT}`;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -51,7 +51,7 @@ function killTree(proc: ChildProcess): void {
     return;
   }
   // Synchronous so taskkill finishes before the script exits and the whole
-  // vite tree (pnpm → node/vite → esbuild) is actually gone.
+  // dev server tree (pnpm → node/rsbuild → rspack) is actually gone.
   spawnSync('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { stdio: 'ignore' });
 }
 
@@ -76,7 +76,7 @@ async function curlOnce(header: string | null): Promise<string> {
   if (header !== null) {
     args.push('-H', header);
   }
-  args.push(`${VITE_BASE}/api/probe`);
+  args.push(`${DEV_BASE}/api/probe`);
   const proc = spawn('curl', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   const out = await readAllText(proc.stdout);
   await new Promise<void>((resolve) => proc.once('close', () => resolve()));
@@ -92,18 +92,18 @@ const probe = createServer((req, res) => {
 probe.listen(PROBE_PORT, '127.0.0.1');
 await new Promise<void>((resolve) => probe.once('listening', resolve));
 
-let vite: ChildProcess | undefined;
+let devServer: ChildProcess | undefined;
 let pass = true;
 try {
   console.log(`echo probe listening on ${API_TARGET}`);
-  vite = spawn('pnpm', ['run', 'dev'], {
+  devServer = spawn('pnpm', ['run', 'dev'], {
     cwd: join(import.meta.dirname, '..', 'apps', 'admin-next'),
     env: { ...process.env, ADMIN_API_TARGET: API_TARGET },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
-  await waitFor(`${VITE_BASE}/`, 20_000);
-  console.log(`vite dev listening on ${VITE_BASE}`);
+  await waitFor(`${DEV_BASE}/`, 20_000);
+  console.log(`rsbuild dev listening on ${DEV_BASE}`);
 
   const allowed = await curlOnce('Origin: http://localhost:5273');
   const evil = await curlOnce('Origin: http://evil.example');
@@ -146,8 +146,8 @@ try {
 } finally {
   probe.closeAllConnections();
   probe.close();
-  if (vite !== undefined) {
-    killTree(vite);
+  if (devServer !== undefined) {
+    killTree(devServer);
   }
 }
 process.exit(pass ? 0 : 1);

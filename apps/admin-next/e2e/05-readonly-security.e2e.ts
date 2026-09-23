@@ -3,7 +3,7 @@ import { adminUrl, authStoragePath, watchPageIssues } from './helpers.ts';
 
 /**
  * Read-only guarantee and the production security posture, exercised against
- * the real static hosting (not the Vite dev server): audit pages must never
+ * the real static hosting (not the Rsbuild dev server): audit pages must never
  * issue write methods to `/api/**`, the CSP header must be present, and the
  * whole browsing session must stay same-origin with zero console/page errors.
  */

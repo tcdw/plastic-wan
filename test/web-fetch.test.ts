@@ -7,7 +7,8 @@ import { SqliteStore } from '../src/store/database.ts';
 import type { InvocationContext } from '../src/platform/invocation-context.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { createWebFetchTool } from '../src/capabilities/web-fetch.ts';
+import { createToolAudit } from '../src/plugins/plugin.ts';
+import { createWebFetchTool } from '../src/plugins/web-fetch/web-fetch.ts';
 import { renderInvocationContext, testConfigStore, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
@@ -65,8 +66,7 @@ test('web_fetch returns bounded untrusted text through proxy synthetic DNS and a
   const { store, context } = await fixture();
   try {
     const tool = createWebFetchTool({
-      store,
-      context,
+      audit: createToolAudit(store, context.invocationId),
       invocationDeadline: Date.now() + 30_000,
       resolveHostname: async (hostname) => {
         expect(hostname).toBe('public.example');
@@ -108,8 +108,7 @@ test('web_fetch blocks private and literal synthetic addresses, including redire
   try {
     let requests = 0;
     const tool = createWebFetchTool({
-      store,
-      context,
+      audit: createToolAudit(store, context.invocationId),
       invocationDeadline: Date.now() + 30_000,
       resolveHostname: async () => [{ address: '198.18.0.42', family: 4 }],
       requestResolved: async () => {

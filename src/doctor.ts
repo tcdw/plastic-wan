@@ -32,6 +32,8 @@ import { RuntimeConfigurationStore } from './platform/runtime-config.ts';
 import { keyJarPath } from './platform/key-jar.ts';
 import { SecretStore } from './platform/secrets.ts';
 import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from './platform/system-resources.ts';
+import { BUILTIN_PLUGINS } from './plugins/builtin.ts';
+import { loadPlugins } from './plugins/plugin.ts';
 
 export async function runDoctor(configPath: string, outputAgentPrompt = false): Promise<void> {
   const loaded = await loadConfig(configPath);
@@ -181,7 +183,10 @@ async function runDoctorChecks(
         username: me.username ?? null,
       },
       modelGate,
-      systemResources: await SystemResources.load(BUNDLED_SYSTEM_RESOURCES_DIR),
+      systemResources: await SystemResources.load(
+        BUNDLED_SYSTEM_RESOURCES_DIR,
+        loadPlugins(BUILTIN_PLUGINS).skillDirectories,
+      ),
       directImageLoader: (context, signal) => media.loadDirectImages(context.directImages, signal),
       additionalTools: (context, deadline) => [...manager.createTools(context, deadline)],
     });

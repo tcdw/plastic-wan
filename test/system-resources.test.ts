@@ -86,6 +86,45 @@ test('rejects invalid skill manifests at load time', async () => {
   await expect(SystemResources.load(invalidName)).rejects.toThrow('directory name is invalid');
 });
 
+test('mounts plugin skill directories beside the bundled tree and rejects name conflicts', async () => {
+  const root = await tempRoot();
+  await writeSkill(root, 'alpha', '---\nname: alpha\ndescription: bundled\n---');
+  const plugin = await tempRoot('plasticwan-plugin-skills-');
+  await writeSkill(plugin, 'beta', '---\nname: beta\ndescription: from a plugin\n---\n# Beta\n', {
+    'guide.md': 'Plugin guide.\n',
+  });
+  const resources = await SystemResources.load(root, [join(plugin, 'skills', 'beta')]);
+  expect(resources.skills).toEqual([
+    { name: 'alpha', description: 'bundled', uri: 'system:///skills/alpha/SKILL.md' },
+    { name: 'beta', description: 'from a plugin', uri: 'system:///skills/beta/SKILL.md' },
+  ]);
+  const document = await resources.readText('system:///skills/beta/SKILL.md');
+  expect(document.text).toContain('# Beta');
+  const guide = await resources.readText('references/guide.md', document.uri);
+  expect(guide).toEqual({
+    uri: 'system:///skills/beta/references/guide.md',
+    text: 'Plugin guide.\n',
+    truncated: false,
+  });
+  await expect(resources.readText('../../alpha/SKILL.md', guide.uri)).resolves.toMatchObject({
+    uri: 'system:///skills/alpha/SKILL.md',
+  });
+
+  // A root without a skills directory still serves plugin skills.
+  const bare = await SystemResources.load(await tempRoot(), [join(plugin, 'skills', 'beta')]);
+  expect(bare.skills.map((skill) => skill.name)).toEqual(['beta']);
+
+  const shadowing = await tempRoot('plasticwan-plugin-skills-');
+  await writeSkill(shadowing, 'alpha', '---\nname: alpha\ndescription: shadows the bundled skill\n---');
+  await expect(SystemResources.load(root, [join(shadowing, 'skills', 'alpha')])).rejects.toThrow(
+    'Duplicate system skill name: alpha',
+  );
+  await expect(
+    SystemResources.load(await tempRoot(), [join(plugin, 'skills', 'beta'), join(plugin, 'skills', 'beta')]),
+  ).rejects.toThrow('Duplicate system skill name: beta');
+  await expect(SystemResources.load(root, [join(plugin, 'skills', 'missing')])).rejects.toThrow('missing SKILL.md');
+});
+
 test('resolves a large multi-document skill through progressive disclosure', async () => {
   const root = await tempRoot();
   const oversized = `${'s'.repeat(40)}\n`.repeat(1_200);

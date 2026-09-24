@@ -36,7 +36,8 @@ import { appState } from './store/schema.ts';
 import { StickerService } from './capabilities/stickers.ts';
 import { TelegramIngestion } from './ingress/telegram-ingestion.ts';
 import { capability } from './capabilities/execute-tool.ts';
-import { createWebFetchTool } from './capabilities/web-fetch.ts';
+import { BUILTIN_PLUGINS } from './plugins/builtin.ts';
+import { loadPlugins } from './plugins/plugin.ts';
 import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from './platform/system-resources.ts';
 
 const ALLOWED_UPDATES = ['message', 'edited_message', 'my_chat_member'] as const;
@@ -109,7 +110,7 @@ export async function serve(configPath: string, takeover = false): Promise<void>
       shutdown();
     });
     store = await SqliteStore.open(loaded.config);
-    const webFetchStore = store;
+    const openedStore = store;
     seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? []);
     bot = new Bot(token);
     // The registry is built once here and republished by every reload; the
@@ -157,7 +158,8 @@ export async function serve(configPath: string, takeover = false): Promise<void>
     const mcpManager = new McpManager(store, loaded.config, secrets);
     mcp = mcpManager;
     const memoryStore = new MemoryStore(store.orm);
-    const systemResources = await SystemResources.load(BUNDLED_SYSTEM_RESOURCES_DIR);
+    const plugins = loadPlugins(BUILTIN_PLUGINS);
+    const systemResources = await SystemResources.load(BUNDLED_SYSTEM_RESOURCES_DIR, plugins.skillDirectories);
     logEvent('system_skills_loaded', { skills: systemResources.skills.map((skill) => skill.name).join(',') });
     const conversationRuntime = new ConversationRuntime({
       agentCacheSize: loaded.config.agent.context.agent_cache_size,
@@ -173,10 +175,10 @@ export async function serve(configPath: string, takeover = false): Promise<void>
       capability(media.createReadImageTool(context, capabilities, deadline), false),
       capability(stickerService.createSearchTool(context, capabilities), false),
       ...createMemoryTools(memoryStore, context).map((tool) => capability(tool, true)),
-      capability(createWebFetchTool({ store: webFetchStore, context, invocationDeadline: deadline }), false),
-      capability(createAlarmTool({ store: webFetchStore, context }), true),
-      capability(createListAlarmTool({ store: webFetchStore, context, runtime: alarmToolRuntime }), false),
-      capability(createDeleteAlarmTool({ store: webFetchStore, context }), true),
+      capability(createAlarmTool({ store: openedStore, context }), true),
+      capability(createListAlarmTool({ store: openedStore, context, runtime: alarmToolRuntime }), false),
+      capability(createDeleteAlarmTool({ store: openedStore, context }), true),
+      ...plugins.capabilities(openedStore, context, deadline),
     ];
     // Directly exposed non-primitive tools: allowlisted MCP tools only.
     const additionalTools: ToolFactory = (context, deadline) => [...mcpManager.createTools(context, deadline)];

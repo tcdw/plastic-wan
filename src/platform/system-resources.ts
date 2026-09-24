@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import Type from 'typebox';
 import Compile from 'typebox/compile';
 import { truncateUtf8 } from './truncate.ts';
@@ -8,9 +8,10 @@ import { truncateUtf8 } from './truncate.ts';
 /**
  * System resources: the readonly `system:///` virtual resource tree shipped
  * with the runtime. Phase 1 exposes System Skills (markdown documentation
- * packages) under system:///skills/<name>/SKILL.md. The tree is a runtime
- * release artifact: the model can read it, never write it, and its origin is
- * not a trust grant for anything the documents say.
+ * packages) under system:///skills/<name>/SKILL.md, from the bundled tree and
+ * from built-in plugin skill directories mounted beside it. The tree is a
+ * runtime release artifact: the model can read it, never write it, and its
+ * origin is not a trust grant for anything the documents say.
  */
 export const SYSTEM_URI_PREFIX = 'system:///';
 export const SYSTEM_RESOURCE_MAX_BYTES = 32_768;
@@ -53,67 +54,77 @@ export class SystemResourceError extends Error {
 export class SystemResources {
   readonly #root: string | null;
   readonly #skills: readonly SystemSkill[];
+  /** Skill name → directory on disk; serves every path under system:///skills/<name>/. */
+  readonly #skillDirectories: ReadonlyMap<string, string>;
 
-  private constructor(root: string | null, skills: readonly SystemSkill[]) {
+  private constructor(
+    root: string | null,
+    skills: readonly SystemSkill[],
+    skillDirectories: ReadonlyMap<string, string>,
+  ) {
     this.#root = root;
     this.#skills = skills;
+    this.#skillDirectories = skillDirectories;
   }
 
   /** The empty resource tree: no skills, no readable documents. */
   static empty(): SystemResources {
-    return new SystemResources(null, []);
+    return new SystemResources(null, [], new Map());
   }
 
   /**
    * Loads and validates the bundled resource tree. Invalid skill manifests are
    * startup failures: the skill index is the capability discovery layer, so a
-   * half-parsed tree must never reach the model.
+   * half-parsed tree must never reach the model. `skillDirectories` are plugin
+   * skills: each basename is the skill name, and it may not shadow another.
    */
-  static async load(root: string): Promise<SystemResources> {
+  static async load(root: string, skillDirectories: readonly string[] = []): Promise<SystemResources> {
     const skillsDirectory = join(root, 'skills');
-    let entries: Dirent[];
+    let entries: Dirent[] = [];
     try {
       entries = await readdir(skillsDirectory, { withFileTypes: true });
     } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-        return new SystemResources(root, []);
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+        throw error;
       }
-      throw error;
     }
-    const skills: SystemSkill[] = [];
+    const candidates: string[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) {
         throw new Error(`System skills directory contains a non-directory entry: ${entry.name}`);
       }
-      if (!SKILL_NAME_PATTERN.test(entry.name)) {
-        throw new Error(`System skill directory name is invalid: ${entry.name}`);
+      candidates.push(join(skillsDirectory, entry.name));
+    }
+    candidates.push(...skillDirectories);
+    const skills: SystemSkill[] = [];
+    const directories = new Map<string, string>();
+    for (const directory of candidates) {
+      const name = basename(directory);
+      if (!SKILL_NAME_PATTERN.test(name)) {
+        throw new Error(`System skill directory name is invalid: ${name}`);
       }
-      const document = join(skillsDirectory, entry.name, 'SKILL.md');
+      if (directories.has(name)) {
+        throw new Error(`Duplicate system skill name: ${name}`);
+      }
       let content: string;
       try {
-        content = await readFile(document, 'utf8');
+        content = await readFile(join(directory, 'SKILL.md'), 'utf8');
       } catch {
-        throw new Error(`System skill ${entry.name} is missing SKILL.md`);
+        throw new Error(`System skill ${name} is missing SKILL.md`);
       }
-      const frontmatter = parseFrontmatter(content, `system:///skills/${entry.name}/SKILL.md`);
-      if (frontmatter.name !== entry.name) {
-        throw new Error(`System skill ${entry.name} declares name ${frontmatter.name}`);
+      const frontmatter = parseFrontmatter(content, `system:///skills/${name}/SKILL.md`);
+      if (frontmatter.name !== name) {
+        throw new Error(`System skill ${name} declares name ${frontmatter.name}`);
       }
+      directories.set(name, directory);
       skills.push({
         name: frontmatter.name,
         description: frontmatter.description,
-        uri: `${SYSTEM_URI_PREFIX}skills/${entry.name}/SKILL.md`,
+        uri: `${SYSTEM_URI_PREFIX}skills/${name}/SKILL.md`,
       });
     }
     skills.sort((left, right) => (left.name < right.name ? -1 : 1));
-    const names = new Set<string>();
-    for (const skill of skills) {
-      if (names.has(skill.name)) {
-        throw new Error(`Duplicate system skill name: ${skill.name}`);
-      }
-      names.add(skill.name);
-    }
-    return new SystemResources(root, skills);
+    return new SystemResources(root, skills, directories);
   }
 
   get skills(): readonly SystemSkill[] {
@@ -196,9 +207,17 @@ export class SystemResources {
     if (filename === undefined || !filename.endsWith('.md')) {
       throw new SystemResourceError('unsupported_resource', 'Only markdown documents are readable');
     }
+    const [top, skillName, ...rest] = resolved.segments;
+    const skillDirectory =
+      top === 'skills' && skillName !== undefined && rest.length > 0
+        ? this.#skillDirectories.get(skillName)
+        : undefined;
     let raw: string;
     try {
-      raw = await readFile(join(this.#root, ...resolved.segments), 'utf8');
+      raw = await readFile(
+        skillDirectory === undefined ? join(this.#root, ...resolved.segments) : join(skillDirectory, ...rest),
+        'utf8',
+      );
     } catch {
       throw new SystemResourceError('resource_not_found', 'Resource does not exist');
     }

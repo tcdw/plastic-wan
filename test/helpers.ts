@@ -8,6 +8,8 @@ import { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { KEY_JAR_FILE, keyJarPath } from '../src/platform/key-jar.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from '../src/platform/system-resources.ts';
+import { BUILTIN_PLUGINS } from '../src/plugins/builtin.ts';
+import { loadPlugins } from '../src/plugins/plugin.ts';
 import type {
   DirectImage,
   InvocationContext,
@@ -36,9 +38,9 @@ export function invocationCapabilities(
   return createCapabilityResolver(refs, header);
 }
 
-/** Loads the real bundled system:/// resource tree for integration-style tests. */
+/** Loads the real system:/// resource tree, plugin skills included, for integration-style tests. */
 export function bundledSystemResources(): Promise<SystemResources> {
-  return SystemResources.load(BUNDLED_SYSTEM_RESOURCES_DIR);
+  return SystemResources.load(BUNDLED_SYSTEM_RESOURCES_DIR, loadPlugins(BUILTIN_PLUGINS).skillDirectories);
 }
 
 export interface TestContextOptions {

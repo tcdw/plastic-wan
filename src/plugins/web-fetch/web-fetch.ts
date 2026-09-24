@@ -5,8 +5,7 @@ import { Readable } from 'node:stream';
 import { request as httpsRequest } from 'node:https';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import Type from 'typebox';
-import { finishToolCall, startToolCall, type SqliteStore } from '../store/database.ts';
-import type { InvocationContext } from '../platform/invocation-context.ts';
+import type { ToolAudit } from '../plugin.ts';
 
 const Strict = { additionalProperties: false } as const;
 const WebFetchInputSchema = Type.Object({ url: Type.String({ minLength: 1, maxLength: 2_048 }) }, Strict);
@@ -65,8 +64,7 @@ type ResolveHostname = (hostname: string) => Promise<readonly ResolvedAddress[]>
 type RequestResolved = (url: URL, address: string, signal: AbortSignal) => Promise<Response>;
 
 export interface WebFetchToolOptions {
-  readonly store: SqliteStore;
-  readonly context: InvocationContext;
+  readonly audit: ToolAudit;
   readonly invocationDeadline: number;
   readonly resolveHostname?: ResolveHostname;
   readonly requestResolved?: RequestResolved;
@@ -85,15 +83,7 @@ export function createWebFetchTool(
     parameters: WebFetchInputSchema,
     executionMode: 'sequential',
     execute: async (toolCallId, input, outerSignal) => {
-      const startedAt = performance.now();
-      const auditId = startToolCall(
-        options.store.orm,
-        options.context.invocationId,
-        toolCallId,
-        'web_fetch',
-        JSON.stringify(input),
-        false,
-      );
+      const audit = options.audit.start(toolCallId, 'web_fetch', JSON.stringify(input), false);
       const remainingMs = options.invocationDeadline - Date.now();
       const timeoutSignal = AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, remainingMs)));
       const signal = outerSignal === undefined ? timeoutSignal : AbortSignal.any([outerSignal, timeoutSignal]);
@@ -112,14 +102,14 @@ export function createWebFetchTool(
         const bodyLimit = RESULT_MAX_BYTES - Buffer.byteLength(header) - Buffer.byteLength(TRUNCATION_MARKER);
         const body = await readTextBody(fetched.response, Math.max(0, bodyLimit));
         const text = `${header}${body.text}${body.truncated ? TRUNCATION_MARKER : ''}`;
-        finishToolCall(options.store.orm, auditId, 'success', text, null, { startedAt, pendingOnly: true });
+        audit.succeed(text);
         return {
           content: [{ type: 'text', text }],
           details: { url: fetched.url, status: fetched.response.status, truncated: body.truncated },
         };
       } catch (error) {
         const failure = normalizeError(error, outerSignal, timeoutSignal);
-        finishToolCall(options.store.orm, auditId, 'error', null, failure.code, { startedAt, pendingOnly: true });
+        audit.fail(failure.code);
         throw new Error(`web_fetch failed: ${failure.message}`);
       }
     },

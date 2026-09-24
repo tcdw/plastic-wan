@@ -21,7 +21,8 @@ import { capability } from '../src/capabilities/execute-tool.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
 import { MediaService } from '../src/capabilities/media/media.ts';
 import { createMemoryTools, MemoryStore } from '../src/context/memory.ts';
-import { createWebFetchTool } from '../src/capabilities/web-fetch.ts';
+import { BUILTIN_PLUGINS } from '../src/plugins/builtin.ts';
+import { loadPlugins } from '../src/plugins/plugin.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { StickerService } from '../src/capabilities/stickers.ts';
@@ -225,7 +226,7 @@ test('the skill index reaches the system prompt and primitives stay directly cal
     systemResources: await bundledSystemResources(),
     capabilityTools: (context, deadline) => [
       ...createMemoryTools(memoryStore, context).map((tool) => capability(tool, true)),
-      capability(createWebFetchTool({ store, context, invocationDeadline: deadline }), false),
+      ...loadPlugins(BUILTIN_PLUGINS).capabilities(store, context, deadline),
     ],
   });
   expect(

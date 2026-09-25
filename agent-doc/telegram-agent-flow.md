@@ -153,7 +153,8 @@ system prompt 拆分（文档中只在此处维护；`ContextBuilder.buildSystem
 
 - checkpoint 是纯 metadata（`context_messages.is_checkpoint`），不是消息；每批注入的 `user` 消息打上该标志。`assistant`/`toolResult` 永远不是 checkpoint。
 - 触发条件：保留区间的 `send` 数超过 `agent.context.retained_sends_max`，或估算输入 + `maxTokens` 达到 `contextWindow * hard_token_ratio`。
-- 目标 checkpoint：从最新往回找第一个仍保留至少 `retained_sends_target` 次 `send` 的 checkpoint（`send` 少而 Tool 多的历史退回 token 判据），一次跨过多个 `send`，形成 sliding window。
+- 目标 checkpoint：从最新往回找第一个仍保留至少 `retained_sends_target` 次 `send` 的 checkpoint（`send` 少而 Tool 多的历史退回 token 判据），一次跨过多个 `send`，形成 sliding window。有 token 压力时，按 `send` 数选出的候选还必须让保留段落到 token 软预算（`contextWindow × hard_token_ratio × 0.8`）以内，否则改用 token 判据，哪怕保留的 `send` 少于目标。
+- GC 之后按保留行与当前 Tool 注册表重新估算输入 Token，再判断是否进入 `context_stop_ratio` 收尾；否则估算仍停在 GC 之前的高水位，刚被 GC 缓解的运行会直接进入收尾。
 - 安全校验：目标必须是 checkpoint 的 `user` 消息、必须前进、保留段头部不能是 `toolResult`、保留段内每个 `toolResult` 都要有对应的 assistant toolCall。任一不过就放弃本次 GC，等下一个 turn 边界（最高优先级守卫：provider 不会修孤儿 `toolResult`）。
 - GC 后必须同步四处：`head_seq` 前移（旧行软标记 `evicted_at`）、loop context 的 `messages`、`Agent.state.messages`、被淘汰消息携带的 `context_refs`。缺任何一处都会让三份历史分叉。
 - 一份 Context 在运行期只允许一个 `ContextHeader` 对象。`ConversationContextStore` 会就地推进传入的 header，而写入方（`#persistMessage`、`#maybeCollect`）走 `entry.header`、注入与引用解析走 `open()` 的句柄，所以缓存命中时必须把新句柄赋给缓存条目。留成两个对象时后者永不推进：复用缓存的运行里，第一批之后的每一批都会把「本次运行开始时的 `next_seq`」写成自己 `img_`/reply 引用的 `source_seq`，于是这些引用会比应有的时间早一次 GC 失效；同时引用解析比对的 `head_seq` 也看不到运行中途的 GC。

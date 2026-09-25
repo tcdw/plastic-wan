@@ -61,11 +61,18 @@ export function planContextGc(options: ContextGcOptions): ContextGcPlan | undefi
     // cut to. The caller falls back to closing mode instead.
     return undefined;
   }
+  // Under token pressure a cut that keeps the transcript over budget relieves
+  // nothing, however many sends it keeps.
+  const fitsTokens = (seq: bigint): boolean => !tokenPressure || tokensFrom(rows, seq) <= tokenBudget(options);
   const target =
     // Newest checkpoint that still keeps `retained_sends_target` sends: the
     // window slides instead of trimming message by message, exactly what the
     // "keep the latest ~N sends" requirement asks for.
-    checkpoints.toReversed().find((candidate) => countSends(rows, candidate.seq) >= options.retainedSendsTarget) ??
+    checkpoints
+      .toReversed()
+      .find(
+        (candidate) => countSends(rows, candidate.seq) >= options.retainedSendsTarget && fitsTokens(candidate.seq),
+      ) ??
     // Tool-heavy, send-light histories: fall back to the token criterion, which
     // takes the newest checkpoint already under the soft token budget.
     checkpoints.toReversed().find((candidate) => tokensFrom(rows, candidate.seq) <= tokenBudget(options));

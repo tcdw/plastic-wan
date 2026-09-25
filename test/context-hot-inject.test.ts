@@ -1339,6 +1339,75 @@ describe('conversation continuity', () => {
     config.agent.context.idle_grace_seconds = 0;
   };
 
+  test('a collection that relieves token pressure does not push the run into closing mode', async () => {
+    // Regression: the input estimate is a high-water mark that model usage only
+    // raises. GC collected the old history at a turn boundary, but the closing
+    // check right after still used the pre-GC estimate, so the run went send-only
+    // and ended as `context_limit` although the retained transcript was tiny.
+    const fixtureSetup = await fixture((config) => {
+      withoutIdleWait(config);
+      config.agent.context_stop_ratio = 0.8;
+      config.agent.context.hard_token_ratio = 0.6;
+    });
+    const faux = fauxProvider({
+      provider: 'agent',
+      models: [{ id: 'agent-model', input: ['text'], contextWindow: 40_000, maxTokens: 1_000 }],
+    });
+    faux.setResponses([
+      () => fauxAssistantMessage('first answer'),
+      () => fauxAssistantMessage(fauxToolCall('read', { path: 'system:///missing.md' }), { stopReason: 'toolUse' }),
+      () => fauxAssistantMessage('second answer'),
+    ]);
+    const runtime = await fixtureSetup.runtimeWith(faux);
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.configStore, async () => ({
+      state: 'completed',
+      reason: 'done',
+    }));
+    const runNext = async (updateId: number, messageId: number, text: string) => {
+      fixtureSetup.ingestion.ingest(update(updateId, messageId, text), new Date());
+      const [invocationId] = scheduler.processDue(new Date());
+      if (invocationId === undefined) {
+        throw new Error(`Expected an invocation for ${text}`);
+      }
+      const outcome = await runtime.run(
+        invocationId,
+        fixtureSetup.configStore.beginInvocation(),
+        new AbortController().signal,
+      );
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'completed' WHERE id = ?").run(invocationId);
+      fixtureSetup.store.db
+        .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+        .run(invocationId);
+      return outcome;
+    };
+    try {
+      await runNext(1, 10, 'first');
+      // Stands in for a long earlier history: the next run starts with an
+      // estimate over `context_stop_ratio` that only this old row accounts for.
+      fixtureSetup.store.db.prepare('UPDATE context_messages SET est_tokens = 31000 WHERE seq = 2').run();
+      const outcome = await runNext(2, 11, 'second');
+
+      // GC did run and dropped the heavy row…
+      const context = fixtureSetup.store.db
+        .prepare<[], { head_seq: bigint; last_gc_at: string | null }>(
+          'SELECT head_seq, last_gc_at FROM conversation_contexts',
+        )
+        .get();
+      expect(context?.head_seq).toBe(3n);
+      expect(context?.last_gc_at).not.toBeNull();
+      // …and the run carried on with its full registry instead of closing.
+      expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+      const requests = fixtureSetup.store.db
+        .prepare<[], { tools_json: string }>('SELECT tools_json FROM model_calls ORDER BY id')
+        .all();
+      expect(requests).toHaveLength(3);
+      expect(JSON.parse(requests.at(-1)?.tools_json ?? '[]')).toContain('execute');
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
   test('GC judges token pressure against the model this run uses', async () => {
     // Regression: `#maybeCollect` sized the window from the constructor-time registry
     // model while the rest of the run used `modelSwitcher.model()`. After a runtime

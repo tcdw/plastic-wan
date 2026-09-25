@@ -642,6 +642,15 @@ export class AgentRuntime {
         rebuildVisibleState,
       );
       const messages = collected === undefined ? undefined : turn.context.messages.slice(collected.retainedIndex);
+      if (collected !== undefined) {
+        // The estimate is a high-water mark that model usage only ever raises, so
+        // after a collection it still describes the history just dropped and
+        // would push a run that GC had relieved straight into closing mode.
+        state.estimatedInputTokens = this.#estimateInputTokens(
+          cached,
+          estimateToolRegistryCharacters(nextTools ?? tools),
+        );
+      }
       const stopThreshold = Math.floor(model.contextWindow * config.agent.context_stop_ratio);
       if (state.estimatedInputTokens >= stopThreshold) {
         state.contextClosing = true;

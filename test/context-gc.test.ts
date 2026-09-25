@@ -132,6 +132,35 @@ describe('context gc planning', () => {
     expect(plan.afterTokens).toBeLessThanOrEqual(100_000 * 0.6 * 0.8);
   });
 
+  test('under token pressure the send window cannot pick a cut that stays over budget', () => {
+    // Ten batches, one send each. The two newest batches alone hold far more
+    // than the token budget, so keeping `retained_sends_target` sends cannot
+    // relieve the pressure; only a later checkpoint can.
+    const rows: ContextWindowRow[] = [];
+    for (let index = 0; index < 10; index += 1) {
+      const heavy = index >= 8 ? 20_000 : 1_000;
+      rows.push(row(BigInt(index * 2 + 1), true, null, heavy));
+      rows.push(row(BigInt(index * 2 + 2), false, BigInt(index + 1), heavy));
+    }
+    const plan = planContextGc({
+      ...base,
+      retainedSendsTarget: 2,
+      retainedSendsMax: 30,
+      contextWindow: 100_000,
+      maxOutputTokens: 1_000,
+      estimatedInputTokens: 59_000,
+      transcriptSeqs: rows.map((entry) => entry.seq),
+      window: rows,
+      messages: transcript(rows),
+    });
+    if (plan === undefined) {
+      throw new Error('Expected token-pressure collection');
+    }
+    expect(plan.afterTokens).toBeLessThanOrEqual(100_000 * 0.6 * 0.8);
+    expect(plan.targetSeq).toBe(19n);
+    expect(plan.afterSends).toBe(1);
+  });
+
   test('refuses to cut when the retained segment would start with a tool result', () => {
     const rows = [row(1n, true, null), row(2n, false, null, 10), row(3n, true, null, 10)];
     const messages: AgentMessage[] = [

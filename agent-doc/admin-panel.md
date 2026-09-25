@@ -21,13 +21,17 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 `src/ingress/admin/auth.ts`：
 
 - 首次访问时 `GET /api/auth/session` 返回 `setup_required = true`，前端渲染创建管理员表单。
-- `POST /api/auth/setup` 在事务内再次确认无用户后写入 `admin_users`；重复调用返回 409 `setup_complete`。
+- `POST /api/auth/setup` 在 hash 之前先检查是否已有用户（已完成时直接 409 `setup_complete`，不消耗 Argon2），再在事务内确认一次后写入 `admin_users`。
 - 密码 12–200 字符，用户名 `^[A-Za-z0-9._-]{3,32}$`。
 - 密码只以 `argon2id` hash（`@node-rs/argon2`）存储，明文不落库、不进日志。
 - Session Token 为 32 字节随机值，返回给 Cookie，数据库只存 SHA-256 摘要。
 - Cookie 为 `HttpOnly; SameSite=Strict; Path=/`，`Max-Age` 等于 `session_ttl_hours`。
 - 用户名不存在时仍执行一次 hash 运算，避免枚举时间差。
-- 同一失败键连续 10 次失败后锁定 15 分钟，返回 429 `too_many_attempts`；计数只在内存中，重启 `serve` 清空。失败键是请求头 `X-Forwarded-For` 的原值（缺省为 `local`）加小写用户名，见 `server.ts` 登录分支与 `AdminAuth.login`。该请求头由客户端提供，直连时并不可信。
+- 同一客户端连续 10 次失败后锁定 15 分钟，返回 429 `too_many_attempts`；计数只在内存中，重启 `serve` 清空。客户端按 TCP 连接的对端地址区分，不读 `X-Forwarded-For`（客户端可以随意伪造它），也不区分用户名，所以换用户名或换请求头都绕不过锁定。反向代理之后所有请求共用代理的地址、共用一个计数，这是有意的取舍：没有可信代理配置时无法安全地取真实地址。
+- 失败在 Argon2 校验**之前**计数，并发的失败尝试都会被计入；锁定过期后计数从零开始。失败记录超过一个锁定窗口会被清除，最多记录 1000 个客户端。
+- 用户名不符合格式或密码超过 200 字符的登录直接失败（计入失败），不做 hash。login 与 setup 同时最多运行 2 个 Argon2 运算，超出的请求直接返回 429，不排队。
+- 登录校验通过后在 immediate 事务里重新读取密码 hash，与校验时的不一致（期间改过密码）就按失败处理，不签发 Session。
+- 所有带 body 的请求边读边按字节计数，超过上限（登录等 8 KiB，Models 页写端点单独设上限）立即取消读取并返回 413 `body_too_large`，不会先把整个 body 读进内存。
 - 过期 Session 在认证时删除，并在新建 Session 与服务启动时批量清理。
 - `POST /api/auth/logout` 按 Token 摘要删除 Session。
 - `POST /api/auth/credentials` 修改当前管理员用户名和密码，撤销该用户全部 Session（含当前）并签发新的 Cookie。

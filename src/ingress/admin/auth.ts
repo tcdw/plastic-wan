@@ -10,6 +10,11 @@ const LOCKOUT_MS = 15 * 60_000;
 const MIN_PASSWORD_LENGTH = 12;
 const MAX_PASSWORD_LENGTH = 200;
 const USERNAME_PATTERN = /^[A-Za-z0-9._-]{3,32}$/;
+// Bounds for the unauthenticated paths. Failures are tracked per client, the
+// map is swept and capped, and at most this many 64 MiB Argon2 jobs run for
+// login and setup at once; the rest are turned away instead of queued.
+const MAX_TRACKED_CLIENTS = 1_000;
+const MAX_CONCURRENT_HASHES = 2;
 // The runtime defaults to Argon2id; the explicit cost parameters keep the
 // strength of the Bun.password defaults this project was built on (64 MiB
 // memory), where @node-rs/argon2 would otherwise drop to its 19 MiB default.
@@ -58,7 +63,9 @@ interface SessionRow {
 export class AdminAuth {
   readonly #orm: Orm;
   readonly #ttlMs: number;
-  readonly #failures = new Map<string, { count: number; lockedUntil: number }>();
+  // Insertion order is recency order: a failure re-inserts its entry.
+  readonly #failures = new Map<string, { count: number; lastAt: number; lockedUntil: number }>();
+  #hashing = 0;
 
   constructor(orm: Orm, sessionTtlHours: number) {
     this.#orm = orm;
@@ -72,7 +79,12 @@ export class AdminAuth {
 
   async createFirstUser(credentials: AdminCredentials, now = new Date()): Promise<string> {
     assertCredentials(credentials);
-    const passwordHash = await hash(credentials.password, HASH_OPTIONS);
+    // Checked before hashing so a finished setup endpoint cannot be used to burn
+    // Argon2 work; the transaction below still settles a race between two setups.
+    if (!this.setupRequired()) {
+      throw new AdminAuthError(409, 'setup_complete', 'Administrator account already exists');
+    }
+    const passwordHash = await this.#withHashSlot(() => hash(credentials.password, HASH_OPTIONS));
     const iso = now.toISOString();
     const userId = this.#orm.transaction(
       () => {
@@ -130,41 +142,105 @@ export class AdminAuth {
     );
   }
 
+  /**
+   * `clientKey` is the transport address of the caller. Failures are counted per
+   * client, not per username, so rotating usernames does not reset the lockout.
+   */
   async login(credentials: AdminCredentials, now = new Date(), clientKey = 'unknown'): Promise<string> {
     const username = typeof credentials.username === 'string' ? credentials.username : '';
     const password = typeof credentials.password === 'string' ? credentials.password : '';
-    const failureKey = `${clientKey}|${username.toLowerCase()}`;
-    const failure = this.#failures.get(failureKey);
-    if (failure !== undefined && failure.lockedUntil > now.getTime()) {
+    const nowMs = now.getTime();
+    this.#sweepFailures(nowMs);
+    const failure = this.#failures.get(clientKey);
+    if (failure !== undefined && failure.lockedUntil > nowMs) {
       throw new AdminAuthError(429, 'too_many_attempts', 'Too many failed attempts; retry later');
+    }
+    // No stored account can match input outside these bounds, so it is refused
+    // without spending a hash on it.
+    if (!USERNAME_PATTERN.test(username) || password.length > MAX_PASSWORD_LENGTH) {
+      this.#recordFailure(clientKey, nowMs);
+      throw new AdminAuthError(401, 'invalid_credentials', 'Invalid username or password');
     }
     const row = this.#orm
       .select({ id: adminUsers.id, passwordHash: adminUsers.passwordHash })
       .from(adminUsers)
       .where(eq(adminUsers.username, username))
       .get() satisfies UserRow | undefined;
-    let verified = false;
-    if (row === undefined) {
-      // Burn comparable time on unknown usernames so response latency does not leak account existence.
-      await hash(password.length === 0 ? 'absent-account-placeholder' : password, HASH_OPTIONS);
-    } else {
-      verified = await verify(row.passwordHash, password);
-    }
+    const verified = await this.#withHashSlot(async () => {
+      // Counted before the slow verification, so concurrent failures all count
+      // instead of each overwriting the same snapshot.
+      this.#recordFailure(clientKey, nowMs);
+      if (row === undefined) {
+        // Burn comparable time on unknown usernames so response latency does not leak account existence.
+        await hash(password.length === 0 ? 'absent-account-placeholder' : password, HASH_OPTIONS);
+        return false;
+      }
+      return verify(row.passwordHash, password);
+    });
     if (row === undefined || !verified) {
-      const count = (failure?.count ?? 0) + 1;
-      this.#failures.set(failureKey, {
-        count,
-        lockedUntil: count >= MAX_FAILED_ATTEMPTS ? now.getTime() + LOCKOUT_MS : 0,
-      });
       throw new AdminAuthError(401, 'invalid_credentials', 'Invalid username or password');
     }
-    this.#failures.delete(failureKey);
-    this.#orm
-      .update(adminUsers)
-      .set({ lastLoginAt: now.toISOString(), updatedAt: now.toISOString() })
-      .where(eq(adminUsers.id, row.id))
-      .run();
-    return this.#createSession(row.id, now);
+    this.#failures.delete(clientKey);
+    return this.#orm.transaction(
+      () => {
+        // The password may have changed while it was being verified; a change
+        // revokes every session, so a login checked against the old hash must
+        // not create a new one.
+        const current = this.#orm
+          .select({ passwordHash: adminUsers.passwordHash })
+          .from(adminUsers)
+          .where(eq(adminUsers.id, row.id))
+          .get();
+        if (current?.passwordHash !== row.passwordHash) {
+          throw new AdminAuthError(401, 'invalid_credentials', 'Invalid username or password');
+        }
+        this.#orm
+          .update(adminUsers)
+          .set({ lastLoginAt: now.toISOString(), updatedAt: now.toISOString() })
+          .where(eq(adminUsers.id, row.id))
+          .run();
+        return this.#createSession(row.id, now);
+      },
+      { behavior: 'immediate' },
+    );
+  }
+
+  async #withHashSlot<T>(work: () => Promise<T>): Promise<T> {
+    if (this.#hashing >= MAX_CONCURRENT_HASHES) {
+      throw new AdminAuthError(429, 'too_many_attempts', 'Too many concurrent sign-in attempts; retry later');
+    }
+    this.#hashing += 1;
+    try {
+      return await work();
+    } finally {
+      this.#hashing -= 1;
+    }
+  }
+
+  #recordFailure(clientKey: string, nowMs: number): void {
+    const count = (this.#failures.get(clientKey)?.count ?? 0) + 1;
+    this.#failures.delete(clientKey);
+    this.#failures.set(clientKey, {
+      count,
+      lastAt: nowMs,
+      lockedUntil: count >= MAX_FAILED_ATTEMPTS ? nowMs + LOCKOUT_MS : 0,
+    });
+    while (this.#failures.size > MAX_TRACKED_CLIENTS) {
+      const oldest = this.#failures.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      this.#failures.delete(oldest);
+    }
+  }
+
+  /** Forgets expired lockouts and failures older than one lockout window. */
+  #sweepFailures(nowMs: number): void {
+    for (const [key, entry] of this.#failures) {
+      if (Math.max(entry.lastAt + LOCKOUT_MS, entry.lockedUntil) <= nowMs) {
+        this.#failures.delete(key);
+      }
+    }
   }
 
   authenticate(token: string, now = new Date()): AdminSession | null {

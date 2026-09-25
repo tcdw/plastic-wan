@@ -168,7 +168,11 @@ export class AdminServer {
     }
     this.#auth.purgeExpired();
     const server = serve({
-      fetch: (request) => this.handle(request),
+      // The socket address, not a forwarded header: a caller controls
+      // X-Forwarded-For, so keying the login throttle on it let every attempt
+      // pick a fresh bucket.
+      fetch: (request, env) =>
+        this.handle(request, 'incoming' in env ? (env.incoming.socket.remoteAddress ?? 'unknown') : 'unknown'),
       hostname: this.#admin.host,
       port: this.#admin.port,
       serverOptions: {
@@ -208,12 +212,13 @@ export class AdminServer {
     await closeServer(server);
   }
 
-  async handle(request: Request): Promise<Response> {
+  /** `clientAddress` is the transport peer; tests calling this directly share one. */
+  async handle(request: Request, clientAddress = 'local'): Promise<Response> {
     const url = new URL(request.url);
     const segments = url.pathname.split('/').filter((segment) => segment.length > 0);
     try {
       if (segments[0] === 'api') {
-        return await this.#api(request, url, segments.slice(1));
+        return await this.#api(request, url, segments.slice(1), clientAddress);
       }
       return await this.#staticAsset(request, segments);
     } catch (error) {
@@ -232,7 +237,7 @@ export class AdminServer {
     }
   }
 
-  async #api(request: Request, url: URL, segments: readonly string[]): Promise<Response> {
+  async #api(request: Request, url: URL, segments: readonly string[], clientAddress: string): Promise<Response> {
     if (
       request.method !== 'GET' &&
       request.method !== 'POST' &&
@@ -262,8 +267,7 @@ export class AdminServer {
       return json({ status: 'ok' }, 200, this.#sessionCookie(token));
     }
     if (route === 'auth/login' && request.method === 'POST') {
-      const clientKey = request.headers.get('x-forwarded-for') ?? 'local';
-      const token = await this.#auth.login(await readCredentials(request), new Date(), clientKey);
+      const token = await this.#auth.login(await readCredentials(request), new Date(), clientAddress);
       return json({ status: 'ok' }, 200, this.#sessionCookie(token));
     }
     if (route === 'auth/logout' && request.method === 'POST') {
@@ -842,14 +846,7 @@ function readCookie(request: Request, name: string): string {
 }
 
 async function readJsonObject(request: Request, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
-  const declared = request.headers.get('content-length');
-  if (declared !== null && Number(declared) > maxBytes) {
-    throw new AdminAuthError(413, 'body_too_large', 'Request body is too large');
-  }
-  const text = await request.text();
-  if (text.length > maxBytes) {
-    throw new AdminAuthError(413, 'body_too_large', 'Request body is too large');
-  }
+  const text = await readBoundedText(request, maxBytes);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -860,6 +857,43 @@ async function readJsonObject(request: Request, maxBytes = MAX_BODY_BYTES): Prom
     throw new AdminAuthError(400, 'invalid_body', 'Request body must be a JSON object');
   }
   return parsed as Record<string, unknown>;
+}
+
+/**
+ * Reads at most `maxBytes` of the body, counting bytes as they arrive. The limit
+ * used to be checked after `request.text()` had buffered everything, so a
+ * chunked request without Content-Length could make an unauthenticated login
+ * allocate without bound, and the check counted UTF-16 units, not bytes.
+ */
+async function readBoundedText(request: Request, maxBytes: number): Promise<string> {
+  const tooLarge = (): AdminAuthError => new AdminAuthError(413, 'body_too_large', 'Request body is too large');
+  const declared = request.headers.get('content-length');
+  if (declared !== null && Number(declared) > maxBytes) {
+    throw tooLarge();
+  }
+  if (request.body === null) {
+    return '';
+  }
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      total += value.byteLength;
+      if (total > maxBytes) {
+        throw tooLarge();
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 async function readCredentials(request: Request): Promise<AdminCredentials> {

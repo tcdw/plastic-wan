@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from 'grammy/types';
+import { AdminAuth } from '../src/ingress/admin/auth.ts';
 import { AdminServer } from '../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
 import { readConfigRevision } from '../src/platform/config-file.ts';
@@ -171,6 +172,88 @@ test('admin login persists only hashes and rejects invalid credentials', async (
     );
     expect(crossOrigin.status).toBe(403);
     expect(await readJson(crossOrigin)).toMatchObject({ error: 'bad_origin' });
+  } finally {
+    store.close();
+  }
+});
+
+test('the login lockout cannot be dodged by rotating X-Forwarded-For or usernames', async () => {
+  const { store, server } = await fixture();
+  try {
+    await server.handle(post('/api/auth/setup', { username: 'owner', password: PASSWORD }));
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const failed = await server.handle(
+        request('/api/auth/login', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-forwarded-for': `203.0.113.${attempt}` },
+          body: JSON.stringify({ username: `guess${attempt}`, password: 'wrong-password-value' }),
+        }),
+      );
+      expect(failed.status).toBe(401);
+    }
+    const locked = await server.handle(post('/api/auth/login', { username: 'owner', password: PASSWORD }));
+    expect(locked.status).toBe(429);
+    expect(await readJson(locked)).toMatchObject({ error: 'too_many_attempts' });
+    // Another transport peer has its own bucket.
+    expect(
+      (await server.handle(post('/api/auth/login', { username: 'owner', password: PASSWORD }), '198.51.100.7')).status,
+    ).toBe(200);
+  } finally {
+    store.close();
+  }
+}, 30_000);
+
+test('concurrent failures all count, and an expired lockout starts a fresh count', async () => {
+  const { store } = await fixture();
+  try {
+    const auth = new AdminAuth(store.orm, 12);
+    const start = new Date('2026-09-26T00:00:00.000Z');
+    await auth.createFirstUser({ username: 'owner', password: PASSWORD }, start);
+    const wrong = (at: Date) => auth.login({ username: 'owner', password: 'wrong-password-value' }, at, 'peer');
+    // Two at once used to compute the same next count from one snapshot.
+    await Promise.allSettled([wrong(start), wrong(start)]);
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await expect(wrong(start)).rejects.toMatchObject({ code: 'invalid_credentials' });
+    }
+    await expect(auth.login({ username: 'owner', password: PASSWORD }, start, 'peer')).rejects.toMatchObject({
+      code: 'too_many_attempts',
+    });
+
+    // After the lockout the count starts over instead of re-locking on the
+    // very next mistake.
+    const later = new Date(start.getTime() + 15 * 60_000 + 1);
+    await expect(wrong(later)).rejects.toMatchObject({ code: 'invalid_credentials' });
+    await expect(wrong(later)).rejects.toMatchObject({ code: 'invalid_credentials' });
+    expect(typeof (await auth.login({ username: 'owner', password: PASSWORD }, later, 'peer'))).toBe('string');
+  } finally {
+    store.close();
+  }
+}, 30_000);
+
+test('request bodies are limited by bytes as they stream in', async () => {
+  const { store, server } = await fixture();
+  try {
+    let pulled = 0;
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(4_096).fill(0x20));
+      },
+    });
+    const chunked = await server.handle(
+      request('/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: endless,
+        duplex: 'half',
+      } as RequestInit),
+    );
+    expect(chunked.status).toBe(413);
+    expect(pulled).toBeLessThan(10);
+
+    // 3,000 three-byte characters are ~9 KiB but only ~3,000 UTF-16 units.
+    const multibyte = await server.handle(post('/api/auth/login', { username: '\u4e2d'.repeat(3_000), password: 'x' }));
+    expect(multibyte.status).toBe(413);
   } finally {
     store.close();
   }

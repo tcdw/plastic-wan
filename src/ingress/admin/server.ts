@@ -40,7 +40,7 @@ import {
   parseUpdateMemoryBody,
   updateMemory,
 } from './memory-admin.ts';
-import { cancelPendingSessions } from './operations.ts';
+import { cancelOngoingSessions } from './operations.ts';
 import {
   appendModels,
   createProvider,
@@ -278,10 +278,13 @@ export class AdminServer {
       const token = await this.#auth.changeCredentials(session.userId, await readCredentials(request));
       return json({ status: 'ok' }, 200, this.#sessionCookie(token));
     }
-    if (route === 'cancel-pending-sessions' && request.method === 'POST') {
-      const result = cancelPendingSessions(this.#store.orm, new Date());
+    if (route === 'cancel-ongoing-sessions' && request.method === 'POST') {
+      // Close the database side first: an aborted run releases its un-injected
+      // batches, and they must already be expired by then.
+      const result = cancelOngoingSessions(this.#store.orm, new Date());
+      const running = this.#scheduler?.abortAll() ?? 0;
       this.#scheduler?.wake();
-      return json(result);
+      return json({ ...result, canceled_invocations: result.canceled_invocations + running });
     }
     if (route === 'wake' && request.method === 'POST') {
       const wasSleeping = wakeFromSleep(this.#store.orm);

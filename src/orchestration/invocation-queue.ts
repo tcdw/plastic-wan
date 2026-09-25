@@ -443,11 +443,16 @@ export class InvocationQueueService {
       .all();
     for (const row of rows) {
       const timestamp = now.toISOString();
-      this.#store.orm
+      const released = this.#store.orm
         .update(buckets)
         .set({ state: 'queued', queuedAt: timestamp, updatedAt: timestamp })
         .where(and(eq(buckets.id, row.bucketId), eq(buckets.state, 'running')))
         .run();
+      // An admin cancel expires attached batches before aborting the run; those
+      // must not come back as a new invocation.
+      if (asRunResult(released).changes === 0) {
+        continue;
+      }
       this.#insertInvocation(row.bucketId, row.conversationId, now, false);
       console.log(
         JSON.stringify({

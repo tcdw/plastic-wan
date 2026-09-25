@@ -17,7 +17,7 @@ import { Card } from '@/components/ui/card';
 import { Panel } from '@/components/layout/panel';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { cancelPendingSessions, type LabelCount, type UsageEntry, wakeBot } from '@/lib/api';
+import { cancelOngoingSessions, type LabelCount, type UsageEntry, wakeBot } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 import { formatNumber, formatTime } from '@/lib/format';
 import { overviewQuery, usageQuery } from '@/lib/queries';
@@ -107,7 +107,7 @@ export default function OverviewPage(): React.ReactElement {
   });
 
   const cancel = useMutation({
-    mutationFn: cancelPendingSessions,
+    mutationFn: cancelOngoingSessions,
     onSuccess: (result) => {
       setCancelOpen(false);
       toast.success(
@@ -146,7 +146,9 @@ export default function OverviewPage(): React.ReactElement {
   }
 
   const totalInvocations = data.invocation_states.reduce((sum, entry) => sum + entry.count, 0);
-  const queuedInvocations = data.invocation_states.find((entry) => entry.label === 'queued')?.count ?? 0;
+  const ongoingInvocations = data.invocation_states
+    .filter((entry) => entry.label === 'running' || entry.label === 'queued')
+    .reduce((sum, entry) => sum + entry.count, 0);
   const chartData = usage?.series.map((point) => ({ ...point })) ?? [];
 
   return (
@@ -210,16 +212,16 @@ export default function OverviewPage(): React.ReactElement {
               disabled={cancel.isPending}
               onClick={() => setCancelOpen(true)}
             >
-              Cancel pending
+              Cancel ongoing
             </Button>
           }
         >
           <dl className="space-y-4">
-            <Field label="Queued invocations">
-              <p className="text-sm font-medium tabular-nums">{formatNumber(queuedInvocations)}</p>
+            <Field label="Ongoing invocations">
+              <p className="text-sm font-medium tabular-nums">{formatNumber(ongoingInvocations)}</p>
             </Field>
-            <Field label="Cancel pending">
-              <p className="text-sm">Expires collecting/queued buckets and aborts queued invocations.</p>
+            <Field label="Cancel ongoing">
+              <p className="text-sm">Aborts running and queued invocations and expires every pending bucket.</p>
             </Field>
           </dl>
         </Panel>
@@ -310,9 +312,9 @@ export default function OverviewPage(): React.ReactElement {
             setCancelOpen(false);
           }
         }}
-        title="Cancel all pending sessions?"
-        description="This will expire collecting/queued buckets and abort queued invocations."
-        confirmText="Cancel pending sessions"
+        title="Cancel all ongoing sessions?"
+        description="This will abort running and queued invocations and expire every pending bucket. Messages already sent stay sent."
+        confirmText="Cancel ongoing sessions"
         destructive
         pending={cancel.isPending}
         error={cancel.isError ? errorMessage(cancel.error) : null}

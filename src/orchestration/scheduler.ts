@@ -110,6 +110,15 @@ export class BucketScheduler {
     }
   }
 
+  // Aborts every running invocation (used by the admin "Cancel ongoing"). Returns
+  // how many were signalled; each one persists its own terminal state.
+  abortAll(): number {
+    for (const entry of this.#active.values()) {
+      entry.controller.abort(new Error('admin_cancel'));
+    }
+    return this.#active.size;
+  }
+
   async stop(graceMilliseconds = 30_000): Promise<void> {
     this.#running = false;
     this.wake();

@@ -11,10 +11,11 @@ import type { RuntimeConfigurationStore } from '../src/platform/runtime-config.t
 import { SqliteStore } from '../src/store/database.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
+import { attachBucketToInvocation } from '../src/orchestration/invocation-queue.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { enterSleep } from '../src/store/sleep.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
+import { sleep, testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
 
 const PASSWORD = 'correct-horse-battery';
 const directories: string[] = [];
@@ -686,7 +687,7 @@ test('admin config accepts a non-loopback bind host', async () => {
   });
 });
 
-test('admin can cancel all pending sessions', async () => {
+test('admin can cancel all ongoing sessions', async () => {
   const { store, server, configStore } = await fixture();
   try {
     const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
@@ -706,7 +707,7 @@ test('admin can cancel all pending sessions', async () => {
     );
     const headers = { cookie };
 
-    const canceled = await server.handle(post('/api/cancel-pending-sessions', {}, cookie));
+    const canceled = await server.handle(post('/api/cancel-ongoing-sessions', {}, cookie));
     expect(canceled.status).toBe(200);
     const body = await readJson(canceled);
     expect(body).toMatchObject({ canceled_buckets: 1, canceled_invocations: 1 });
@@ -721,6 +722,76 @@ test('admin can cancel all pending sessions', async () => {
     const overview = await readJson(await server.handle(request('/api/overview', { headers })));
     expect(overview.invocation_states).toContainEqual({ label: 'aborted', count: 1 });
   } finally {
+    store.close();
+  }
+});
+
+test('cancel ongoing aborts a running invocation without re-queuing its attached batch', async () => {
+  const { store, configStore } = await fixture();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const scheduler = new BucketScheduler(store, configStore, async (_id, _snapshot, signal) => {
+    await gate;
+    return signal.aborted ? { state: 'aborted', reason: 'aborted' } : { state: 'completed', reason: 'done' };
+  });
+  const server = new AdminServer({ store, configStore, scheduler });
+  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
+  const invocationStates = (): string[] =>
+    store.db
+      .prepare<[], { state: string }>('SELECT state FROM invocations ORDER BY id')
+      .all()
+      .map((row) => row.state);
+  const until = async (check: () => boolean, label: string): Promise<void> => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (check()) {
+        return;
+      }
+      await sleep(10);
+    }
+    throw new Error(`Timed out waiting for ${label}`);
+  };
+  try {
+    const start = new Date();
+    ingestion.ingest(textUpdate(1, 10, 'first'), start);
+    store.db.prepare('UPDATE buckets SET deadline_at = ?').run(new Date(start.getTime() - 1_000).toISOString());
+    scheduler.start();
+    await until(() => invocationStates()[0] === 'running', 'the running invocation');
+
+    // A second batch attached mid-run and not yet injected.
+    ingestion.ingest(textUpdate(2, 11, 'second'), new Date());
+    const running = store.db
+      .prepare<[], { id: bigint; conversation_id: bigint }>(
+        "SELECT id, conversation_id FROM invocations WHERE state = 'running'",
+      )
+      .get()!;
+    const attached = store.db
+      .prepare<[], { id: bigint }>("SELECT id FROM buckets WHERE state = 'collecting'")
+      .get()!.id;
+    attachBucketToInvocation(store, 20, running.id, attached, running.conversation_id, new Date());
+
+    const cookie = sessionCookie(
+      await server.handle(post('/api/auth/setup', { username: 'owner', password: PASSWORD })),
+    );
+    const canceled = await server.handle(post('/api/cancel-ongoing-sessions', {}, cookie));
+    expect(canceled.status).toBe(200);
+    expect(await readJson(canceled)).toMatchObject({ canceled_buckets: 1, canceled_invocations: 1 });
+
+    release();
+    await until(() => invocationStates()[0] === 'aborted', 'the aborted invocation');
+    expect(invocationStates()).toEqual(['aborted']);
+    const bucketStates = store.db
+      .prepare<[], { id: bigint; state: string }>('SELECT id, state FROM buckets ORDER BY id')
+      .all()
+      .map((row) => [row.id === attached ? 'attached' : 'opening', row.state]);
+    expect(bucketStates).toEqual([
+      ['opening', 'aborted'],
+      ['attached', 'expired'],
+    ]);
+  } finally {
+    release();
+    await scheduler.stop();
     store.close();
   }
 });

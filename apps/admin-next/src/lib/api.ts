@@ -646,7 +646,7 @@ export interface UsageEntry {
   readonly amount: number;
 }
 
-export interface CancelPendingResult {
+export interface CancelOngoingResult {
   readonly canceled_buckets: number;
   readonly canceled_invocations: number;
 }
@@ -992,8 +992,8 @@ export function applyConfigFile(): Promise<ConfigApplyResponse> {
   return call<ConfigApplyResponse>('/config/apply', { method: 'POST' });
 }
 
-export function cancelPendingSessions(): Promise<CancelPendingResult> {
-  return call<CancelPendingResult>('/cancel-pending-sessions', { method: 'POST' });
+export function cancelOngoingSessions(): Promise<CancelOngoingResult> {
+  return call<CancelOngoingResult>('/cancel-ongoing-sessions', { method: 'POST' });
 }
 
 export function wakeBot(): Promise<WakeResult> {

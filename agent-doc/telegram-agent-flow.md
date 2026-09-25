@@ -338,7 +338,7 @@ Sticker 代表帧：
 
 - Telegram thumbnail 优先。
 - 静态 WEBP 直接标准化。
-- 视频 WEBM 使用 FFprobe 获取时长、FFmpeg 提取中间帧。
+- 视频 WEBM 使用 FFprobe 获取时长、FFmpeg 提取中间帧。两者都固定 `-f matroska -protocol_whitelist file`：`is_video` 只是元数据，不能说明文件内容；如果放开格式探测，伪装成视频的播放列表（HLS）或 concat 文件会让 FFmpeg 以服务身份读取其他本地文件或访问网络。不是 Matroska/WebM 的内容直接失败。
 - 动画 TGS 使用 python-lottie 导出指定中间帧 SVG，再由 Sharp 标准化。
 
 Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、动作、中英文标签。不要改回“提示模型输出 JSON 后直接 `JSON.parse`”；Provider 可能返回 Markdown code fence，曾导致真实 `read_image` 失败。

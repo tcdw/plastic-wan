@@ -40,6 +40,15 @@ export interface MediaRow {
   readonly telegramJson: string;
 }
 
+/**
+ * Input options for a downloaded video sticker. Telegram video stickers are
+ * WebM, and `is_video` says nothing about the bytes: with format probing left
+ * on, a playlist or concat file makes ffprobe/ffmpeg open further local files
+ * or network URLs. Forcing the Matroska demuxer and the `file` protocol keeps
+ * them on the one downloaded file.
+ */
+const VIDEO_STICKER_INPUT = ['-f', 'matroska', '-protocol_whitelist', 'file'] as const;
+
 export interface NormalizedImage {
   readonly path: string;
   readonly mimeType: 'image/jpeg' | 'image/png';
@@ -88,6 +97,7 @@ export async function prepareMediaImage(
         'ffprobe',
         '-v',
         'error',
+        ...VIDEO_STICKER_INPUT,
         '-show_entries',
         'format=duration',
         '-of',
@@ -102,7 +112,19 @@ export async function prepareMediaImage(
       throw new Error('ffprobe returned an invalid sticker duration');
     }
     await runExternal(
-      ['ffmpeg', '-v', 'error', '-ss', String(duration / 2), '-i', inputPath, '-frames:v', '1', outputPath],
+      [
+        'ffmpeg',
+        '-v',
+        'error',
+        '-ss',
+        String(duration / 2),
+        ...VIDEO_STICKER_INPUT,
+        '-i',
+        inputPath,
+        '-frames:v',
+        '1',
+        outputPath,
+      ],
       false,
       signal,
     );

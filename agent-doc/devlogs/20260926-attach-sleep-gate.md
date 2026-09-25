@@ -27,7 +27,7 @@ open-code-review 扫描（session `d79a83a3-a8f1-4dea-83e0-86c7dab26187`）指�
     }
 ```
 
-返回 `true` 表示这个 Bucket 已经处理完（`processDue` 直接 `continue`），不会再走开新运行的分支，也不会通知 runtime。跳过的 Bucket 与 `#queueBucket` 一样记为 `skipped_budget` 加原因码，不写 `invocation_buckets`。原来 attach 之后那次 `#logSleepingSkip` 已删除，`sleeping_skip` 日志现在只在真正跳过时输出。
+返回 `true` 表示这个 Bucket 已经处理完（`processDue` 直接 `continue`），不会再走开新运行的分支，也不会通知 runtime。跳过的 Bucket 与 `#queueBucket` 一样记为 `skipped_budget` 加原因码，不写 `invocation_buckets`。原来 attach 之后那次 `#logSleepingSkip` 已删除，`agent_session_skipped_sleeping` 日志现在只在真正跳过时输出。
 
 暂停不需要在这里再判断：due 查询本身就排除了 `chat_pause` 里的 Chat。Chat 查询里原来那个没用上的 `paused` 列也一起删掉了，留了一行注释说明原因。
 
@@ -78,7 +78,7 @@ pnpm vitest run test/context-hot-inject.test.ts -t "sleeps"
 
 还没做的：
 
-- 真实环境验收：让 Bot `zzz` 后在空闲等待窗口内发消息，确认日志出现 `sleeping_skip` 而不是 `bucket_attached`，且没有新的 `model_calls` 行。
+- 真实环境验收：让 Bot `zzz` 后在空闲等待窗口内发消息，确认日志出现 `agent_session_skipped_sleeping` 而不是 `bucket_attached`，且没有新的 `model_calls` 行。
 
 ## 提交
 

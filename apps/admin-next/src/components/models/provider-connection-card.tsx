@@ -1,13 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { KvList, MonoValue } from '@/components/business';
-import {
-  HeaderFields,
-  headerPayload,
-  headerRowsFromNames,
-  type HeaderRow,
-  removedHeaderNames,
-} from '@/components/models/header-fields';
+import { HeaderFields } from '@/components/models/header-fields';
 import { Panel } from '@/components/layout/panel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +14,7 @@ import {
   type UpdateProviderRequest,
   updateProvider,
 } from '@/lib/api.ts';
+import { headerPayload, headerRowsFromNames, type HeaderRow, removedHeaderNames } from '@/lib/header-rows.ts';
 import { requestErrorMessage } from '@/lib/model-manager.ts';
 import { useProviderWrite } from '@/lib/use-provider-write.ts';
 
@@ -45,30 +40,56 @@ export function ProviderConnectionCard({
   readonly onDetect: () => void;
 }): React.ReactElement {
   const write = useProviderWrite();
+  // The provider and revision the drafts below were built from. Every comparison
+  // and the If-Match of a save use this baseline, never the latest query data:
+  // comparing stale header rows against freshly fetched names read a header
+  // someone else just added as a deletion, and the fresh revision let that save
+  // through.
+  const [baseline, setBaseline] = useState({ provider, revision });
   const [baseUrl, setBaseUrl] = useState(provider.base_url);
   const [api, setApi] = useState<ProviderApi>(provider.api);
   const [apiKey, setApiKey] = useState('');
   const [headers, setHeaders] = useState<readonly HeaderRow[]>(() => headerRowsFromNames(provider.header_names));
   const [localError, setLocalError] = useState<string | null>(null);
 
-  const custom = provider.kind === 'custom';
+  const base = baseline.provider;
+  const custom = base.kind === 'custom';
   const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, '');
-  const baseUrlChanged = custom && trimmedBaseUrl !== provider.base_url;
-  const apiChanged = custom && api !== provider.api;
-  const removed = removedHeaderNames(provider.header_names, headers);
+  const baseUrlChanged = custom && trimmedBaseUrl !== base.base_url;
+  const apiChanged = custom && api !== base.api;
+  const removed = removedHeaderNames(base.header_names, headers);
   const payload = headerPayload(headers, removed);
   const dirty = baseUrlChanged || apiChanged || apiKey.length > 0 || payload.headers !== undefined;
+  const stale = revision !== baseline.revision;
+
+  const resetDrafts = (next: ProviderView, nextRevision: string): void => {
+    setBaseline({ provider: next, revision: nextRevision });
+    setBaseUrl(next.base_url);
+    setApi(next.api);
+    setApiKey('');
+    setHeaders(headerRowsFromNames(next.header_names));
+    setLocalError(null);
+  };
+
+  // Untouched drafts simply follow the server. Edited ones wait for an explicit
+  // reload, so a refresh never silently merges into what the admin typed.
+  useEffect(() => {
+    if (stale && !dirty) {
+      setBaseline({ provider, revision });
+      setBaseUrl(provider.base_url);
+      setApi(provider.api);
+      setHeaders(headerRowsFromNames(provider.header_names));
+    }
+  }, [stale, dirty, provider, revision]);
 
   const save = useMutation({
-    mutationFn: (body: UpdateProviderRequest) => updateProvider(provider.alias, body, revision),
+    mutationFn: (body: UpdateProviderRequest) => updateProvider(base.alias, body, baseline.revision),
     onSuccess: (result) => {
-      const saved = result.providers.find((candidate) => candidate.alias === provider.alias);
+      const saved = result.providers.find((candidate) => candidate.alias === base.alias);
       setApiKey('');
       setLocalError(null);
       if (saved !== undefined) {
-        setBaseUrl(saved.base_url);
-        setApi(saved.api);
-        setHeaders(headerRowsFromNames(saved.header_names));
+        resetDrafts(saved, result.revision);
       }
       write.succeeded(result.apply);
       // The request body carries the plaintext key; resetting the mutation drops
@@ -96,7 +117,7 @@ export function ProviderConnectionCard({
         setLocalError('Changing base_url requires the API key again');
         return;
       }
-      const missing = provider.header_names.filter((name) => !headers.some((row) => row.existing && row.name === name));
+      const missing = base.header_names.filter((name) => !headers.some((row) => row.existing && row.name === name));
       if (missing.length > 0) {
         setLocalError(`A header cannot be removed while base_url changes: ${missing.join(', ')}`);
         return;
@@ -126,7 +147,7 @@ export function ProviderConnectionCard({
           <Button type="button" size="sm" variant="outline" onClick={onDetect}>
             Test
           </Button>
-          <Button type="button" size="sm" disabled={!dirty || save.isPending} onClick={submit}>
+          <Button type="button" size="sm" disabled={!dirty || stale || save.isPending} onClick={submit}>
             {save.isPending ? 'Saving…' : 'Save'}
           </Button>
         </div>
@@ -216,6 +237,17 @@ export function ProviderConnectionCard({
           <p className="text-warning text-xs">
             Changing base_url requires the API key and every header value in the same save
           </p>
+        ) : null}
+        {stale && dirty ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-warning text-sm break-words">
+              config.jsonc changed since you started editing. Reload to edit the current version; your unsaved changes
+              here are discarded.
+            </p>
+            <Button type="button" size="sm" variant="outline" onClick={() => resetDrafts(provider, revision)}>
+              Reload
+            </Button>
+          </div>
         ) : null}
         {error !== null ? <p className="text-destructive text-sm break-words">{error}</p> : null}
       </div>

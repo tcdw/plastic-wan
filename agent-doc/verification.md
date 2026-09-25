@@ -175,7 +175,8 @@ pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.t
   5. 写操作（请求真实发出 + UI/数据变化）：记忆新建与删除（含 API 复核）、Bot admin
      添加与移除、模型切换（写回 `config.jsonc`）、Settings 页的 `Apply config file`、
      Alarm 取消成功与 409 冲突路径（`alarm_not_pending` + 列表刷新到新状态）、
-     Overview 的 Cancel ongoing 与睡眠态 Wake now。
+     Overview 的 Cancel ongoing 与睡眠态 Wake now；Models 页并发编辑（模型编辑输掉 revision 竞争后关闭而不覆盖、
+     连接卡片的旧草稿不能删掉期间新增的 header、header 名可逐键输入不丢焦点）。
   6. 只读保证：浏览全部审计页面时记录网络请求，断言没有任何 POST/PUT/DELETE 打到
      `/api/**`。
   7. 安全：生产静态托管（非 dev server）下断言 CSP 头（`default-src 'none'` /

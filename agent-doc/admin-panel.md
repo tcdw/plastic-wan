@@ -91,6 +91,8 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 所有写端点：路径在 `/api` 下；必须带 `If-Match: <revision>`（缺失返回 400 `revision_required`，过期返回 409 `config_conflict` 且文件不变）；在 `ConfigReloader` 的锁里「写文件 → 应用」；响应是 `GET /providers` 的完整视图加上 `apply: { applied, restart_required, outside_serve }`。模型 id 可能含 `/`，路径里必须 `encodeURIComponent` 编码：服务端先按 `/` 切分再逐段解码，未编码的 id 不会匹配到路由。
 
+前端的 `If-Match` 必须是编辑表单**起步时**那份数据的 revision，而不是最新查询结果的 revision，否则后台刷新之后，用旧快照填的表单也能通过并发检查，覆盖掉别人的修改。模型编辑对话框在打开时记下 revision，保存遇到 409 会关闭对话框，提示重新打开编辑最新版本。Provider 连接卡片记住草稿所基于的 provider 与 revision，比较（含「哪些已保存的 header 被删掉了」）和提交都用这份基线；服务端数据变化后，没有改动的草稿自动跟上，有改动的草稿禁用 Save 并显示 Reload，重新加载前不能再次提交。Header 行用稳定 id 作为 React key，不用可编辑的名字。
+
 | 端点 | 语义 |
 | --- | --- |
 | `POST /providers` | 新建 Provider。body：`alias`、`kind`、builtin 的 `provider` 或 custom 的 `base_url` + `api`、`api_key`（必填明文，存入 `key.json`）、`headers?`、`models`（至少 1 个）。alias 已存在返回 409 `provider_exists`；builtin 不满足收录规则返回 400 `unknown_builtin_provider` / `unsupported_builtin_provider`；模型违反 `max_tokens ≤ context_window` 或 compat 适用性返回 400 `invalid_model`。新增 Provider 热应用：注册表随配置重建，新 Provider 立即可用于 `POST /providers/discover` 的 saved 模式与 `PUT /model` |

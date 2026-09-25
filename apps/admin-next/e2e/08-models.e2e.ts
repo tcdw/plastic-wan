@@ -307,4 +307,76 @@ test.describe('models page', () => {
     const after = await (await page.request.get(await adminUrl('/api/providers'))).json();
     expect(after.providers.map((provider: { alias: string }) => provider.alias)).not.toContain('relay3');
   });
+
+  test('a header name can be typed key by key without losing focus', async ({ page }) => {
+    await page.goto(await adminUrl('/models'));
+    await page.getByRole('button', { name: `Provider ${E2E_RELAY_ALIAS}`, exact: true }).click();
+    await page.getByRole('button', { name: 'Add header' }).click();
+    // The row used to be keyed by its own name, so every keystroke remounted it
+    // and dropped the focus after the first character.
+    await page.locator('#provider-header-name-1').pressSequentially('x-typed');
+    await expect(page.locator('#provider-header-name-1')).toHaveValue('x-typed');
+  });
+
+  test('a model edit that loses a revision race is closed instead of overwriting', async ({ page }) => {
+    await page.goto(await adminUrl('/models'));
+    await page.getByRole('button', { name: `Provider ${E2E_RELAY_ALIAS}`, exact: true }).click();
+    await page.getByRole('button', { name: 'Edit relay-existing-model' }).click();
+    await expect(page.locator('#model-context')).toBeVisible();
+
+    // Another admin renames the model while this form is open.
+    await page.evaluate(async (alias) => {
+      const view = await (await fetch('/api/providers')).json();
+      const provider = view.providers.find((candidate: { alias: string }) => candidate.alias === alias);
+      const model = provider.models.find((candidate: { id: string }) => candidate.id === 'relay-existing-model');
+      const response = await fetch(`/api/providers/${alias}/models/relay-existing-model`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', 'if-match': view.revision },
+        body: JSON.stringify({ ...model, name: 'Renamed elsewhere' }),
+      });
+      if (!response.ok) {
+        throw new Error(`concurrent write failed: ${response.status}`);
+      }
+    }, E2E_RELAY_ALIAS);
+
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByText('Nothing was saved - open the model again')).toBeVisible();
+    await expect(page.locator('#model-context')).toHaveCount(0);
+
+    const view = await (await page.request.get(await adminUrl('/api/providers'))).json();
+    const relay = view.providers.find((provider: { alias: string }) => provider.alias === E2E_RELAY_ALIAS);
+    const model = relay.models.find((candidate: { id: string }) => candidate.id === 'relay-existing-model');
+    expect(model.name).toBe('Renamed elsewhere');
+  });
+
+  test('a connection edit built on an old revision cannot delete a header added meanwhile', async ({ page }) => {
+    await page.goto(await adminUrl('/models'));
+    await page.getByRole('button', { name: `Provider ${E2E_RELAY_ALIAS}`, exact: true }).click();
+    await page.getByLabel('API Key').fill('e2e-stale-draft-key');
+
+    // Another admin adds a header while this card holds a draft.
+    await page.evaluate(async (alias) => {
+      const view = await (await fetch('/api/providers')).json();
+      const response = await fetch(`/api/providers/${alias}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', 'if-match': view.revision },
+        body: JSON.stringify({ headers: { 'x-added-elsewhere': 'value' } }),
+      });
+      if (!response.ok) {
+        throw new Error(`concurrent write failed: ${response.status}`);
+      }
+    }, E2E_RELAY_ALIAS);
+
+    // The save is refused on its old revision; the refresh then marks the draft
+    // stale and blocks another attempt until it is reloaded.
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByText('config.jsonc changed since you started editing')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save' })).toBeDisabled();
+    await page.getByRole('button', { name: 'Reload' }).click();
+    await expect(page.locator('#provider-header-name-1')).toHaveValue('x-added-elsewhere');
+
+    const view = await (await page.request.get(await adminUrl('/api/providers'))).json();
+    const relay = view.providers.find((provider: { alias: string }) => provider.alias === E2E_RELAY_ALIAS);
+    expect(relay.header_names).toContain('x-added-elsewhere');
+  });
 });

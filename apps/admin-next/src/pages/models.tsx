@@ -36,6 +36,7 @@ import {
 import { errorMessage } from '@/lib/errors.ts';
 import { formatNumber } from '@/lib/format.ts';
 import {
+  isConfigConflict,
   isImageCapable,
   isTextCapable,
   modelFormFromConfig,
@@ -84,7 +85,13 @@ export default function ModelsPage(): React.ReactElement {
   const [search, setSearch] = useState('');
   const [wizardOpen, setWizardOpen] = useState(false);
   const [picker, setPicker] = useState<PickerTarget | null>(null);
-  const [editing, setEditing] = useState<{ readonly alias: string; readonly model: ProviderModelConfig } | null>(null);
+  // The revision travels with the snapshot the edit form starts from, so a save
+  // can never pass the concurrency check with a form built from older data.
+  const [editing, setEditing] = useState<{
+    readonly alias: string;
+    readonly model: ProviderModelConfig;
+    readonly revision: string;
+  } | null>(null);
   const [deletingModel, setDeletingModel] = useState<{ readonly alias: string; readonly model: string } | null>(null);
   const [deletingProvider, setDeletingProvider] = useState<ProviderView | null>(null);
 
@@ -118,14 +125,30 @@ export default function ModelsPage(): React.ReactElement {
   });
 
   const saveModel = useMutation({
-    mutationFn: ({ alias, model }: { readonly alias: string; readonly model: ProviderModelConfig }) =>
-      replaceProviderModel(alias, model.id, model, revision),
+    mutationFn: ({
+      alias,
+      model,
+      revision: formRevision,
+    }: {
+      readonly alias: string;
+      readonly model: ProviderModelConfig;
+      readonly revision: string;
+    }) => replaceProviderModel(alias, model.id, model, formRevision),
     onSuccess: (result) => {
       setEditing(null);
       write.succeeded(result.apply);
     },
     onError: (error) => {
       write.failed(error);
+      if (isConfigConflict(error)) {
+        // Retrying this form would overwrite whatever changed on the server, so
+        // it closes; reopening starts from the refreshed definition.
+        setEditing(null);
+        saveModel.reset();
+        toast.error(
+          'config.jsonc changed while you were editing. Nothing was saved - open the model again to edit the current version.',
+        );
+      }
     },
   });
 
@@ -293,7 +316,7 @@ export default function ModelsPage(): React.ReactElement {
               size="icon-sm"
               variant="ghost"
               aria-label={`Edit ${row.model.id}`}
-              onClick={() => setEditing({ alias: row.alias, model: row.model })}
+              onClick={() => setEditing({ alias: row.alias, model: row.model, revision })}
             >
               <Pencil />
             </Button>
@@ -502,7 +525,7 @@ export default function ModelsPage(): React.ReactElement {
           draft={null}
           pending={saveModel.isPending}
           error={saveModel.isError ? writeErrorMessage(saveModel.error) : null}
-          onSubmit={(model) => saveModel.mutate({ alias: editing.alias, model })}
+          onSubmit={(model) => saveModel.mutate({ alias: editing.alias, model, revision: editing.revision })}
         />
       )}
 

@@ -1,7 +1,8 @@
 import { useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
 import { MonoValue } from '@/components/business';
-import { HeaderFields, headerRowsFromNames, headerValues, type HeaderRow } from '@/components/models/header-fields';
+import { HeaderFields } from '@/components/models/header-fields';
+import { headerRowsFromNames, headerValues, type HeaderRow } from '@/lib/header-rows.ts';
 import { ModelDraftList } from '@/components/models/model-draft-list';
 import { ModelEditDialog } from '@/components/models/model-edit-dialog';
 import { useDraftSelection } from '@/components/models/use-draft-selection';

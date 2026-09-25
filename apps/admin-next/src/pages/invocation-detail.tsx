@@ -546,9 +546,8 @@ function ModelCallsTab({ invocation }: { readonly invocation: InvocationDetail }
   return (
     <TabContent count={invocation.model_calls.length} message="No model calls were recorded for this invocation.">
       <p className="text-muted-foreground text-xs">
-        Total counts Input plus Output — the same definition the daily budget meters. Cache read and Cache write are
-        listed for audit and are never added to any total; the provider's raw total is exposed by the API as{' '}
-        <code className="font-mono">provider_total_tokens</code>.
+        Total is Input + Output + Cache read + Cache write — the same definition the daily budget meters. The provider's
+        raw total is exposed by the API as <code className="font-mono">provider_total_tokens</code>.
       </p>
       <TableShell
         columns={MODEL_CALL_COLUMNS}

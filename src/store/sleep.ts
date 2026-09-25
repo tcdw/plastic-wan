@@ -21,15 +21,25 @@ export interface SleepTransition {
 }
 
 /**
- * Tokens charged against the daily budget: the prompt tokens the provider had
- * to process plus the tokens it generated. Cache reads are served from the
- * provider's cached prefix and cache writes are tracked separately, so neither
- * counts here — the meter must follow the work the run asked for, not how warm
- * the provider's cache happened to be. `usage.input` already excludes both
- * cache counters (`total = input + output + cacheRead + cacheWrite`).
+ * Tokens charged against the daily budget: every token the call involved,
+ * cached or not. The budget is a runaway breaker for loops and stuck
+ * invocations, not a cost meter, so price (free models, cheap cache reads) must
+ * not let a call slip past it.
+ *
+ * The four pi-ai `Usage` counters are disjoint, so summing them never double
+ * counts: each provider adapter subtracts cache reads and writes from the
+ * provider's prompt total before storing `input`. `cacheWrite1h` is a subset of
+ * `cacheWrite` and `reasoning` a subset of `output`, so neither is added.
+ * `totalTokens` is not used because several adapters copy the provider's raw
+ * total, which is not guaranteed to equal this sum.
  */
-export function meteredTokens(usage: { readonly input: number | bigint; readonly output: number | bigint }): bigint {
-  return BigInt(usage.input) + BigInt(usage.output);
+export function meteredTokens(usage: {
+  readonly input: number | bigint;
+  readonly output: number | bigint;
+  readonly cacheRead: number | bigint;
+  readonly cacheWrite: number | bigint;
+}): bigint {
+  return BigInt(usage.input) + BigInt(usage.output) + BigInt(usage.cacheRead) + BigInt(usage.cacheWrite);
 }
 
 export function readDailyTokenBudget(orm: Orm, maxTokens: number, now = new Date()): DailyTokenBudget {

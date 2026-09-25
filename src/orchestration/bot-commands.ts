@@ -415,8 +415,8 @@ export class BotCommandService {
     const lines = [
       `当前模型: ${effective.provider} / ${effective.model}`,
       `思考强度: ${config.agent.thinking_level}`,
-      `本群今日 token 用量（不含缓存）: ${tokens.toLocaleString('en-US')}`,
-      `全局今日 token 用量（不含缓存）: ${dailyBudget.usedTokens.toLocaleString('en-US')} / ${dailyBudget.maxTokens.toLocaleString('en-US')} (${dailyBudgetPercentage})`,
+      `本群今日 token 用量: ${tokens.toLocaleString('en-US')}`,
+      `全局今日 token 用量: ${dailyBudget.usedTokens.toLocaleString('en-US')} / ${dailyBudget.maxTokens.toLocaleString('en-US')} (${dailyBudgetPercentage})`,
       `读取: ${(tokenBreakdown?.readTokens ?? 0n).toLocaleString('en-US')}`,
       `写入: ${(tokenBreakdown?.writeTokens ?? 0n).toLocaleString('en-US')}`,
       `缓存读取: ${(tokenBreakdown?.cacheReadTokens ?? 0n).toLocaleString('en-US')}`,

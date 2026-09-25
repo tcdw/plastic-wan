@@ -247,8 +247,7 @@ export default function OverviewPage(): React.ReactElement {
             <ChartPanel title="Tokens">
               <TimeSeriesChart data={chartData} series={TOKEN_SERIES} height={200} />
               <p className="text-muted-foreground text-xs">
-                Token usage: prompt tokens processed plus generated tokens. Cache reads and writes are excluded from
-                this total and from the daily budget.
+                Token usage: input, output, cache read and cache write tokens — the definition the daily budget meters.
               </p>
             </ChartPanel>
             <ChartPanel title="Invocations">
@@ -297,8 +296,8 @@ export default function OverviewPage(): React.ReactElement {
         />
         <p className="text-muted-foreground px-5 py-3 text-xs">
           <code className="font-mono">model_tokens</code> is what the global daily budget meters, per chat:{' '}
-          <code className="font-mono">vision_tokens</code> is the same definition for the sticker index. Neither
-          includes cache reads or writes.
+          <code className="font-mono">vision_tokens</code> is the same definition for the sticker index. Both include
+          cache reads and writes.
         </p>
       </Panel>
 

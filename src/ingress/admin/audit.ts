@@ -83,9 +83,9 @@ interface InvocationListRow {
   readonly message_thread_id: bigint;
   readonly tool_call_count: bigint;
   /**
-   * Tokens this invocation consumed under the daily-budget definition: prompt
-   * tokens processed plus generated tokens. Cache reads and writes are reported
-   * in their own fields and never folded into this total.
+   * Tokens this invocation consumed under the daily-budget definition
+   * (`meteredTokens`): input, output, cache read and cache write. The cache
+   * counters are also reported on their own as a breakdown of this total.
    */
   readonly total_tokens: bigint;
   readonly cache_read_tokens: bigint;
@@ -366,7 +366,7 @@ export function listInvocations(orm: Orm, query: ListQuery): Page<Record<string,
               ch.telegram_chat_id, ch.type AS chat_type, ch.title AS chat_title, ch.username AS chat_username,
               c.message_thread_id,
               (SELECT COUNT(*) FROM tool_calls tc WHERE tc.invocation_id = i.id) AS tool_call_count,
-              (SELECT COALESCE(SUM(COALESCE(mc.input_tokens, 0) + COALESCE(mc.output_tokens, 0)), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS total_tokens,
+              (SELECT COALESCE(SUM(COALESCE(mc.input_tokens, 0) + COALESCE(mc.output_tokens, 0) + COALESCE(mc.cache_read_tokens, 0) + COALESCE(mc.cache_write_tokens, 0)), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS total_tokens,
               (SELECT COALESCE(SUM(mc.cache_read_tokens), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS cache_read_tokens,
               (SELECT COALESCE(SUM(mc.cache_write_tokens), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS cache_write_tokens,
               (SELECT SUM(mc.cost) FROM model_calls mc WHERE mc.invocation_id = i.id) AS total_cost
@@ -406,7 +406,7 @@ export function getInvocation(orm: Orm, id: bigint): Record<string, unknown> | n
               ch.telegram_chat_id, ch.type AS chat_type, ch.title AS chat_title, ch.username AS chat_username,
               c.message_thread_id,
               (SELECT COUNT(*) FROM tool_calls tc WHERE tc.invocation_id = i.id) AS tool_call_count,
-              (SELECT COALESCE(SUM(COALESCE(mc.input_tokens, 0) + COALESCE(mc.output_tokens, 0)), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS total_tokens,
+              (SELECT COALESCE(SUM(COALESCE(mc.input_tokens, 0) + COALESCE(mc.output_tokens, 0) + COALESCE(mc.cache_read_tokens, 0) + COALESCE(mc.cache_write_tokens, 0)), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS total_tokens,
               (SELECT COALESCE(SUM(mc.cache_read_tokens), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS cache_read_tokens,
               (SELECT COALESCE(SUM(mc.cache_write_tokens), 0) FROM model_calls mc WHERE mc.invocation_id = i.id) AS cache_write_tokens,
               (SELECT SUM(mc.cost) FROM model_calls mc WHERE mc.invocation_id = i.id) AS total_cost
@@ -550,7 +550,14 @@ export function getInvocation(orm: Orm, id: bigint): Record<string, unknown> | n
       output_tokens: num(row.outputTokens),
       cache_read_tokens: num(row.cacheReadTokens),
       cache_write_tokens: num(row.cacheWriteTokens),
-      total_tokens: Number(meteredTokens({ input: row.inputTokens ?? 0n, output: row.outputTokens ?? 0n })),
+      total_tokens: Number(
+        meteredTokens({
+          input: row.inputTokens ?? 0n,
+          output: row.outputTokens ?? 0n,
+          cacheRead: row.cacheReadTokens ?? 0n,
+          cacheWrite: row.cacheWriteTokens ?? 0n,
+        }),
+      ),
       provider_total_tokens: num(row.totalTokens),
       cost: row.cost,
       duration_ms: num(row.durationMs),

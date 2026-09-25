@@ -52,8 +52,8 @@ export interface InvocationListItem {
   readonly chat: ChatSummary;
   readonly tool_call_count: number;
   /**
-   * Daily-budget definition: prompt tokens processed plus generated tokens.
-   * Cache reads and writes are reported separately and excluded here.
+   * Daily-budget definition: input + output + cache read + cache write.
+   * The cache counters are also listed on their own as a breakdown.
    */
   readonly total_tokens: number;
   readonly cache_read_tokens: number;
@@ -86,9 +86,9 @@ export interface ModelCallEntry {
   readonly output_tokens: number | null;
   readonly cache_read_tokens: number | null;
   readonly cache_write_tokens: number | null;
-  /** Prompt tokens processed plus generated tokens; cache counters excluded. */
+  /** Input + output + cache read + cache write, the daily-budget definition. */
   readonly total_tokens: number;
-  /** Raw provider `total_tokens`, which does include the cache counters. */
+  /** Raw provider `total_tokens`, kept for audit; not guaranteed to equal `total_tokens`. */
   readonly provider_total_tokens: number | null;
   readonly cost: number | null;
   readonly duration_ms: number | null;

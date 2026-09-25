@@ -288,7 +288,7 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
       .run(toolRow.id, invocationId, iso, iso);
     store.db
       .prepare(
-        "INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens, cost, duration_ms, error_code, error_detail, tools_json, created_at, finished_at) VALUES (?, 'agent', 'agent', 'agent-model', 1, 'error', 100, 20, 500, 0, 620, 0.5, 900, 'model_error', 'status=500\nbody={\"error\":\"upstream exploded\"}', ?, ?, ?)",
+        "INSERT INTO model_calls(invocation_id, role, provider, model, attempt, state, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens, cost, duration_ms, error_code, error_detail, tools_json, created_at, finished_at) VALUES (?, 'agent', 'agent', 'agent-model', 1, 'error', 100, 20, 500, 30, 620, 0.5, 900, 'model_error', 'status=500\nbody={\"error\":\"upstream exploded\"}', ?, ?, ?)",
       )
       .run(invocationId, JSON.stringify(['send', 'add_memory']), iso, iso);
     store.db
@@ -328,10 +328,10 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
     expect(invocations.items[0]).toMatchObject({
       id: invocationId.toString(),
       tool_call_count: 1,
-      // Budget definition: input + output. The 500 cached prompt tokens stay out.
-      total_tokens: 120,
+      // Budget definition: input + output + cache read + cache write.
+      total_tokens: 650,
       cache_read_tokens: 500,
-      cache_write_tokens: 0,
+      cache_write_tokens: 30,
       chat: { telegram_chat_id: '123456789', type: 'private' },
     });
 
@@ -349,9 +349,11 @@ test('audit routes expose tool sessions, messages and sticker cache', async () =
       provider: 'agent',
       model: 'agent-model',
       state: 'error',
-      total_tokens: 120,
+      // The provider's raw total is kept for audit but never trusted as the sum.
+      total_tokens: 650,
       provider_total_tokens: 620,
       cache_read_tokens: 500,
+      cache_write_tokens: 30,
       error_code: 'model_error',
       error_detail: 'status=500\nbody={"error":"upstream exploded"}',
     });

@@ -1,0 +1,6 @@
+-- Retired. This version once rebuilt `model_tokens` / `vision_tokens` without
+-- cache reads and writes. Cache tokens count toward the daily budget again, so
+-- the rebuild would now corrupt a database that has not applied it yet. The
+-- version stays so every database agrees on the migration count; the body is
+-- intentionally empty. Dev databases that already ran the old rebuild are
+-- repaired by scripts/reconcile-daily-token-usage.ts.

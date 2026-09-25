@@ -2,7 +2,17 @@ import { afterAll, expect, test } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type FauxProviderHandle, fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai';
+import {
+  type AssistantMessageEventStream,
+  createAssistantMessageEventStream,
+  createModels,
+  type FauxProviderHandle,
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+  type Provider,
+  type Usage,
+} from '@earendil-works/pi-ai';
 import type { Update } from 'grammy/types';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { type LoadedConfig, loadConfig } from '../src/platform/config.ts';
@@ -49,9 +59,42 @@ async function openStore(
   return { loaded, configStore, store: await SqliteStore.open(loaded.config) };
 }
 
+/**
+ * Registers the faux provider with every reply reporting `usage`. The faux
+ * provider estimates its own usage and never reports cache traffic, which is
+ * exactly what these budget tests need to control.
+ */
+function reportingUsage(faux: FauxProviderHandle, usage: Omit<Usage, 'totalTokens' | 'cost'>): TestRegistry {
+  const reported: Usage = {
+    ...usage,
+    totalTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+  const rewrite = (inner: AssistantMessageEventStream): AssistantMessageEventStream => {
+    const outer = createAssistantMessageEventStream();
+    void (async () => {
+      for await (const event of inner) {
+        outer.push(event.type === 'done' ? { ...event, message: { ...event.message, usage: reported } } : event);
+      }
+      outer.end();
+    })();
+    return outer;
+  };
+  const base = faux.provider;
+  const provider: Provider = {
+    ...base,
+    stream: (model, context, options) => rewrite(base.stream(model, context, options)),
+    streamSimple: (model, context, options) => rewrite(base.streamSimple(model, context, options)),
+  };
+  const models = createModels();
+  models.setProvider(provider);
+  return { models, visionModel: faux.getModel() };
+}
+
 async function runtimeSetup(
   usedTokens: bigint,
   usageResource = '123456789',
+  usage?: Omit<Usage, 'totalTokens' | 'cost'>,
 ): Promise<{
   store: SqliteStore;
   configStore: RuntimeConfigurationStore;
@@ -63,7 +106,10 @@ async function runtimeSetup(
     provider: 'agent',
     models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
   });
-  const { configStore, store } = await openStore('plasticwan-sleep-', fauxRegistry(faux));
+  const { configStore, store } = await openStore(
+    'plasticwan-sleep-',
+    usage === undefined ? fauxRegistry(faux) : reportingUsage(faux, usage),
+  );
   const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
   const received = new Date('2026-08-15T00:00:00.000Z');
   ingestion.ingest(update, received);
@@ -105,26 +151,77 @@ function modelToolLists(store: SqliteStore): string[][] {
     .map((row) => JSON.parse(row.tools_json) as string[]);
 }
 
-test('charges the daily budget with processed and generated tokens only', async () => {
-  const { store, configStore, runtime, invocationId, faux } = await runtimeSetup(0n);
-  faux.setResponses([fauxAssistantMessage('   ')]);
-  await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
-  const call = store.db
-    .prepare<[], { input_tokens: bigint | null; output_tokens: bigint | null; total_tokens: bigint | null }>(
-      "SELECT input_tokens, output_tokens, total_tokens FROM model_calls WHERE role = 'agent'",
-    )
-    .get();
-  const row = store.db
+function todayUsage(store: SqliteStore): bigint | undefined {
+  return store.db
     .prepare<[string, string], { amount: bigint }>(
       "SELECT amount FROM daily_usage WHERE utc_date = ? AND scope = 'chat' AND resource = ? AND metric = 'model_tokens'",
     )
-    .get(new Date().toISOString().slice(0, 10), '123456789');
-  // The meter follows the budget definition — processed plus generated tokens —
-  // rather than the provider's cache-inclusive total. The faux provider reports
-  // no cache traffic, so this pins the definition, not the arithmetic; the
-  // cache-inclusive cases are covered by the migration and Admin API tests.
-  expect(row?.amount).toBe((call?.input_tokens ?? 0n) + (call?.output_tokens ?? 0n));
-  expect(row?.amount).toBeGreaterThan(0n);
+    .get(new Date().toISOString().slice(0, 10), '123456789')?.amount;
+}
+
+test('charges a free model the cache tokens of its calls', async () => {
+  const { store, configStore, runtime, invocationId, faux } = await runtimeSetup(0n, '123456789', {
+    input: 120,
+    output: 30,
+    cacheRead: 4_000,
+    cacheWrite: 850,
+  });
+  faux.setResponses([fauxAssistantMessage('   ')]);
+  await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
+  const call = store.db
+    .prepare<
+      [],
+      {
+        input_tokens: bigint;
+        output_tokens: bigint;
+        cache_read_tokens: bigint;
+        cache_write_tokens: bigint;
+        cost: number;
+      }
+    >(
+      "SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost FROM model_calls WHERE role = 'agent'",
+    )
+    .get();
+  // The breakdown stays on the audit row; the budget meters all of it, and a
+  // zero price changes nothing.
+  expect(call).toEqual({
+    input_tokens: 120n,
+    output_tokens: 30n,
+    cache_read_tokens: 4_000n,
+    cache_write_tokens: 850n,
+    cost: 0,
+  });
+  expect(todayUsage(store)).toBe(5_000n);
+  store.close();
+});
+
+test('stops a cache-heavy runaway invocation on the daily budget', async () => {
+  // Each turn generates almost nothing and re-reads a large cached prompt, the
+  // shape of a tool loop on a long context. 60,000 tokens a turn against the
+  // 300,000 budget trips the breaker on the fifth turn, three turns before the
+  // per-injection turn limit would.
+  const { store, configStore, runtime, invocationId, faux } = await runtimeSetup(0n, '123456789', {
+    input: 10,
+    output: 5,
+    cacheRead: 59_985,
+    cacheWrite: 0,
+  });
+  faux.setResponses(
+    Array.from({ length: 8 }, () =>
+      fauxAssistantMessage(fauxToolCall('read', { uri: 'system:///missing.md' }), { stopReason: 'toolUse' }),
+    ),
+  );
+  expect(await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal)).toEqual({
+    state: 'completed',
+    reason: 'budget',
+  });
+  const calls = store.db
+    .prepare<[], { calls: bigint; input_output: bigint }>(
+      "SELECT COUNT(*) AS calls, SUM(input_tokens + output_tokens) AS input_output FROM model_calls WHERE role = 'agent'",
+    )
+    .get();
+  expect(calls).toEqual({ calls: 5n, input_output: 75n });
+  expect(todayUsage(store)).toBe(300_000n);
   store.close();
 });
 

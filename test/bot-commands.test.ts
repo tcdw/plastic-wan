@@ -289,7 +289,7 @@ describe('bot command service', () => {
     ingestion.ingest(textUpdate(1, 10, 'hello'), FIXED_NOW);
     store.db
       .prepare(
-        "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', 700, ?)",
+        "INSERT INTO daily_usage(utc_date, scope, resource, metric, amount, updated_at) VALUES (?, 'chat', ?, 'model_tokens', 1234, ?)",
       )
       .run(FIXED_NOW.toISOString().slice(0, 10), '123456789', FIXED_NOW.toISOString());
     store.db
@@ -310,7 +310,7 @@ describe('bot command service', () => {
     expect(status).toContain('agent / agent-model');
     expect(status).toContain('思考强度: low');
     expect(status).toContain(
-      '本群今日 token 用量（不含缓存）: 700\n全局今日 token 用量（不含缓存）: 766 / 300,000 (0.26%)\n读取: 500\n写入: 200\n缓存读取: 400\n缓存写入: 134',
+      '本群今日 token 用量: 1,234\n全局今日 token 用量: 1,300 / 300,000 (0.43%)\n读取: 500\n写入: 200\n缓存读取: 400\n缓存写入: 134',
     );
     expect(status).not.toContain('已暂停');
     await commands.run({ name: 'pause' }, 123456789n, ALICE, FIXED_NOW);
@@ -523,7 +523,7 @@ describe('bot command service', () => {
       )
       .run(FIXED_NOW.toISOString().slice(0, 10), '987654321', FIXED_NOW.toISOString());
     expect(await commands.run({ name: 'status' }, 123456789n, ALICE, FIXED_NOW)).toContain(
-      '本群今日 token 用量（不含缓存）: 0\n全局今日 token 用量（不含缓存）: 888 / 300,000 (0.30%)',
+      '本群今日 token 用量: 0\n全局今日 token 用量: 888 / 300,000 (0.30%)',
     );
     store.close();
   });

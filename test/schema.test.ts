@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq, sql } from 'drizzle-orm';
@@ -10,11 +10,8 @@ import {
   buckets,
   chats,
   conversations,
-  dailyUsage,
-  invocations,
   memories,
   messages,
-  modelCalls,
   schemaMigrations,
   stickerSets,
   telegramUpdates,
@@ -164,130 +161,6 @@ test('sql templates bind bigint parameters and query the fts5 virtual table', as
 
     const bound = store.orm.all<{ n: bigint }>(sql`SELECT ${9007199254740993n} AS n`);
     expect(bound[0]?.n).toBe(9007199254740993n);
-  } finally {
-    store.close();
-  }
-});
-
-test('token usage migration rebuilds the rollup without the cache counters', async () => {
-  const { store } = await openStore();
-  try {
-    const now = new Date('2026-09-10T08:00:00.000Z').toISOString();
-    const day = now.slice(0, 10);
-    store.orm
-      .insert(chats)
-      .values({ id: 1n, telegramChatId: 123456789n, canonicalChatId: 123456789n, type: 'private', updatedAt: now })
-      .run();
-    store.orm.insert(conversations).values({ id: 1n, chatId: 1n, createdAt: now, updatedAt: now }).run();
-    store.orm
-      .insert(buckets)
-      .values({
-        id: 1n,
-        conversationId: 1n,
-        state: 'completed',
-        firstReceivedAt: now,
-        deadlineAt: now,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .run();
-    store.orm
-      .insert(invocations)
-      .values({
-        id: 1n,
-        bucketId: 1n,
-        conversationId: 1n,
-        state: 'completed',
-        configHash: 'hash',
-        promptVersion: 1n,
-        createdAt: now,
-      })
-      .run();
-    store.orm
-      .insert(modelCalls)
-      .values([
-        {
-          id: 1n,
-          invocationId: 1n,
-          role: 'agent',
-          provider: 'agent',
-          model: 'agent-model',
-          attempt: 1n,
-          state: 'success',
-          inputTokens: 1_000n,
-          outputTokens: 250n,
-          cacheReadTokens: 40_000n,
-          cacheWriteTokens: 500n,
-          totalTokens: 41_750n,
-          createdAt: now,
-          finishedAt: now,
-        },
-        {
-          id: 2n,
-          invocationId: null,
-          role: 'vision_sticker',
-          provider: 'vision',
-          model: 'vision-model',
-          attempt: 1n,
-          state: 'success',
-          inputTokens: 100n,
-          outputTokens: 20n,
-          cacheReadTokens: 900n,
-          cacheWriteTokens: 0n,
-          totalTokens: 1_020n,
-          createdAt: now,
-          finishedAt: now,
-        },
-      ])
-      .run();
-    // Pre-migration rows: provider totals, cache included.
-    store.orm
-      .insert(dailyUsage)
-      .values([
-        { utcDate: day, scope: 'chat', resource: '123456789', metric: 'model_tokens', amount: 41_750n, updatedAt: now },
-        {
-          utcDate: day,
-          scope: 'system',
-          resource: 'sticker_index',
-          metric: 'vision_tokens',
-          amount: 1_020n,
-          updatedAt: now,
-        },
-        {
-          utcDate: day,
-          scope: 'system',
-          resource: 'sticker_index',
-          metric: 'vision_images',
-          amount: 3n,
-          updatedAt: now,
-        },
-      ])
-      .run();
-
-    const migration = await readFile(
-      join(import.meta.dirname, '..', 'src', 'store', 'migrations', '018_token_usage_excludes_cache.sql'),
-      'utf8',
-    );
-    store.db.exec(migration);
-
-    const rows = store.orm
-      .select({
-        scope: dailyUsage.scope,
-        resource: dailyUsage.resource,
-        metric: dailyUsage.metric,
-        amount: dailyUsage.amount,
-      })
-      .from(dailyUsage)
-      .all();
-    expect(rows).toEqual(
-      expect.arrayContaining([
-        { scope: 'chat', resource: '123456789', metric: 'model_tokens', amount: 1_250n },
-        { scope: 'system', resource: 'sticker_index', metric: 'vision_tokens', amount: 120n },
-        // Counts are not token metrics and must survive the rebuild untouched.
-        { scope: 'system', resource: 'sticker_index', metric: 'vision_images', amount: 3n },
-      ]),
-    );
-    expect(rows).toHaveLength(3);
   } finally {
     store.close();
   }

@@ -238,7 +238,7 @@ System Skills 是随 runtime 发布的只读文档包，位于 `src/system-resou
 
 ## 睡眠
 
-全局当日 `model_tokens` 剩余比例严格低于 5% 时，当前 Agent 才会看到 `zzz`；恰好 5% 不可见。全局用量是所有 Chat 的主 Agent 与聊天触发 `read_image` 用量之和，同时保留各 Chat 的归属统计；计量口径为非缓存输入加生成，不含缓存读写（见 [configuration.md](configuration.md#agent-与-vision)）。运行中的会话越过阈值后，在下一次 model turn 边界更新工具注册表，不为此额外创建会话。
+全局当日 `model_tokens` 剩余比例严格低于 5% 时，当前 Agent 才会看到 `zzz`；恰好 5% 不可见。全局用量是所有 Chat 的主 Agent 与聊天触发 `read_image` 用量之和，同时保留各 Chat 的归属统计；计量口径包含缓存读写（见 [configuration.md](configuration.md#agent-与-vision)）。运行中的会话越过阈值后，在下一次 model turn 边界更新工具注册表，不为此额外创建会话。
 
 `zzz` 可见性与注入块里的睡眠状态说明由同一个判断渲染：只要 `zzz` 可见，本批注入的 `<runtime_state>` 就带一段自然语义的状态说明（现在很困、该睡就睡、静默结束也应该直接睡），而不是只让模型从 tool description 推断自己的状态。状态放在注入块而不是 system prompt，是因为 system prompt 必须对一个 Conversation Context 保持稳定。会话中途越过阈值时，工具注册表立即更新，状态说明在下一次注入时出现；如果该批注入之后 `zzz` 才可见，模型仍可从 tool description 推断。`zzz` 的 description 同样只用自然语义描述睡意，不暴露 token、budget、quota 等实现细节。
 
@@ -371,7 +371,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 暂停期间消息仍入库并保留 Revision，但不创建 Bucket、不启动会话；`processDue` 与启动追赶也会跳过暂停 Chat（追赶 Bucket 记 `skipped_budget`/`chat_paused`）。`/resume` 删除 `chat_pause` 行，恢复正常节拍。
 
-`/status` 返回当前生效的 `agent.provider` / `agent.model`（含 Admin Panel 热切换后的运行时模型）、`agent.thinking_level`、本 Chat 的当日 `model_tokens` 用量，以及全局当日用量、`agent.daily_budget.max_tokens` 上限与四舍五入到两位小数的用量百分比；所有 token 数量使用千位分隔符。用量行标注「不含缓存」，口径为非缓存输入加生成；随后按该 Chat 的 Model Call 审计拆分显示 `读取`、`写入`、`缓存读取`、`缓存写入`，前两项之和即上面的用量。日期口径均为 UTC；暂停中额外显示一行。每个 Conversation 再追加一行 Context 状态（保留消息数、保留窗口内的 `send` 数、`head_seq`、上次 GC 时间，尚未建立时显示 `Context: 尚未建立`）。配置了 `participation` 的 Chat 再多一行互动状态：`互动: 活跃时段内`、`互动: 注意力窗口至 <UTC ISO>` 或 `互动: 静默（仅 @、Reply 或关键词触发）`；暂停时只显示 `互动: 已暂停`。
+`/status` 返回当前生效的 `agent.provider` / `agent.model`（含 Admin Panel 热切换后的运行时模型）、`agent.thinking_level`、本 Chat 的当日 `model_tokens` 用量，以及全局当日用量、`agent.daily_budget.max_tokens` 上限与四舍五入到两位小数的用量百分比；所有 token 数量使用千位分隔符。随后按该 Chat 的 Model Call 审计拆分显示 `读取`、`写入`、`缓存读取`、`缓存写入`，四项之和即上面的本群用量。日期口径均为 UTC；暂停中额外显示一行。每个 Conversation 再追加一行 Context 状态（保留消息数、保留窗口内的 `send` 数、`head_seq`、上次 GC 时间，尚未建立时显示 `Context: 尚未建立`）。配置了 `participation` 的 Chat 再多一行互动状态：`互动: 活跃时段内`、`互动: 注意力窗口至 <UTC ISO>` 或 `互动: 静默（仅 @、Reply 或关键词触发）`；暂停时只显示 `互动: 已暂停`。
 
 `/cut_topic` 仅对 Bot 管理员开放，用于在群聊上下文被旧话题污染时手动切断历史：
 

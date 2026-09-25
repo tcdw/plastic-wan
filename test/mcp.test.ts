@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -10,11 +10,13 @@ import { loadConfig } from '../src/platform/config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import { McpManager } from '../src/capabilities/mcp.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
+import { previewContext } from '../src/platform/invocation-context.ts';
 import { keyJarPath } from '../src/platform/key-jar.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import {
   renderInvocationContext,
+  sleep,
   startFixtureServer,
   stopFixtureServer,
   testConfigJsonc,
@@ -336,6 +338,123 @@ test('required stdio server failure reports the full underlying error', async ()
         ?.state,
     ).toBe('stopped');
   } finally {
+    store.close();
+  }
+});
+
+test('a server whose tool discovery fails is closed instead of left running', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-mcp-leak-'));
+  directories.push(directory);
+  const configPath = join(directory, 'config.jsonc');
+  const pidFile = join(directory, 'server.pid');
+  const fixturePath = join(import.meta.dirname, 'fixtures', 'mcp-server.ts');
+  const jsonc = testConfigJsonc(directory, (config) => {
+    config.mcp = {
+      servers: [
+        {
+          alias: 'local',
+          transport: 'stdio',
+          command: [process.execPath, fixturePath, pidFile],
+          required: true,
+          // The fixture only offers `echo`, so selecting tools fails after the
+          // process has started and the client has connected.
+          tools: ['echo', 'absent'],
+          payload_max_bytes: 1048576,
+          result_max_bytes: 128,
+          tool_policies: [
+            { name: 'echo', read_only: true, timeout_seconds: 5 },
+            { name: 'absent', read_only: true, timeout_seconds: 5 },
+          ],
+        },
+      ],
+    };
+  });
+  await writeTestConfig(directory, configPath, jsonc);
+  const loaded = await loadConfig(configPath);
+  const store = await SqliteStore.open(loaded.config);
+  const manager = new McpManager(store, loaded.config, new SecretStore(keyJarPath(loaded.configPath)));
+  let pid: number | undefined;
+  try {
+    await expect(manager.start()).rejects.toThrow(/Required MCP server local failed to initialize/);
+    pid = Number(await readFile(pidFile, 'utf8'));
+    const alive = (): boolean => {
+      try {
+        process.kill(pid ?? 0, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const deadline = Date.now() + 5_000;
+    while (alive() && Date.now() < deadline) {
+      await sleep(50);
+    }
+    expect(alive()).toBe(false);
+  } finally {
+    if (pid !== undefined) {
+      try {
+        process.kill(pid);
+      } catch {}
+    }
+    store.close();
+  }
+});
+
+test('stop() during a pending connect leaves the server stopped and closed', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-mcp-stop-'));
+  directories.push(directory);
+  const configPath = join(directory, 'config.jsonc');
+  const pidFile = join(directory, 'server.pid');
+  const fixturePath = join(import.meta.dirname, 'fixtures', 'mcp-server.ts');
+  const jsonc = testConfigJsonc(directory, (config) => {
+    config.mcp = {
+      servers: [
+        {
+          alias: 'local',
+          transport: 'stdio',
+          command: [process.execPath, fixturePath, pidFile],
+          required: false,
+          tools: ['echo'],
+          payload_max_bytes: 1048576,
+          result_max_bytes: 128,
+          tool_policies: [{ name: 'echo', read_only: true, timeout_seconds: 5 }],
+        },
+      ],
+    };
+  });
+  await writeTestConfig(directory, configPath, jsonc);
+  const loaded = await loadConfig(configPath);
+  const store = await SqliteStore.open(loaded.config);
+  const manager = new McpManager(store, loaded.config, new SecretStore(keyJarPath(loaded.configPath)));
+  let pid: number | undefined;
+  try {
+    const starting = manager.start();
+    await manager.stop();
+    await starting;
+    expect(
+      store.db.prepare<[], { state: string }>("SELECT state FROM mcp_server_state WHERE alias = 'local'").get()?.state,
+    ).toBe('stopped');
+    expect(manager.createTools(previewContext(), Number.MAX_SAFE_INTEGER)).toEqual([]);
+    pid = Number(await readFile(pidFile, 'utf8'));
+    const alive = (): boolean => {
+      try {
+        process.kill(pid ?? 0, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const deadline = Date.now() + 5_000;
+    while (alive() && Date.now() < deadline) {
+      await sleep(50);
+    }
+    expect(alive()).toBe(false);
+  } finally {
+    if (pid !== undefined) {
+      try {
+        process.kill(pid);
+      } catch {}
+    }
     store.close();
   }
 });

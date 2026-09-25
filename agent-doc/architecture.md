@@ -97,7 +97,7 @@ send Tool → Telegram API → 审计
 - 同一 Chat 的 Invocation 仍然串行：另一个 Forum Topic 到期的 Bucket 不会 attach 到当前 Invocation，它属于另一个 Conversation Context。
 - `KeyedSemaphore` 避免同一 Chat 的 Agent 与 `read_image` Vision 并发占用模型。
 - Vision 总并发由 `vision.max_concurrency` 限制；后台 Sticker 索引固定单并发，且优先级低于前台 `read_image`。
-- MCP 每个 Server 有独立的调用 semaphore、重连状态和审计。
+- MCP 每个 Server 有独立的调用 semaphore、重连状态和审计。连接、发现 Tool 或注册表校验任一步失败时都会关闭这次新建的 client（stdio 子进程 / HTTP 会话），不留下无人持有的连接；`stop()` 与连接过程并发时，连接完成后发现已停止或已被更新的连接取代，就关闭自己而不发布为 `ready`。旧 client 的 `tools/list_changed` 通知与过期的刷新结果同样丢弃。
 
 ## 恢复与节拍
 

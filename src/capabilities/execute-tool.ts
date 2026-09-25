@@ -239,6 +239,10 @@ async function executeCall(
     target.entry.sideEffect,
   );
   try {
+    // Capabilities are not required to honour the signal (alarm ignores it), so
+    // a call queued before the run was cancelled must stop here, before any side
+    // effect, and be audited as aborted.
+    signal?.throwIfAborted();
     const result = await target.entry.tool.execute(`${toolCallId}:${toolName}`, callInput, signal);
     // Text payload: bounded and truncated. Reference payload: non-text
     // artifacts only ever leave as conversation-scoped tokens from details.refs.

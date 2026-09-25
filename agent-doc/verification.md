@@ -47,13 +47,13 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | `context-send.test.ts` | Context 可见性、Reply capability、滑动窗口内的 `send` 速率限制与 `send_rate_limited` 审计、未知网络结果不重试、abort/过期不发送、429 等待后命中屏障不重试、已接受的发送在落库失败时仍为成功 |
 | `cut-topic.test.ts` | `/cut_topic` 切点排除命令消息及更早历史、切点只前移、按 Chat 与 Forum Topic 隔离、非管理员拒绝、重建服务后仍生效、同时清空该 Conversation 的 Conversation Context、中断仍持有切点前 transcript 的运行 |
 | `agent-runtime.test.ts` | 按 Conversation 播种的 Agent、Tool 循环、每批注入的 turn 预算、transcript 隔离与工具可见性审计 |
-| `skills.test.ts` | Skill 索引注入 system prompt、原语不经 execute、`execute` search/help/call、`{text, refs}` 封套驱动 `search_stickers → send` 贴纸链路、记忆经 execute 写入、原语/未知能力拒绝的审计 |
+| `skills.test.ts` | Skill 索引注入 system prompt、原语不经 execute、`execute` search/help/call、`{text, refs}` 封套驱动 `search_stickers → send` 贴纸链路、记忆经 execute 写入、原语/未知能力拒绝的审计、已 abort 的运行不 dispatch 能力 |
 | `system-resources.test.ts` | Skill manifest 校验与启动失败、插件 Skill 目录挂载与重名拒绝、`system:///` 绝对/相对 URI 解析、越界与非 Markdown 拒绝、32 KiB 截断、progressive disclosure fixture |
 | `plugins.test.ts` | 插件 id 校验与重名拒绝、内置插件清单装配 |
 | `model-request-audit.test.ts` | `request_json` 中 inline base64 图片被结构化摘要替换、其余请求数据保留、重复清洗幂等 |
 | `media.test.ts` | 图片标准化、缓存和 Vision reasoning、换 vision 模型后按新 `analysis_version` 重新分析 |
 | `stickers.test.ts` | Set 同步、结构化视觉 Tool Call、索引、搜索、发送 |
-| `mcp.test.ts` | stdio/HTTP transport、策略、Header、重定向和审计 |
+| `mcp.test.ts` | stdio/HTTP transport、策略、Header、重定向和审计、发现 Tool 失败时关闭 stdio 子进程、连接中 `stop()` 后保持 stopped 且关闭子进程 |
 | `web-fetch.test.ts` | 有界不可信文本结果与审计、私网/合成地址拒绝（含跳转目标） |
 | `operations.test.ts` | Retention、备份轮换、Scheduler 关闭 |
 | `admin.test.ts` | Admin 首次设置、登录、Session、只读审计 API（含 Conversation Context 列表/详情与写入尝试被拒）、静态托管 |

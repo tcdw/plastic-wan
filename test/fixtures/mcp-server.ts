@@ -1,6 +1,14 @@
+import { writeFileSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+
+// Optional first argument: a file that receives this process's PID, so a test
+// can check whether the manager closed the server.
+const pidFile = process.argv[2];
+if (pidFile !== undefined) {
+  writeFileSync(pidFile, String(process.pid));
+}
 
 const server = new McpServer({ name: 'plasticwan-test', version: '1.0.0' });
 let calls = 0;

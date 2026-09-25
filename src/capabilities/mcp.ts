@@ -150,6 +150,11 @@ export class McpManager {
         listChanged: {
           tools: {
             onChanged: () => {
+              // A notification from a replaced or stopped client must not touch
+              // the registry the current client owns.
+              if (this.#stopping || generation !== server.generation) {
+                return;
+              }
               void this.#refreshTools(server).catch(() => {
                 this.#setState(server, 'degraded', 'registry_update_failed');
               });
@@ -175,23 +180,45 @@ export class McpManager {
       }
       this.#setState(server, 'degraded', 'transport_error');
     };
-    await client.connect(transport, { signal: AbortSignal.timeout(30_000), timeout: 30_000, maxTotalTimeout: 30_000 });
-    const listed = await client.listTools(undefined, {
-      signal: AbortSignal.timeout(30_000),
-      timeout: 30_000,
-      maxTotalTimeout: 30_000,
-    });
-    const definitions = this.#selectTools(server.config, listed.tools);
-    const previousDefinitions = server.definitions;
-    server.definitions = definitions;
+    // Every exit that does not publish this client closes it: a failed
+    // discovery or validation used to leave its stdio process or HTTP session
+    // running with nothing left that could find and close it.
+    let published = false;
     try {
-      this.#validateCandidateRegistry();
-    } catch (error) {
-      server.definitions = previousDefinitions;
-      await client.close().catch(() => undefined);
-      throw error;
+      await client.connect(transport, {
+        signal: AbortSignal.timeout(30_000),
+        timeout: 30_000,
+        maxTotalTimeout: 30_000,
+      });
+      const listed = await client.listTools(undefined, {
+        signal: AbortSignal.timeout(30_000),
+        timeout: 30_000,
+        maxTotalTimeout: 30_000,
+      });
+      // stop() or a newer connect may have run while this one awaited; publishing
+      // now would mark a stopped server ready with a client nobody closes.
+      if (this.#stopping || generation !== server.generation) {
+        return;
+      }
+      const definitions = this.#selectTools(server.config, listed.tools);
+      const previousDefinitions = server.definitions;
+      server.definitions = definitions;
+      try {
+        this.#validateCandidateRegistry();
+      } catch (error) {
+        server.definitions = previousDefinitions;
+        throw error;
+      }
+      server.client = client;
+      published = true;
+    } finally {
+      if (!published) {
+        // Its failure is reported by the caller, not as a transport close.
+        client.onclose = () => undefined;
+        client.onerror = () => undefined;
+        await client.close().catch(() => undefined);
+      }
     }
-    server.client = client;
     server.reconnectAttempt = 0;
     this.#setState(server, 'ready', null);
     if (!startup) {
@@ -211,6 +238,10 @@ export class McpManager {
         timeout: 30_000,
         maxTotalTimeout: 30_000,
       });
+      // The client may have been replaced or stopped during discovery.
+      if (this.#stopping || server.client !== client) {
+        return;
+      }
       const candidate = this.#selectTools(server.config, listed.tools);
       const previous = server.definitions;
       server.definitions = candidate;

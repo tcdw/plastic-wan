@@ -12,12 +12,13 @@ import {
 } from '@earendil-works/pi-ai';
 import type { Update } from 'grammy/types';
 import sharp from 'sharp';
+import Type from 'typebox';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
 import type { RuntimeConfigurationStore } from '../src/platform/runtime-config.ts';
 import { SqliteStore } from '../src/store/database.ts';
-import { capability } from '../src/capabilities/execute-tool.ts';
+import { capability, createExecuteTool } from '../src/capabilities/execute-tool.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
 import { MediaService } from '../src/capabilities/media/media.ts';
 import { createMemoryTools, MemoryStore } from '../src/context/memory.ts';
@@ -30,6 +31,7 @@ import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
 import {
   bundledSystemResources,
   fauxRegistry,
+  renderInvocationContext,
   testConfigJsonc,
   testConfigStore,
   writeTestConfig,
@@ -483,5 +485,48 @@ test('execute rejects a half-filled action before dispatch and audits the reject
     { tool_name: 'send', state: 'success', error_code: null },
   ]);
   expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM memories').get()?.count).toBe(0n);
+  store.close();
+});
+
+test('execute does not dispatch a capability once the run is aborted', async () => {
+  const agentFaux = fauxProvider({
+    provider: 'agent',
+    models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
+  });
+  const setup = await setupInvocation('plasticwan-skills-aborted-', false, fauxRegistry(agentFaux));
+  const { store } = setup;
+  let dispatched = 0;
+  // Like the alarm capability, this side effect ignores its signal.
+  const sideEffect = capability(
+    {
+      name: 'record_note',
+      label: 'Record a note',
+      description: 'Records a note.',
+      parameters: Type.Object({ note: Type.String() }),
+      execute: async () => {
+        dispatched += 1;
+        return { content: [{ type: 'text', text: 'recorded' }], details: {} };
+      },
+    },
+    true,
+  );
+  const tool = createExecuteTool({
+    store,
+    context: renderInvocationContext(store, setup.loaded.config, setup.invocationId),
+    capabilities: [sideEffect],
+  });
+  const controller = new AbortController();
+  controller.abort();
+  await expect(
+    tool.execute('aborted-call', { action: 'call', tool: 'record_note', input: { note: 'x' } }, controller.signal),
+  ).rejects.toThrow('execute.call record_note failed');
+  expect(dispatched).toBe(0);
+  expect(
+    store.db
+      .prepare<[], { tool_name: string; state: string; error_code: string | null }>(
+        'SELECT tool_name, state, error_code FROM tool_calls ORDER BY id',
+      )
+      .all(),
+  ).toEqual([{ tool_name: 'execute', state: 'error', error_code: 'aborted' }]);
   store.close();
 });

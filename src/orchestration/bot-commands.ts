@@ -12,7 +12,7 @@ import type { BucketScheduler } from './scheduler.ts';
 import type { ConversationRuntime } from './conversation-runtime.ts';
 import { ConversationContextStore, listConversationContexts } from '../context/context-store.ts';
 import { readDailyTokenBudget } from '../store/sleep.ts';
-import { botAdmins, chatContextCutoffs, chatPause, chats, conversations, dailyUsage } from '../store/schema.ts';
+import { botAdmins, chatPause, chats, conversationContextCutoffs, conversations, dailyUsage } from '../store/schema.ts';
 
 export interface ParsedCommand {
   readonly name: 'pause' | 'resume' | 'status' | 'model' | 'cut_topic';
@@ -239,10 +239,11 @@ export class BotCommandService {
     return '已恢复本群互动。';
   }
 
-  // Cuts agent-session history at the command message itself: the cutoff row
-  // stores the command's Telegram message ID, so the command and everything
-  // before it drop out of future invocations. Only the new cutoff matters, so
-  // replying is safe even when this chat has never triggered the agent.
+  // Cuts one Conversation's agent-session history at the command message itself:
+  // the cutoff row stores the command's Telegram message ID, so the command and
+  // everything before it in the same topic drop out of future invocations. Other
+  // topics of the chat keep their history, matching the Context clear below.
+  // Replying is safe even when this chat has never triggered the agent.
   //
   // The continuous Conversation Context is cleared in the same step. Without
   // that, the command would only trim the rendered history while the model kept
@@ -256,20 +257,27 @@ export class BotCommandService {
       throw new Error(`Chat ${telegramChatId} has no stored row`);
     }
     const timestamp = now.toISOString();
-    this.#store.orm
-      .insert(chatContextCutoffs)
-      .values({ chatId, telegramMessageId: messageId, createdAt: timestamp, updatedAt: timestamp })
-      .onConflictDoUpdate({
-        target: chatContextCutoffs.chatId,
-        set: { telegramMessageId: messageId, updatedAt: timestamp },
-      })
-      .run();
     const conversationId = this.#store.orm
       .select({ id: conversations.id })
       .from(conversations)
       .where(and(eq(conversations.chatId, chatId), eq(conversations.messageThreadId, threadId ?? 0n)))
       .get()?.id;
+    // No Conversation row means this topic has stored nothing yet, so there is
+    // no history to cut and no Context to clear.
     if (conversationId !== undefined) {
+      // The cutoff only moves forward: a late or re-delivered older command must
+      // not bring back history a newer cut already removed.
+      this.#store.orm
+        .insert(conversationContextCutoffs)
+        .values({ conversationId, telegramMessageId: messageId, createdAt: timestamp, updatedAt: timestamp })
+        .onConflictDoUpdate({
+          target: conversationContextCutoffs.conversationId,
+          set: {
+            telegramMessageId: sql`MAX(${conversationContextCutoffs.telegramMessageId}, excluded.telegram_message_id)`,
+            updatedAt: timestamp,
+          },
+        })
+        .run();
       // Interrupt before clearing. A run in flight holds the pre-cut transcript and
       // a header snapshot taken at its start, so it would keep answering from the
       // history just cut and could write a lower `head_seq` back over the cut.

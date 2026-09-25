@@ -571,10 +571,10 @@ export const botAdmins = sqliteTable('bot_admins', {
   updatedAt: text('updated_at').notNull(),
 });
 
-export const chatContextCutoffs = sqliteTable('chat_context_cutoffs', {
-  chatId: sqliteBigIntId('chat_id')
+export const conversationContextCutoffs = sqliteTable('conversation_context_cutoffs', {
+  conversationId: sqliteBigIntId('conversation_id')
     .primaryKey()
-    .references(() => chats.id, { onDelete: 'cascade' }),
+    .references(() => conversations.id, { onDelete: 'cascade' }),
   telegramMessageId: sqliteBigInt('telegram_message_id').notNull(),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),

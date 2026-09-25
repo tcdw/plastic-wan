@@ -332,6 +332,48 @@ describe('Telegram ingestion', () => {
     store.close();
   });
 
+  test('authorizes the new supergroup from a migrate_from notice seen first', async () => {
+    const migratedChatId = -1001234567890;
+    const { store, ingestion } = await setup();
+    // The notice arrives in the new supergroup, whose ID is not configured yet.
+    const notice: Update = {
+      update_id: 1,
+      message: {
+        message_id: 1,
+        date: 1_700_000_000,
+        chat: { id: migratedChatId, type: 'supergroup', title: 'Group' },
+        from: { id: 7, is_bot: false, first_name: 'User 7' },
+        migrate_from_chat_id: 123456789,
+      },
+    } as Update;
+    ingestion.ingest(notice);
+    expect(
+      store.db.prepare<[], { new_chat_id: bigint }>('SELECT new_chat_id FROM chat_migrations').get()?.new_chat_id,
+    ).toBe(BigInt(migratedChatId));
+    expect(ingestion.ingest(groupTextUpdate(2, 2, 7, migratedChatId)).messageId).toBeDefined();
+    store.close();
+  });
+
+  test('a migrate_from notice cannot hand on an allowlist entry the old chat never had', async () => {
+    const { store, ingestion } = await setup();
+    const notice: Update = {
+      update_id: 1,
+      message: {
+        message_id: 1,
+        date: 1_700_000_000,
+        chat: { id: -1009999999999, type: 'supergroup', title: 'Other' },
+        from: { id: 7, is_bot: false, first_name: 'User 7' },
+        migrate_from_chat_id: 555,
+      },
+    } as Update;
+    ingestion.ingest(notice);
+    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM chat_migrations').get()?.count).toBe(
+      0n,
+    );
+    expect(ingestion.ingest(groupTextUpdate(2, 2, 7, -1009999999999))).toEqual({});
+    store.close();
+  });
+
   test('requires sticker_trigger_enabled for a sticker to open a bucket', async () => {
     const disabled = await setup();
     const standalone = disabled.ingestion.ingest(stickerUpdate(1, 10));

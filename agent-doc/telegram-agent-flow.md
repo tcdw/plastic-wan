@@ -26,7 +26,7 @@
 ## Chat、Conversation 与 Topic
 
 - Telegram Chat 归一化到 `chats`。
-- Supergroup 迁移通过 `chat_migrations` 把旧 ID 指向 canonical Chat。
+- Supergroup 迁移通过 `chat_migrations` 把旧 ID 指向 canonical Chat。迁移通知（`migrate_to_chat_id` / `migrate_from_chat_id`）在 allowlist 与 Topic 校验之前记录，因为新 Supergroup 的 ID 正是靠这条通知获得授权；只有旧 ID 本身被允许时才记录。
 - Conversation 由 Chat 与真正的 Forum Topic 组成。仅当 Supergroup 的 `chat.is_forum = true` 且消息的 `is_topic_message = true` 时，才使用 `message_thread_id` 隔离 Conversation。
 - 私聊、普通群消息及非 Forum Supergroup 的普通回复线程统一使用 thread ID `0`；Telegram 在普通回复中提供的 `message_thread_id` 不作为 Topic。
 - 不同 Forum Topic 的 Bucket、Context、Reply 和预算相互隔离；启动追赶是显式的 Chat 级例外。
@@ -52,7 +52,7 @@
 
 1. Update 仍经过 allowlist、去重、Revision 与媒体持久化，但不创建常规实时 Bucket。
 2. `app_state.telegram_startup_catch_up` 保存本轮起点；进程在排空或建任务时崩溃，下一次启动从同一起点完成，不丢失已确认 Update。
-3. 每个有可触发消息的 Chat 只创建一个 `startup_catch_up` Bucket；单独的人类 Sticker 仍受 `sticker_trigger_enabled` 限制。
+3. 每个有可触发消息的 Conversation（Chat + Forum Topic）只创建一个 `startup_catch_up` Bucket，取该 Conversation 最新的 `agent.history_messages` 条消息，参与闸门也按该 Conversation 判断；同一 Chat 的多个 Topic 各自排队，由 Scheduler 按 Chat 串行启动；单独的人类 Sticker 仍受 `sticker_trigger_enabled` 限制。
 4. Bucket 仅包含该 Chat 按 Telegram 时间排序的最新 `agent.history_messages` 条本轮消息；Forum Topic 可以混合。
 5. Snapshot 携带 `message_thread_id`。回复可见消息时，`send` 路由到该消息所属 Topic；不带 Reply 时路由到最新消息所属 Topic。
 6. 排空完成并原子清除启动状态后，才切换到常规按 Conversation 收集。
@@ -352,7 +352,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 ## Bot Commands
 
-`/pause`、`/resume` 与 `/status` 是 Chat 级控制命令，作用于发送命令的 Chat（含 Forum 全部 Topic），不按 Topic 隔离。`/cut_topic` 同样是 Chat 级命令。
+`/pause`、`/resume` 与 `/status` 是 Chat 级控制命令，作用于发送命令的 Chat（含 Forum 全部 Topic），不按 Topic 隔离。`/cut_topic` 是 Conversation 级命令：切点与 Context 清空都只作用于命令所在的 Topic。
 
 - 判定：`message.entities` 中 offset 为 0 的 `bot_command`；命令名大小写不敏感；带 `@用户名` 后缀时必须匹配当前 Bot；Bot 发送者的消息不触发命令。未知命令与非命令消息照常入库。
 - 启动时（`getMe` 后）调用 `setMyCommands` 自动注册 `/pause`、`/resume`、`/status`、`/model`、`/cut_topic` 及中文描述（`BOT_COMMANDS` 是唯一事实来源，注册前校验每个命令都能被 `parseBotCommand` 解析）；注册失败只记 `command_registration_failed`，不阻塞启动——命令菜单是便利设施，文本解析不依赖它。
@@ -375,7 +375,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 `/cut_topic` 仅对 Bot 管理员开放，用于在群聊上下文被旧话题污染时手动切断历史：
 
-1. 把命令消息自身的 Telegram message ID 写入 `chat_context_cutoffs`（每 Chat 一行，重复执行即前移切点）。
+1. 把命令消息自身的 Telegram message ID 写入 `conversation_context_cutoffs`（每 Conversation 一行，即 Chat + Forum Topic；重复执行只会前移切点，更旧的命令不会把切点往回挪）。Forum 中切一个 Topic 不影响同群其他 Topic 的 history。该 Topic 还没有任何入库消息时（没有 Conversation 行）不写切点，因为没有可切的历史。
 2. 之后新建的 Invocation 在冻结 history 快照时排除 `telegram_message_id <= 切点` 的消息，命令消息本身也在切点上，因此不会进入下一个会话的上下文。
 3. 先中断该 Conversation 正在运行的 Invocation（`BucketScheduler.abortConversation`，abort reason `context_cut`），再清空 canonical history（`head_seq` 推进到 `next_seq`、`context_refs` 全删），并驱逐进程内的 Agent 缓存。三步都必要：运行中的那次调用把切点前的 transcript 和一份运行开始时的 `head_seq` 快照都留在内存里，不中断它就会继续按被切掉的历史回答，还可能把这份更旧的 `head_seq` 写回去覆盖切点。
 4. 不删除任何消息、Revision 或已淘汰的 Context 行（只软标记）；被切 Conversation 之外的已排队/运行中 Invocation 不受影响，启动追赶的 `new` 消息也不受影响。

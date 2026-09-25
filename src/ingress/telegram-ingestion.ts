@@ -105,6 +105,10 @@ export class TelegramIngestion {
     // One rule, shared with `parseBotCommand`: the two must agree or a command
     // scoped to a Conversation cannot find the rows ingestion wrote.
     const threadId = conversationThreadId(message);
+    // A migration notice is what authorizes the new supergroup ID, so it is
+    // recorded before that ID is checked against the allowlist and topics. The
+    // first notice the bot sees can be `migrate_from_chat_id` in the new chat.
+    this.#recordMigration(message, receivedAt);
     const topics = chatId === undefined ? null : this.#topicsFor(chatId);
     const topicAllowed = topics !== null && (topics === undefined || topics.has(threadId));
     const allowed = chat !== undefined && chat.type !== 'channel' && topicAllowed;
@@ -139,7 +143,6 @@ export class TelegramIngestion {
       return {};
     }
 
-    this.#recordMigration(message, receivedAt);
     if (message === undefined) {
       this.#upsertChat(chat, chatId, receivedAt);
       return {};
@@ -216,7 +219,8 @@ export class TelegramIngestion {
       oldChatId = BigInt(message.migrate_from_chat_id);
       newChatId = BigInt(message.chat.id);
     }
-    if (oldChatId === undefined || newChatId === undefined) {
+    // Only a chat that is itself allowed can hand its allowlist entry on.
+    if (oldChatId === undefined || newChatId === undefined || this.#topicsFor(oldChatId) === null) {
       return;
     }
     this.#store.orm
@@ -537,7 +541,6 @@ export class TelegramIngestion {
       .all<{ id: bigint }>(
         sql`SELECT m.id
          FROM messages m
-         JOIN conversations v ON v.id = m.conversation_id
          JOIN message_revisions r ON r.id = m.current_revision_id
          JOIN senders s ON s.id = r.sender_id
          WHERE m.conversation_id = ${conversationId} AND m.visible = 1 AND m.sent_by_bot = 0 AND s.is_bot = 1
@@ -545,8 +548,8 @@ export class TelegramIngestion {
            AND m.received_at >= COALESCE(
              (SELECT MAX(first_received_at) FROM buckets WHERE conversation_id = ${conversationId} AND id <> ${bucketId}),
              '')
-           AND (v.chat_id NOT IN (SELECT chat_id FROM chat_context_cutoffs)
-                OR m.telegram_message_id > (SELECT telegram_message_id FROM chat_context_cutoffs WHERE chat_id = v.chat_id))
+           AND m.telegram_message_id > COALESCE(
+             (SELECT telegram_message_id FROM conversation_context_cutoffs WHERE conversation_id = m.conversation_id), -1)
          ORDER BY m.telegram_date DESC, m.telegram_message_id DESC
          LIMIT ${BigInt(this.#configStore.current().config.agent.history_messages)}`,
       )

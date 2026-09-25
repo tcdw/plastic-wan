@@ -134,12 +134,12 @@ function fixedClock(): () => Date {
 }
 
 describe('startup catch-up', () => {
-  test('creates one invocation per chat with the configured latest messages', async () => {
+  test('creates one invocation per conversation with the configured latest messages', async () => {
     const { store, ingestion, scheduler } = await setup(true);
     const updates: Update[] = [];
     for (let index = 0; index < 15; index += 1) {
-      updates.push(topicUpdate(index * 2 + 1, index + 1, FIRST_CHAT_ID, 100 + index, 1_700_000_000 + index));
-      updates.push(topicUpdate(index * 2 + 2, index + 101, SECOND_CHAT_ID, 200 + index, 1_700_000_000 + index));
+      updates.push(topicUpdate(index * 2 + 1, index + 1, FIRST_CHAT_ID, 100, 1_700_000_000 + index));
+      updates.push(topicUpdate(index * 2 + 2, index + 101, SECOND_CHAT_ID, 200, 1_700_000_000 + index));
     }
     const result = await runStartupCatchUp({
       api: fakeApi(updates),
@@ -284,7 +284,7 @@ describe('startup catch-up', () => {
     store.close();
   });
 
-  test('routes replies to the visible message topic', async () => {
+  test('keeps forum topics of one chat in separate invocations', async () => {
     const { store, loaded, ingestion, scheduler, build } = await setup(false);
     const result = await runStartupCatchUp({
       api: fakeApi([
@@ -297,11 +297,7 @@ describe('startup catch-up', () => {
       allowedUpdates: ['message', 'edited_message', 'my_chat_member'],
       now: fixedClock(),
     });
-    const invocationId = result.invocationIds[0];
-    if (invocationId === undefined) {
-      throw new Error('Expected startup catch-up invocation');
-    }
-    const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
+    expect(result.invocationIds).toHaveLength(2);
     const sentThreads: Array<number | undefined> = [];
     const api: TelegramSendApi = {
       sendMessage: async (_chatId, _text, options) => {
@@ -310,23 +306,28 @@ describe('startup catch-up', () => {
       },
       sendSticker: async () => ({ message_id: 600, date: 1_700_000_200, chat: { id: FIRST_CHAT_ID } }),
     };
-    const tool = createSendTool({
-      store,
-      api,
-      context,
-      capabilities: invocationCapabilities(store, loaded.config, context.header),
-      sendRateLimit: { sendsPerWindow: 6, windowSeconds: 300 },
-      maxTextLength: undefined,
-      disallowBlankLines: false,
-      deadline: Date.now() + 30_000,
-      bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
-    });
-
-    await tool.execute('reply-old-topic', { kind: 'text', text: 'old', reply_to_message_id: '10' });
-    await tool.execute('default-latest-topic', { kind: 'text', text: 'latest' });
+    const prompts: string[] = [];
+    for (const invocationId of result.invocationIds) {
+      const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
+      prompts.push(context.userPrompt);
+      const tool = createSendTool({
+        store,
+        api,
+        context,
+        capabilities: invocationCapabilities(store, loaded.config, context.header),
+        sendRateLimit: { sendsPerWindow: 6, windowSeconds: 300 },
+        maxTextLength: undefined,
+        disallowBlankLines: false,
+        deadline: Date.now() + 30_000,
+        bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+      });
+      await tool.execute(`default-topic-${invocationId}`, { kind: 'text', text: 'latest' });
+    }
     expect(sentThreads).toEqual([100, 200]);
-    expect(context.userPrompt).toContain(' topic:100 ');
-    expect(context.userPrompt).toContain(' topic:200 ');
+    expect(prompts[0]).toContain(`chat-${FIRST_CHAT_ID}-message-10`);
+    expect(prompts[0]).not.toContain(`chat-${FIRST_CHAT_ID}-message-11`);
+    expect(prompts[1]).toContain(`chat-${FIRST_CHAT_ID}-message-11`);
+    expect(prompts[1]).not.toContain(`chat-${FIRST_CHAT_ID}-message-10`);
     const outgoingThreads = store.db
       .prepare<[], { message_thread_id: bigint }>(
         'SELECT v.message_thread_id FROM messages m JOIN conversations v ON v.id = m.conversation_id WHERE m.sent_by_bot = 1 ORDER BY m.id',

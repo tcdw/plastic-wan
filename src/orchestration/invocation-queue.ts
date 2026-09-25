@@ -194,19 +194,22 @@ export class InvocationQueueService {
          ),
          ranked AS (
            SELECT *, ROW_NUMBER() OVER (
-             PARTITION BY chat_id ORDER BY telegram_date DESC, telegram_message_id DESC
+             PARTITION BY conversation_id ORDER BY telegram_date DESC, telegram_message_id DESC
            ) AS message_rank
            FROM session_messages
-           WHERE chat_id IN (SELECT chat_id FROM session_messages WHERE eligible_human = 1)
+           WHERE conversation_id IN (SELECT conversation_id FROM session_messages WHERE eligible_human = 1)
          )
          SELECT id, conversation_id, chat_id, telegram_chat_id, chat_type, telegram_message_id, telegram_date
          FROM ranked
          WHERE message_rank <= ${BigInt(this.#configStore.current().config.agent.history_messages)}
-         ORDER BY chat_id, telegram_date, telegram_message_id`,
+         ORDER BY conversation_id, telegram_date, telegram_message_id`,
       );
+      // One catch-up bucket per Conversation: forum topics are separate
+      // sessions with their own participation state, and the bucket snapshot
+      // does not filter its messages by conversation.
       const grouped = new Map<string, StartupMessageRow[]>();
       for (const message of selected) {
-        const key = message.chat_id.toString();
+        const key = message.conversation_id.toString();
         const messages = grouped.get(key);
         if (messages === undefined) {
           grouped.set(key, [message]);

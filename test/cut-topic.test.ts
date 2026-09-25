@@ -52,6 +52,21 @@ function commandUpdate(updateId: number, messageId: number, chatId: bigint): Upd
   };
 }
 
+function forumUpdate(updateId: number, messageId: number, text: string, threadId: number): Update {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: messageId,
+      date: 1_700_000_000 + messageId,
+      chat: { id: Number(FIRST_CHAT), type: 'supergroup', title: 'Forum', is_forum: true },
+      from: { id: 42, is_bot: false, first_name: 'Alice' },
+      message_thread_id: threadId,
+      is_topic_message: true,
+      text,
+    },
+  } as Update;
+}
+
 async function setup(): Promise<{
   loaded: LoadedConfig;
   configStore: RuntimeConfigurationStore;
@@ -186,7 +201,7 @@ describe('cut_topic', () => {
     expect(await commands.run(command!, FIRST_CHAT, ALICE)).toContain('已切掉');
     expect(
       store.db
-        .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM chat_context_cutoffs')
+        .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM conversation_context_cutoffs')
         .get()?.telegram_message_id,
     ).toBe(12n);
 
@@ -382,7 +397,7 @@ describe('cut_topic', () => {
     await commands.run(second!, FIRST_CHAT, ALICE);
     expect(
       store.db
-        .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM chat_context_cutoffs')
+        .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM conversation_context_cutoffs')
         .get()?.telegram_message_id,
     ).toBe(13n);
 
@@ -400,7 +415,8 @@ describe('cut_topic', () => {
     const command = ingestion.ingest(commandUpdate(3, 11, FIRST_CHAT), new Date(start.getTime() + 1_000)).command;
     await commands.run(command!, FIRST_CHAT, ALICE);
     expect(
-      store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM chat_context_cutoffs').get()?.count,
+      store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM conversation_context_cutoffs').get()
+        ?.count,
     ).toBe(1n);
 
     expect(
@@ -438,7 +454,8 @@ describe('cut_topic', () => {
       '该命令仅对本 Bot 的管理员可用。',
     );
     expect(
-      store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM chat_context_cutoffs').get()?.count,
+      store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM conversation_context_cutoffs').get()
+        ?.count,
     ).toBe(0n);
     store.close();
   });
@@ -458,13 +475,13 @@ describe('cut_topic', () => {
     const recreatedCommands = new BotCommandService(store, configStore, reopened);
     expect(
       store.db
-        .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM chat_context_cutoffs')
+        .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM conversation_context_cutoffs')
         .get()?.telegram_message_id,
     ).toBe(11n);
     recreatedCommands.run({ name: 'cut_topic', messageId: 20n }, FIRST_CHAT, ALICE);
     expect(
       store.db
-        .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM chat_context_cutoffs')
+        .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM conversation_context_cutoffs')
         .get()?.telegram_message_id,
     ).toBe(20n);
     expect(
@@ -480,6 +497,60 @@ describe('cut_topic', () => {
       ),
     ).toEqual([]);
     await reopened.stop();
+    store.close();
+  });
+
+  test("cut_topic in one forum topic leaves the other topics' history alone", async () => {
+    const { store, ingestion, scheduler, commands } = await setup();
+    const start = new Date('2026-08-15T00:00:00.000Z');
+    const at = (seconds: number): Date => new Date(start.getTime() + seconds * 1_000);
+    ingestion.ingest(forumUpdate(1, 10, 'topic A old', 100), at(0));
+    ingestion.ingest(forumUpdate(2, 11, 'topic B old', 200), at(1));
+    for (const id of scheduler.processDue(at(60))) {
+      completeInvocation(store, id, at(61));
+    }
+    for (const id of scheduler.processDue(at(62))) {
+      completeInvocation(store, id, at(63));
+    }
+    const commandUpdate = forumUpdate(3, 12, '/cut_topic', 100);
+    commandUpdate.message!.entities = [{ offset: 0, length: 10, type: 'bot_command' }];
+    const command = ingestion.ingest(commandUpdate, at(70)).command;
+    expect(command).toEqual({ name: 'cut_topic', messageId: 12n, threadId: 100n });
+    await commands.run(command!, FIRST_CHAT, ALICE);
+    expect(
+      store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM conversation_context_cutoffs').get()
+        ?.count,
+    ).toBe(1n);
+
+    const historyOf = (updateId: number, messageId: number, threadId: number, seconds: number): string[] => {
+      ingestion.ingest(forumUpdate(updateId, messageId, 'trigger', threadId), at(seconds));
+      const [invocationId] = scheduler.processDue(at(seconds + 20));
+      if (invocationId === undefined) {
+        throw new Error(`Expected an invocation for topic ${threadId}`);
+      }
+      completeInvocation(store, invocationId, at(seconds + 21));
+      return store.db
+        .prepare<[bigint], { snapshot_json: string }>(
+          "SELECT snapshot_json FROM invocation_messages WHERE invocation_id = ? AND section = 'history' ORDER BY sequence_no",
+        )
+        .all(invocationId)
+        .map((row) => (JSON.parse(row.snapshot_json) as { text: string | null }).text ?? '');
+    };
+    expect(historyOf(4, 13, 100, 80)).toEqual([]);
+    expect(historyOf(5, 14, 200, 120)).toEqual(['topic B old']);
+    store.close();
+  });
+
+  test('an older cut_topic never moves the cutoff backwards', async () => {
+    const { store, ingestion, commands } = await setup();
+    ingestion.ingest(groupUpdate(1, 10, 'polluted', FIRST_CHAT), new Date('2026-08-15T00:00:00.000Z'));
+    await commands.run({ name: 'cut_topic', messageId: 20n }, FIRST_CHAT, ALICE);
+    await commands.run({ name: 'cut_topic', messageId: 15n }, FIRST_CHAT, ALICE);
+    expect(
+      store.db
+        .prepare<[], { telegram_message_id: bigint }>('SELECT telegram_message_id FROM conversation_context_cutoffs')
+        .get()?.telegram_message_id,
+    ).toBe(20n);
     store.close();
   });
 });

@@ -270,6 +270,10 @@ Agent 通过 `alarm` 能力（经 `execute.call` 调用）创建一个绑定当�
 
 发送前写 pending 审计并标记副作用边界。明确失败可按策略处理；网络中断后无法确认 Telegram 是否接收时记录 `outcome_unknown`，不能盲目重发。
 
+- 运行已被 abort（`/pause`、`/cut_topic`、Admin 取消）或已过 Invocation deadline 时，`send` 在写 pending 审计之前直接拒绝：Tool Call 记为 `error`，错误码 `aborted` / `deadline_exceeded`，不写 `telegram_sends`、不调用 Telegram。
+- Telegram 返回 429 时按 `retry_after` 等待后重试，等待超过 deadline 则不重试；等待期间 abort 记为 `error`/`aborted`。开启 send 屏障时，等待结束后会再判断一次屏障，命中则不重试，记为 `error`/`send_barrier`（此时已有 `telegram_sends` 行）。
+- Telegram 已接受、但本地落库失败（例如写 `messages` 出错）时，Tool 仍向模型返回成功，避免模型重发；日志输出 `send_record_failed`（带 `telegram_message_id`），并尽量单独把 `tool_calls` / `telegram_sends` 标为 `success`。这种情况下该条外发消息可能不在 `messages` 里。
+
 `agent.send_max_text_length` 配置了文本最大字符数（默认不限制）时，超长文本在进入发送前被拒绝：Tool Call 记为 `error`、错误码 `send_text_too_long`，不写 `telegram_sends`、不消耗窗口额度。
 
 `agent.send_disallow_blank_lines` 开启（默认关闭）时，包含任何空行的文本同样在发送前被拒绝，错误码 `send_blank_lines`。

@@ -29,6 +29,9 @@ export const SendInputSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** A 429 retry that the send barrier stopped before it reached Telegram. */
+class SendHeldBack extends Error {}
+
 /**
  * Tool error for a send held back by the barrier. The new batch is injected at
  * the next turn boundary, so the model reads it right after this result.
@@ -200,6 +203,13 @@ export function createSendTool(
         recordRejectedSend(environment, toolCallId, input, 'sticker_ref_not_authorized');
         throw new Error('sticker_ref is not authorized in this conversation context');
       }
+      // A cancelled or expired run must not start a side effect: the model may
+      // have queued this call before the abort or deadline landed.
+      if (signal?.aborted === true || Date.now() >= environment.deadline) {
+        const errorCode = signal?.aborted === true ? 'aborted' : 'deadline_exceeded';
+        recordRejectedSend(environment, toolCallId, input, errorCode);
+        throw new Error(`Not sent: ${errorCode}`);
+      }
       // Checked last, so only a send that would otherwise go out is held back:
       // an invalid one keeps its own error and the barrier stays unspent.
       if (environment.holdForNewMessages?.() === true) {
@@ -275,8 +285,8 @@ export function createSendTool(
           : {}),
       };
       const startedAt = performance.now();
+      let response: TelegramSendResponse;
       try {
-        let response: TelegramSendResponse;
         while (true) {
           try {
             if (send.kind === 'text') {
@@ -300,51 +310,19 @@ export function createSendTool(
               throw error;
             }
             await delay(retryAfter * 1000, undefined, { signal });
+            // Messages that arrived during the wait make this reply stale, just
+            // as they would have before the first attempt.
+            if (environment.holdForNewMessages?.() === true) {
+              throw new SendHeldBack();
+            }
           }
         }
-        environment.store.transaction(() => {
-          const now = new Date().toISOString();
-          environment.store.orm
-            .update(toolCalls)
-            .set({
-              state: 'success',
-              resultText: `telegram_message_id=${response.message_id}`,
-              durationMs: BigInt(Math.round(performance.now() - startedAt)),
-              finishedAt: now,
-            })
-            .where(eq(toolCalls.id, pending.toolId))
-            .run();
-          environment.store.orm
-            .update(telegramSends)
-            .set({
-              state: 'success',
-              telegramMessageId: BigInt(response.message_id),
-              responseJson: JSON.stringify({ message_id: response.message_id }),
-              finishedAt: now,
-            })
-            .where(eq(telegramSends.id, sendId))
-            .run();
-          recordOutgoingMessage(
-            environment,
-            response,
-            send,
-            stickerFileId ?? null,
-            targetConversationId,
-            sendText,
-            now,
-          );
-        });
-        if (mention !== null) {
-          firstTextSent = true;
-        }
-        return {
-          content: [{ type: 'text', text: `Sent Telegram message ${response.message_id}` }],
-          details: { telegramMessageId: String(response.message_id) },
-        };
       } catch (error) {
+        const held = error instanceof SendHeldBack;
         const unknown = error instanceof HttpError || (error instanceof GrammyError && error.error_code >= 500);
-        const errorCode =
-          error instanceof GrammyError
+        const errorCode = held
+          ? 'send_barrier'
+          : error instanceof GrammyError
             ? `telegram_${error.error_code}`
             : error instanceof HttpError
               ? 'telegram_network'
@@ -370,8 +348,75 @@ export function createSendTool(
             .where(eq(telegramSends.id, sendId))
             .run();
         });
-        throw new Error(unknown ? 'Telegram send outcome is unknown' : `Telegram send failed: ${errorCode}`);
+        throw new Error(
+          held
+            ? SEND_BARRIER_TEXT
+            : unknown
+              ? 'Telegram send outcome is unknown'
+              : `Telegram send failed: ${errorCode}`,
+        );
       }
+      if (mention !== null) {
+        firstTextSent = true;
+      }
+      // Telegram has accepted the message from here on. A failure to record it
+      // must not read as a failed send, or the model would send it again.
+      const now = new Date().toISOString();
+      const markAccepted = (): void => {
+        environment.store.orm
+          .update(toolCalls)
+          .set({
+            state: 'success',
+            resultText: `telegram_message_id=${response.message_id}`,
+            durationMs: BigInt(Math.round(performance.now() - startedAt)),
+            finishedAt: now,
+          })
+          .where(eq(toolCalls.id, pending.toolId))
+          .run();
+        environment.store.orm
+          .update(telegramSends)
+          .set({
+            state: 'success',
+            telegramMessageId: BigInt(response.message_id),
+            responseJson: JSON.stringify({ message_id: response.message_id }),
+            finishedAt: now,
+          })
+          .where(eq(telegramSends.id, sendId))
+          .run();
+      };
+      try {
+        environment.store.transaction(() => {
+          markAccepted();
+          recordOutgoingMessage(
+            environment,
+            response,
+            send,
+            stickerFileId ?? null,
+            targetConversationId,
+            sendText,
+            now,
+          );
+        });
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            event: 'send_record_failed',
+            invocation_id: environment.context.invocationId.toString(),
+            telegram_message_id: String(response.message_id),
+            error: error instanceof Error ? error.message : String(error),
+            at: new Date().toISOString(),
+          }),
+        );
+        // Keep at least the accepted outcome when only the outgoing-message
+        // record failed; if the store itself is failing, the log is the record.
+        try {
+          markAccepted();
+        } catch {}
+      }
+      return {
+        content: [{ type: 'text', text: `Sent Telegram message ${response.message_id}` }],
+        details: { telegramMessageId: String(response.message_id) },
+      };
     },
   };
 }

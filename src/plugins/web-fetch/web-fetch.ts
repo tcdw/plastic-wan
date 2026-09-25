@@ -42,6 +42,11 @@ for (const [address, prefix] of [
   ['64:ff9b::', 96],
   ['64:ff9b:1::', 48],
   ['100::', 64],
+  // Transition prefixes embed an IPv4 destination (6to4 in 2002::/16, Teredo in
+  // 2001::/32) that a host with a matching tunnel route would reach without the
+  // IPv4 deny list ever seeing it.
+  ['2001::', 32],
+  ['2002::', 16],
   ['2001:10::', 28],
   ['2001:20::', 28],
   ['2001:db8::', 32],
@@ -66,6 +71,8 @@ type RequestResolved = (url: URL, address: string, signal: AbortSignal) => Promi
 export interface WebFetchToolOptions {
   readonly audit: ToolAudit;
   readonly invocationDeadline: number;
+  /** `web_fetch.allow_proxy_synthetic_addresses`; off unless a fake-ip proxy needs it. */
+  readonly allowProxySyntheticAddresses?: boolean;
   readonly resolveHostname?: ResolveHostname;
   readonly requestResolved?: RequestResolved;
 }
@@ -91,7 +98,13 @@ export function createWebFetchTool(
         if (remainingMs <= 0) {
           throw new WebFetchError('invocation_timeout', 'Invocation deadline reached before web fetch');
         }
-        const fetched = await fetchWithRedirects(input.url, signal, resolveHostname, requestResolved);
+        const fetched = await fetchWithRedirects(
+          input.url,
+          signal,
+          resolveHostname,
+          requestResolved,
+          options.allowProxySyntheticAddresses === true,
+        );
         const header = [
           UNTRUSTED_NOTICE,
           `URL: ${fetched.url}`,
@@ -121,11 +134,12 @@ async function fetchWithRedirects(
   signal: AbortSignal,
   resolveHostname: ResolveHostname,
   requestResolved: RequestResolved,
+  allowProxySynthetic: boolean,
 ): Promise<{ url: string; response: Response }> {
   let url = parseUrl(input);
   for (let redirects = 0; ; redirects += 1) {
     const hostname = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
-    const address = await resolvePublicAddress(hostname, resolveHostname);
+    const address = await resolvePublicAddress(hostname, resolveHostname, allowProxySynthetic);
     const response = await requestResolved(url, address, signal);
     const location = response.headers.get('location');
     if (![301, 302, 303, 307, 308].includes(response.status) || location === null) {
@@ -163,7 +177,11 @@ function parseUrl(input: string): URL {
   return url;
 }
 
-async function resolvePublicAddress(hostname: string, resolver: ResolveHostname): Promise<string> {
+async function resolvePublicAddress(
+  hostname: string,
+  resolver: ResolveHostname,
+  allowProxySynthetic: boolean,
+): Promise<string> {
   const family = isIP(hostname);
   const addresses: readonly ResolvedAddress[] =
     family === 0 ? await resolver(hostname) : [{ address: hostname, family } as ResolvedAddress];
@@ -174,7 +192,12 @@ async function resolvePublicAddress(hostname: string, resolver: ResolveHostname)
     addresses.some(
       (entry) =>
         !isPublicAddress(entry.address, entry.family) &&
-        !(family === 0 && entry.family === 4 && proxySyntheticAddresses.check(entry.address, 'ipv4')),
+        !(
+          allowProxySynthetic &&
+          family === 0 &&
+          entry.family === 4 &&
+          proxySyntheticAddresses.check(entry.address, 'ipv4')
+        ),
     )
   ) {
     throw new WebFetchError('blocked_address', 'Hostname resolves to a non-public address');

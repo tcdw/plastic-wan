@@ -440,6 +440,20 @@ Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用
 
 Streamable HTTP 使用 `url` 与可选 SecretRef `headers`，且 `follow_redirects` 必须为 `false`。`url` 可以包含服务协议要求的查询参数，但禁止 URL userinfo 与 fragment；机密值应使用 SecretRef `headers`，不应写入查询参数。`tools` 为 `"*"` 时全部 Tool 共享 `default_tool_policy`；`tools` 为显式数组时，每个列出的 Tool 必须在 `tool_policies` 中提供对应策略，`default_tool_policy` 只服务于 `"*"`。策略只包含 `read_only` 与 `timeout_seconds`，没有每日调用次数上限。没有策略的 Tool 不会暴露给模型。`required = true` 的 Server 启动失败会阻止 `serve`/`doctor` 成功。
 
+## web_fetch
+
+```jsonc
+{
+  "web_fetch": {
+    "allow_proxy_synthetic_addresses": false,
+  },
+}
+```
+
+- 整个 section 可省略。`allow_proxy_synthetic_addresses` 默认 `false`：域名解析到 `198.18.0.0/15` 时 `web_fetch` 拒绝访问，因为任何人都能把自己的域名解析到这个网段，所在网络恰好路由它时就成了 SSRF。
+- 只有在 fake-ip 代理后运行（Clash、Surge 等把所有域名都解析到该网段）的部署才设为 `true`，否则 `web_fetch` 取不到任何网页。即使开启，模型直接提交该网段的 IP 仍会被拒绝。
+- 修改后需要重启（不在热更新白名单内）。
+
 ## Admin Panel
 
 ```jsonc

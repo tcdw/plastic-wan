@@ -62,12 +62,35 @@ async function fixture(): Promise<Fixture> {
   return { store, context };
 }
 
+test('proxy synthetic DNS answers are refused unless the deployment opts in', async () => {
+  const { store, context } = await fixture();
+  try {
+    let requests = 0;
+    const tool = createWebFetchTool({
+      audit: createToolAudit(store, context.invocationId),
+      invocationDeadline: Date.now() + 30_000,
+      resolveHostname: async () => [{ address: '198.18.0.42', family: 4 }],
+      requestResolved: async () => {
+        requests += 1;
+        return new Response('ok', { headers: { 'content-type': 'text/plain' } });
+      },
+    });
+    await expect(tool.execute('web-default', { url: 'https://attacker.example/' })).rejects.toThrow(
+      'non-public address',
+    );
+    expect(requests).toBe(0);
+  } finally {
+    store.close();
+  }
+});
+
 test('web_fetch returns bounded untrusted text through proxy synthetic DNS and audits it', async () => {
   const { store, context } = await fixture();
   try {
     const tool = createWebFetchTool({
       audit: createToolAudit(store, context.invocationId),
       invocationDeadline: Date.now() + 30_000,
+      allowProxySyntheticAddresses: true,
       resolveHostname: async (hostname) => {
         expect(hostname).toBe('public.example');
         return [{ address: '198.18.0.42', family: 4 }];
@@ -103,6 +126,38 @@ test('web_fetch returns bounded untrusted text through proxy synthetic DNS and a
   }
 });
 
+test('web_fetch blocks IPv6 transition addresses that embed an IPv4 destination', async () => {
+  const { store, context } = await fixture();
+  try {
+    let requests = 0;
+    const resolved: Record<string, string> = {
+      'six-to-four.example': '2002:7f00:1::1',
+      'teredo.example': '2001:0:4136:e378:8000:63bf:3fff:fdd2',
+    };
+    const tool = createWebFetchTool({
+      audit: createToolAudit(store, context.invocationId),
+      invocationDeadline: Date.now() + 30_000,
+      resolveHostname: async (hostname) => [{ address: resolved[hostname] ?? '2606:4700::1', family: 6 }],
+      requestResolved: async () => {
+        requests += 1;
+        return new Response('ok', { headers: { 'content-type': 'text/plain' } });
+      },
+    });
+    await expect(tool.execute('web-6to4', { url: 'https://six-to-four.example/' })).rejects.toThrow(
+      'non-public address',
+    );
+    await expect(tool.execute('web-teredo', { url: 'https://teredo.example/' })).rejects.toThrow('non-public address');
+    await expect(tool.execute('web-literal-6to4', { url: 'http://[2002:a00:1::1]/' })).rejects.toThrow(
+      'non-public address',
+    );
+    // An ordinary global unicast address still passes.
+    await tool.execute('web-public-v6', { url: 'https://public.example/' });
+    expect(requests).toBe(1);
+  } finally {
+    store.close();
+  }
+});
+
 test('web_fetch blocks private and literal synthetic addresses, including redirects', async () => {
   const { store, context } = await fixture();
   try {
@@ -110,6 +165,8 @@ test('web_fetch blocks private and literal synthetic addresses, including redire
     const tool = createWebFetchTool({
       audit: createToolAudit(store, context.invocationId),
       invocationDeadline: Date.now() + 30_000,
+      // Even with the opt-in, a literal synthetic IP and a private redirect stay blocked.
+      allowProxySyntheticAddresses: true,
       resolveHostname: async () => [{ address: '198.18.0.42', family: 4 }],
       requestResolved: async () => {
         requests += 1;

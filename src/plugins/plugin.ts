@@ -1,4 +1,5 @@
 import type { ExecutableCapability } from '../capabilities/execute-tool.ts';
+import type { RawConfig } from '../platform/config.ts';
 import type { InvocationContext } from '../platform/invocation-context.ts';
 import { finishToolCall, startToolCall, type SqliteStore } from '../store/database.ts';
 
@@ -24,6 +25,7 @@ export interface ToolAuditRecord {
  * read it at call time instead of copying it.
  */
 export interface InvocationScope {
+  readonly config: RawConfig;
   readonly context: InvocationContext;
   readonly deadline: number;
   readonly audit: ToolAudit;
@@ -49,7 +51,12 @@ export function definePlugin<const T extends AgentPlugin>(plugin: T): T {
 export interface LoadedPlugins {
   /** Mounted under system:///skills/ next to the bundled tree, see `SystemResources.load`. */
   readonly skillDirectories: readonly string[];
-  capabilities(store: SqliteStore, context: InvocationContext, deadline: number): readonly ExecutableCapability[];
+  capabilities(
+    store: SqliteStore,
+    config: RawConfig,
+    context: InvocationContext,
+    deadline: number,
+  ): readonly ExecutableCapability[];
 }
 
 /**
@@ -70,8 +77,13 @@ export function loadPlugins(plugins: readonly AgentPlugin[]): LoadedPlugins {
   }
   return {
     skillDirectories: plugins.flatMap((plugin) => plugin.skills ?? []),
-    capabilities: (store, context, deadline) => {
-      const scope: InvocationScope = { context, deadline, audit: createToolAudit(store, context.invocationId) };
+    capabilities: (store, config, context, deadline) => {
+      const scope: InvocationScope = {
+        config,
+        context,
+        deadline,
+        audit: createToolAudit(store, context.invocationId),
+      };
       return plugins.flatMap((plugin) => plugin.capabilities?.(scope) ?? []);
     },
   };

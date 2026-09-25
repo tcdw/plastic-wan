@@ -318,6 +318,17 @@ export const ConfigSchema = Type.Object(
     ),
     mcp: Type.Optional(Type.Object({ servers: Type.Array(Type.Union([StdioMcpSchema, HttpMcpSchema])) }, Strict)),
     admin: Type.Optional(AdminSchema),
+    web_fetch: Type.Optional(
+      Type.Object(
+        {
+          // Proxy fake-ip modes (Clash, Surge) answer every DNS lookup with a
+          // 198.18.0.0/15 address; only such deployments may accept it, since
+          // anywhere else a hostname resolving there is an SSRF attempt.
+          allow_proxy_synthetic_addresses: Type.Optional(Type.Boolean()),
+        },
+        Strict,
+      ),
+    ),
   },
   Strict,
 );

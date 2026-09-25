@@ -228,7 +228,7 @@ test('the skill index reaches the system prompt and primitives stay directly cal
     systemResources: await bundledSystemResources(),
     capabilityTools: (context, deadline) => [
       ...createMemoryTools(memoryStore, context).map((tool) => capability(tool, true)),
-      ...loadPlugins(BUILTIN_PLUGINS).capabilities(store, context, deadline),
+      ...loadPlugins(BUILTIN_PLUGINS).capabilities(store, setup.loaded.config, context, deadline),
     ],
   });
   expect(

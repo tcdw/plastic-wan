@@ -178,7 +178,7 @@ export async function serve(configPath: string, takeover = false): Promise<void>
       capability(createAlarmTool({ store: openedStore, context }), true),
       capability(createListAlarmTool({ store: openedStore, context, runtime: alarmToolRuntime }), false),
       capability(createDeleteAlarmTool({ store: openedStore, context }), true),
-      ...plugins.capabilities(openedStore, context, deadline),
+      ...plugins.capabilities(openedStore, configStore.current().config, context, deadline),
     ];
     // Directly exposed non-primitive tools: allowlisted MCP tools only.
     const additionalTools: ToolFactory = (context, deadline) => [...mcpManager.createTools(context, deadline)];

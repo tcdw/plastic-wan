@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseCli } from '../src/cli-options.ts';
@@ -12,6 +12,7 @@ import {
   toModelDefaults,
 } from '../src/platform/models-dev.ts';
 import { assertBaseUrl, fetchProviderModels, planModelsEndpoint } from '../src/platform/provider-models.ts';
+import { saveConfig } from '../src/tui/configure.ts';
 import { filterSearchChoices } from '../src/tui/provider-wizard.ts';
 import { startFixtureServer, stopFixtureServer, testConfigJsonc, writeTestConfig } from './helpers.ts';
 
@@ -39,6 +40,39 @@ describe('configure JSONC round-trip', () => {
     expect(reparsed.version).toBe(1);
     expect(reparsed.providers.agent?.kind).toBe('custom');
     expect(reparsed.agent.thinking_level).toBe('low');
+  });
+});
+
+describe('configure save', () => {
+  test('an invalid configuration never reaches the file', async () => {
+    const { configPath } = await fixture();
+    const original = await readFile(configPath, 'utf8');
+    const { fileConfig } = await loadConfig(configPath);
+    // Deleting the agent's provider leaves `agent.provider` dangling.
+    const { agent: _agent, ...providers } = fileConfig.providers;
+    expect(await saveConfig(configPath, { ...fileConfig, providers }, original)).toBe(false);
+    expect(await readFile(configPath, 'utf8')).toBe(original);
+  });
+
+  test('a file changed during the session is not overwritten', async () => {
+    const { configPath } = await fixture();
+    const original = await readFile(configPath, 'utf8');
+    const { fileConfig } = await loadConfig(configPath);
+    const concurrent = original.replace('"thinking_level": "low"', '"thinking_level": "medium"');
+    expect(concurrent).not.toBe(original);
+    await writeFile(configPath, concurrent);
+    const edited = { ...fileConfig, agent: { ...fileConfig.agent, thinking_level: 'off' as const } };
+    expect(await saveConfig(configPath, edited, original)).toBe(false);
+    expect(await readFile(configPath, 'utf8')).toBe(concurrent);
+  });
+
+  test('a valid configuration is saved and loads back', async () => {
+    const { configPath } = await fixture();
+    const original = await readFile(configPath, 'utf8');
+    const { fileConfig } = await loadConfig(configPath);
+    const edited = { ...fileConfig, agent: { ...fileConfig.agent, thinking_level: 'off' as const } };
+    expect(await saveConfig(configPath, edited, original)).toBe(true);
+    expect((await loadConfig(configPath)).config.agent.thinking_level).toBe('off');
   });
 });
 

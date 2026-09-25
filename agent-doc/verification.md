@@ -65,7 +65,7 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | `alarm.test.ts` / `alarm-internal-context.test.ts` | Alarm 创建/触发/取消、creator-vs-target ownership、latest-new caller 解析、跨 invocation hidden mapping、状态变化安全失败、send 不泄漏、重启后 durable internal context |
 | `prompt-template.test.ts` | Prompt 模板白名单变量渲染、未知与格式错误表达式拒绝 |
 | `prompt-markdown.test.ts` | HTML 注释剔除、纯注释行移除、跨行注释与未闭合注释保留 |
-| `tui-configure.test.ts` | `configure` 向导输出可被 `loadConfig` 接受、models.dev 能力/费用映射、Provider `/models` 拉取与去重、CLI 参数与 `--output-agent-prompt` 解析 |
+| `tui-configure.test.ts` | `configure` 向导输出可被 `loadConfig` 接受、非法配置不落盘、会话期间被改过的文件不被覆盖、models.dev 能力/费用映射、Provider `/models` 拉取与去重、CLI 参数与 `--output-agent-prompt` 解析 |
 | `apps/admin-next/src/lib/*.test.ts` | Admin 前端纯函数：错误文本、记忆 TTL 边界、Invocation 时间线排序与 send 参数解析 |
 
 跨模块改动完成后运行全部测试与 TypeScript 检查。

@@ -1,7 +1,9 @@
 import { confirm, select } from '@inquirer/prompts';
-import { readFile, writeFile } from 'node:fs/promises';
-import { parse } from 'jsonc-parser';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { type ParseError, parse } from 'jsonc-parser';
 import { loadConfig, type FileConfig, type ThinkingLevelConfig } from '../platform/config.ts';
+import { writeConfigEdits } from '../platform/config-file.ts';
 import { keyJarPath, readKeyJar, referencedJarNames, updateKeyJar } from '../platform/key-jar.ts';
 import { supportedThinkingLevels } from '../platform/thinking-levels.ts';
 import { runProviderWizard } from './provider-wizard.ts';
@@ -70,8 +72,9 @@ export async function runConfigure(configPath: string): Promise<void> {
       }
     }
   } finally {
-    // Also after Ctrl+C, which surfaces as a rejected prompt.
-    await pruneKeyJar(configPath, keyJar, jarBefore, jarNamesIn(originalSource));
+    // Also after Ctrl+C, which surfaces as a rejected prompt. The original file
+    // already loaded, so its reference set is readable.
+    await pruneKeyJar(configPath, keyJar, jarBefore, jarNamesIn(originalSource) ?? new Set());
   }
 }
 
@@ -93,6 +96,12 @@ async function pruneKeyJar(
     return;
   }
   const onDisk = jarNamesIn(await readFile(configPath, 'utf8'));
+  if (onDisk === null) {
+    // A best-effort parse of a damaged file can miss references, and deleting
+    // an entry it missed would lose a secret for good. Leave the jar alone.
+    console.error('Config on disk does not parse; key jar entries were not cleaned up');
+    return;
+  }
   const remove = Object.keys(jar).filter((name) => !onDisk.has(name) && (original.has(name) || !before.has(name)));
   if (remove.length > 0) {
     await updateKeyJar(keyJar, { remove });
@@ -107,24 +116,30 @@ function agentThinkingLevels(config: FileConfig): readonly ThinkingLevelConfig[]
   return model === undefined ? [config.agent.thinking_level] : supportedThinkingLevels(model);
 }
 
-async function saveConfig(path: string, config: FileConfig, originalSource: string): Promise<boolean> {
+/**
+ * Goes through the same staged write as the panel: the new file is validated as
+ * a sibling temporary file and only then renamed over the original, so a
+ * rejected configuration never reaches disk and there is nothing to restore.
+ * The revision of the source this session started from makes the write fail
+ * instead of overwriting a change made to the file in the meantime.
+ */
+export async function saveConfig(path: string, config: FileConfig, originalSource: string): Promise<boolean> {
   try {
-    await writeFile(path, `${JSON.stringify(config, null, 2)}\n`);
+    const revision = createHash('sha256').update(Buffer.from(originalSource, 'utf8')).digest('hex');
+    await writeConfigEdits(path, [{ path: [], value: config }], revision);
     const loaded = await loadConfig(path);
     console.log(`Config saved and validated. Hash: ${loaded.hash}`);
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`Failed to save config: ${message}`);
-    const restore = await confirm({ message: 'Restore previous config?', default: true });
-    if (restore) {
-      await writeFile(path, originalSource);
-      console.log('Previous config restored.');
-    }
+    console.error(`Config not saved; the file is unchanged: ${message}`);
     return false;
   }
 }
 
-function jarNamesIn(source: string): Set<string> {
-  return referencedJarNames(parse(source.replace(/^\uFEFF/, ''), [], { allowTrailingComma: true }));
+/** `null` when the source does not parse cleanly. */
+function jarNamesIn(source: string): Set<string> | null {
+  const errors: ParseError[] = [];
+  const value: unknown = parse(source.replace(/^\uFEFF/, ''), errors, { allowTrailingComma: true });
+  return errors.length > 0 ? null : referencedJarNames(value);
 }

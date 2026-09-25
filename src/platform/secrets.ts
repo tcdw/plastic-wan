@@ -102,15 +102,39 @@ export class SecretStore {
     }
   }
 
+  /**
+   * Matches every known value against the original text and replaces the
+   * merged spans at once. Replacing value by value let an earlier replacement
+   * break a later match: with `abcdef` and `abcdef123456` both known, the
+   * longer one came out as `[REDACTED]123456`.
+   */
   redact(text: string): string {
-    let redacted = text;
+    const spans: [number, number][] = [];
     for (const value of [...this.#values, ...this.#submitted]) {
       if (value.length < MIN_REDACTED_LENGTH) {
         continue;
       }
-      redacted = redacted.replaceAll(value, '[REDACTED]');
+      for (let start = text.indexOf(value); start >= 0; start = text.indexOf(value, start + 1)) {
+        spans.push([start, start + value.length]);
+      }
     }
-    return redacted;
+    if (spans.length === 0) {
+      return text;
+    }
+    spans.sort((left, right) => left[0] - right[0]);
+    let redacted = '';
+    let cursor = 0;
+    let [spanStart, spanEnd] = spans[0] ?? [0, 0];
+    for (const [start, end] of spans.slice(1)) {
+      if (start <= spanEnd) {
+        spanEnd = Math.max(spanEnd, end);
+        continue;
+      }
+      redacted += `${text.slice(cursor, spanStart)}[REDACTED]`;
+      cursor = spanEnd;
+      [spanStart, spanEnd] = [start, end];
+    }
+    return `${redacted}${text.slice(cursor, spanStart)}[REDACTED]${text.slice(spanEnd)}`;
   }
 
   redactError(error: unknown): string {

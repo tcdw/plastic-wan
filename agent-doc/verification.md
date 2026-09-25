@@ -33,7 +33,7 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 
 | 测试 | 主要契约 |
 | --- | --- |
-| `foundation.test.ts` | 严格配置（含 `agent.context` 与 `agent.rate_limits`）、Secret 脱敏、迁移与备份 |
+| `foundation.test.ts` | 严格配置（含 `agent.context` 与 `agent.rate_limits`）、Secret 脱敏（含前缀与重叠值）、迁移与备份 |
 | `load-env.test.ts` | CLI `.env.local`/`.env` 加载语义：缺失跳过、dotenv 解析（含 BOM）、真实环境变量 > `.env.local` > `.env` 优先级 |
 | `schema.test.ts` | Drizzle 层 bigint/boolean 往返、STRICT 与 CHECK 约束、better-sqlite3 IMMEDIATE 事务回滚、`sql` 模板绑定与 FTS5 查询 |
 | `telegram-ingestion.test.ts` | allowlist、Revision、Bot/Service、Topic 隔离、先到的 `migrate_from_chat_id` 授权新 Supergroup、匿名管理员（占位 Bot + `sender_chat`）按真人处理 |

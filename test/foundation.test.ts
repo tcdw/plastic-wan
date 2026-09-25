@@ -695,6 +695,21 @@ describe('secrets', () => {
     expect(store.redact('failed secret-value request')).toBe('failed [REDACTED] request');
   });
 
+  test('redacts a secret in full when another known secret is its prefix or overlaps it', () => {
+    const store = new SecretStore();
+    // Submission order used to decide the result: the shorter value replaced
+    // first and left the longer one's tail in the clear.
+    store.remember('abcdef-short');
+    store.remember('abcdef-short-and-long');
+    store.remember('xyz-overlap-1');
+    store.remember('overlap-1-tail');
+    expect(store.redact('key=abcdef-short-and-long;')).toBe('key=[REDACTED];');
+    expect(store.redact('a abcdef-short b')).toBe('a [REDACTED] b');
+    expect(store.redact('[xyz-overlap-1-tail]')).toBe('[[REDACTED]]');
+    expect(store.redact('abcdef-short abcdef-short')).toBe('[REDACTED] [REDACTED]');
+    expect(store.redact('nothing to hide')).toBe('nothing to hide');
+  });
+
   test('keeps submitted plaintext redactable without letting it accumulate', async () => {
     const { directory, configPath } = await fixture();
     await writeTestKeyJar(directory, { configured: 'configured-api-key' });

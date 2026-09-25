@@ -36,7 +36,7 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | `foundation.test.ts` | 严格配置（含 `agent.context` 与 `agent.rate_limits`）、Secret 脱敏、迁移与备份 |
 | `load-env.test.ts` | CLI `.env.local`/`.env` 加载语义：缺失跳过、dotenv 解析（含 BOM）、真实环境变量 > `.env.local` > `.env` 优先级 |
 | `schema.test.ts` | Drizzle 层 bigint/boolean 往返、STRICT 与 CHECK 约束、better-sqlite3 IMMEDIATE 事务回滚、`sql` 模板绑定与 FTS5 查询 |
-| `telegram-ingestion.test.ts` | allowlist、Revision、Bot/Service、Topic 隔离、先到的 `migrate_from_chat_id` 授权新 Supergroup |
+| `telegram-ingestion.test.ts` | allowlist、Revision、Bot/Service、Topic 隔离、先到的 `migrate_from_chat_id` 授权新 Supergroup、匿名管理员（占位 Bot + `sender_chat`）按真人处理 |
 | `participation.test.ts` | 全局/每 Chat 规则合并、私聊配置拒绝、跨午夜时段、触发与注意力窗口、暂停/编辑边界、启动追赶与清理 |
 | `startup-catch-up.test.ts` | 每 Conversation 一个追赶 Invocation（同群不同 Topic 分开）、`history_messages` 上限、`ignored_user_ids` 与 `sticker_trigger_enabled` 生效、排空后切换实时 Bucket、各 Topic 发送落回自己的 Topic |
 | `scheduler.test.ts` | 配置 deadline、冻结快照、恢复和并发串行 |

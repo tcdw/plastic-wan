@@ -271,7 +271,11 @@ export class TelegramIngestion {
     ignoredUserIds: readonly number[],
   ): StoredMessage | undefined {
     const sender = this.#upsertSender(message, receivedAt);
-    const fromBot = message.from?.is_bot === true;
+    // A message sent on behalf of a chat (anonymous group admin, a channel
+    // identity, a linked-channel post) carries a placeholder bot in `from` for
+    // backward compatibility, such as GroupAnonymousBot. Its author is
+    // `sender_chat`, which `#upsertSender` already records as a non-bot.
+    const fromBot = message.sender_chat === undefined && message.from?.is_bot === true;
     const ownMessage = message.from !== undefined && BigInt(message.from.id) === this.#botId;
     const service = isServiceMessage(message);
     if (ownMessage || (fromBot && !this.#configStore.current().config.telegram.process_bot_messages)) {

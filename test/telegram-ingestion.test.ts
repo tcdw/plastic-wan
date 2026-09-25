@@ -332,6 +332,44 @@ describe('Telegram ingestion', () => {
     store.close();
   });
 
+  test('an anonymous admin message is a human message despite its placeholder bot sender', async () => {
+    const { store, ingestion } = await setup();
+    const anonymous: Update = {
+      update_id: 1,
+      message: {
+        message_id: 10,
+        date: 1_700_000_000,
+        chat: { id: 123456789, type: 'supergroup', title: 'Group' },
+        from: { id: 1087968824, is_bot: true, first_name: 'Group', username: 'GroupAnonymousBot' },
+        sender_chat: { id: 123456789, type: 'supergroup', title: 'Group' },
+        text: 'from an anonymous admin',
+      },
+    };
+    const result = ingestion.ingest(anonymous);
+    expect(result.messageId).toBeDefined();
+    expect(result.bucketId).toBeDefined();
+    expect(
+      store.db
+        .prepare<[], { telegram_type: string; is_bot: bigint }>(
+          'SELECT telegram_type, is_bot FROM senders WHERE telegram_id = 123456789',
+        )
+        .get(),
+    ).toEqual({ telegram_type: 'sender_chat', is_bot: 0n });
+    // A real bot without a sender_chat is still dropped by default.
+    const bot: Update = {
+      update_id: 2,
+      message: {
+        message_id: 11,
+        date: 1_700_000_001,
+        chat: { id: 123456789, type: 'supergroup', title: 'Group' },
+        from: { id: 555, is_bot: true, first_name: 'Other', username: 'other_bot' },
+        text: 'bot message',
+      },
+    };
+    expect(ingestion.ingest(bot)).toEqual({});
+    store.close();
+  });
+
   test('authorizes the new supergroup from a migrate_from notice seen first', async () => {
     const migratedChatId = -1001234567890;
     const { store, ingestion } = await setup();

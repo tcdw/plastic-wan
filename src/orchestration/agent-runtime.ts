@@ -454,7 +454,9 @@ export class AgentRuntime {
     state.estimatedInputTokens = this.#estimateInputTokens(cached, toolDefinitionCharacters);
     const timeoutSignal = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
     const signal = AbortSignal.any([schedulerSignal, timeoutSignal]);
-    const pendingUserTags: ('checkpoint' | 'harness')[] = [];
+    // One entry per user message handed to the agent, in delivery order. A batch
+    // carries its bucket so it is acknowledged only once it is in the transcript.
+    const pendingUserTags: { readonly tag: 'checkpoint' | 'harness'; readonly bucketId: bigint | null }[] = [];
     const injectBatch = async (bucketId: bigint): Promise<AgentMessage> => {
       const injection = this.#contextBuilder.renderInjection(config, {
         header,
@@ -477,7 +479,7 @@ export class AgentRuntime {
       }
       runtime.beginRound(conversationId);
       const images = supportsImages ? ((await this.#directImageLoader?.(contextState, signal)) ?? []) : [];
-      pendingUserTags.push('checkpoint');
+      pendingUserTags.push({ tag: 'checkpoint', bucketId });
       state.turnsSinceInjection = 0;
       state.sendUsed = false;
       state.nudged = false;
@@ -499,9 +501,10 @@ export class AgentRuntime {
         return false;
       }
       for (const bucketId of pending) {
-        const message = await injectBatch(bucketId);
-        agent.steer(message);
-        this.#markBucketInjected(invocationId, bucketId);
+        // `steer` only queues the message. The bucket is marked injected when the
+        // message is persisted (`message_end`), so a run that ends first leaves it
+        // un-injected and `releaseUninjectedBuckets` re-queues the batch.
+        agent.steer(await injectBatch(bucketId));
       }
       return true;
     };
@@ -716,7 +719,7 @@ export class AgentRuntime {
           .join('');
         if (!hasToolCalls && text.trim().length > 0) {
           state.nudged = true;
-          pendingUserTags.push('harness');
+          pendingUserTags.push({ tag: 'harness', bucketId: null });
           agent.steer({ role: 'user', content: [{ type: 'text', text: SEND_NUDGE_TEXT }], timestamp: Date.now() });
           this.recordAgentMessage(invocationId, 'harness_nudge', SEND_NUDGE_TEXT);
           return false;
@@ -784,8 +787,11 @@ export class AgentRuntime {
       if (event.type !== 'message_end') {
         return;
       }
-      const tag = event.message.role === 'user' ? (pendingUserTags.shift() ?? 'harness') : undefined;
-      this.#persistMessage(cached, invocationId, event.message, tag === 'checkpoint');
+      const pendingUser = event.message.role === 'user' ? pendingUserTags.shift() : undefined;
+      this.#persistMessage(cached, invocationId, event.message, pendingUser?.tag === 'checkpoint');
+      if (pendingUser !== undefined && pendingUser.bucketId !== null) {
+        this.#markBucketInjected(invocationId, pendingUser.bucketId);
+      }
       if (event.message.role === 'assistant') {
         const text = event.message.content
           .filter((entry) => entry.type === 'text')
@@ -806,9 +812,7 @@ export class AgentRuntime {
     try {
       this.#contexts.touch(header, invocationId);
       const openingBucket = this.#openingBucketId(invocationId);
-      const opening = await injectBatch(openingBucket);
-      this.#markBucketInjected(invocationId, openingBucket);
-      await agent.prompt(opening);
+      await agent.prompt(await injectBatch(openingBucket));
       if (signal.aborted) {
         const unknown =
           this.#store.orm
@@ -847,9 +851,12 @@ export class AgentRuntime {
       runtime.endRound(conversationId);
       this.#contexts.clearActiveInvocation(invocationId);
       this.#contexts.touch(header, null);
-      if (agent.state.errorMessage !== undefined) {
-        // A failed run must not leave a half-broken transcript behind that the
-        // next invocation would happily replay.
+      // A failed run must not leave a half-broken transcript behind that the
+      // next invocation would happily replay. That covers a thrown error too
+      // (`outcome` is only set on a normal return): a persistence failure can
+      // throw after the agent added a message but before `transcriptSeqs` knew
+      // of it, and the next run would trip over the diverged arrays again.
+      if (outcome === undefined || agent.state.errorMessage !== undefined) {
         runtime.forget(conversationId);
       }
     }

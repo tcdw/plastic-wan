@@ -120,7 +120,7 @@ T+94   若期间再没有新 Bucket 到期，空闲等待耗尽，I 结束
 - 结束判定顺序：睡眠/暂停/每日预算触顶 → 结束；有已 attach 未注入的 Bucket → 注入后继续；一轮结束时先标记 Agent 空闲并把 collecting Bucket 的 deadline 推到至少 `本轮结束 + bucket_window_seconds`，再空闲等待至多 `idle_grace_seconds`，期间有 Bucket 到期 → 注入后继续；超过 `max_wall_clock_seconds` → 结束；其余结束。
 - **`idle_grace_seconds = 0` 是关闭开关**：不空闲等待、到期 Bucket 不 attach，退回「一次 Bucket 一次 Invocation」，但 Conversation Context 依然持久，且运行期间到达的批次仍从本轮结束起算窗口（比从消息自身起算可能晚一个窗口）。这是唯一受支持的降级方式，代码里没有第二套模式或 mode 分支。
 - 防失控靠 `agent.rate_limits`：`turns_per_injection` 限制每批注入后最多跑多少轮（注入即重置），`sends_per_window`/`window_seconds` 限制同一 Chat 滑动窗口内的 `send` 次数，`max_wall_clock_seconds` 限制单次运行总时长。per-Invocation 的 `max_turns`/`max_sends`/`timeout_seconds` 已删除。
-- attach 但从未注入的 Bucket 在运行结束时重新排队成新 Invocation（`invocation_buckets.injected_at` 为 NULL），不会被丢弃。
+- attach 但从未注入的 Bucket 在运行结束时重新排队成新 Invocation（`invocation_buckets.injected_at` 为 NULL），不会被丢弃。`injected_at` 在该批的 user 消息写进 canonical history（`message_end`）之后才写入，而不是 `steer` 排队时：`steer` 只是把消息放进 Agent 队列，这条消息落库失败导致运行失败时，这批仍按未注入重新排队。
 - `/pause` 会中断处于空闲等待中的 Invocation。
 
 ## Context 生命周期
@@ -215,7 +215,7 @@ Context（稳定 system prompt + 本批注入）
   → completed / failed / aborted / outcome_unknown
 ```
 
-Invocation 结束时 Agent 实例可以留在 `ConversationRuntime` 缓存里供下一次复用；canonical history 才是唯一真相，缓存被驱逐或进程重启都不影响连续性。失败运行（`model_error`）会主动驱逐该 Conversation 的缓存，避免把半截 transcript 带进下一次。
+Invocation 结束时 Agent 实例可以留在 `ConversationRuntime` 缓存里供下一次复用；canonical history 才是唯一真相，缓存被驱逐或进程重启都不影响连续性。失败运行（`model_error`）和抛出异常的运行都会主动驱逐该 Conversation 的缓存，避免把半截 transcript 带进下一次：Pi 先把消息推进 `state.messages` 再调用监听器，落库失败时内存里的 transcript 已经和 `transcriptSeqs` 分叉。
 
 运行时抛出的异常（播种 canonical history 失败等）由 Scheduler 记为 `state = failed`、`completion_reason = invocation_error`，异常消息与堆栈以 `agent_invocation_error` 日志落盘——`completion_reason` 是 outcome 词表而不是错误类名，只有日志里才有“为什么”。同一条异常会把该 Invocation 消费的 Bucket 一起置为 `failed`，不会留下悬空的运行中 Bucket。`invocation_error` 意味着代码或存储层出问题，`model_error` 才是 Provider 侧问题。
 

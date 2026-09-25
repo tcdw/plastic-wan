@@ -922,6 +922,67 @@ describe('long-lived invocation', () => {
     }
   }, 30_000);
 
+  test('a steered batch whose transcript write fails is re-queued, not lost', async () => {
+    // Regression: the bucket was marked injected as soon as it was steered, but
+    // `steer` only queues the message. When persisting it then failed, Pi turned
+    // the listener error into a failed run, and the injected mark kept
+    // `releaseUninjectedBuckets` from re-queuing a batch that never reached the
+    // canonical history. The failed run's cached agent, which already held the
+    // message, also had to go so the retry replays durable history only.
+    const fixtureSetup = await fixture();
+    const faux = fauxAgent();
+    faux.setResponses([() => fauxAssistantMessage('first answer'), () => fauxAssistantMessage('second answer')]);
+    const runtime = await fixtureSetup.runtimeWith(faux);
+    // Fails the steered batch's own write, and only while the first run is the
+    // only invocation, so the re-queued run can persist it.
+    fixtureSetup.store.db.exec(`CREATE TRIGGER fail_steered BEFORE INSERT ON context_messages
+      WHEN NEW.payload_json LIKE '%second%' AND (SELECT COUNT(*) FROM invocations) = 1
+      BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END;`);
+    const scheduler = new BucketScheduler(
+      fixtureSetup.store,
+      fixtureSetup.configStore,
+      async (invocationId, snapshot, signal) => runtime.run(invocationId, snapshot, signal),
+      fixtureSetup.conversationRuntime,
+    );
+    try {
+      scheduler.start();
+      fixtureSetup.ingestion.ingest(update(1, 10, 'first'), new Date());
+      scheduler.wake();
+      await until(
+        () =>
+          fixtureSetup.store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM model_calls').get()
+            ?.count === 1n,
+        'the first model call',
+      );
+      // Lands during the idle grace: attached, steered, and its write fails.
+      fixtureSetup.ingestion.ingest(update(2, 11, 'second'), new Date());
+      scheduler.wake();
+      await until(
+        () =>
+          fixtureSetup.store.db
+            .prepare<[], { state: string }>('SELECT state FROM invocations WHERE bucket_id = 2')
+            .get()?.state === 'completed',
+        'the re-queued batch to run as its own invocation',
+      );
+      expect(
+        fixtureSetup.store.db.prepare<[], { state: string }>('SELECT state FROM invocations WHERE id = 1').get()?.state,
+      ).toBe('failed');
+      // The batch reached the canonical history exactly once, after the first turn.
+      const userTexts = fixtureSetup.store.db
+        .prepare<[], { payload_json: string }>(
+          "SELECT payload_json FROM context_messages WHERE role = 'user' AND evicted_at IS NULL ORDER BY seq",
+        )
+        .all()
+        .map((row) => row.payload_json);
+      expect(userTexts).toHaveLength(2);
+      expect(userTexts[0]).not.toContain('second');
+      expect(userTexts[1]).toContain('second');
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
   test('releases an un-injected batch before the run closes its buckets', async () => {
     // Regression: the terminal transaction closed every bucket in
     // `invocation_buckets` first and released the un-injected ones afterwards, so
@@ -1402,6 +1463,64 @@ describe('conversation continuity', () => {
         .all();
       expect(requests).toHaveLength(3);
       expect(JSON.parse(requests.at(-1)?.tools_json ?? '[]')).toContain('execute');
+    } finally {
+      await scheduler.stop();
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
+  test('a run that throws drops its cached agent so the next run replays durable history', async () => {
+    // Regression: only a model error (`errorMessage`) evicted the cached agent. A
+    // transcript write that failed twice — the message, then Pi's failure message
+    // for it — made `prompt` throw with no `errorMessage`, after Pi had already
+    // pushed both into `state.messages`. The next run reused those diverged arrays.
+    const fixtureSetup = await fixture(withoutIdleWait);
+    const faux = fauxAgent();
+    faux.setResponses([() => fauxAssistantMessage('first answer'), () => fauxAssistantMessage('third answer')]);
+    const runtime = await fixtureSetup.runtimeWith(faux);
+    const scheduler = new BucketScheduler(fixtureSetup.store, fixtureSetup.configStore, async () => ({
+      state: 'completed',
+      reason: 'done',
+    }));
+    const runNext = async (updateId: number, messageId: number, text: string) => {
+      fixtureSetup.ingestion.ingest(update(updateId, messageId, text), new Date());
+      const [invocationId] = scheduler.processDue(new Date());
+      if (invocationId === undefined) {
+        throw new Error(`Expected an invocation for ${text}`);
+      }
+      try {
+        return await runtime.run(
+          invocationId,
+          fixtureSetup.configStore.beginInvocation(),
+          new AbortController().signal,
+        );
+      } finally {
+        fixtureSetup.store.db
+          .prepare("UPDATE invocations SET state = 'failed' WHERE id = ? AND state <> 'completed'")
+          .run(invocationId);
+        fixtureSetup.store.db
+          .prepare("UPDATE buckets SET state = 'completed' WHERE id = (SELECT bucket_id FROM invocations WHERE id = ?)")
+          .run(invocationId);
+      }
+    };
+    try {
+      await runNext(1, 10, 'first');
+      // Both the transcript row and the audit row of Pi's failure message fail.
+      for (const table of ['context_messages', 'agent_messages']) {
+        fixtureSetup.store.db.exec(`CREATE TRIGGER fail_second_run_${table} BEFORE INSERT ON ${table}
+          WHEN (SELECT COUNT(*) FROM invocations) = 2
+          BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END;`);
+      }
+      await expect(runNext(2, 11, 'second')).rejects.toThrow('disk I/O error');
+      const outcome = await runNext(3, 12, 'third');
+      expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+      // Durable history holds the first and third runs only.
+      expect(
+        fixtureSetup.store.db
+          .prepare<[], { role: string }>('SELECT role FROM context_messages WHERE evicted_at IS NULL ORDER BY seq')
+          .all()
+          .map((row) => row.role),
+      ).toEqual(['user', 'assistant', 'user', 'assistant']);
     } finally {
       await scheduler.stop();
       fixtureSetup.store.close();

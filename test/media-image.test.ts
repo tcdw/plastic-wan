@@ -1,8 +1,9 @@
 import { afterAll, describe, expect, test } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { type MediaRow, prepareMediaImage } from '../src/capabilities/media/media-image.ts';
 
 const directories: string[] = [];
@@ -89,4 +90,21 @@ describe.skipIf(!hasFfmpeg)('video sticker frame extraction', () => {
     );
     expect(image.width).toBeGreaterThan(0);
   });
+});
+
+test('an animated sticker that decompresses past the TGS ceiling is refused before conversion', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-media-'));
+  directories.push(directory);
+  // 64 MiB of JSON that gzips to a few dozen KiB: inside the download limit, and
+  // otherwise inflated in one synchronous call on the event loop.
+  const bomb = join(directory, 'bomb.tgs');
+  await writeFile(bomb, gzipSync(`{"ip":0,"op":10,"pad":"${' '.repeat(64 * 1024 * 1024)}"}`));
+  const sticker: MediaRow = {
+    ...videoSticker(),
+    mimeType: 'application/x-tgsticker',
+    telegramJson: JSON.stringify({ is_video: false, is_animated: true }),
+  };
+  await expect(
+    prepareMediaImage(sticker, join(directory, 'input'), directory, serving(bomb), new AbortController().signal),
+  ).rejects.toThrow('larger than 8 MiB');
 });

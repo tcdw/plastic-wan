@@ -41,6 +41,14 @@ export interface MediaRow {
 }
 
 /**
+ * Ceiling for a decompressed TGS. Telegram caps the gzip file at 64 KiB and real
+ * Lottie JSON stays far below this, but the download limit alone lets a gzip
+ * bomb expand to gigabytes inside a synchronous call on the event loop. The
+ * converter only runs once this check has passed.
+ */
+const MAX_TGS_JSON_BYTES = 8 * 1024 * 1024;
+
+/**
  * Input options for a downloaded video sticker. Telegram video stickers are
  * WebM, and `is_video` says nothing about the bytes: with format probing left
  * on, a playlist or concat file makes ffprobe/ffmpeg open further local files
@@ -134,9 +142,9 @@ export async function prepareMediaImage(
   const compressed = new Uint8Array(await readFile(inputPath));
   let metadata: unknown;
   try {
-    metadata = JSON.parse(new TextDecoder().decode(gunzipSync(compressed)));
+    metadata = JSON.parse(new TextDecoder().decode(gunzipSync(compressed, { maxOutputLength: MAX_TGS_JSON_BYTES })));
   } catch {
-    throw new Error('Animated sticker TGS metadata is invalid');
+    throw new Error('Animated sticker TGS metadata is invalid or larger than 8 MiB');
   }
   if (!tgsMetadataValidator.Check(metadata) || metadata.op <= metadata.ip) {
     throw new Error('Animated sticker frame range is invalid');

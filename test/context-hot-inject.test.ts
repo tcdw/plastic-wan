@@ -1001,6 +1001,51 @@ describe('long-lived invocation', () => {
     }
   }, 30_000);
 
+  test('a batch that comes due while the bot sleeps is skipped instead of attached', async () => {
+    // Regression: the attach path logged the sleeping skip but attached and queued
+    // the batch anyway, which woke a run idling through its grace period for
+    // another model turn during sleep.
+    const fixtureSetup = await fixture();
+    try {
+      const injected: bigint[] = [];
+      const service = new InvocationQueueService(fixtureSetup.store, fixtureSetup.configStore, {
+        isClosing: () => false,
+        isRoundInProgress: () => false,
+        queueInjection: (_conversationId, bucketId) => {
+          injected.push(bucketId);
+        },
+      });
+      const start = new Date();
+      fixtureSetup.ingestion.ingest(update(1, 10, 'first'), start);
+      const [invocationId] = service.processDue(new Date(start.getTime() + 60_000));
+      if (invocationId === undefined) {
+        throw new Error('Expected an opening invocation');
+      }
+      fixtureSetup.store.db.prepare("UPDATE invocations SET state = 'running' WHERE id = ?").run(invocationId);
+      fixtureSetup.store.db
+        .prepare('INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)')
+        .run('bot_sleep_until', new Date(start.getTime() + 3_600_000).toISOString(), start.toISOString());
+      fixtureSetup.ingestion.ingest(update(2, 11, 'while asleep'), new Date(start.getTime() + 61_000));
+
+      expect(service.processDue(new Date(start.getTime() + 120_000))).toEqual([]);
+      expect(injected).toEqual([]);
+      expect(
+        fixtureSetup.store.db
+          .prepare<[], { state: string; error_code: string | null }>(
+            'SELECT state, error_code FROM buckets WHERE id = 2',
+          )
+          .get(),
+      ).toEqual({ state: 'skipped_budget', error_code: 'sleeping' });
+      expect(
+        fixtureSetup.store.db
+          .prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM invocation_buckets WHERE bucket_id = 2')
+          .get()?.count,
+      ).toBe(0n);
+    } finally {
+      fixtureSetup.store.close();
+    }
+  }, 30_000);
+
   test('drops a queued batch that the run never injected instead of replaying it later', async () => {
     // Regression: `pendingBuckets` outlived the run. A batch attached between rounds
     // and left un-injected (here because the turn budget ends the run before the

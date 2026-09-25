@@ -244,7 +244,7 @@ System Skills 是随 runtime 发布的只读文档包，位于 `src/system-resou
 
 `zzz` 把全局 `bot_sleep_until` 写入 `app_state`，取 `max(调用时间 + 8 小时, 下一次 UTC 日预算重置)`。写入使用 SQLite IMMEDIATE transaction，重复或并发调用保持同一状态。调用后当前会话停止下一轮模型请求，后续实际 Tool Call 被阻止。
 
-睡眠期间 Telegram Update、Message、Revision 与 Bucket 仍照常保存；Scheduler 将到期 Bucket 和尚未启动的 queued Invocation 标记为 `skipped_budget`/`sleeping`，不创建新 Agent。首次在 `sleep_until` 之后检查状态时原子删除该键并恢复调度，因此状态可跨进程重启且不会因预算提前重置而提前唤醒。
+睡眠期间 Telegram Update、Message、Revision 与 Bucket 仍照常保存；Scheduler 将到期 Bucket 和尚未启动的 queued Invocation 标记为 `skipped_budget`/`sleeping`，不创建新 Agent。本该 attach 到运行中 Invocation 的到期 Bucket 同样跳过、不注入，空闲等待中的运行不会因此被唤醒再跑一轮；Chat 已移出配置时同理记为 `chat_removed`。首次在 `sleep_until` 之后检查状态时原子删除该键并恢复调度，因此状态可跨进程重启且不会因预算提前重置而提前唤醒。
 
 管理员调大预算后可在 Admin Overview 手动解除睡眠；`POST /api/wake` 原子删除该键并唤醒 Scheduler，重复调用幂等。已因睡眠跳过的 Bucket 不会重放，后续到期 Bucket 与新消息恢复正常调度。
 

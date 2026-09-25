@@ -370,15 +370,27 @@ export class InvocationQueueService {
     if (attachment === undefined || attachment.isClosing(bucket.conversation_id)) {
       return false;
     }
+    // Paused chats never reach here: the due query excludes them.
     const chat = this.#store.orm
-      .all<{ telegram_chat_id: bigint; paused: bigint }>(
-        sql`SELECT c.telegram_chat_id,
-                EXISTS(SELECT 1 FROM chat_pause p WHERE p.chat_id = c.id) AS paused
-         FROM conversations v JOIN chats c ON c.id = v.chat_id WHERE v.id = ${bucket.conversation_id}`,
+      .all<{ telegram_chat_id: bigint }>(
+        sql`SELECT c.telegram_chat_id FROM conversations v JOIN chats c ON c.id = v.chat_id WHERE v.id = ${bucket.conversation_id}`,
       )
       .at(0);
     if (chat === undefined) {
       throw new Error(`Bucket ${bucket.id} has no chat`);
+    }
+    // The same gates as opening a run: a batch that could not start its own
+    // invocation must not reach a running one either. Skipping it here also
+    // keeps the waiter asleep, so a run idling through its grace period is not
+    // woken for another model turn while the bot sleeps.
+    if (resolveChatConfig(this.#configStore.current().config, this.#store.orm, chat.telegram_chat_id) === undefined) {
+      this.#markBucketSkipped(bucket.id, now, 'chat_removed');
+      return true;
+    }
+    if (sleepUntil !== null) {
+      this.#markBucketSkipped(bucket.id, now, 'sleeping');
+      this.#logSleepingSkip(chat.telegram_chat_id, bucket.id, invocationId, sleepUntil);
+      return true;
     }
     const timestamp = now.toISOString();
     attachBucketToInvocation(
@@ -389,9 +401,6 @@ export class InvocationQueueService {
       bucket.conversation_id,
       now,
     );
-    if (sleepUntil !== null) {
-      this.#logSleepingSkip(chat.telegram_chat_id, bucket.id, invocationId, sleepUntil);
-    }
     attachment.queueInjection(bucket.conversation_id, bucket.id);
     console.log(
       JSON.stringify({

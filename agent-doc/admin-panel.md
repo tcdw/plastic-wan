@@ -25,7 +25,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 - 密码 12–200 字符，用户名 `^[A-Za-z0-9._-]{3,32}$`。
 - 密码只以 `argon2id` hash（`@node-rs/argon2`）存储，明文不落库、不进日志。
 - Session Token 为 32 字节随机值，返回给 Cookie，数据库只存 SHA-256 摘要。
-- Cookie 为 `HttpOnly; SameSite=Strict; Path=/`，`Max-Age` 等于 `session_ttl_hours`。
+- Cookie 为 `HttpOnly; SameSite=Strict; Path=/`，`Max-Age` 等于 `session_ttl_hours`。浏览器在 HTTPS 页面上时（请求本身是 `https:`，或 TLS 在反向代理终止时请求的 `Origin` 是 `https://…`）额外带 `Secure`，登出清除 Cookie 时同样。纯 HTTP 的回环面板不带 `Secure`，浏览器才会保存它。
 - 用户名不存在时仍执行一次 hash 运算，避免枚举时间差。
 - 同一客户端连续 10 次失败后锁定 15 分钟，返回 429 `too_many_attempts`；计数只在内存中，重启 `serve` 清空。客户端按 TCP 连接的对端地址区分，不读 `X-Forwarded-For`（客户端可以随意伪造它），也不区分用户名，所以换用户名或换请求头都绕不过锁定。反向代理之后所有请求共用代理的地址、共用一个计数，这是有意的取舍：没有可信代理配置时无法安全地取真实地址。
 - 失败在 Argon2 校验**之前**计数，并发的失败尝试都会被计入；锁定过期后计数从零开始。失败记录超过一个锁定窗口会被清除，最多记录 1000 个客户端。

@@ -264,15 +264,15 @@ export class AdminServer {
     }
     if (route === 'auth/setup' && request.method === 'POST') {
       const token = await this.#auth.createFirstUser(await readCredentials(request));
-      return json({ status: 'ok' }, 200, this.#sessionCookie(token));
+      return json({ status: 'ok' }, 200, this.#sessionCookie(request, url, token));
     }
     if (route === 'auth/login' && request.method === 'POST') {
       const token = await this.#auth.login(await readCredentials(request), new Date(), clientAddress);
-      return json({ status: 'ok' }, 200, this.#sessionCookie(token));
+      return json({ status: 'ok' }, 200, this.#sessionCookie(request, url, token));
     }
     if (route === 'auth/logout' && request.method === 'POST') {
       this.#auth.logout(readCookie(request, SESSION_COOKIE));
-      return json({ status: 'ok' }, 200, `${SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+      return json({ status: 'ok' }, 200, `${SESSION_COOKIE}=; ${cookieAttributes(request, url)}; Max-Age=0`);
     }
     const session = this.#auth.authenticate(readCookie(request, SESSION_COOKIE));
     if (session === null) {
@@ -280,7 +280,7 @@ export class AdminServer {
     }
     if (route === 'auth/credentials' && request.method === 'POST') {
       const token = await this.#auth.changeCredentials(session.userId, await readCredentials(request));
-      return json({ status: 'ok' }, 200, this.#sessionCookie(token));
+      return json({ status: 'ok' }, 200, this.#sessionCookie(request, url, token));
     }
     if (route === 'cancel-ongoing-sessions' && request.method === 'POST') {
       // Close the database side first: an aborted run releases its un-injected
@@ -739,10 +739,22 @@ export class AdminServer {
     );
   }
 
-  #sessionCookie(token: string): string {
+  #sessionCookie(request: Request, url: URL, token: string): string {
     const maxAge = Math.floor(this.#auth.sessionTtlMs / 1000);
-    return `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}`;
+    return `${SESSION_COOKIE}=${token}; ${cookieAttributes(request, url)}; Max-Age=${maxAge}`;
   }
+}
+
+/**
+ * Adds `Secure` whenever the browser is on HTTPS. Behind a TLS-terminating proxy
+ * the request itself arrives over plain HTTP, so the Origin the browser sends
+ * with every auth POST is what reveals it. A forged Origin only changes the
+ * caller's own cookie, and a plain-HTTP loopback panel keeps working because
+ * browsers refuse to store a Secure cookie there.
+ */
+function cookieAttributes(request: Request, url: URL): string {
+  const secure = url.protocol === 'https:' || request.headers.get('origin')?.startsWith('https://') === true;
+  return `HttpOnly; SameSite=Strict; Path=/${secure ? '; Secure' : ''}`;
 }
 
 /**

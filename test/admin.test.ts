@@ -259,6 +259,30 @@ test('request bodies are limited by bytes as they stream in', async () => {
   }
 });
 
+test('session cookies are Secure when the browser is on HTTPS', async () => {
+  const { store, server } = await fixture();
+  try {
+    const plain = await server.handle(post('/api/auth/setup', { username: 'owner', password: PASSWORD }));
+    expect(plain.headers.get('set-cookie')).not.toContain('Secure');
+
+    // Behind a TLS-terminating proxy only the Origin shows the page is on HTTPS.
+    const https = (path: string, body: unknown): Request =>
+      request(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'https://127.0.0.1:8899' },
+        body: JSON.stringify(body),
+      });
+    const login = await server.handle(https('/api/auth/login', { username: 'owner', password: PASSWORD }));
+    expect(login.status).toBe(200);
+    expect(login.headers.get('set-cookie')).toMatch(/; Secure(;|$)/);
+    const logout = await server.handle(https('/api/auth/logout', {}));
+    expect(logout.headers.get('set-cookie')).toMatch(/Max-Age=0/);
+    expect(logout.headers.get('set-cookie')).toContain('Secure');
+  } finally {
+    store.close();
+  }
+});
+
 test('login verifies a legacy Bun.password hash with the argon2 runtime', async () => {
   const { store, server } = await fixture();
   try {

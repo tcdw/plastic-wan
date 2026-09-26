@@ -23,7 +23,7 @@
 - Telegram `/model` 的列表和切换改为当前 Chat 语义，切换时将该 Chat 的 thinking 重置为目标模型支持的最弱档；`/model default` 清除三项覆盖，恢复继承全局。
 - `/status` 展示当前 Chat 的生效模型和 thinking，并标明继承全局的项目。Admin Models 页的模型/thinking 写端点仍只修改全局默认，不改动 Chat 覆盖。
 - 已有 active Chat 的模型覆盖可以热应用；Chat 增删、Topic 范围与其它非白名单字段仍需重启。写配置时按文件中的 Chat ID 定位，并用 revision 防止数组重排导致改错对象。
-- 发布前验证全局默认和所有 Chat 的生效模型；Provider / 模型删除保护纳入 Chat 引用。已经从文件移除但仍在运行态等待重启移除的 Chat，其模型引用仍受 candidate 校验保护。
+- 发布前验证全局默认和所有 Chat 的生效模型；Provider / 模型删除保护纳入 Chat 引用，包括已经从文件移除、但仍在运行态等待重启移除的 Chat。这类引用在写文件前就返回 409 `provider_in_use` / `model_in_use`，不会先落盘再被 candidate 校验拒绝。
 - MCP Tool 注册校验覆盖各 Chat 选用的模型；Doctor 按全局默认与 Chat 选用的 provider/model/thinking 组合去重后执行探针，而不是只检查全局模型。
 
 实现入口：[src/platform/config-reload.ts:155](../../src/platform/config-reload.ts#L155)、[src/platform/config-diff.ts:255](../../src/platform/config-diff.ts#L255)、[src/orchestration/bot-commands.ts:307](../../src/orchestration/bot-commands.ts#L307)、[src/platform/providers.ts:123](../../src/platform/providers.ts#L123)。
@@ -35,6 +35,7 @@
 - 读取视图取文件与运行态 Chat ID 的并集，分别返回 `saved` 和 `active`；待新增、待删除与设置不一致都能表达。名称、类型和迁移后的 ID 来自本地 SQLite，不额外查询 Telegram。
 - HTTP 中 Chat / Topic ID 保持十进制字符串，校验安全整数后才转换成配置值；拒绝零、前导零、越界整数、重复 Topic 和未知字段。
 - 写入必须带 `If-Match`。revision 在 body 解析前核对，在写锁内再次核对；请求体保持 8 KiB 上限。
+- 设置模型覆盖时必须同时给出 `thinking_level`，否则返回 400 `thinking_level_required`。继承的 thinking 会把全局默认绑到该 Chat 的模型上，之后调整全局模型或 thinking 可能被这个 Chat 拒绝；不覆盖模型时仍可只覆盖 thinking。
 - 编辑只改 Topic 范围和三项模型设置，保留 JSONC 注释、instructions、参与策略与忽略用户等其它字段。删除移除整个配置项，但不删除消息、Context、记忆或审计历史；最后一个配置 Chat 不能删除。
 - 文件写入成功后应用失败，不回滚文件、不改变 active 快照；错误明确以 `config.jsonc was updated but not applied:` 开头，并记录配置应用失败状态。
 
@@ -42,7 +43,7 @@
 
 ### 4. 保存态与运行态并排展示
 
-Manage → Chats 同时显示 Saved settings / Running settings，并区分 Addition pending、Removal pending、Changes pending 与 Active。表单可编辑 Topic 白名单、模型和 thinking；选择 Global default 恢复模型与 thinking 继承，也能单独覆盖 thinking。
+Manage → Chats 同时显示 Saved settings / Running settings，并区分 Addition pending、Removal pending、Changes pending 与 Active。表单可编辑 Topic 白名单、模型和 thinking；选择 Global default 恢复模型与 thinking 继承，也能单独覆盖 thinking。选了 Chat 模型后 thinking 不提供继承项；手改配置里“有模型覆盖、thinking 继承”的 Chat，打开时预填当前生效档位，保存即显式写入。
 
 编辑表单和删除确认在打开时冻结数据与 revision。后台 refetch 不会把旧草稿的 revision 升级成新值；冲突后关闭旧对话框，要求重新打开。Models / Chats 写入及 Settings 应用配置，无论成功或失败都会刷新相关视图，确保“文件已保存但应用失败”不会被隐藏。
 
@@ -58,18 +59,18 @@ Manage → Chats 同时显示 Saved settings / Running settings，并区分 Addi
 
 新增 [test/admin-chats.test.ts](../../test/admin-chats.test.ts)、[test/chat-model-runtime.test.ts](../../test/chat-model-runtime.test.ts) 和 [apps/admin-next/e2e/09-chats.e2e.ts](../../apps/admin-next/e2e/09-chats.e2e.ts)，并扩展配置、Provider、Bot 命令与路由回归。
 
-覆盖 ID 与 Topic 边界、鉴权和 Origin、并发 revision 冲突、JSONC 保留、保存/运行状态分离、按群模型继承、缓存 thinking 重绑、Topic 共用模型、迁移优先级、Context 与模型调用审计，以及保存后应用失败和 Settings 恢复。浏览器测试还验证后台刷新不升级草稿 revision、删除确认和移动端暗色布局。
+覆盖 ID 与 Topic 边界、鉴权和 Origin、并发 revision 冲突、JSONC 保留、保存/运行状态分离、按群模型继承、缓存 thinking 重绑、Topic 共用模型、迁移优先级、Context 与模型调用审计，以及保存后应用失败和 Settings 恢复。浏览器测试还验证后台刷新不升级草稿 revision、删除确认和移动端暗色布局；共享 server 的每个用例开始前恢复完整基线白名单，避免前一个失败用例留下的临时 Chat、被删的基线 Chat 或未触发的注入失败污染后续用例。
 
 ## 验证
 
-以下命令均在本次实现与提交前实际运行；提交前再次执行了定向测试、lint、类型检查和差异检查。
+以下命令均在本次实现与提交前实际运行；提交前再次执行了定向测试、lint、类型检查和差异检查。Review 修复（第二个提交）后重新运行了全部命令，数字为修复后的结果；待重启移除 Chat 的删除保护测试先在旧 guard 上复现出 `candidate_invalid`，再验证修复后返回 409 且文件不变。
 
 ```bash
 pnpm test test/admin-chats.test.ts test/admin-providers.test.ts test/chat-model-runtime.test.ts
-# Test Files 3 passed (3) / Tests 33 passed (33)
+# Test Files 3 passed (3) / Tests 35 passed (35)
 
 pnpm test
-# Test Files 49 passed (49) / Tests 582 passed (582)
+# Test Files 49 passed (49) / Tests 584 passed (584)
 
 pnpm run admin:build
 # Rsbuild 构建成功
@@ -98,4 +99,5 @@ git diff --cached --check
 
 ```txt
 e5f6db67a07bc03be8e285c0583cff94abfaf7bc Add Chat management and per-chat model overrides
+25c0a83372d8f15fb024a71b019b0c7dd2f9c26d Guard Chat model references and require thinking with overrides
 ```

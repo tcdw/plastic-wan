@@ -190,10 +190,10 @@ test.describe('alarm cancel + conflict path', () => {
 });
 
 test.describe('overview operations', () => {
-  test('cancel pending sessions reports the audit result', async ({ page }) => {
+  test('cancel ongoing sessions reports the audit result', async ({ page }) => {
     await page.goto(await adminUrl('/'));
-    await page.getByRole('button', { name: 'Cancel pending' }).click();
-    await page.getByRole('button', { name: 'Cancel pending sessions' }).click();
+    await page.getByRole('button', { name: 'Cancel ongoing', exact: true }).click();
+    await page.getByRole('button', { name: 'Cancel ongoing sessions' }).click();
     await expect(page.getByText(/Canceled 0 buckets \/ 0 invocations/)).toBeVisible();
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
   });

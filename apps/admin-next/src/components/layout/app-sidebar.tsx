@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   LogOut,
   MessageSquare,
+  MessagesSquare,
   Settings,
   Shield,
   Sticker,
@@ -54,6 +55,7 @@ const NAV_GROUPS: NavGroup[] = [
       { title: 'Memories', url: '/memories', icon: Brain },
       { title: 'Bot admins', url: '/admins', icon: Shield },
       { title: 'Models', url: '/models', icon: Cpu },
+      { title: 'Chats', url: '/chats', icon: MessagesSquare },
     ],
   },
   {

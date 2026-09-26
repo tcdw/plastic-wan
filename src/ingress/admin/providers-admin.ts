@@ -486,8 +486,16 @@ export async function updateProvider(
 
 export function deleteProvider(context: ProviderWriteContext, alias: string): ConfigEdit[] {
   providerOf(context.file, alias);
-  if (context.file.agent.provider === alias || context.file.vision.provider === alias) {
-    throw new AdminQueryError('provider_in_use', `Provider ${alias} is the agent or vision provider`, 409);
+  if (
+    context.file.agent.provider === alias ||
+    context.file.vision.provider === alias ||
+    context.file.telegram.chats.some((chat) => chat.provider === alias)
+  ) {
+    throw new AdminQueryError(
+      'provider_in_use',
+      `Provider ${alias} is used by the default agent, a Chat, or vision`,
+      409,
+    );
   }
   return [{ path: ['providers', alias], value: undefined }];
 }
@@ -540,9 +548,10 @@ export function deleteModel(context: ProviderWriteContext, alias: string, modelI
   }
   if (
     (context.file.agent.provider === alias && context.file.agent.model === modelId) ||
-    (context.file.vision.provider === alias && context.file.vision.model === modelId)
+    (context.file.vision.provider === alias && context.file.vision.model === modelId) ||
+    context.file.telegram.chats.some((chat) => chat.provider === alias && chat.model === modelId)
   ) {
-    throw new AdminQueryError('model_in_use', `Model ${modelId} is the agent or vision model`, 409);
+    throw new AdminQueryError('model_in_use', `Model ${modelId} is used by the default agent, a Chat, or vision`, 409);
   }
   return [{ path: ['providers', alias, 'models', index], value: undefined }];
 }

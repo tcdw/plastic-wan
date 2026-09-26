@@ -1,5 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import {
+  getChats,
   getConfigStatus,
   getConversationContext,
   getInvocation,
@@ -95,6 +96,12 @@ export const memoryChatsQuery = queryOptions({
 export const adminsQuery = queryOptions({
   queryKey: ['admins'],
   queryFn: listBotAdmins,
+});
+
+export const chatsQuery = queryOptions({
+  queryKey: ['chats'],
+  queryFn: getChats,
+  staleTime: 0,
 });
 
 export const providersQuery = queryOptions({

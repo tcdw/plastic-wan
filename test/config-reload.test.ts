@@ -10,7 +10,7 @@ import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { BotCommandService, type CommandSender } from '../src/orchestration/bot-commands.ts';
 import { ConversationRuntime } from '../src/orchestration/conversation-runtime.ts';
 import { BucketScheduler, type InvocationOutcome } from '../src/orchestration/scheduler.ts';
-import { type FileConfig, type LoadedConfig, loadConfig } from '../src/platform/config.ts';
+import { type FileConfig, type LoadedConfig, loadConfig, resolveAgentSettings } from '../src/platform/config.ts';
 import { readConfigRevision } from '../src/platform/config-file.ts';
 import { ConfigReloader } from '../src/platform/config-reload.ts';
 import { previewContext } from '../src/platform/invocation-context.ts';
@@ -784,18 +784,21 @@ test('a bucket attached to a long-lived invocation keeps its snapshot', async ()
   });
   const faux = fauxAgent();
   const prompts: string[] = [];
+  const levels: (string | undefined)[] = [];
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
   faux.setResponses([
-    async (context) => {
+    async (context, options) => {
       prompts.push(context.systemPrompt ?? '');
+      levels.push(options?.reasoning);
       await gate;
       return fauxAssistantMessage('first answer');
     },
-    (context) => {
+    (context, options) => {
       prompts.push(context.systemPrompt ?? '');
+      levels.push(options?.reasoning);
       return fauxAssistantMessage('');
     },
   ]);
@@ -817,6 +820,9 @@ test('a bucket attached to a long-lived invocation keeps its snapshot', async ()
     scheduler.wake();
     await sleep(1_200);
     await writeFile(join(fixture.directory, 'agent-system-prompt.md'), 'A prompt for later runs.');
+    await fixture.patch((config) => {
+      Object.assign(config.telegram.chats[0] ?? {}, { provider: 'faux', model: SECOND_MODEL, thinking_level: 'high' });
+    });
     const reloaded = await fixture.reloader.reloadFromFile();
     expect(reloaded.ok).toBe(true);
     release();
@@ -828,6 +834,23 @@ test('a bucket attached to a long-lived invocation keeps its snapshot', async ()
       fixture.store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM invocation_buckets').get()?.count,
     ).toBe(2n);
     expect(fixture.configStore.current().config.agent.system_prompt).toBe('A prompt for later runs.');
+    expect(fixture.configStore.current().config.telegram.chats[0]?.model).toBe(SECOND_MODEL);
+    expect(levels).toEqual(['low', 'low']);
+    await until(
+      () =>
+        fixture.store.db
+          .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM model_calls WHERE state = 'success'")
+          .get()?.count === 2n,
+      'both model audits',
+    );
+    expect(
+      fixture.store.db
+        .prepare<[], { model: string; state: string }>('SELECT model, state FROM model_calls ORDER BY id')
+        .all(),
+    ).toEqual([
+      { model: AGENT_MODEL, state: 'success' },
+      { model: AGENT_MODEL, state: 'success' },
+    ]);
   } finally {
     release();
     await scheduler.stop();
@@ -1139,8 +1162,8 @@ test('a reloaded model and thinking level show up in /status and the admin API',
     expect(reloaded.ok).toBe(true);
 
     const status = await fixture.commands.run({ name: 'status' }, BigInt(CHAT_ID), ADMIN);
-    expect(status).toContain(`当前模型: faux / ${SECOND_MODEL}`);
-    expect(status).toContain('思考强度: high');
+    expect(status).toContain(`本群模型: faux / ${SECOND_MODEL}（继承全局）`);
+    expect(status).toContain('思考强度: high（继承全局）');
 
     const server = new AdminServer({
       store: fixture.store,
@@ -1178,12 +1201,9 @@ test('/model writes the file, keeps its comments and applies from the next run',
     const index = options.findIndex((option) => option.provider === 'faux' && option.model === SECOND_MODEL) + 1;
     expect(index).toBeGreaterThan(0);
     const reply = await fixture.commands.run({ name: 'model', argument: String(index) }, BigInt(CHAT_ID), ADMIN);
-    expect(reply).toBe(
-      [
-        `已切换: faux / ${SECOND_MODEL}，已写入 config.jsonc，将在下一次 agent session 生效。`,
-        '思考强度已重置为该模型最弱的一档: off',
-      ].join('\n'),
-    );
+    expect(reply).toContain(`faux / ${SECOND_MODEL}`);
+    expect(reply).toContain('本群');
+    // Thinking level reset is handled internally by setChatModel; visible via /status.
 
     const text = await fixture.readText();
     expect(text).toContain('// Keep this comment.');
@@ -1194,8 +1214,14 @@ test('/model writes the file, keeps its comments and applies from the next run',
     }
     // A restart sees the same model: the file is the desired configuration.
     const reloaded = await loadConfig(fixture.configPath);
-    expect(reloaded.config.agent.model).toBe(SECOND_MODEL);
-    expect(fixture.configStore.current().config.agent.model).toBe(SECOND_MODEL);
+    expect(reloaded.config.agent.model).toBe(AGENT_MODEL);
+    expect(fixture.configStore.current().config.agent.model).toBe(AGENT_MODEL);
+    expect(resolveAgentSettings(reloaded.config, reloaded.config.telegram.chats[0])).toMatchObject({
+      provider: 'faux',
+      model: SECOND_MODEL,
+      thinking_level: 'off',
+    });
+    expect(fixture.configStore.current().config.telegram.chats[0]?.model).toBe(SECOND_MODEL);
 
     faux.setResponses([() => fauxAssistantMessage('answer')]);
     fixture.ingestion.ingest(textUpdate(1, 10, 'hello'), new Date());
@@ -1299,7 +1325,9 @@ test('/model reports a written file that could not be applied', async () => {
     expect(reply.startsWith('已写入 config.jsonc，但应用失败: ')).toBe(true);
     // The write happened, the application did not.
     const written = await loadConfig(fixture.configPath);
-    expect(written.config.agent.provider).toBe('agent');
+    expect(written.config.telegram.chats[0]?.provider).toBe('agent');
+    expect(written.config.agent.provider).toBe('faux');
+    expect(fixture.configStore.current().config.telegram.chats[0]?.provider).toBeUndefined();
     expect(fixture.configStore.current().config.agent.provider).toBe('faux');
   } finally {
     fixture.store.close();
@@ -1979,6 +2007,194 @@ test('a reload with no changes keeps the generation', async () => {
     expect(result.outsideServe).toEqual([]);
     expect(result.status.generation).toBe(1);
     expect(result.status.activeHash).toBe(result.status.fileHash);
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('Chat switches resolve file IDs after a reorder and preserve other Chats and defaults', async () => {
+  const secondChat = -1009876543210;
+  const fixture = await setup({
+    transform: (config) => {
+      config.telegram.chats.push({ id: secondChat });
+    },
+  });
+  try {
+    await fixture.patch((config) => {
+      config.telegram.chats.reverse();
+    });
+    const before = fixture.configStore.beginInvocation();
+    const result = await fixture.reloader.setChatModel(CHAT_ID, 'faux', SECOND_MODEL);
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.message);
+    }
+    expect(result.applied).toEqual(
+      expect.arrayContaining([
+        `telegram.chats[${CHAT_ID}].provider`,
+        `telegram.chats[${CHAT_ID}].model`,
+        `telegram.chats[${CHAT_ID}].thinking_level`,
+      ]),
+    );
+    const written = await loadConfig(fixture.configPath);
+    const active = fixture.configStore.current().config;
+    expect(written.config.telegram.chats.find((chat) => chat.id === CHAT_ID)).toMatchObject({
+      provider: 'faux',
+      model: SECOND_MODEL,
+      thinking_level: 'off',
+    });
+    expect(active.telegram.chats.find((chat) => chat.id === CHAT_ID)?.model).toBe(SECOND_MODEL);
+    expect(written.config.telegram.chats.find((chat) => chat.id === secondChat)?.model).toBeUndefined();
+    expect(active.agent).toEqual(before.config.agent);
+    expect(before.config.telegram.chats.find((chat) => chat.id === CHAT_ID)?.model).toBeUndefined();
+    expect(logEvents('config_reloaded').at(-1)?.applied).toContain(`telegram.chats[${CHAT_ID}].model`);
+
+    const reset = await fixture.reloader.resetChatModel(CHAT_ID);
+    expect(reset.ok).toBe(true);
+    const inherited = await loadConfig(fixture.configPath);
+    const chat = inherited.config.telegram.chats.find((entry) => entry.id === CHAT_ID);
+    expect(chat).not.toHaveProperty('provider');
+    expect(chat).not.toHaveProperty('model');
+    expect(chat).not.toHaveProperty('thinking_level');
+    expect(resolveAgentSettings(inherited.config, chat)).toEqual(resolveAgentSettings(inherited.config));
+    const noOp = await fixture.reloader.resetChatModel(CHAT_ID);
+    expect(noOp.ok).toBe(true);
+    expect(noOp.status.generation).toBe(reset.status.generation);
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('Chat switches reject missing file IDs without writing', async () => {
+  const fixture = await setup();
+  try {
+    const before = fixture.configStore.current();
+    const original = await fixture.readText();
+    const unknown = await fixture.reloader.setChatModel(-999, 'faux', SECOND_MODEL);
+    expect(unknown).toMatchObject({ ok: false, code: 'config_invalid', fileWritten: false });
+    expect(await fixture.readText()).toBe(original);
+    expect(fixture.configStore.current()).toBe(before);
+    await fixture.patch((config) => {
+      config.telegram.chats = [{ id: -999 }];
+    });
+    const removed = await fixture.readText();
+    const missing = await fixture.reloader.setChatModel(CHAT_ID, 'faux', SECOND_MODEL);
+    expect(missing).toMatchObject({ ok: false, code: 'config_invalid', fileWritten: false });
+    expect(await fixture.readText()).toBe(removed);
+    expect(fixture.configStore.current()).toBe(before);
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('reload validates every selected Chat model before publishing and rejects deleting its definition', async () => {
+  const fixture = await setup();
+  try {
+    fixture.runtimeWith(fauxAgent());
+    const before = fixture.configStore.current();
+    await fixture.patch((config) => {
+      builtinProvider(config.providers, 'faux').models.push(
+        model('tiny-chat', { reasoning: true, context_window: 1_000, max_tokens: 512 }),
+      );
+      Object.assign(config.telegram.chats[0] ?? {}, { provider: 'faux', model: 'tiny-chat' });
+    });
+    const rejected = await fixture.reloader.reloadFromFile();
+    expect(rejected).toMatchObject({ ok: false, code: 'model_unusable' });
+    expect(fixture.configStore.current()).toBe(before);
+    expect(logEvents('config_reload_failed').at(-1)?.code).toBe('model_unusable');
+    await fixture.patch((config) => {
+      const provider = builtinProvider(config.providers, 'faux');
+      provider.models = provider.models.filter((entry) => entry.id !== 'tiny-chat');
+    });
+    const missing = await fixture.reloader.reloadFromFile();
+    expect(missing).toMatchObject({ ok: false, code: 'config_invalid' });
+    expect(fixture.configStore.current()).toBe(before);
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test.each(['model', 'provider'] as const)('a pending Chat removal still protects its %s reference', async (removed) => {
+  const fixture = await setup({
+    transform: (config) => {
+      config.providers.chat = {
+        ...customProvider(config.providers, 'agent'),
+        models: [model('chat-only'), model('spare')],
+      };
+      Object.assign(config.telegram.chats[0] ?? {}, { provider: 'chat', model: 'chat-only', thinking_level: 'off' });
+      config.telegram.chats.push({ id: -999 });
+    },
+  });
+  try {
+    const before = fixture.configStore.current();
+    await fixture.patch((config) => {
+      config.telegram.chats = config.telegram.chats.filter((chat) => chat.id !== CHAT_ID);
+      if (removed === 'provider') {
+        delete config.providers.chat;
+      } else {
+        customProvider(config.providers, 'chat').models = [model('spare')];
+      }
+    });
+    await expect(loadConfig(fixture.configPath)).resolves.toBeDefined();
+    const result = await fixture.reloader.reloadFromFile();
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'candidate_invalid',
+      fileWritten: false,
+      message: expect.stringContaining(`telegram.chats[${CHAT_ID}]`),
+    });
+    expect(fixture.configStore.current()).toBe(before);
+    expect(before.models.getModel('chat', 'chat-only')).toBeDefined();
+    expect(logEvents('config_reload_failed').at(-1)?.code).toBe('candidate_invalid');
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('global model changes refuse inherited thinking incompatibility and preserve Chat overrides', async () => {
+  const fixture = await setup({
+    transform: (config) => {
+      Object.assign(config.telegram.chats[0] ?? {}, { thinking_level: 'high' });
+    },
+  });
+  try {
+    const original = await fixture.readText();
+    const before = fixture.configStore.current();
+    const rejected = await fixture.reloader.setAgentModel('vision', 'vision-model');
+    expect(rejected).toMatchObject({ ok: false, code: 'config_invalid', fileWritten: false });
+    expect(await fixture.readText()).toBe(original);
+    expect(fixture.configStore.current()).toBe(before);
+    expect((await fixture.reloader.setChatModel(CHAT_ID, 'faux', SECOND_MODEL)).ok).toBe(true);
+    expect((await fixture.reloader.setAgentModel('agent', 'agent-model')).ok).toBe(true);
+    const config = fixture.configStore.current().config;
+    expect(resolveAgentSettings(config, config.telegram.chats[0])).toMatchObject({
+      provider: 'faux',
+      model: SECOND_MODEL,
+      thinking_level: 'off',
+    });
+    expect(config.agent.provider).toBe('agent');
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('concurrent switches in different Chats retain both overrides', async () => {
+  const secondChat = -1009876543210;
+  const fixture = await setup({
+    transform: (config) => {
+      config.telegram.chats.push({ id: secondChat });
+    },
+  });
+  try {
+    const results = await Promise.all([
+      fixture.reloader.setChatModel(CHAT_ID, 'faux', SECOND_MODEL),
+      fixture.reloader.setChatModel(secondChat, 'agent', 'agent-model'),
+    ]);
+    expect(results.every((result) => result.ok)).toBe(true);
+    const written = await loadConfig(fixture.configPath);
+    expect(written.config.telegram.chats.find((chat) => chat.id === CHAT_ID)?.model).toBe(SECOND_MODEL);
+    expect(written.config.telegram.chats.find((chat) => chat.id === secondChat)?.model).toBe('agent-model');
+    expect(written.config.agent.model).toBe(AGENT_MODEL);
   } finally {
     fixture.store.close();
   }

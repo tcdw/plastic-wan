@@ -14,7 +14,14 @@ import { googleGenerativeAIApi } from '@earendil-works/pi-ai/api/google-generati
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy';
 import { builtinProviderApi, findBuiltinProvider } from './builtin-providers.ts';
-import type { FileConfig, ModelCompatConfig, ModelFileConfig, RawConfig } from './config.ts';
+import {
+  type FileConfig,
+  type ModelCompatConfig,
+  type ModelFileConfig,
+  type RawConfig,
+  resolveAgentSettings,
+  type ThinkingLevelConfig,
+} from './config.ts';
 import { deepEqual } from './config-diff.ts';
 import type { ConfigurationModels } from './runtime-config.ts';
 import type { SecretStore } from './secrets.ts';
@@ -111,6 +118,31 @@ export async function buildModelRegistry(
     throw new Error('Vision max_output_tokens exceeds registered model limit');
   }
   return { models, visionModel };
+}
+
+/** Selected model/thinking pairs, deduplicated across the default and every Chat. */
+export function configuredAgentModels(
+  config: RawConfig,
+  models: Models,
+): { readonly model: Model<Api>; readonly thinkingLevel: ThinkingLevelConfig }[] {
+  const selected = [
+    resolveAgentSettings(config),
+    ...config.telegram.chats.map((chat) => resolveAgentSettings(config, chat)),
+  ];
+  const seen = new Set<string>();
+  return selected.flatMap((settings) => {
+    const key = JSON.stringify([settings.provider, settings.model, settings.thinking_level]);
+    if (seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [
+      {
+        model: requireModel(models, settings.provider, settings.model, ['text']),
+        thinkingLevel: settings.thinking_level,
+      },
+    ];
+  });
 }
 
 /**

@@ -357,7 +357,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 ## Bot Commands
 
-`/pause`、`/resume` 与 `/status` 是 Chat 级控制命令，作用于发送命令的 Chat（含 Forum 全部 Topic），不按 Topic 隔离。`/cut_topic` 是 Conversation 级命令：切点与 Context 清空都只作用于命令所在的 Topic。
+`/pause`、`/resume`、`/status` 与 `/model` 是 Chat 级控制命令，作用于发送命令的 Chat（含 Forum 全部 Topic），不按 Topic 隔离——`/model` 读写的就是该 Chat 的模型覆盖，Topic 共用 Chat 设置。`/cut_topic` 是 Conversation 级命令：切点与 Context 清空都只作用于命令所在的 Topic。
 
 - 判定：`message.entities` 中 offset 为 0 的 `bot_command`；命令名大小写不敏感；带 `@用户名` 后缀时必须匹配当前 Bot；Bot 发送者的消息不触发命令。未知命令与非命令消息照常入库。
 - 启动时（`getMe` 后）调用 `setMyCommands` 自动注册 `/pause`、`/resume`、`/status`、`/model`、`/cut_topic` 及中文描述（`BOT_COMMANDS` 是唯一事实来源，注册前校验每个命令都能被 `parseBotCommand` 解析）；注册失败只记 `command_registration_failed`，不阻塞启动——命令菜单是便利设施，文本解析不依赖它。
@@ -366,7 +366,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 `/pause` 与 `/resume` 仅对 Bot 管理员开放（`bot_admins` 表，见下文）；`/status` 对任何成员开放。非管理员或匿名身份执行会收到拒绝回复，不产生任何状态变更。管理员执行命令时其显示名会刷新到 `bot_admins`。
 
-`/model` 同样仅限管理员，用于运行时切换 agent 模型（与 Admin Panel「Model」页共享同一 `AgentModelSwitcher` 与 `ConfigReloader`）：`/model` 按每页 20 条列出当前模型与第一页可切换序号；`/model page 页码` 翻页，所有页面保留全局序号；`/model 纯数字序号` 把 `agent.provider` / `agent.model` 写入 `config.jsonc`，同时把 `agent.thinking_level` 重置为新模型接受的最弱级别，再重新加载配置，成功回复「已切换: …，已写入 config.jsonc，将在下一次 agent session 生效。」与「思考强度已重置为该模型最弱的一档: <级别>」两行，因此重启后仍然生效，没有「恢复默认」（`/model reset` 按无效序号处理）。写入与加载共用同一把锁，两个并发的切换不会交错；配置文件是符号链接、权限不允许或写后校验失败时回复错误，文件与当前配置都不变；文件已写入但应用失败时回复「已写入 config.jsonc，但应用失败: …」。越界页码或无效参数返回提示且不改状态。切换对后续启动的 Invocation 生效，不影响进行中的会话；清单与语义见 [configuration.md](configuration.md#运行时配置热更新)。
+`/model` 同样仅限管理员，在当前 Chat 上运行时切换 agent 模型（与 Admin Panel「Models」页共享同一 `AgentModelSwitcher` 与 `ConfigReloader`，但只写当前 Chat 的 `telegram.chats[<id>]` 覆盖，不碰全局 `agent.*`；全局切换仍走 Admin `PUT /api/model` 或配置文件）：`/model` 按每页 20 条列出该 Chat 生效的模型与思考强度（未覆盖的项标注「继承全局」）与第一页可切换序号；`/model page 页码` 翻页，所有页面保留全局序号；`/model 纯数字序号` 把序号对应的 `provider` / `model` 写入 `config.jsonc` 中该 Chat 的覆盖，同时把该 Chat 的 `thinking_level` 重置为目标模型接受的最弱级别，再重新加载配置，成功回复「已为本群切换: …，已写入 config.jsonc，将在下一次 agent session 生效。」与「思考强度已重置为该模型最弱的一档: <级别>」两行，因此重启后仍然生效。`/model default` 删除该 Chat 的 `provider`/`model`/`thinking_level` 三项覆盖，恢复继承全局；文件中已无覆盖时不重写文件，但仍应用文件里的其它热更新并报告待重启项。写入与加载共用同一把锁，两个并发切换不会交错；配置文件是符号链接、权限不允许或写后校验失败时回复错误，文件与当前配置都不变；文件已写入但应用失败时回复「已写入 config.jsonc，但应用失败: …」。越界页码、无效参数与 `/model reset` 都按无效序号处理。切换只对该 Chat 后续启动的 Invocation 生效，不影响进行中的会话；清单与语义见 [configuration.md](configuration.md#运行时配置热更新)。
 
 `/pause` 立即生效（与 scheduler 同一事件循环，无竞态）：
 
@@ -376,7 +376,7 @@ Sticker 视觉元数据通过严格 Tool Call 返回：中文描述、情绪、�
 
 暂停期间消息仍入库并保留 Revision，但不创建 Bucket、不启动会话；`processDue` 与启动追赶也会跳过暂停 Chat（追赶 Bucket 记 `skipped_budget`/`chat_paused`）。`/resume` 删除 `chat_pause` 行，恢复正常节拍。
 
-`/status` 返回当前生效的 `agent.provider` / `agent.model`（含 Admin Panel 热切换后的运行时模型）、`agent.thinking_level`、本 Chat 的当日 `model_tokens` 用量，以及全局当日用量、`agent.daily_budget.max_tokens` 上限与四舍五入到两位小数的用量百分比；所有 token 数量使用千位分隔符。随后按该 Chat 的 Model Call 审计拆分显示 `读取`、`写入`、`缓存读取`、`缓存写入`，四项之和即上面的本群用量。日期口径均为 UTC；暂停中额外显示一行。每个 Conversation 再追加一行 Context 状态（保留消息数、保留窗口内的 `send` 数、`head_seq`、上次 GC 时间，尚未建立时显示 `Context: 尚未建立`）。配置了 `participation` 的 Chat 再多一行互动状态：`互动: 活跃时段内`、`互动: 注意力窗口至 <UTC ISO>` 或 `互动: 静默（仅 @、Reply 或关键词触发）`；暂停时只显示 `互动: 已暂停`。
+`/status` 返回当前 Chat 生效的模型与思考强度（`本群模型: provider / model`、`思考强度: 级别`，未覆盖的项带「（继承全局）」标记；Admin Panel 的全局热切换与该 Chat 自己的 `/model` 覆盖都反映在生效值里）、本 Chat 的当日 `model_tokens` 用量，以及全局当日用量、`agent.daily_budget.max_tokens` 上限与四舍五入到两位小数的用量百分比；所有 token 数量使用千位分隔符。随后按该 Chat 的 Model Call 审计拆分显示 `读取`、`写入`、`缓存读取`、`缓存写入`，四项之和即上面的本群用量。日期口径均为 UTC；暂停中额外显示一行。每个 Conversation 再追加一行 Context 状态（保留消息数、保留窗口内的 `send` 数、`head_seq`、上次 GC 时间，尚未建立时显示 `Context: 尚未建立`）。配置了 `participation` 的 Chat 再多一行互动状态：`互动: 活跃时段内`、`互动: 注意力窗口至 <UTC ISO>` 或 `互动: 静默（仅 @、Reply 或关键词触发）`；暂停时只显示 `互动: 已暂停`。
 
 `/cut_topic` 仅对 Bot 管理员开放，用于在群聊上下文被旧话题污染时手动切断历史：
 

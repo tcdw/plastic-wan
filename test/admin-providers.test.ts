@@ -562,6 +562,39 @@ test('protects the providers and models that are in use', async () => {
   }
 });
 
+test('protects a provider and model used only by a Chat override', async () => {
+  const fixture = await adminFixture({
+    transform: (config) => {
+      const provider = config.providers.agent;
+      if (provider === undefined) {
+        throw new Error('Missing fixture provider');
+      }
+      config.providers.chat = { ...provider, models: [model('chat-only')] };
+      Object.assign(config.telegram.chats[0] ?? {}, { provider: 'chat', model: 'chat-only', thinking_level: 'off' });
+    },
+  });
+  try {
+    const before = await fixture.read();
+    const snapshot = fixture.configStore.current();
+    const provider = await write(fixture, '/api/providers/chat', 'DELETE', {}, await revisionOf(fixture));
+    expect(provider.status).toBe(409);
+    expect(await readJson(provider)).toMatchObject({ error: 'provider_in_use' });
+    const selected = await write(
+      fixture,
+      '/api/providers/chat/models/chat-only',
+      'DELETE',
+      {},
+      await revisionOf(fixture),
+    );
+    expect(selected.status).toBe(409);
+    expect(await readJson(selected)).toMatchObject({ error: 'model_in_use' });
+    expect(await fixture.read()).toBe(before);
+    expect(fixture.configStore.current()).toBe(snapshot);
+  } finally {
+    fixture.store.close();
+  }
+});
+
 test('discovers models in saved mode from the registry connection', async () => {
   const requests: string[] = [];
   const upstream = await startFixtureServer((incoming) => {
@@ -784,6 +817,48 @@ test('sets the agent thinking level only to a level the agent model accepts', as
       'agent.thinking_level max is not supported by agent/agent-model (supported: off, high)',
     );
     expect(await readFile(fixture.configPath, 'utf8')).toBe(before);
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('global Admin writes preserve Chat overrides and reject incompatible inherited thinking', async () => {
+  const fixture = await adminFixture({
+    transform: (config) => {
+      config.agent.thinking_level = 'off';
+      Object.assign(config.telegram.chats[0] ?? {}, { provider: 'vision', model: 'vision-model' });
+      config.telegram.chats.push({ id: -999, provider: 'agent', model: 'agent-model', thinking_level: 'high' });
+    },
+  });
+  try {
+    const original = await fixture.read();
+    const before = fixture.configStore.current();
+    const rejected = await write(
+      fixture,
+      '/api/thinking-level',
+      'PUT',
+      { thinking_level: 'low' },
+      await revisionOf(fixture),
+    );
+    expect(rejected.status).toBe(422);
+    expect(await readJson(rejected)).toMatchObject({
+      error: 'config_invalid',
+      message: expect.stringContaining('chat 123456789.thinking_level low is not supported'),
+    });
+    expect(await fixture.read()).toBe(original);
+    expect(fixture.configStore.current()).toBe(before);
+
+    const switched = await write(
+      fixture,
+      '/api/model',
+      'PUT',
+      { provider: 'vision', model: 'vision-model' },
+      await revisionOf(fixture),
+    );
+    expect(switched.status).toBe(200);
+    expect(fixture.file().agent).toMatchObject({ provider: 'vision', model: 'vision-model', thinking_level: 'off' });
+    expect(fixture.file().telegram.chats).toEqual(fixture.loaded.fileConfig.telegram.chats);
+    expect(fixture.configStore.current().config.telegram.chats).toEqual(before.config.telegram.chats);
   } finally {
     fixture.store.close();
   }

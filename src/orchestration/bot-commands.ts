@@ -1,7 +1,7 @@
 import type { Message } from 'grammy/types';
 import { and, eq, sql } from 'drizzle-orm';
 import { isBotAdmin } from '../store/admins.ts';
-import type { RawConfig } from '../platform/config.ts';
+import { type AgentSettings, resolveAgentSettings, type RawConfig } from '../platform/config.ts';
 import type { ConfigReloader } from '../platform/config-reload.ts';
 import type { RuntimeConfigurationStore } from '../platform/runtime-config.ts';
 import { isWithinActiveWindows } from '../platform/participation.ts';
@@ -53,8 +53,14 @@ export interface CommandSender {
   readonly username: string | null;
 }
 
-/** What `/model` itself writes; any other applied path came from the file. */
-const SWITCH_PATHS: ReadonlySet<string> = new Set(['agent.provider', 'agent.model', 'agent.thinking_level']);
+/** What chat-scoped `/model` itself writes; any other applied path came from the file. */
+function switchPaths(configuredChatId: number): ReadonlySet<string> {
+  return new Set([
+    `telegram.chats[${configuredChatId}].provider`,
+    `telegram.chats[${configuredChatId}].model`,
+    `telegram.chats[${configuredChatId}].thinking_level`,
+  ]);
+}
 const COMMAND_NAMES = new Set<ParsedCommand['name']>(['pause', 'resume', 'status', 'model', 'cut_topic']);
 const DENIED_REPLY = '该命令仅对本 Bot 的管理员可用。';
 const MODEL_PAGE_SIZE = 20;
@@ -167,7 +173,7 @@ export class BotCommandService {
       case 'status':
         return this.#status(telegramChatId, now);
       case 'model':
-        return this.#adminGate(sender) ? await this.#modelSwitch(command.argument) : DENIED_REPLY;
+        return this.#adminGate(sender) ? await this.#modelSwitch(command.argument, telegramChatId) : DENIED_REPLY;
       case 'cut_topic':
         return this.#adminGate(sender)
           ? this.#cutTopic(telegramChatId, command.messageId, command.threadId, now)
@@ -301,42 +307,59 @@ export class BotCommandService {
     return '已切掉此消息及更早的历史，并清空该话题的连续 Context。';
   }
 
-  async #modelSwitch(argument: string | undefined): Promise<string> {
+  async #modelSwitch(argument: string | undefined, telegramChatId: bigint): Promise<string> {
     const switcher = this.#modelSwitcher;
     const reloader = this.#configReloader;
     if (switcher === undefined || reloader === undefined) {
       return '运行时模型切换不可用。';
     }
-    if (argument === undefined) {
-      return this.#modelMenu(switcher, 1, switcher.list());
+    const config = this.#configStore.current().config;
+    const chatConfig = resolveChatConfig(config, this.#store.orm, telegramChatId);
+    if (chatConfig === undefined) {
+      return '本 Chat 未在配置中找到。';
     }
+    const configuredChatId = chatConfig.id;
+    const effective = resolveAgentSettings(config, chatConfig);
     const options = switcher.list();
+
+    if (argument === undefined) {
+      return this.#modelMenu(1, options, effective, chatConfig);
+    }
+
     const pageMatch = /^page\s+(\d+)$/.exec(argument);
     if (pageMatch !== null) {
       const page = Number.parseInt(pageMatch[1] ?? '', 10);
       const pageCount = Math.max(1, Math.ceil(options.length / MODEL_PAGE_SIZE));
       if (!Number.isSafeInteger(page) || page < 1 || page > pageCount) {
-        return `无效页码。${this.#modelMenu(switcher, 1, options)}`;
+        return `无效页码。${this.#modelMenu(1, options, effective, chatConfig)}`;
       }
-      return this.#modelMenu(switcher, page, options);
+      return this.#modelMenu(page, options, effective, chatConfig);
     }
+    const reset = argument === 'default';
     const index = /^\d+$/.test(argument) ? Number.parseInt(argument, 10) : NaN;
-    if (!Number.isInteger(index) || index < 1 || index > options.length) {
-      return `无效序号。${this.#modelMenu(switcher, 1, options)}`;
-    }
     const option = options[index - 1];
-    if (option === undefined) {
-      return `无效序号。${this.#modelMenu(switcher, 1, options)}`;
+    if (!reset && option === undefined) {
+      return `无效序号。${this.#modelMenu(1, options, effective, chatConfig)}`;
     }
-    const result = await reloader.setAgentModel(option.provider, option.model);
+    const result =
+      option === undefined
+        ? await reloader.resetChatModel(configuredChatId)
+        : await reloader.setChatModel(configuredChatId, option.provider, option.model);
     if (!result.ok) {
-      return result.fileWritten ? `已写入 config.jsonc，但应用失败: ${result.message}` : `切换失败: ${result.message}`;
+      return result.fileWritten
+        ? `已写入 config.jsonc，但应用失败: ${result.message}`
+        : `${reset ? '恢复' : '切换'}失败: ${result.message}`;
     }
-    const lines = [
-      `已切换: ${option.provider} / ${option.model}，已写入 config.jsonc，将在下一次 agent session 生效。`,
-      `思考强度已重置为该模型最弱的一档: ${this.#configStore.current().config.agent.thinking_level}`,
-    ];
-    const other = result.applied.filter((path) => !SWITCH_PATHS.has(path));
+    const current = this.#configStore.current().config;
+    const settings = resolveAgentSettings(current, resolveChatConfig(current, this.#store.orm, telegramChatId));
+    const paths = switchPaths(configuredChatId);
+    const lines = reset
+      ? [`已清除本群模型覆盖，跟随全局 ${settings.provider} / ${settings.model}，将在下一次 agent session 生效。`]
+      : [
+          `已为本群切换: ${settings.provider} / ${settings.model}，已写入 config.jsonc，将在下一次 agent session 生效。`,
+          `思考强度已重置为该模型最弱的一档: ${settings.thinking_level}`,
+        ];
+    const other = result.applied.filter((path) => !paths.has(path));
     if (other.length > 0) {
       lines.push(`同时应用了配置文件中的其它修改: ${other.join(', ')}`);
     }
@@ -346,13 +369,21 @@ export class BotCommandService {
     return lines.join('\n');
   }
 
-  #modelMenu(switcher: AgentModelSwitcher, page: number, options: readonly AgentModelOption[]): string {
-    const current = switcher.current();
+  #modelMenu(
+    page: number,
+    options: readonly AgentModelOption[],
+    effective: AgentSettings,
+    chatConfig: RawConfig['telegram']['chats'][number],
+  ): string {
+    const hasProviderOverride = chatConfig.provider !== undefined;
+    const hasModelOverride = chatConfig.model !== undefined;
+    const hasThinkingOverride = chatConfig.thinking_level !== undefined;
     const pageCount = Math.max(1, Math.ceil(options.length / MODEL_PAGE_SIZE));
     const start = (page - 1) * MODEL_PAGE_SIZE;
     const end = Math.min(start + MODEL_PAGE_SIZE, options.length);
     const lines = [
-      `当前模型: ${current.provider} / ${current.model}`,
+      `本群模型: ${effective.provider} / ${effective.model}${hasProviderOverride || hasModelOverride ? '' : '（继承全局）'}`,
+      `思考强度: ${effective.thinking_level}${hasThinkingOverride ? '' : '（继承全局）'}`,
       `可用模型（第 ${page}/${pageCount} 页，共 ${options.length} 条）:`,
     ];
     for (let index = start; index < end; index += 1) {
@@ -362,7 +393,7 @@ export class BotCommandService {
       }
       lines.push(`${index + 1}. ${option.provider} / ${option.model}（${option.name}）`);
     }
-    lines.push('使用 /model 序号 切换，/model page 页码 翻页');
+    lines.push('使用 /model 序号 切换，/model page 页码 翻页，/model default 清除本群覆盖');
     return lines.join('\n');
   }
 
@@ -415,14 +446,14 @@ export class BotCommandService {
             )
             .at(0);
     const config = this.#configStore.current().config;
+    const effective = resolveAgentSettings(config, chat);
     const paused = chatId !== null && isChatPaused(this.#store.orm, chatId);
-    const effective = this.#modelSwitcher?.current() ?? {
-      provider: config.agent.provider,
-      model: config.agent.model,
-    };
+    const hasProviderOverride = chat.provider !== undefined;
+    const hasModelOverride = chat.model !== undefined;
+    const hasThinkingOverride = chat.thinking_level !== undefined;
     const lines = [
-      `当前模型: ${effective.provider} / ${effective.model}`,
-      `思考强度: ${config.agent.thinking_level}`,
+      `本群模型: ${effective.provider} / ${effective.model}${hasProviderOverride || hasModelOverride ? '' : '（继承全局）'}`,
+      `思考强度: ${effective.thinking_level}${hasThinkingOverride ? '' : '（继承全局）'}`,
       `本群今日 token 用量: ${tokens.toLocaleString('en-US')}`,
       `全局今日 token 用量: ${dailyBudget.usedTokens.toLocaleString('en-US')} / ${dailyBudget.maxTokens.toLocaleString('en-US')} (${dailyBudgetPercentage})`,
       `读取: ${(tokenBreakdown?.readTokens ?? 0n).toLocaleString('en-US')}`,

@@ -25,7 +25,7 @@ import { TelegramMediaClient } from './capabilities/media/media-download.ts';
 import { MediaService } from './capabilities/media/media.ts';
 import { createMemoryTools, MemoryStore } from './context/memory.ts';
 import { AgentModelSwitcher } from './platform/model-switch.ts';
-import { buildModelRegistry } from './platform/providers.ts';
+import { buildModelRegistry, configuredAgentModels } from './platform/providers.ts';
 import { RuntimeConfigurationStore } from './platform/runtime-config.ts';
 import { BucketScheduler } from './orchestration/scheduler.ts';
 import { ConversationRuntime } from './orchestration/conversation-runtime.ts';
@@ -229,9 +229,12 @@ export async function serve(configPath: string, takeover = false): Promise<void>
       conversationRuntime,
       configReloader,
     );
-    mcpManager.setRegistryValidator((mcpTools) =>
-      runtime.validateAdditionalTools(preview, mcpTools, modelSwitcher.model()),
-    );
+    mcpManager.setRegistryValidator((mcpTools) => {
+      const snapshot = configStore.current();
+      for (const { model } of configuredAgentModels(snapshot.config, snapshot.models)) {
+        runtime.validateAdditionalTools(preview, mcpTools, model);
+      }
+    });
     const catchUpController = new AbortController();
     startupCatchUpController = catchUpController;
     const catchUp = await runStartupCatchUp({

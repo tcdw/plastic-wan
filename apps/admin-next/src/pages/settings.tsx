@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label';
 import { ApiError, applyConfigFile, type ConfigApplyResponse, type Credentials, updateCredentials } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 import { configStatusQuery, sessionQuery } from '@/lib/queries';
+import { useProviderWrite } from '@/lib/use-provider-write';
 
 function shortHash(hash: string): string {
   return hash.slice(0, 12);
@@ -36,6 +37,7 @@ function AppliedResult({ result }: { readonly result: ConfigApplyResponse }): Re
 
 export default function SettingsPage(): React.ReactElement {
   const queryClient = useQueryClient();
+  const write = useProviderWrite();
   const [success, setSuccess] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [applyResult, setApplyResult] = useState<ConfigApplyResponse | null>(null);
@@ -58,18 +60,18 @@ export default function SettingsPage(): React.ReactElement {
 
   const applyMutation = useMutation({
     mutationFn: applyConfigFile,
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       setApplyResult(result);
       setApplyFailure(null);
-      await queryClient.invalidateQueries({ queryKey: configStatusQuery.queryKey });
+      write.refresh();
     },
-    onError: async (error) => {
+    onError: (error) => {
       // Show the real error next to the button, then refresh: a failed reload
       // keeps the active configuration and the file hash, but records the error
       // as the last error.
       setApplyResult(null);
       setApplyFailure(errorMessage(error));
-      await queryClient.invalidateQueries({ queryKey: configStatusQuery.queryKey });
+      write.refresh();
     },
   });
 

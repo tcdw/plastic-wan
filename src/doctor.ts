@@ -27,7 +27,7 @@ import { createLottieCommand } from './capabilities/media/media-image.ts';
 import { TelegramMediaClient } from './capabilities/media/media-download.ts';
 import { MediaService } from './capabilities/media/media.ts';
 import { type PromptTemplateValues, renderPromptTemplate } from './platform/prompt-template.ts';
-import { buildModelRegistry, requireModel } from './platform/providers.ts';
+import { buildModelRegistry, configuredAgentModels } from './platform/providers.ts';
 import { RuntimeConfigurationStore } from './platform/runtime-config.ts';
 import { keyJarPath } from './platform/key-jar.ts';
 import { SecretStore } from './platform/secrets.ts';
@@ -109,28 +109,30 @@ async function runDoctorChecks(
       );
     }
     const probeSchema = Type.Object({}, { additionalProperties: false });
-    const agentModel = requireModel(registry.models, config.agent.provider, config.agent.model, ['text']);
-    const agentResponse = await completeDoctorCall(
-      store,
-      registry.models,
-      agentModel,
-      {
-        systemPrompt: 'Call doctor_probe exactly once with an empty object. Do not answer with text.',
-        messages: [
-          { role: 'user', content: [{ type: 'text', text: 'Run the required probe.' }], timestamp: Date.now() },
-        ],
-        tools: [
-          {
-            name: 'doctor_probe',
-            description: 'A no-side-effect doctor probe',
-            parameters: probeSchema,
-          },
-        ],
-      },
-      doctorReasoning(agentModel, config.agent.thinking_level),
-    );
-    if (!agentResponse.content.some((entry) => entry.type === 'toolCall' && entry.name === 'doctor_probe')) {
-      throw new Error('Agent model did not produce the required strict Tool Call');
+    const agentModels = configuredAgentModels(config, registry.models);
+    for (const { model, thinkingLevel } of agentModels) {
+      const agentResponse = await completeDoctorCall(
+        store,
+        registry.models,
+        model,
+        {
+          systemPrompt: 'Call doctor_probe exactly once with an empty object. Do not answer with text.',
+          messages: [
+            { role: 'user', content: [{ type: 'text', text: 'Run the required probe.' }], timestamp: Date.now() },
+          ],
+          tools: [
+            {
+              name: 'doctor_probe',
+              description: 'A no-side-effect doctor probe',
+              parameters: probeSchema,
+            },
+          ],
+        },
+        doctorReasoning(model, thinkingLevel),
+      );
+      if (!agentResponse.content.some((entry) => entry.type === 'toolCall' && entry.name === 'doctor_probe')) {
+        throw new Error(`Agent model ${model.provider}/${model.id} did not produce the required strict Tool Call`);
+      }
     }
     const pixel = await sharp({ create: { width: 1, height: 1, channels: 3, background: 'white' } })
       .png()
@@ -191,7 +193,11 @@ async function runDoctorChecks(
       additionalTools: (context, deadline) => [...manager.createTools(context, deadline)],
     });
     const preview = previewContext();
-    manager.setRegistryValidator((mcpTools) => runtime.validateAdditionalTools(preview, mcpTools, agentModel));
+    manager.setRegistryValidator((mcpTools) => {
+      for (const { model } of agentModels) {
+        runtime.validateAdditionalTools(preview, mcpTools, model);
+      }
+    });
     await manager.start();
     console.log(
       JSON.stringify({

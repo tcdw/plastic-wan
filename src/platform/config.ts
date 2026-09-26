@@ -180,6 +180,9 @@ const ChatSchema = Type.Object(
     timezone: Type.Optional(Type.String({ minLength: 1 })),
     instructions_file: Type.Optional(Type.String({ minLength: 1 })),
     participation: Type.Optional(ParticipationSchema),
+    provider: Type.Optional(Type.String({ minLength: 1 })),
+    model: Type.Optional(Type.String({ minLength: 1 })),
+    thinking_level: Type.Optional(ThinkingLevelSchema),
   },
   Strict,
 );
@@ -340,6 +343,19 @@ export type ThinkingLevelConfig = Static<typeof ThinkingLevelSchema>;
 export type ModelFileConfig = Static<typeof ModelConfigSchema>;
 export type FileConfig = Static<typeof ConfigSchema>;
 export type FileChat = FileConfig['telegram']['chats'][number];
+export type AgentSettings = Pick<FileConfig['agent'], 'provider' | 'model' | 'thinking_level'>;
+
+/** Resolves Chat overrides, or the global defaults when no Chat is supplied. */
+export function resolveAgentSettings(
+  config: { agent: AgentSettings },
+  chat?: Pick<FileChat, 'provider' | 'model' | 'thinking_level'>,
+): AgentSettings {
+  return {
+    provider: chat?.provider ?? config.agent.provider,
+    model: chat?.model ?? config.agent.model,
+    thinking_level: chat?.thinking_level ?? config.agent.thinking_level,
+  };
+}
 export type ParticipationConfig = Static<typeof ParticipationSchema>;
 export type ParticipationWindowConfig = Static<typeof ParticipationWindowSchema>;
 export type RawConfig = Omit<FileConfig, 'agent' | 'telegram'> & {
@@ -583,6 +599,15 @@ export function validateSemantics(config: FileConfig): void {
         throw new Error(`Invalid ignored Telegram user ID in chat ${chat.id}: ${ignoredUserId}`);
       }
     }
+    if (chat.provider !== undefined || chat.model !== undefined) {
+      if (chat.provider === undefined || chat.model === undefined) {
+        throw new Error(`Chat ${chat.id}: provider and model must both be set when overriding agent settings`);
+      }
+      validateModelReference(config, chat.provider, chat.model, `chat ${chat.id}`, ['text']);
+    }
+    if (chat.provider !== undefined || chat.thinking_level !== undefined) {
+      validateAgentThinkingLevel(config, resolveAgentSettings(config, chat), `chat ${chat.id}`);
+    }
   }
   for (const adminId of config.telegram.admins ?? []) {
     if (!Number.isSafeInteger(adminId) || adminId === 0) {
@@ -612,7 +637,7 @@ export function validateSemantics(config: FileConfig): void {
       validateEndpoint(provider.base_url, `provider ${alias} base_url`);
     }
   }
-  validateAgentThinkingLevel(config);
+  validateAgentThinkingLevel(config, config.agent, 'agent');
   const servers = config.mcp?.servers ?? [];
   assertUnique(servers, (server) => server.alias, 'MCP server alias');
   for (const server of servers) {
@@ -735,8 +760,8 @@ export function configuredToolSchemaKeywords(
  * The configured level has to be one the agent model accepts: Pi would otherwise
  * clamp it on some adapters and send it unchanged on others.
  */
-function validateAgentThinkingLevel(config: FileConfig): void {
-  const { provider, model: modelId, thinking_level: level } = config.agent;
+function validateAgentThinkingLevel(config: FileConfig, settings: AgentSettings, label: string): void {
+  const { provider, model: modelId, thinking_level: level } = settings;
   const model = config.providers[provider]?.models.find((candidate) => candidate.id === modelId);
   if (model === undefined) {
     return;
@@ -744,7 +769,7 @@ function validateAgentThinkingLevel(config: FileConfig): void {
   const supported = supportedThinkingLevels(model);
   if (!supported.includes(level)) {
     throw new Error(
-      `agent.thinking_level ${level} is not supported by ${provider}/${modelId} (supported: ${supported.join(', ')})`,
+      `${label}.thinking_level ${level} is not supported by ${provider}/${modelId} (supported: ${supported.join(', ')})`,
     );
   }
 }

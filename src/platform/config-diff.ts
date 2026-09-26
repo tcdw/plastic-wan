@@ -252,6 +252,22 @@ function mergeChat(
       }
       continue;
     }
+    if (key === 'provider' || key === 'model' || key === 'thinking_level') {
+      const path = `telegram.chats[${active.id}].${key}`;
+      const hasFile = Object.hasOwn(fileRecord, key);
+      const hasActive = Object.hasOwn(activeRecord, key);
+      if (!hasFile) {
+        recorder.add(path, 'hot');
+        delete target[key];
+      } else if (!hasActive) {
+        recorder.add(path, 'hot');
+        target[key] = fileRecord[key];
+      } else if (!deepEqual(activeRecord[key], fileRecord[key])) {
+        recorder.add(path, 'hot');
+        target[key] = fileRecord[key];
+      }
+      continue;
+    }
     mergeField(activeRecord, fileRecord, target, key, `telegram.chats[${active.id}].${key}`, recorder);
   }
   return result;

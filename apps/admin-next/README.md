@@ -64,8 +64,8 @@ Playwright 套件位于 `e2e/**/*.e2e.ts`（文件名不以 `.test.ts` 结尾，
 不会发现它们）。`globalSetup` 派生 Node 子进程 `e2e/server.ts`：临时目录 + 临时
 SQLite + `test/fixtures/admin-seed.ts` 合成数据 + 真实 `AdminServer`
 （`static_dir` 指向本包 `dist`），回环随机端口；`globalTeardown` 关闭并清理。
-用例覆盖认证状态机、13 路由深链接、列表过滤与 Load more 游标分页、Invocation
-六 Tab、记忆/管理员/模型/告警/Overview 写操作与冲突路径、只读保证与 CSP 同源
+用例覆盖认证状态机、路由深链接、列表过滤与 Load more 游标分页、Invocation
+六 Tab、记忆/管理员/模型/Chats/告警/Overview 写操作与冲突路径、只读保证与 CSP 同源
 安全断言。真实命令与契约清单见
 [agent-doc/verification.md](../../agent-doc/verification.md#admin-panel-浏览器-e2e)。
 
@@ -89,15 +89,23 @@ models.dev 目录缓存——`GET /providers/discover` 与 `lookup-metadata` 因
   `invalid_credentials` 等 401 属于表单错误，必须留在表单内展示，不得被
   全局处理吞掉（判定按错误 code，不是按 status）。
 
+### Chats 页（`src/pages/chats.tsx`）
+
+- Manage → Chats 管理配置里的 Chat 与 Topic 白名单，以及 Chat 范围的模型 / thinking；不提供 Topic 级模型。Chat ID 与 Topic ID 全程保持字符串，服务端校验安全整数后写入配置。
+- `GET /api/chats` 同时返回 `saved` 与 `active`，页面并排显示 Saved settings / Running settings。增删 Chat、Topic 范围变化只有重启后生效；已有 active Chat 的模型设置热应用于下一次 Invocation。删除不清除审计历史，最后一个配置 Chat 不能删除。
+- 空 Topic 输入表示不限制 Topic；Global default 恢复模型与 thinking 继承，也可只覆盖 thinking。可选模型与思考档取自服务端，换模型自动选最弱档。
+- 表单与删除确认打开时冻结 revision 和数据快照。后台刷新不能升级草稿的 `If-Match`；`config_conflict` 关闭旧对话框并要求重新打开。写入成功或失败都刷新 Chats / Models / config-status，因为失败也可能已写文件但未应用；错误仍内联展示。Settings 应用配置也使这三个视图失效。
+- `e2e/09-chats.e2e.ts` 覆盖增删、Topic 待重启、热切模型与恢复继承、并发修改/删除、真实保存后应用失败与恢复、移动端暗色表单。
+
 ### Models 页（`src/pages/models.tsx`）写入约定
 
 - 每个写请求都带 `GET /api/providers` 返回的 `revision`（`If-Match`）。
   `409 config_conflict` 表示 config.jsonc 在编辑期间被改动：提示 “config.jsonc changed…”、
   重新拉取，再让用户重试（`lib/model-manager.ts` 的 `writeErrorMessage`）。
 - 保存反馈区分 “Applied” 与 “Saved, restart required”：只要 `apply.restart_required` 非空，
-  就不能显示成已应用（`applyFeedback`）。Models 页自己的写入现在全部热应用，所以那里只会看到
-  “Applied”；待重启横幅与 “Restart now” 按钮由全局 `restart_required` + `supervised` 驱动，
-  服务于其它 restart 字段（未声明 `PLASTICWAN_SUPERVISED=1` 时只列字段）。
+  就不能显示成全部已应用（`applyFeedback`）。Models 页自己的写入全部热应用，但其它字段仍可能
+  待重启，此时也显示 “Saved, restart required”。待重启横幅与 “Restart now” 按钮由全局
+  `restart_required` + `supervised` 驱动（未声明 `PLASTICWAN_SUPERVISED=1` 时只列字段并提示手动重启）。
 - 凭据只写不读：`api_key` 与 header 值永远是 `type="password"`、`autocomplete="new-password"`
   的空输入框，没有查看按钮；提交后用 `mutation.reset()` 立刻把带明文 key 的请求体
   从 mutation cache 里丢掉。页面不写 localStorage，也不把 key 放进任何持久结构。

@@ -86,7 +86,7 @@ node src/cli.ts serve --config dev-data/config.jsonc --takeover
 
 ### 立即重启与进程监督
 
-Admin Panel 的 Models 页在有字段等待重启时提供「立即重启」（`POST /api/restart`）。它不是 supervisor，只是请求当前进程优雅退出：走上面同一套关闭流程，然后以退出码 **75**（`EX_TEMPFAIL`，与崩溃区分）退出，由外部把进程重新拉起。重启期间 Admin 页面会断开，界面轮询等待服务恢复；这段时间收到的 Telegram 消息由启动补偿拉取。
+Admin Panel 的 Models / Chats 页在有字段等待重启时提供「立即重启」（`POST /api/restart`）。它不是 supervisor，只是请求当前进程优雅退出：走上面同一套关闭流程，然后以退出码 **75**（`EX_TEMPFAIL`，与崩溃区分）退出，由外部把进程重新拉起。重启期间 Admin 页面会断开，界面轮询等待服务恢复；这段时间收到的 Telegram 消息由启动补偿拉取。
 
 只有部署方声明了监督时这个端点才可用：环境变量 `PLASTICWAN_SUPERVISED=1` 未设置时端点返回 409 `restart_unsupported`，界面也不显示按钮。**声明的位置是部署，不是镜像**：`Dockerfile` 故意不设这个变量（镜像无法知道自己会不会带着重启策略跑），`docker-compose.yml` 模板在 `restart: unless-stopped` 旁边设好了；用 `docker run` 的话要自己同时给出 `--restart` 和 `-e PLASTICWAN_SUPERVISED=1`，systemd 则配合 `Restart=always`。Electron 版由主进程重启 server。裸机前台运行时不要设置它，否则退出后不会有人把 bot 拉起来。
 
@@ -94,7 +94,7 @@ Admin Panel 的 Models 页在有字段等待重启时提供「立即重启」（
 
 ## 配置变更
 
-白名单字段可以热应用，其余字段不热重载。白名单（agent 模型、Provider 的全部字段——连接字段、模型列表与增删、vision 模型、Prompt、预算与并发等）在改完文件后，用 Admin Panel 的「Apply config file」、Models 页的保存操作或 Telegram 的 `/model` 触发一次应用，不必重启；清单与语义见 [configuration.md](configuration.md#运行时配置热更新)。其它字段（allowlist、MCP、`admin.*`、`vision.max_concurrency` 等）变更后：
+白名单字段可以热应用，其余字段不热重载。白名单（agent 模型、Provider 的全部字段——连接字段、模型列表与增删、vision 模型、Prompt、已有 Chat 的 `provider`/`model`/`thinking_level` 覆盖、预算与并发等）在改完文件后，用 Admin Panel 的「Apply config file」、Models / Chats 页的保存操作或 Telegram 的 `/model` 触发一次应用，不必重启；清单与语义见 [configuration.md](configuration.md#运行时配置热更新)。其它字段（allowlist、MCP、`admin.*`、`vision.max_concurrency` 等）变更后：
 
 ```bash
 node src/cli.ts check-config --config dev-data/config.jsonc
@@ -110,7 +110,7 @@ node src/cli.ts serve --config dev-data/config.jsonc
 node src/cli.ts doctor --config dev-data/config.jsonc
 ```
 
-Doctor 是对已配置运行环境执行的真实依赖检查，不是静态 lint；完整检查范围与何时可判定通过见[验证：Doctor](verification.md#doctor)。它会产生 `role = 'doctor'` 的模型调用审计并消耗少量 Provider Token。
+Doctor 是对已配置运行环境执行的真实依赖检查，不是静态 lint；完整检查范围与何时可判定通过见[验证：Doctor](verification.md#doctor)。它会产生 `role = 'doctor'` 的模型调用审计并消耗少量 Provider Token。探针按全局默认与每个 Chat 实际选用的 provider/model/thinking 组合**去重后**逐一执行：同一组合只探测一次，新增 Chat 覆盖会引入新的探针并消耗相应 Token。
 
 如需查看配置中 Agent 系统 Prompt 的模板渲染结果：
 

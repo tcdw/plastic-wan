@@ -40,6 +40,15 @@ import {
   parseUpdateMemoryBody,
   updateMemory,
 } from './memory-admin.ts';
+import {
+  createChat,
+  deleteChat,
+  listChats,
+  parseChatId,
+  parseChatSettings,
+  parseCreateChat,
+  updateChat,
+} from './chats-admin.ts';
 import { cancelOngoingSessions } from './operations.ts';
 import {
   appendModels,
@@ -384,6 +393,9 @@ export class AdminServer {
     if (segments[0] === 'providers') {
       return await this.#providers(request, segments);
     }
+    if (segments[0] === 'chats') {
+      return await this.#chats(request, segments);
+    }
     if (route === 'vision' && request.method === 'PUT') {
       const body = parseVisionBody(await readJsonObject(request));
       return await this.#providerWrite(request, (context) => visionEdits(context, body));
@@ -589,6 +601,87 @@ export class AdminServer {
       ...(await this.#providersView(reloader)),
       apply: { applied: result.applied, restart_required: result.restartRequired, outside_serve: result.outsideServe },
     });
+  }
+
+  async #chats(request: Request, segments: readonly string[]): Promise<Response> {
+    const reloader = this.#configReloader;
+    if (reloader === undefined) {
+      return json({ error: 'chats_unavailable', message: 'Chat management is not wired' }, 503);
+    }
+    if (request.method === 'GET' && segments.length === 1) {
+      return json(await this.#chatsView(reloader));
+    }
+    if (
+      !(
+        (request.method === 'POST' && segments.length === 1) ||
+        ((request.method === 'PUT' || request.method === 'DELETE') && segments.length === 2)
+      )
+    ) {
+      return json({ error: 'method_not_allowed', message: 'Unsupported Chat operation' }, 405);
+    }
+    const revision = requiredRevision(request);
+    if (revision === null) {
+      return revisionRequired();
+    }
+    const { loaded, revision: currentRevision } = await this.#chatFile(reloader);
+    if (revision !== currentRevision) {
+      return json({ error: 'config_conflict', message: 'The configuration file changed; reload before editing' }, 409);
+    }
+    let edits: readonly ConfigEdit[];
+    if (request.method === 'POST') {
+      edits = createChat(loaded.fileConfig, parseCreateChat(await readJsonObject(request)));
+    } else {
+      const id = parseChatId(segments[1] ?? '');
+      edits =
+        request.method === 'DELETE'
+          ? deleteChat(loaded.fileConfig, id)
+          : updateChat(loaded.fileConfig, id, parseChatSettings(await readJsonObject(request)));
+    }
+    // The revision pins the ID-to-array-index mapping even if another writer reorders the file.
+    const result = await reloader.writeAndApply(edits, revision);
+    if (!result.ok) {
+      const message = result.fileWritten
+        ? `config.jsonc was updated but not applied: ${result.message}`
+        : result.message;
+      return json({ error: result.code, message }, CONFIG_WRITE_STATUS[result.code] ?? 409);
+    }
+    return json({
+      ...(await this.#chatsView(reloader)),
+      apply: { applied: result.applied, restart_required: result.restartRequired, outside_serve: result.outsideServe },
+    });
+  }
+
+  async #chatFile(reloader: ConfigReloader) {
+    try {
+      // A revision must describe the very file used to build the view and edit paths,
+      // never a newer file read after an intervening write.
+      const revision = await readConfigRevision(reloader.configPath);
+      const loaded = await loadConfig(reloader.configPath);
+      if (revision !== (await readConfigRevision(reloader.configPath))) {
+        throw new AdminQueryError(
+          'config_conflict',
+          'The configuration file changed while being read; reload and try again',
+          409,
+        );
+      }
+      return { loaded, revision };
+    } catch (error) {
+      if (error instanceof AdminQueryError) {
+        throw error;
+      }
+      throw new AdminQueryError('config_invalid', this.#redact(error), 422);
+    }
+  }
+
+  async #chatsView(reloader: ConfigReloader) {
+    const { loaded, revision } = await this.#chatFile(reloader);
+    return listChats(
+      loaded.fileConfig,
+      this.#configStore.current().config,
+      this.#store,
+      revision,
+      reloader.status().restartRequired,
+    );
   }
 
   /** A read-shaped POST: provider discovery and metadata lookup write nothing. */

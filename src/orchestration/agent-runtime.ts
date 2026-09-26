@@ -11,14 +11,19 @@ import {
 } from '@earendil-works/pi-ai';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { KeyedSemaphore } from '../platform/concurrency.ts';
-import { configuredToolSchemaKeywords, type RawConfig } from '../platform/config.ts';
+import {
+  type AgentSettings,
+  configuredToolSchemaKeywords,
+  type RawConfig,
+  resolveAgentSettings,
+} from '../platform/config.ts';
 import { applyToolSchemaKeywords } from '../platform/tool-schema.ts';
 import { type ContextIdentity, ContextBuilder, type Injection, type StablePrompt } from '../context/context-builder.ts';
 import { encodeContextMessage, estimateMessageTokens } from '../context/context-codec.ts';
 import { isRenderable, planContextGc, type ContextGcPlan } from '../context/context-gc.ts';
 import { ContextRefStore, createCapabilityResolver } from '../context/context-refs.ts';
 import { ConversationContextStore, type ContextHeader, type RetainedContextMessage } from '../context/context-store.ts';
-import type { SqliteStore } from '../store/database.ts';
+import { type SqliteStore, resolveChatConfig } from '../store/database.ts';
 import {
   type CapabilityRefResolver,
   type InvocationContext,
@@ -231,15 +236,20 @@ export class AgentRuntime {
     // connections — and a model that is no longer registered fails the run
     // instead of silently falling back.
     const config = snapshot.config;
-    const model = snapshot.models.getModel(config.agent.provider, config.agent.model);
+    const identity = this.#contextBuilder.identity(config, invocationId);
+    const chat = resolveChatConfig(config, this.#store.orm, identity.chatId);
+    if (chat === undefined) {
+      throw new Error(`Invocation chat ${identity.chatId} is no longer configured`);
+    }
+    const settings = resolveAgentSettings(config, chat);
+    const model = snapshot.models.getModel(settings.provider, settings.model);
     if (model === undefined) {
-      throw new Error(`Agent model ${config.agent.provider}/${config.agent.model} is not registered`);
+      throw new Error(`Agent model ${settings.provider}/${settings.model} is not registered`);
     }
     // The declared keyword profile of the agent model decides what its tool
     // definitions may carry; the snapshot is read so a reload cannot change the
     // schema mid-run.
-    const toolSchemaKeywords = configuredToolSchemaKeywords(config, config.agent.provider, config.agent.model);
-    const identity = this.#contextBuilder.identity(config, invocationId);
+    const toolSchemaKeywords = configuredToolSchemaKeywords(config, settings.provider, settings.model);
     const supportsImages = model.input.includes('image');
     const stable = this.#contextBuilder.buildSystemPrompt(config, identity, supportsImages, {
       provider: model.provider,
@@ -390,7 +400,7 @@ export class AgentRuntime {
       entry = undefined;
     }
     if (entry === undefined) {
-      entry = this.#createCachedAgent(config, identity, header, stable, model, tools);
+      entry = this.#createCachedAgent(settings, identity, header, stable, model, tools);
       runtime.remember(entry);
     } else {
       // One Context, one header object. A cached entry carries the header of the
@@ -448,7 +458,7 @@ export class AgentRuntime {
     agent.state.model = model;
     // The cached agent keeps the thinking level of the run that built it, so a
     // reused entry has to be re-bound here like the prompt and the model.
-    agent.state.thinkingLevel = config.agent.thinking_level;
+    agent.state.thinkingLevel = settings.thinking_level;
     agent.state.tools = [...tools];
     agent.maxRetryDelayMs = Math.max(0, deadline - Date.now());
     state.estimatedInputTokens = this.#estimateInputTokens(cached, toolDefinitionCharacters);
@@ -939,7 +949,7 @@ export class AgentRuntime {
    * identically after an eviction or a process restart.
    */
   #createCachedAgent(
-    config: RawConfig,
+    settings: AgentSettings,
     identity: ContextIdentity,
     header: ContextHeader,
     stable: StablePrompt,
@@ -951,7 +961,7 @@ export class AgentRuntime {
       initialState: {
         systemPrompt: stable.systemPrompt,
         model,
-        thinkingLevel: config.agent.thinking_level,
+        thinkingLevel: settings.thinking_level,
         tools: [...tools],
         messages: retained.map((row) => row.message),
       },

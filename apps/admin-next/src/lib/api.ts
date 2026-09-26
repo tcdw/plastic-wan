@@ -498,6 +498,42 @@ export interface ProvidersView {
   readonly providers: readonly ProviderView[];
 }
 
+export interface ChatSettings {
+  readonly topic_ids: readonly string[] | null;
+  readonly provider: string | null;
+  readonly model: string | null;
+  readonly thinking_level: ThinkingLevel | null;
+}
+
+export interface ChatSettingsView extends ChatSettings {
+  readonly effective: AgentModelReference;
+}
+
+export interface ChatEntry {
+  readonly id: string;
+  readonly runtime_chat_id: string;
+  readonly title: string | null;
+  readonly type: string | null;
+  readonly saved: ChatSettingsView | null;
+  readonly active: ChatSettingsView | null;
+}
+
+export interface ChatsView {
+  readonly revision: string;
+  readonly supervised: boolean;
+  readonly restart_required: readonly string[];
+  readonly defaults: AgentModelReference;
+  readonly models: readonly (ProviderModelReference & {
+    readonly name: string;
+    readonly thinking_levels: readonly ThinkingLevel[];
+  })[];
+  readonly items: readonly ChatEntry[];
+}
+
+export interface ChatWriteResponse extends ChatsView {
+  readonly apply: ModelApplySummary;
+}
+
 export interface ProviderPresetView {
   readonly id: string;
   readonly name: string;
@@ -865,7 +901,7 @@ export function removeBotAdmin(telegramUserId: string): Promise<{ status: string
  * rejects a write whose configuration has moved on (`409 config_conflict`)
  * instead of silently overwriting somebody else's edit.
  */
-function writeHeaders(revision: string): HeadersInit {
+function writeHeaders(revision: string): Record<string, string> {
   return { 'content-type': 'application/json', 'if-match': revision };
 }
 
@@ -874,6 +910,33 @@ export function switchAgentModel(request: ModelSwitchRequest, revision: string):
     method: 'PUT',
     headers: writeHeaders(revision),
     body: JSON.stringify(request),
+  });
+}
+
+export function getChats(): Promise<ChatsView> {
+  return call<ChatsView>('/chats');
+}
+
+export function createChat(body: ChatSettings & { readonly id: string }, revision: string): Promise<ChatWriteResponse> {
+  return call<ChatWriteResponse>('/chats', {
+    method: 'POST',
+    headers: writeHeaders(revision),
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateChat(id: string, body: ChatSettings, revision: string): Promise<ChatWriteResponse> {
+  return call<ChatWriteResponse>(`/chats/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: writeHeaders(revision),
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteChat(id: string, revision: string): Promise<ChatWriteResponse> {
+  return call<ChatWriteResponse>(`/chats/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: writeHeaders(revision),
   });
 }
 

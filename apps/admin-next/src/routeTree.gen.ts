@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminsRouteImport } from './routes/admins'
 import { Route as AlarmsRouteImport } from './routes/alarms'
+import { Route as ChatsRouteImport } from './routes/chats'
 import { Route as ContextsRouteImport } from './routes/contexts'
 import { Route as InvocationsRouteImport } from './routes/invocations'
 import { Route as MemoriesRouteImport } from './routes/memories'
@@ -36,6 +37,11 @@ const AdminsRoute = AdminsRouteImport.update({
 const AlarmsRoute = AlarmsRouteImport.update({
   id: '/alarms',
   path: '/alarms',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ChatsRoute = ChatsRouteImport.update({
+  id: '/chats',
+  path: '/chats',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ContextsRoute = ContextsRouteImport.update({
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admins': typeof AdminsRoute
   '/alarms': typeof AlarmsRoute
+  '/chats': typeof ChatsRoute
   '/contexts': typeof ContextsRoute
   '/invocations': typeof InvocationsRoute
   '/memories': typeof MemoriesRoute
@@ -108,6 +115,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admins': typeof AdminsRoute
   '/alarms': typeof AlarmsRoute
+  '/chats': typeof ChatsRoute
   '/contexts': typeof ContextsRoute
   '/invocations': typeof InvocationsRoute
   '/memories': typeof MemoriesRoute
@@ -124,6 +132,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/admins': typeof AdminsRoute
   '/alarms': typeof AlarmsRoute
+  '/chats': typeof ChatsRoute
   '/contexts': typeof ContextsRoute
   '/invocations': typeof InvocationsRoute
   '/memories': typeof MemoriesRoute
@@ -141,6 +150,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admins'
     | '/alarms'
+    | '/chats'
     | '/contexts'
     | '/invocations'
     | '/memories'
@@ -156,6 +166,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admins'
     | '/alarms'
+    | '/chats'
     | '/contexts'
     | '/invocations'
     | '/memories'
@@ -171,6 +182,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admins'
     | '/alarms'
+    | '/chats'
     | '/contexts'
     | '/invocations'
     | '/memories'
@@ -187,6 +199,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminsRoute: typeof AdminsRoute
   AlarmsRoute: typeof AlarmsRoute
+  ChatsRoute: typeof ChatsRoute
   ContextsRoute: typeof ContextsRoute
   InvocationsRoute: typeof InvocationsRoute
   MemoriesRoute: typeof MemoriesRoute
@@ -220,6 +233,13 @@ declare module '@tanstack/react-router' {
       path: '/alarms'
       fullPath: '/alarms'
       preLoaderRoute: typeof AlarmsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/chats': {
+      id: '/chats'
+      path: '/chats'
+      fullPath: '/chats'
+      preLoaderRoute: typeof ChatsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/contexts': {
@@ -299,6 +319,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminsRoute: AdminsRoute,
   AlarmsRoute: AlarmsRoute,
+  ChatsRoute: ChatsRoute,
   ContextsRoute: ContextsRoute,
   InvocationsRoute: InvocationsRoute,
   MemoriesRoute: MemoriesRoute,

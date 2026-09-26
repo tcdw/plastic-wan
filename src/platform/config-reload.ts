@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { type Api, getSupportedThinkingLevels, type Model, type Models } from '@earendil-works/pi-ai';
+import { type Api, getSupportedThinkingLevels, type Model } from '@earendil-works/pi-ai';
 import {
   assertConfigPermissions,
+  type AgentSettings,
   type FileConfig,
   type LoadedConfig,
   loadConfig,
@@ -11,7 +12,7 @@ import {
 import { type ConfigChange, type ConfigSource, diffConfig } from './config-diff.ts';
 import { ConfigWriteError, type ConfigEdit, readConfigRevision, writeConfigEdits } from './config-file.ts';
 import { type AgentModelSwitcher, ModelSwitchError } from './model-switch.ts';
-import { buildModelRegistry } from './providers.ts';
+import { buildModelRegistry, configuredAgentModels } from './providers.ts';
 import type { ConfigurationModels, RuntimeConfigurationStore } from './runtime-config.ts';
 import { type SecretStore, SecretResolutionError } from './secrets.ts';
 
@@ -56,7 +57,7 @@ export type ConfigApplyResult =
       readonly ok: false;
       readonly code: ConfigErrorCode;
       readonly message: string;
-      /** Only a failed `setAgentModel` that already rewrote the file sets this. */
+      /** A failed apply after the requested edits already rewrote the file. */
       readonly fileWritten: boolean;
       readonly status: ConfigStatus;
     };
@@ -154,36 +155,89 @@ export class ConfigReloader {
    * for the old model may not exist on the new one.
    */
   setAgentModel(provider: string, model: string, expectedRevision?: string): Promise<ConfigApplyResult> {
-    return this.#withLock(async () => {
-      let selected: { readonly provider: string; readonly model: string };
-      try {
-        selected = this.#modelSwitcher.option(provider, model);
-      } catch (error) {
-        if (error instanceof ModelSwitchError) {
-          return this.#rejected(error.code, error.message);
-        }
-        throw error;
+    return this.#withLock(() => this.#setModel(provider, model, expectedRevision));
+  }
+
+  /** The ID is the configured Chat ID, after resolving any Telegram group migration. */
+  setChatModel(configuredChatId: number, provider: string, model: string): Promise<ConfigApplyResult> {
+    return this.#withLock(() => this.#setModel(provider, model, undefined, configuredChatId));
+  }
+
+  /** Removes all three overrides; if absent, still applies other pending file changes without rewriting. */
+  resetChatModel(configuredChatId: number): Promise<ConfigApplyResult> {
+    return this.#withLock(() => this.#writeChatSettings(configuredChatId, null));
+  }
+
+  async #setModel(
+    provider: string,
+    model: string,
+    expectedRevision?: string,
+    configuredChatId?: number,
+  ): Promise<ConfigApplyResult> {
+    try {
+      this.#modelSwitcher.option(provider, model);
+    } catch (error) {
+      if (error instanceof ModelSwitchError) {
+        return this.#rejected(error.code, error.message);
       }
-      const resolved = this.#store.current().models.getModel(selected.provider, selected.model);
-      if (resolved === undefined) {
-        return this.#rejected('model_unusable', `Model ${selected.provider}/${selected.model} is not registered`);
-      }
-      try {
-        this.#validateAgentModel(resolved);
-      } catch (error) {
-        return this.#rejected('model_unusable', messageOf(error));
-      }
-      const [weakest = 'off'] = getSupportedThinkingLevels(resolved);
-      return await this.#writeAndApply(
-        [
-          { path: ['agent', 'provider'], value: provider },
-          { path: ['agent', 'model'], value: model },
-          { path: ['agent', 'thinking_level'], value: weakest },
-        ],
-        expectedRevision,
-        'model_switch_failed',
+      throw error;
+    }
+    const resolved = this.#store.current().models.getModel(provider, model);
+    if (resolved === undefined) {
+      return this.#rejected('model_unusable', `Model ${provider}/${model} is not registered`);
+    }
+    try {
+      this.#validateAgentModel(resolved);
+    } catch (error) {
+      return this.#rejected('model_unusable', messageOf(error));
+    }
+    const [weakest = 'off'] = getSupportedThinkingLevels(resolved);
+    if (configuredChatId !== undefined) {
+      return await this.#writeChatSettings(configuredChatId, { provider, model, thinking_level: weakest });
+    }
+    return await this.#writeAndApply(
+      [
+        { path: ['agent', 'provider'], value: provider },
+        { path: ['agent', 'model'], value: model },
+        { path: ['agent', 'thinking_level'], value: weakest },
+      ],
+      expectedRevision,
+      'model_switch_failed',
+    );
+  }
+
+  async #writeChatSettings(configuredChatId: number, settings: AgentSettings | null): Promise<ConfigApplyResult> {
+    if (!this.#store.current().config.telegram.chats.some((chat) => chat.id === configuredChatId)) {
+      return this.#rejected('config_invalid', `Chat ${configuredChatId} is not configured in the running process`);
+    }
+    let revision: string;
+    let loaded: LoadedConfig;
+    try {
+      // Array order may differ from the active configuration. Locate by ID in the
+      // file, then pin its revision so a concurrent reorder cannot target another Chat.
+      revision = await readConfigRevision(this.#configPath);
+      loaded = await loadConfig(this.#configPath);
+    } catch (error) {
+      return this.#rejected('config_invalid', messageOf(error));
+    }
+    const index = loaded.fileConfig.telegram.chats.findIndex((chat) => chat.id === configuredChatId);
+    const chat = loaded.fileConfig.telegram.chats[index];
+    if (chat === undefined) {
+      return this.#rejected(
+        'config_invalid',
+        `Chat ${configuredChatId} is no longer present in the configuration file`,
       );
-    });
+    }
+    const edits: ConfigEdit[] = [];
+    for (const key of ['provider', 'model', 'thinking_level'] as const) {
+      const value = settings?.[key];
+      if (chat[key] !== value) {
+        edits.push({ path: ['telegram', 'chats', index, key], value });
+      }
+    }
+    return edits.length === 0
+      ? await this.#applyFile()
+      : await this.#writeAndApply(edits, revision, 'model_switch_failed');
   }
 
   async #writeAndApply(
@@ -234,13 +288,10 @@ export class ConfigReloader {
     if (!rebuilt.ok) {
       return this.#failure(rebuilt.code, rebuilt.error, false);
     }
-    const model = this.#resolveAgentModel(diff.candidate.raw, rebuilt.registry.models);
-    if (model === null) {
-      const { provider, model: modelId } = diff.candidate.file.agent;
-      return this.#failure('model_unusable', `Agent model ${provider}/${modelId} is not usable`, false);
-    }
     try {
-      this.#validateAgentModel(model);
+      for (const { model } of configuredAgentModels(diff.candidate.raw, rebuilt.registry.models)) {
+        this.#validateAgentModel(model);
+      }
     } catch (error) {
       return this.#failure('model_unusable', messageOf(error), false);
     }
@@ -315,15 +366,6 @@ export class ConfigReloader {
         error: messageOf(error),
       };
     }
-  }
-
-  #resolveAgentModel(candidate: RawConfig, models: Models): Model<Api> | null {
-    const { provider, model: modelId } = candidate.agent;
-    const model = models.getModel(provider, modelId);
-    if (model === undefined || !model.input.includes('text')) {
-      return null;
-    }
-    return model;
   }
 
   #applied(

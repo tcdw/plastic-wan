@@ -62,6 +62,7 @@ let server: ServerType | null = null;
 let upstream: ServerType | null = null;
 let directory = '';
 let shuttingDown = false;
+let failNextConfigApply = false;
 
 async function shutdown(): Promise<void> {
   if (shuttingDown) {
@@ -108,6 +109,10 @@ function json(body: unknown, status = 200): Response {
 async function handleHook(request: Request, url: URL): Promise<Response> {
   const route = url.pathname.slice('/__e2e'.length);
   if (request.method === 'GET' && route === '/health') {
+    return json({ ok: true });
+  }
+  if (request.method === 'POST' && route === '/fail-next-config-apply') {
+    failNextConfigApply = true;
     return json({ ok: true });
   }
   if (request.method === 'POST' && route === '/shutdown') {
@@ -279,7 +284,12 @@ async function main(): Promise<void> {
     secrets,
     // This fixture runs no agent runtime, so there is no tool registry to fit
     // into the model's context window; production wires the real validator.
-    validateAgentModel: () => undefined,
+    validateAgentModel: () => {
+      if (failNextConfigApply) {
+        failNextConfigApply = false;
+        throw new Error('Synthetic apply failure');
+      }
+    },
     onPublished: () => undefined,
   });
   const admin = new AdminServer({

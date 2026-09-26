@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { adminUrl, authStoragePath, watchPageIssues } from './helpers.ts';
 
 /**
- * The 13 business routes and their deep links render real content (not the
+ * The 14 business routes and their deep links render real content (not the
  * error boundary, not a blank page) with an authenticated session.
  */
 test.use({ storageState: authStoragePath() });
@@ -11,7 +11,7 @@ const INVOCATION_A = '4001';
 const CONVERSATION_ID = '2001';
 const MESSAGE_A = '6001';
 
-test.describe('13 routes and deep links', () => {
+test.describe('14 routes and deep links', () => {
   test('/ overview renders the real stats and bot status', async ({ page }) => {
     await page.goto(await adminUrl('/'));
     await expect(page.getByText('Stored messages')).toBeVisible();
@@ -101,6 +101,14 @@ test.describe('13 routes and deep links', () => {
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
   });
 
+  test('/chats shows saved and running allowlist settings', async ({ page }) => {
+    await page.goto(await adminUrl('/chats'));
+    await expect(page.getByRole('heading', { name: 'Chats', exact: true })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Saved settings' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Running settings' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add Chat' })).toBeVisible();
+  });
+
   test('/models lists providers, their models and the discovery actions', async ({ page }) => {
     await page.goto(await adminUrl('/models'));
     await expect(page.getByText('Providers')).toBeVisible();
@@ -141,6 +149,7 @@ test.describe('no page errors while deep-linking', () => {
     '/alarms',
     '/memories',
     '/admins',
+    '/chats',
     '/models',
     '/stickers',
     '/settings',

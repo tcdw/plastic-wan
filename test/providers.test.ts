@@ -6,7 +6,7 @@ import { type Api, type Context, getSupportedThinkingLevels, type Model } from '
 import { findBuiltinProvider } from '../src/platform/builtin-providers.ts';
 import { type FileConfig, type LoadedConfig, loadConfig, type RawConfig } from '../src/platform/config.ts';
 import { keyJarPath } from '../src/platform/key-jar.ts';
-import { buildModelRegistry, mapCompat } from '../src/platform/providers.ts';
+import { buildModelRegistry, configuredAgentModels, mapCompat } from '../src/platform/providers.ts';
 import { SecretStore } from '../src/platform/secrets.ts';
 import { supportedThinkingLevels, THINKING_LEVELS } from '../src/platform/thinking-levels.ts';
 import { testConfigJsonc, writeTestConfig, writeTestKeyJar } from './helpers.ts';
@@ -55,6 +55,30 @@ const BUILTIN_MODEL = {
 };
 
 describe('model registry', () => {
+  test('enumerates every selected model and thinking pair without duplicate probes', async () => {
+    const loaded = await loadFixture((config) => {
+      config.telegram.chats = [
+        { id: -1 },
+        { id: -2, provider: 'agent', model: 'agent-model' },
+        { id: -3, thinking_level: 'high' },
+        { id: -4, provider: 'vision', model: 'vision-model', thinking_level: 'off' },
+        { id: -5, provider: 'vision', model: 'vision-model', thinking_level: 'off' },
+      ];
+    });
+    const registry = await buildModelRegistry(loaded.config, null, new SecretStore(keyJarPath(loaded.configPath)));
+    expect(
+      configuredAgentModels(loaded.config, registry.models).map(({ model, thinkingLevel }) => ({
+        provider: model.provider,
+        model: model.id,
+        thinkingLevel,
+      })),
+    ).toEqual([
+      { provider: 'agent', model: 'agent-model', thinkingLevel: 'low' },
+      { provider: 'agent', model: 'agent-model', thinkingLevel: 'high' },
+      { provider: 'vision', model: 'vision-model', thinkingLevel: 'off' },
+    ]);
+  });
+
   test('registers only the models a builtin provider lists in the configuration', async () => {
     const loaded = await loadFixture((draft) => {
       draft.providers.deepseek = {

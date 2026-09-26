@@ -21,9 +21,9 @@ pnpm test test/skills.test.ts test/system-resources.test.ts test/plugins.test.ts
 pnpm test test/media.test.ts test/stickers.test.ts
 pnpm test test/mcp.test.ts test/web-fetch.test.ts
 pnpm test test/operations.test.ts test/foundation.test.ts test/schema.test.ts test/load-env.test.ts
-pnpm test test/admin.test.ts test/model-switch.test.ts
+pnpm test test/admin.test.ts test/admin-providers.test.ts test/admin-chats.test.ts test/model-switch.test.ts
 pnpm test test/bot-commands.test.ts
-pnpm test test/config-diff.test.ts test/config-reload.test.ts
+pnpm test test/config-diff.test.ts test/config-reload.test.ts test/chat-model-runtime.test.ts
 pnpm test test/memory.test.ts
 pnpm test test/alarm.test.ts test/alarm-internal-context.test.ts
 pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-configure.test.ts
@@ -47,6 +47,7 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | `context-send.test.ts` | Context 可见性、Reply capability、滑动窗口内的 `send` 速率限制与 `send_rate_limited` 审计、未知网络结果不重试、abort/过期不发送、429 等待后命中屏障不重试、已接受的发送在落库失败时仍为成功 |
 | `cut-topic.test.ts` | `/cut_topic` 切点排除命令消息及更早历史、切点只前移、按 Chat 与 Forum Topic 隔离、非管理员拒绝、重建服务后仍生效、同时清空该 Conversation 的 Conversation Context、中断仍持有切点前 transcript 的运行 |
 | `agent-runtime.test.ts` | 按 Conversation 播种的 Agent、Tool 循环、每批注入的 turn 预算、transcript 隔离与工具可见性审计 |
+| `chat-model-runtime.test.ts` | 按 Chat 解析模型覆盖（覆盖生效、缺省逐项继承全局、仅 `thinking_level` 覆盖时重绑缓存 Agent）、Topic 共用 Chat 设置、群迁移解析迁移前 Chat 配置且直接配置的新 ID 优先、跨 Provider 切换保留未变的 Context 与模型审计、queued→running 用当前快照而下一次 Invocation 才用新值、Chat 选用的 Agent 模型具备 image 能力时启用对应图片提示 |
 | `skills.test.ts` | Skill 索引注入 system prompt、原语不经 execute、`execute` search/help/call、`{text, refs}` 封套驱动 `search_stickers → send` 贴纸链路、记忆经 execute 写入、原语/未知能力拒绝的审计、已 abort 的运行不 dispatch 能力 |
 | `system-resources.test.ts` | Skill manifest 校验与启动失败、插件 Skill 目录挂载与重名拒绝、`system:///` 绝对/相对 URI 解析、越界与非 Markdown 拒绝、32 KiB 截断、progressive disclosure fixture |
 | `plugins.test.ts` | 插件 id 校验与重名拒绝、内置插件清单装配 |
@@ -58,10 +59,12 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | `web-fetch.test.ts` | 有界不可信文本结果与审计、私网/合成地址拒绝（含跳转目标）、fake-ip 网段默认拒绝且需 `allow_proxy_synthetic_addresses` 开启、6to4/Teredo 过渡地址拒绝 |
 | `operations.test.ts` | Retention、备份轮换、Scheduler 关闭 |
 | `admin.test.ts` | Admin 首次设置、登录、登录锁定（不受 `X-Forwarded-For` 与用户名轮换影响、并发失败计数、过期后重新计数）、请求体按字节流式限长、HTTPS 下 Cookie 带 `Secure`、Session、只读审计 API（含 Conversation Context 列表/详情与写入尝试被拒）、静态托管 |
+| `admin-providers.test.ts` | Provider/模型管理、SecretRef 只写不读、修订冲突、全局模型端点保留 Chat 覆盖、阻止删除 Chat 引用的 Provider/模型，待重启移除的 Chat 引用仍受 candidate 校验保护 |
+| `admin-chats.test.ts` | Chat 管理鉴权与 Origin、字符串 ID 与安全整数边界、Topic/模型严格校验、revision 先于 body 解析与并发写入保护、JSONC 注释及未管理字段保留、增删/Topic 待重启与历史保留、模型热应用/恢复继承、迁移 ID、保存后应用失败的状态与脱敏审计 |
 | `model-switch.test.ts` | 可切换模型仅列 text 能力、当前模型取配置值、`option()` 只校验不应用（未知 provider/model 与 image-only 拒绝）、`current()` 跟随 `store.publish` 变化 |
 | `bot-commands.test.ts` | 命令解析与 mention 匹配、`setMyCommands` 注册一致性、`/pause` 中止与阻断、`/resume` 恢复、`/status` 用量与 Context 行口径、`/model` 分页与切换（写配置文件并 reload）、管理员鉴权与匿名拒绝、命令只审计不入库 |
 | `config-diff.test.ts` | 热更新白名单分类（hot/restart/outside_serve）、candidate 构造、Provider 的增删/改 kind/连接字段/模型定义全部取文件值、custom Provider `models[]` 对齐、新增 Chat 与 Prompt 内容比较 |
-| `config-reload.test.ts` | `ConfigReloader` 外部契约：generation 与两个 hash、`config_reloaded`/`config_reload_failed`/`model_switch_failed` 日志、待重启字段撤销与只改注释后 active hash 跟上文件 hash、两遍校验与 `candidate_invalid`、`secret_unresolved` 的整次拒绝、待重启列表、运行中 Invocation 钉住模型与 Provider 连接（两个本地端点验证换地址后的下一轮仍走旧地址）、`/model` 写入文件（保留注释、`0600`、符号链接拒绝）、`invocations.config_hash` 在 `queued → running` 写入、Admin `POST /config/apply` 与 `PUT /model` 的响应体 |
+| `config-reload.test.ts` | `ConfigReloader` 外部契约：generation 与两个 hash、`config_reloaded`/`config_reload_failed`/`model_switch_failed` 日志、待重启字段撤销与只改注释后 active hash 跟上文件 hash、两遍校验与 `candidate_invalid`、`secret_unresolved` 的整次拒绝、待重启列表、运行中 Invocation 钉住模型与 Provider 连接（两个本地端点验证换地址后的下一轮仍走旧地址）、`/model` 写入文件（保留注释、`0600`、符号链接拒绝）、`invocations.config_hash` 在 `queued → running` 写入、Admin `POST /config/apply` 与 `PUT /model` 的响应体；Chat 覆盖切换按文件 ID 定位（reorder 后仍解析正确、保留其它 Chat 与全局默认、文件里缺该 Chat 时拒绝写入不落盘）、并发 Chat 切换互不覆盖、发布前对全局与每个选中 Chat 模型逐一校验（删除在用 Chat 模型被拒、全局换模型拒绝继承不兼容的 thinking） |
 | `memory.test.ts` | 记忆持久化与 TTL、Conversation 隔离、Tool 审计、注入批次内 `<memory_list>` 的顺序与作用域、Admin 记忆 CRUD |
 | `alarm.test.ts` / `alarm-internal-context.test.ts` | Alarm 创建/触发/取消、creator-vs-target ownership、latest-new caller 解析、跨 invocation hidden mapping、状态变化安全失败、send 不泄漏、重启后 durable internal context |
 | `prompt-template.test.ts` | Prompt 模板白名单变量渲染、未知与格式错误表达式拒绝 |
@@ -81,7 +84,7 @@ node src/cli.ts check-config --config dev-data/config.jsonc
 
 - 输出 `status = ok`。
 - `config_hash` 与预期文件一致。
-- Chat ID、Topic、Provider alias、Model ID 和 MCP Tool policy 未被错误引用。
+- Chat ID、Topic、Provider alias、Model ID 和 MCP Tool policy 未被错误引用；Chat 的 `provider`/`model` 必须成对出现且引用存在，`thinking_level` 必须被该 Chat 解析后的生效模型接受，不成对或组合不合法会被严格拒绝。
 - `agent.context` 与 `agent.rate_limits` 的越界值被拒绝；已删除的 `agent.max_turns`/`agent.max_sends`/`agent.timeout_seconds` 会被严格对象模式拒绝，旧配置必须一起改。
 - 配置改变后，不要继续使用旧进程的哈希。
 - 热更新白名单字段改完后，用 Admin「Apply config file」（或 `/model`）应用：日志出现 `config_reloaded`，`active_hash` 反映新配置；没有待重启字段时它与 `check-config` 的文件哈希一致，有待重启字段时两者不同，且这些路径出现在 `restart_required` 里。
@@ -96,7 +99,7 @@ node src/cli.ts check-config --config dev-data/config.jsonc
 
 - SQLite/FTS/磁盘。
 - Sharp、FFmpeg、FFprobe、python-lottie。
-- Agent Provider 文本与严格 Tool Call。
+- Agent Provider 文本与严格 Tool Call（按全局默认与每个 Chat 实际选用的模型/思考组合去重探测，同一组合只探一次）。
 - Vision 图片请求。
 - Telegram Bot Token。
 - required MCP。
@@ -134,10 +137,11 @@ node src/cli.ts serve --config dev-data/config.jsonc
 8. Overview 的 Bot status 卡片显示 `sleeping`/`awake` 与 `sleep_until`，睡眠时 `Wake now` 带二次确认；同时列出所有 `chat_pause` Chat 与暂停时间。
 9. Alarms 页面按 state/Chat/Target 过滤，pending 优先置顶，展开显示完整诊断并链接到对应 Tool session；取消只对 pending 开放且需二次确认，对非 pending 给出 409 冲突提示。
 10. Bot admins 页面能添加/移除管理员，`telegram.admins` 的种子项来源显示为 `config`。
-11. Models 页面列出 Provider 与模型；切换 agent / vision 模型后 `config.jsonc` 的 `agent.provider` / `agent.model`（或 `vision.*`）被改写，Telegram `/status` 与页面立即反映新模型（vision 显示为待重启），重启 `serve` 后仍然生效；模型列表的新增/删除即时生效，连接字段与 Provider 增删显示为「已保存，待重启」。Settings 页的 `Configuration file` 卡片显示 generation、active hash 与 file hash；改一个白名单字段后点 `Apply config file`，应用列表出现该路径，改一个 restart 字段则出现在待重启列表。
+11. Models 页面列出 Provider 与模型；切换 agent / vision 模型后 `config.jsonc` 的 `agent.provider` / `agent.model`（或 `vision.*`）被改写，页面立即反映新模型，后续 Invocation / vision 分析使用新模型，重启 `serve` 后仍然生效；Provider 增删、连接字段与模型列表的修改均热应用（在用引用仍受校验保护）。Models 页的 `PUT /api/model` 与 `PUT /api/thinking-level` 只写全局默认，保留 `telegram.chats[]` 的覆盖；未覆盖的 Chat 在 `/status` 中显示新的全局值，已覆盖的 Chat 保持自己的设置。Chat 覆盖通过 Chats 页、配置文件或 Telegram `/model` 维护。Settings 页的 `Configuration file` 卡片显示 generation、active hash 与 file hash；改一个白名单字段后点 `Apply config file`，应用列表出现该路径，改一个 restart 字段则出现在待重启列表。
 12. Conversation Contexts 页面按 chat 过滤，列表按最近活跃倒序并可用 Load more 翻页；详情显示 head/next seq、保留消息数与 capability refs，展开消息看到 `payload_preview` 与截断标记，且不出现已 GC 的行。
 13. 登出后访问深链接回落登录页；重新登录恢复访问。
-14. `admin_users.password_hash` 以 `$argon2id$` 开头，`admin_sessions` 只有 64 位十六进制摘要。
+14. `admin_users.password_hash` 使用 Argon2id 格式，`admin_sessions` 只有 64 位十六进制摘要。
+15. Manage → Chats 并排显示 Saved settings 与 Running settings：新增/删除 Chat、修改 Topic 白名单后文件已保存但运行态不变；已有 active Chat 切换模型/thinking 后运行列同步，恢复 Global default 清除两种覆盖。删除需确认且保留历史，最后一个配置 Chat 禁止删除。并发编辑/删除冲突不能覆盖新文件；保存后应用失败要显示两种状态，Settings 应用成功后刷新 Chats。待重启横幅列出字段，只在有 supervisor 时提供 Restart now。
 
 未构建 bundle 时静态路由返回 503 `admin_bundle_missing`，API 仍可用；这不是启动失败。
 
@@ -152,8 +156,8 @@ pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.t
 - **真实后端夹具**：`globalSetup` 派生一个 Node 子进程运行 `apps/admin-next/e2e/server.ts`，
   它创建临时目录 + 临时 SQLite，加载 `test/fixtures/admin-seed.ts`（基础行 +
   `seedAdminBulkRows` 的批量分页数据），构造 `SqliteStore` / `AgentModelSwitcher` /
-  `ConfigReloader` / `AdminServer`，在回环地址随机端口启动，并同端口暴露只读的
-  `/__e2e/**` 状态钩子；
+  `ConfigReloader` / `AdminServer`，在回环地址随机端口启动，并同端口暴露仅测试使用的
+  `/__e2e/**` 状态与控制钩子（含单次 apply 失败注入，验证先保存后应用失败的真实路径）；
   `globalTeardown` 优雅关闭并清理临时目录。**不读 `dev-data/`、不启动 `serve`、
   不触碰 8787 或任何用户进程。**
 - 每轮运行是全新数据库：认证从真实 `setup_required` 首次创建管理员开始，后续用例
@@ -186,6 +190,8 @@ pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.t
   8. 信任边界（直接发 API 请求）：无 Session 访问受保护路由返回 401
      `unauthenticated`；对只读审计路由发 POST/PUT 返回 405 `method_not_allowed`；
      跨站 Origin 的写请求返回 403 `bad_origin`。
+  9. Chats：字符串 ID 安全整数边界、增删与 Topic 范围的保存/运行态分离、模型/thinking 热切与恢复继承、
+     后台 refetch 不升级编辑和删除确认的原始 revision、保存后应用失败的双视图刷新与 Settings 恢复、移动端暗色布局。
 
 - 首次运行 E2E 前需要 `pnpm --filter plasticwan-admin-next exec playwright install chromium`；浏览器安装失败时套件无法
   执行，属于环境前置问题而非代码缺陷。

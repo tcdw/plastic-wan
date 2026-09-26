@@ -101,11 +101,11 @@ test.describe('14 routes and deep links', () => {
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
   });
 
-  test('/chats shows saved and running allowlist settings', async ({ page }) => {
+  test('/chats shows the allowlist with topics and agent models', async ({ page }) => {
     await page.goto(await adminUrl('/chats'));
-    await expect(page.getByRole('heading', { name: 'Chats', exact: true })).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: 'Saved settings' })).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: 'Running settings' })).toBeVisible();
+    await expect(page.getByText('Chat allowlist')).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Topics' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Agent model' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add Chat' })).toBeVisible();
   });
 

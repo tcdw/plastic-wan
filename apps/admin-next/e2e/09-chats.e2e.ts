@@ -121,7 +121,6 @@ test('navigation, exact string IDs and pending add/remove work without changing 
   const added = chatRow(page, '9007199254740991');
   await expect(added).toContainText('Private');
   await expect(added).toContainText('Addition pending');
-  await expect(added).toContainText('Not active until restart');
   expect((await viewOf(page)).items.find((chat) => chat.id === '9007199254740991')).toMatchObject({
     saved: inherited,
     active: null,
@@ -142,8 +141,8 @@ test('Topic edits show saved and running scopes separately and cancel leaves the
   await page.getByLabel('Topic IDs').fill('12, 34');
   await saveDialog(page);
   const row = chatRow(page);
-  await expect(row.getByRole('cell').nth(1)).toContainText('Topics: 12, 34');
-  await expect(row.getByRole('cell').nth(2)).toContainText('All topics');
+  await expect(row.getByRole('cell').nth(1)).toContainText('12, 34');
+  await expect(row.getByRole('cell').nth(1)).toContainText('Running: All topics');
   await expect(row).toContainText('Changes pending');
   await expect(page.getByRole('button', { name: 'Restart now' })).toBeVisible();
   const before = await viewOf(page);
@@ -204,7 +203,7 @@ test('a background refetch cannot upgrade the revision of an open Chat edit', as
   await page.getByRole('button', { name: 'Save Chat' }).click();
   await expect(page.getByText('Nothing was saved - reopen the Chat', { exact: false })).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(chatRow(page)).toContainText('Topics: 45');
+  await expect(chatRow(page).getByRole('cell').nth(1)).toContainText('45');
   expect((await viewOf(page)).items.find((chat) => chat.id === ACTIVE_CHAT)?.saved?.topic_ids).toEqual(['45']);
 });
 
@@ -220,12 +219,11 @@ test('remove confirmation retains its original revision and shows removed active
   await page.getByRole('button', { name: 'Remove Chat', exact: true }).click();
   await expect(page.getByText('Nothing was removed', { exact: false })).toBeVisible();
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
-  await expect(chatRow(page)).toContainText('Topics: 67');
+  await expect(chatRow(page).getByRole('cell').nth(1)).toContainText('67');
 
   await chatRow(page).getByRole('button', { name: 'Remove', exact: true }).click();
   await page.getByRole('button', { name: 'Remove Chat', exact: true }).click();
   await expect(chatRow(page)).toContainText('Removal pending');
-  await expect(chatRow(page)).toContainText('Removed from file');
   expect((await viewOf(page)).items.find((chat) => chat.id === ACTIVE_CHAT)).toMatchObject({
     saved: null,
     active: inherited,
@@ -251,7 +249,7 @@ test('saved-but-not-applied errors refresh both views and Settings can apply the
   await expect(page.getByRole('alert')).toContainText('config.jsonc was updated but not applied:');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(chatRow(page)).toContainText('Changes pending');
-  await expect(chatRow(page).getByRole('cell').nth(1)).toContainText('high');
+  await expect(chatRow(page).getByRole('cell').nth(2)).toContainText('high');
   const failed = await viewOf(page);
   expect(failed.items.find((chat) => chat.id === ACTIVE_CHAT)?.active).toEqual(
     before.items.find((chat) => chat.id === ACTIVE_CHAT)?.active,
@@ -270,7 +268,7 @@ test('mobile dark layout keeps the form and actions usable without page overflow
     localStorage.setItem('admin-theme', 'dark');
   });
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Chats', exact: true })).toBeVisible();
+  await expect(page.getByText('Chat allowlist')).toBeVisible();
   await page.getByRole('button', { name: 'Add Chat', exact: true }).click();
   await expect(page.getByLabel('Telegram Chat ID')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Save Chat' })).toBeInViewport();

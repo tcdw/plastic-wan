@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import {
@@ -41,28 +42,31 @@ import { chatsQuery } from '@/lib/queries';
 import { waitForAdminServer } from '@/lib/restart';
 import { useProviderWrite } from '@/lib/use-provider-write';
 
-function SettingsSummary({
-  settings,
-  absent,
-}: {
-  readonly settings: ChatSettingsView | null;
-  readonly absent: string;
-}): React.ReactElement {
-  if (settings === null) {
-    return <span className="text-muted-foreground text-sm">{absent}</span>;
+function topicsText(settings: ChatSettingsView): string {
+  return settings.topic_ids === null ? 'All topics' : settings.topic_ids.join(', ');
+}
+
+function modelText(settings: ChatSettingsView): string {
+  return `${settings.effective.provider} / ${settings.effective.model}`;
+}
+
+function modelSource(settings: ChatSettingsView): string {
+  return `${settings.provider === null ? 'Default model' : 'Chat override'} · thinking ${settings.effective.thinking_level}${
+    settings.thinking_level === null ? ' (inherited)' : ''
+  }`;
+}
+
+/** A field the file and the running process disagree on shows the running value underneath. */
+function RunningNote({ value }: { readonly value: string | null }): React.ReactElement | null {
+  return value === null ? null : <p className="text-muted-foreground text-xs">Running: {value}</p>;
+}
+
+function runningDiff(row: ChatEntry, text: (settings: ChatSettingsView) => string): string | null {
+  if (row.saved === null || row.active === null) {
+    return null;
   }
-  return (
-    <div className="space-y-1 text-sm">
-      <MonoValue value={`${settings.effective.provider} / ${settings.effective.model}`} />
-      <p className="text-muted-foreground text-xs">
-        {settings.provider === null ? 'Default model' : 'Chat override'} · {settings.effective.thinking_level}
-        {settings.thinking_level === null ? ' (inherited)' : ''}
-      </p>
-      <p className="text-muted-foreground text-xs">
-        {settings.topic_ids === null ? 'All topics' : `Topics: ${settings.topic_ids.join(', ')}`}
-      </p>
-    </div>
-  );
+  const running = text(row.active);
+  return running === text(row.saved) ? null : running;
 }
 
 function modelKey(provider: string, model: string): string {
@@ -326,30 +330,58 @@ export default function ChatsPage(): React.ReactElement {
     );
   }
   const view = query.data;
+  // A Chat removed from the file is still running until restart: show what it runs.
+  const shown = (row: ChatEntry): ChatSettingsView | null => row.saved ?? row.active;
   const columns: readonly ColumnSpec<ChatEntry>[] = [
     {
       key: 'chat',
       title: 'Chat',
       render: (row) => (
         <div className="space-y-1">
-          <p className="font-medium">{row.title ?? 'Unknown Chat'}</p>
-          <MonoValue value={row.id} />
-          <p className="text-muted-foreground text-xs">{row.type ?? (row.id.startsWith('-') ? 'Group' : 'Private')}</p>
+          <p className={row.title === null ? 'text-muted-foreground font-medium' : 'font-medium'}>
+            {row.title ?? 'Unknown Chat'}
+          </p>
+          <p className="text-muted-foreground text-xs">
+            <span className="font-mono">{row.id}</span> · {row.type ?? (row.id.startsWith('-') ? 'Group' : 'Private')}
+          </p>
           {row.runtime_chat_id !== row.id ? (
-            <p className="text-muted-foreground text-xs">Migrated to {row.runtime_chat_id}</p>
+            <p className="text-muted-foreground text-xs">
+              Migrated to <span className="font-mono">{row.runtime_chat_id}</span>
+            </p>
           ) : null}
         </div>
       ),
     },
     {
-      key: 'saved',
-      title: 'Saved settings',
-      render: (row) => <SettingsSummary settings={row.saved} absent="Removed from file" />,
+      key: 'topics',
+      title: 'Topics',
+      render: (row) => {
+        const settings = shown(row);
+        return settings === null ? null : (
+          <div className="space-y-1">
+            <p className={settings.topic_ids === null ? 'text-muted-foreground' : 'tabular-nums'}>
+              {topicsText(settings)}
+            </p>
+            <RunningNote value={runningDiff(row, topicsText)} />
+          </div>
+        );
+      },
     },
     {
-      key: 'active',
-      title: 'Running settings',
-      render: (row) => <SettingsSummary settings={row.active} absent="Not active until restart" />,
+      key: 'model',
+      title: 'Agent model',
+      render: (row) => {
+        const settings = shown(row);
+        return settings === null ? null : (
+          <div className="space-y-1">
+            <MonoValue value={modelText(settings)} />
+            <p className="text-muted-foreground text-xs">{modelSource(settings)}</p>
+            <RunningNote
+              value={runningDiff(row, (item) => `${modelText(item)} · thinking ${item.effective.thinking_level}`)}
+            />
+          </div>
+        );
+      },
     },
     {
       key: 'status',
@@ -368,22 +400,32 @@ export default function ChatsPage(): React.ReactElement {
     {
       key: 'actions',
       title: 'Actions',
+      align: 'right',
       render: (row) =>
         row.saved === null ? null : (
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={() => setEditing({ view, chat: row })}>
-              Edit
+          <div className="flex items-center justify-end gap-1">
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Edit"
+              onClick={() => setEditing({ view, chat: row })}
+            >
+              <Pencil />
             </Button>
             <Button
-              size="sm"
-              variant="destructive"
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              className="text-muted-foreground hover:text-destructive"
+              aria-label="Remove"
               disabled={view.items.filter((item) => item.saved !== null).length <= 1}
               onClick={() => {
                 remove.reset();
                 setRemoving({ chat: row, revision: view.revision });
               }}
             >
-              Remove
+              <Trash2 />
             </Button>
           </div>
         ),
@@ -397,25 +439,12 @@ export default function ChatsPage(): React.ReactElement {
         pending={restart.isPending}
         onRestart={() => restart.mutate()}
       />
-      <div className="space-y-2">
-        <h1 className="text-lg font-semibold">Chats</h1>
-        <p className="text-muted-foreground text-sm">
-          Manage the Chat and Topic allowlist and each Chat's agent model. Removing a Chat does not erase its history
-          and only stops new messages after a restart.
-        </p>
-        <p className="text-muted-foreground text-sm">
-          Global default:{' '}
-          <span className="font-mono">
-            {view.defaults.provider} / {view.defaults.model}
-          </span>{' '}
-          · {view.defaults.thinking_level}
-        </p>
-      </div>
       <Panel
         title="Chat allowlist"
         flush
         action={
           <Button size="sm" onClick={() => setEditing({ view, chat: null })}>
+            <Plus />
             Add Chat
           </Button>
         }

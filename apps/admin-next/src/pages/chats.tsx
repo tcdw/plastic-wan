@@ -90,14 +90,19 @@ function ChatDialog({
   const write = useProviderWrite();
   const [id, setId] = useState(chat?.id ?? '');
   const [topics, setTopics] = useState(chat?.saved?.topic_ids?.join(', ') ?? '');
-  const [model, setModel] = useState(
-    chat?.saved?.provider == null ? 'inherit' : modelKey(chat.saved.provider, chat.saved.model ?? ''),
+  const saved = chat?.saved ?? null;
+  const inheritsModel = saved === null || saved.provider === null;
+  const [model, setModel] = useState(inheritsModel ? 'inherit' : modelKey(saved.provider, saved.model ?? ''));
+  // A model override always carries its own thinking; a hand-edited file that
+  // inherits it starts from the effective level so saving pins it explicitly.
+  const [thinking, setThinking] = useState<ThinkingLevel | 'inherit'>(
+    saved?.thinking_level ?? (inheritsModel ? 'inherit' : saved.effective.thinking_level),
   );
-  const [thinking, setThinking] = useState<ThinkingLevel | 'inherit'>(chat?.saved?.thinking_level ?? 'inherit');
   const [validation, setValidation] = useState<string | null>(null);
   const effectiveKey = model === 'inherit' ? modelKey(view.defaults.provider, view.defaults.model) : model;
   const selected = view.models.find((item) => modelKey(item.provider, item.model) === effectiveKey);
   const levels = selected?.thinking_levels ?? [];
+  const inheritAllowed = model === 'inherit';
   const inheritSupported = levels.includes(view.defaults.thinking_level);
   const save = useMutation({
     mutationFn: (settings: ChatSettings) =>
@@ -129,6 +134,10 @@ function ChatDialog({
       (topicIds.some((topic) => !validId(topic, true)) || new Set(topicIds).size !== topicIds.length)
     ) {
       setValidation('Topic IDs must be unique positive safe integers, separated by commas or spaces.');
+      return;
+    }
+    if (thinking === 'inherit' && !inheritAllowed) {
+      setValidation('A Chat model override needs its own thinking effort.');
       return;
     }
     if (selected === undefined || !levels.includes(thinking === 'inherit' ? view.defaults.thinking_level : thinking)) {
@@ -211,8 +220,8 @@ function ChatDialog({
                 </SelectContent>
               </Select>
               <p className="text-muted-foreground text-xs">
-                Changing models resets thinking to the weakest supported effort. Global default clears the model and
-                thinking overrides.
+                Changing models resets thinking to the weakest supported effort; a Chat model always sets its own
+                thinking. Global default clears the model and thinking overrides.
               </p>
             </div>
             <div className="space-y-2">
@@ -229,9 +238,11 @@ function ChatDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="inherit" disabled={!inheritSupported}>
-                    Global default ({view.defaults.thinking_level}){inheritSupported ? '' : ' - unsupported'}
-                  </SelectItem>
+                  {inheritAllowed ? (
+                    <SelectItem value="inherit" disabled={!inheritSupported}>
+                      Global default ({view.defaults.thinking_level}){inheritSupported ? '' : ' - unsupported'}
+                    </SelectItem>
+                  ) : null}
                   {levels.map((level) => (
                     <SelectItem key={level} value={level}>
                       {level}

@@ -64,6 +64,11 @@ function managedSettings(body: ChatSettingsBody): Omit<FileChat, 'id'> {
   if ((body.provider === null) !== (body.model === null)) {
     throw new AdminQueryError('invalid_model_reference', 'provider and model must both be set or both be null');
   }
+  // An inherited thinking level would tie the global default to this Chat's model:
+  // a later global change could then be rejected because of a Chat it never names.
+  if (body.provider !== null && body.thinking_level === null) {
+    throw new AdminQueryError('thinking_level_required', 'A Chat model override must also set thinking_level');
+  }
   const topicIds = body.topic_ids?.map((id) => {
     const number = Number(id);
     if (!Number.isSafeInteger(number) || number <= 0) {

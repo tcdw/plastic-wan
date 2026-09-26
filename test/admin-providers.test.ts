@@ -595,6 +595,45 @@ test('protects a provider and model used only by a Chat override', async () => {
   }
 });
 
+test('protects a provider and model still used by a running Chat pending removal', async () => {
+  const fixture = await adminFixture({
+    transform: (config) => {
+      const provider = config.providers.agent;
+      if (provider === undefined) {
+        throw new Error('Missing fixture provider');
+      }
+      config.providers.chat = { ...provider, models: [model('chat-only')] };
+      config.telegram.chats.push({ id: -999, provider: 'chat', model: 'chat-only', thinking_level: 'off' });
+    },
+  });
+  try {
+    const view = await readJson(await call(fixture, '/api/chats'));
+    const removed = await write(fixture, '/api/chats/-999', 'DELETE', null, view.revision as string);
+    expect(removed.status).toBe(200);
+    expect(await readJson(removed)).toMatchObject({ apply: { restart_required: ['telegram.chats[-999]'] } });
+    expect(fixture.configStore.current().config.telegram.chats.some((chat) => chat.id === -999)).toBe(true);
+
+    const before = await fixture.read();
+    const snapshot = fixture.configStore.current();
+    const provider = await write(fixture, '/api/providers/chat', 'DELETE', {}, await revisionOf(fixture));
+    expect(provider.status).toBe(409);
+    expect(await readJson(provider)).toMatchObject({ error: 'provider_in_use' });
+    const selected = await write(
+      fixture,
+      '/api/providers/chat/models/chat-only',
+      'DELETE',
+      {},
+      await revisionOf(fixture),
+    );
+    expect(selected.status).toBe(409);
+    expect(await readJson(selected)).toMatchObject({ error: 'model_in_use' });
+    expect(await fixture.read()).toBe(before);
+    expect(fixture.configStore.current()).toBe(snapshot);
+  } finally {
+    fixture.store.close();
+  }
+});
+
 test('discovers models in saved mode from the registry connection', async () => {
   const requests: string[] = [];
   const upstream = await startFixtureServer((incoming) => {

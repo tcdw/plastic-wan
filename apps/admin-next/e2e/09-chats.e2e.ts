@@ -30,6 +30,51 @@ async function editElsewhere(page: Page, settings: ChatSettings): Promise<void> 
   );
 }
 
+/**
+ * The suite shares one server, so each test starts from the fixture allowlist:
+ * only ACTIVE_CHAT, inheriting everything. A failed test may have left extra
+ * Chats, removed ACTIVE_CHAT or armed an apply failure that still has to fire.
+ */
+async function restoreBaseline(page: Page): Promise<void> {
+  await page.evaluate(
+    async ({ id, settings }) => {
+      for (let step = 0; step < 20; step += 1) {
+        const view = await (await fetch('/api/chats')).json();
+        const saved = view.items.filter((chat: { saved: unknown }) => chat.saved !== null);
+        const baseline = saved.find((chat: { id: string }) => chat.id === id);
+        const extra = saved.find((chat: { id: string }) => chat.id !== id);
+        const inherits =
+          baseline !== undefined &&
+          ['topic_ids', 'provider', 'model', 'thinking_level'].every((key) => baseline.saved[key] === null) &&
+          ['topic_ids', 'provider', 'model', 'thinking_level'].every((key) => baseline.active?.[key] === null);
+        let request: [string, string, unknown];
+        if (baseline === undefined) {
+          request = ['/api/chats', 'POST', { id, ...settings }];
+        } else if (extra !== undefined) {
+          request = [`/api/chats/${extra.id}`, 'DELETE', null];
+        } else if (!inherits) {
+          request = [`/api/chats/${id}`, 'PUT', settings];
+        } else {
+          return;
+        }
+        const [route, method, body] = request;
+        const response = await fetch(route, {
+          method,
+          headers: { 'content-type': 'application/json', 'if-match': view.revision },
+          body: body === null ? null : JSON.stringify(body),
+        });
+        // An armed apply failure still writes the file; the next pass applies it.
+        const error = response.ok ? null : await response.json();
+        if (error !== null && !String(error.message).startsWith('config.jsonc was updated but not applied:')) {
+          throw new Error(`Restoring the Chat baseline failed: ${response.status} ${error.message}`);
+        }
+      }
+      throw new Error('The Chat baseline did not settle');
+    },
+    { id: ACTIVE_CHAT, settings: inherited },
+  );
+}
+
 function chatRow(page: Page, id = ACTIVE_CHAT) {
   return page.locator('table tbody tr').filter({ has: page.getByText(id, { exact: true }) });
 }
@@ -53,8 +98,7 @@ async function refetchAfterReconnect(page: Page): Promise<void> {
 
 test.beforeEach(async ({ page }) => {
   await page.goto(await adminUrl('/chats'));
-  await expect(chatRow(page)).toBeVisible();
-  await editElsewhere(page, inherited);
+  await restoreBaseline(page);
   await page.reload();
   await expect(chatRow(page)).toBeVisible();
 });
@@ -121,6 +165,7 @@ test('Chat models apply hot, thinking options match the model, and global defaul
   await expect(thinking).toHaveText('off');
   await thinking.click();
   await expect(page.getByRole('option', { name: 'high', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('option', { name: /^Global default/ })).toHaveCount(0);
   await page.getByRole('option', { name: 'off', exact: true }).click();
   await saveDialog(page);
   await expect(chatRow(page).getByRole('cell').nth(2)).toContainText('vision / vision-model');

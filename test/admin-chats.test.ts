@@ -286,6 +286,23 @@ test('migration titles resolve by runtime ID while edits continue targeting the 
   expect(f.configStore.current().config.telegram.chats[1]?.thinking_level).toBe('high');
 });
 
+test('a Chat model override must carry its own thinking level', async () => {
+  const f = await fixture();
+  const { revision } = await f.view();
+  const before = await readFile(f.path, 'utf8');
+  const active = f.configStore.current();
+  for (const [route, method, body] of [
+    ['/chats', 'POST', { ...inherited, id: '456', provider: 'agent', model: 'agent-model' }],
+    ['/chats/-100100', 'PUT', { ...inherited, provider: 'agent', model: 'agent-model' }],
+  ] as const) {
+    const response = await f.write(route, method, body, revision);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: 'thinking_level_required' });
+  }
+  expect(await readFile(f.path, 'utf8')).toBe(before);
+  expect(f.configStore.current()).toBe(active);
+});
+
 test('apply failures disclose saved-but-not-applied state, retain the running snapshot and redact audit errors', async () => {
   const f = await fixture();
   const secret = 'synthetic-chat-error-secret';

@@ -107,7 +107,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 | `PUT /chats/:id` | `{ topic_ids, provider, model, thinking_level }`，四字段必填，仅替换这些字段；保留 `instructions_file`、参与策略、忽略用户等其它设置与 JSONC 注释。ID 不可改名，body 不接受 `id` 或其它字段 |
 | `DELETE /chats/:id` | 从文件删除整项 Chat（含该项的其它设置），不删除消息、Context、记忆或审计；删除最后一个配置 Chat 返回 409 `last_chat_required` |
 
-Chat/Topic ID 在 HTTP 中必须是十进制字符串：不接受 0、前导零、指数记法或超出 JS 安全整数范围的值；Chat 允许负数，Topic 只允许正数。`topic_ids: null` 表示不限制 Topic，否则须为非空、无重复的 ID 数组。`provider` 与 `model` 必须同时为字符串或同时为 `null`；`null` 删除相应覆盖并继承全局，`thinking_level` 可独立覆盖或为 `null`。模型存在性、text 能力与最终继承后的 thinking 兼容性由完整配置校验保证，不兼容不落盘。缺少配置项返回 404 `chat_not_found`。
+Chat/Topic ID 在 HTTP 中必须是十进制字符串：不接受 0、前导零、指数记法或超出 JS 安全整数范围的值；Chat 允许负数，Topic 只允许正数。`topic_ids: null` 表示不限制 Topic，否则须为非空、无重复的 ID 数组。`provider` 与 `model` 必须同时为字符串或同时为 `null`；`null` 删除相应覆盖并继承全局。设置模型覆盖时 `thinking_level` 必须同时给出，否则返回 400 `thinking_level_required`——继承的 thinking 会把全局默认绑到该 Chat 的模型上，之后调整全局设置可能被这个 Chat 拒绝；不覆盖模型时 `thinking_level` 可独立覆盖或为 `null`。模型存在性、text 能力与最终继承后的 thinking 兼容性由完整配置校验保证，不兼容不落盘。缺少配置项返回 404 `chat_not_found`。
 
 写入需认证与同源 Origin，并携带 `If-Match: <revision>`：缺失返回 400 `revision_required`，过期返回 409 `config_conflict`。revision 检查先于 body 解析；读文件前后核对 revision，在 `writeAndApply` 锁内再次核对，避免其它写者重排数组后编辑错项。请求体上限 8 KiB。成功响应为完整 Chats 视图加 `apply: { applied, restart_required, outside_serve }`；新增/删除 Chat、Topic 范围等 restart 字段仍保留旧运行值，已有 active Chat 的模型/thinking 供下一次 Invocation 使用。
 
@@ -125,10 +125,10 @@ Chats 的编辑与删除确认在打开时冻结数据与 revision，后台刷�
 | --- | --- |
 | `POST /providers` | 新建 Provider。body：`alias`、`kind`、builtin 的 `provider` 或 custom 的 `base_url` + `api`、`api_key`（必填明文，存入 `key.json`）、`headers?`、`models`（至少 1 个）。alias 已存在返回 409 `provider_exists`；builtin 不满足收录规则返回 400 `unknown_builtin_provider` / `unsupported_builtin_provider`；模型违反 `max_tokens ≤ context_window` 或 compat 适用性返回 400 `invalid_model`。新增 Provider 热应用：注册表随配置重建，新 Provider 立即可用于 `POST /providers/discover` 的 saved 模式与 `PUT /model` |
 | `PUT /providers/:alias` | 修改连接字段。`api_key` 省略表示保持；`headers` 按名称逐项处理（省略保持、字符串替换、`null` 删除）。**修改 `base_url` 时必须在同一次请求里重新提交 `api_key` 与全部已有 header 值**，否则返回 400 `credentials_required`——面板被盗用时改地址即可把已保存的凭据引向攻击者的服务器。builtin 只接受 `api_key`，其它字段返回 400 `immutable_field`；`kind`、`alias`、builtin 的 `provider` 都不可改。没有任何字段变化返回 400 `no_changes` |
-| `DELETE /providers/:alias` | 删除。文件里的全局 agent、任一 Chat 覆盖或 vision 指向它时返回 409 `provider_in_use`；文件里已移除但运行中等待重启移除的 Chat 引用仍受 candidate 校验保护 |
+| `DELETE /providers/:alias` | 删除。文件里的全局 agent、任一 Chat 覆盖或 vision 指向它，或文件里已移除但运行中等待重启移除的 Chat 仍引用它时，写入前返回 409 `provider_in_use` |
 | `POST /providers/:alias/models` | 批量追加模型（`models`，1–200 个）。id 重复返回 409 `model_exists`。热更新 |
 | `PUT /providers/:alias/models/:id` | 替换单个模型定义，body 的 `id` 必须等于 `:id`（否则 400 `invalid_model_id`）。热更新：candidate 取文件里的新定义，注册表随之重建；运行中的 Invocation 继续用它启动时的快照 |
-| `DELETE /providers/:alias/models/:id` | 删除模型。文件里的全局 agent、任一 Chat 覆盖或 vision 使用它时返回 409 `model_in_use`；待重启移除的 Chat 引用仍受 candidate 校验保护 |
+| `DELETE /providers/:alias/models/:id` | 删除模型。文件里的全局 agent、任一 Chat 覆盖或 vision 使用它，或待重启移除的运行中 Chat 仍使用它时，写入前返回 409 `model_in_use` |
 | `POST /providers/discover` | 拉取模型列表并解析元数据，同时充当连接自检（界面上的 “Test”）。两种模式二选一：`{ alias }` 用运行中快照的 baseUrl 与凭据（不重新解析文件里的 SecretRef，`env`/`command` 不会执行；文件里的连接字段与运行中的 active 配置不一致时返回 409 `connection_not_applied`，文件里有、运行中没有的 Provider 返回 409 `provider_not_registered`），或临时模式 `{ kind, provider \| base_url+api, api_key, headers? }` 用请求体里的完整连接。响应 `{ endpoint, models: [draft], metadata_source_error }`，每个 draft 带元数据、来源标记与 `configured`。上游错误经脱敏后以 502 `provider_discovery_failed` 返回 |
 | `POST /providers/lookup-metadata` | 给定手动输入的模型 id 列表（1–100）只做元数据解析，不访问供应商端点。响应 `{ models: [draft], metadata_source_error }` |
 

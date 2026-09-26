@@ -8,6 +8,7 @@ import {
 } from '../../platform/builtin-providers.ts';
 import {
   assertModelConfig,
+  type FileChat,
   type FileConfig,
   type ModelFileConfig,
   ModelConfigSchema,
@@ -484,12 +485,25 @@ export async function updateProvider(
   return edits;
 }
 
+/**
+ * Chats in the file, plus running Chats already removed from it. A removal waits
+ * for a restart, so the running Chat still needs its model; without it the delete
+ * would be written and only then rejected by the candidate check.
+ */
+function referencingChats(context: ProviderWriteContext): readonly Pick<FileChat, 'provider' | 'model'>[] {
+  const saved = new Set(context.file.telegram.chats.map((chat) => chat.id));
+  return [
+    ...context.file.telegram.chats,
+    ...context.snapshot.config.telegram.chats.filter((chat) => !saved.has(chat.id)),
+  ];
+}
+
 export function deleteProvider(context: ProviderWriteContext, alias: string): ConfigEdit[] {
   providerOf(context.file, alias);
   if (
     context.file.agent.provider === alias ||
     context.file.vision.provider === alias ||
-    context.file.telegram.chats.some((chat) => chat.provider === alias)
+    referencingChats(context).some((chat) => chat.provider === alias)
   ) {
     throw new AdminQueryError(
       'provider_in_use',
@@ -549,7 +563,7 @@ export function deleteModel(context: ProviderWriteContext, alias: string, modelI
   if (
     (context.file.agent.provider === alias && context.file.agent.model === modelId) ||
     (context.file.vision.provider === alias && context.file.vision.model === modelId) ||
-    context.file.telegram.chats.some((chat) => chat.provider === alias && chat.model === modelId)
+    referencingChats(context).some((chat) => chat.provider === alias && chat.model === modelId)
   ) {
     throw new AdminQueryError('model_in_use', `Model ${modelId} is used by the default agent, a Chat, or vision`, 409);
   }

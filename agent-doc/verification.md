@@ -59,8 +59,8 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | `web-fetch.test.ts` | 有界不可信文本结果与审计、私网/合成地址拒绝（含跳转目标）、fake-ip 网段默认拒绝且需 `allow_proxy_synthetic_addresses` 开启、6to4/Teredo 过渡地址拒绝 |
 | `operations.test.ts` | Retention、备份轮换、Scheduler 关闭 |
 | `admin.test.ts` | Admin 首次设置、登录、登录锁定（不受 `X-Forwarded-For` 与用户名轮换影响、并发失败计数、过期后重新计数）、请求体按字节流式限长、HTTPS 下 Cookie 带 `Secure`、Session、只读审计 API（含 Conversation Context 列表/详情与写入尝试被拒）、静态托管 |
-| `admin-providers.test.ts` | Provider/模型管理、SecretRef 只写不读、修订冲突、全局模型端点保留 Chat 覆盖、阻止删除 Chat 引用的 Provider/模型，待重启移除的 Chat 引用仍受 candidate 校验保护 |
-| `admin-chats.test.ts` | Chat 管理鉴权与 Origin、字符串 ID 与安全整数边界、Topic/模型严格校验、revision 先于 body 解析与并发写入保护、JSONC 注释及未管理字段保留、增删/Topic 待重启与历史保留、模型热应用/恢复继承、迁移 ID、保存后应用失败的状态与脱敏审计 |
+| `admin-providers.test.ts` | Provider/模型管理、SecretRef 只写不读、修订冲突、全局模型端点保留 Chat 覆盖、阻止删除 Chat 引用（含待重启移除的运行中 Chat）的 Provider/模型且不落盘 |
+| `admin-chats.test.ts` | Chat 管理鉴权与 Origin、字符串 ID 与安全整数边界、Topic/模型严格校验、模型覆盖必须显式带 thinking、revision 先于 body 解析与并发写入保护、JSONC 注释及未管理字段保留、增删/Topic 待重启与历史保留、模型热应用/恢复继承、迁移 ID、保存后应用失败的状态与脱敏审计 |
 | `model-switch.test.ts` | 可切换模型仅列 text 能力、当前模型取配置值、`option()` 只校验不应用（未知 provider/model 与 image-only 拒绝）、`current()` 跟随 `store.publish` 变化 |
 | `bot-commands.test.ts` | 命令解析与 mention 匹配、`setMyCommands` 注册一致性、`/pause` 中止与阻断、`/resume` 恢复、`/status` 用量与 Context 行口径、`/model` 分页与切换（写配置文件并 reload）、管理员鉴权与匿名拒绝、命令只审计不入库 |
 | `config-diff.test.ts` | 热更新白名单分类（hot/restart/outside_serve）、candidate 构造、Provider 的增删/改 kind/连接字段/模型定义全部取文件值、custom Provider `models[]` 对齐、新增 Chat 与 Prompt 内容比较 |

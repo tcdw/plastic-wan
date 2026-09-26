@@ -93,7 +93,7 @@ models.dev 目录缓存——`GET /providers/discover` 与 `lookup-metadata` 因
 
 - Manage → Chats 管理配置里的 Chat 与 Topic 白名单，以及 Chat 范围的模型 / thinking；不提供 Topic 级模型。Chat ID 与 Topic ID 全程保持字符串，服务端校验安全整数后写入配置。
 - `GET /api/chats` 同时返回 `saved` 与 `active`，页面并排显示 Saved settings / Running settings。增删 Chat、Topic 范围变化只有重启后生效；已有 active Chat 的模型设置热应用于下一次 Invocation。删除不清除审计历史，最后一个配置 Chat 不能删除。
-- 空 Topic 输入表示不限制 Topic；Global default 恢复模型与 thinking 继承，也可只覆盖 thinking。可选模型与思考档取自服务端，换模型自动选最弱档。
+- 空 Topic 输入表示不限制 Topic；Global default 恢复模型与 thinking 继承，也可只覆盖 thinking。选了 Chat 模型时 thinking 必须显式指定（不提供继承项）。可选模型与思考档取自服务端，换模型自动选最弱档。
 - 表单与删除确认打开时冻结 revision 和数据快照。后台刷新不能升级草稿的 `If-Match`；`config_conflict` 关闭旧对话框并要求重新打开。写入成功或失败都刷新 Chats / Models / config-status，因为失败也可能已写文件但未应用；错误仍内联展示。Settings 应用配置也使这三个视图失效。
 - `e2e/09-chats.e2e.ts` 覆盖增删、Topic 待重启、热切模型与恢复继承、并发修改/删除、真实保存后应用失败与恢复、移动端暗色表单。
 

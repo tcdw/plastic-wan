@@ -9,6 +9,9 @@ node_modules
 apps/admin-next/node_modules
 apps/admin-next/dist
 apps/admin-next/.output
+apps/docs
+docs/plan
+key.json
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

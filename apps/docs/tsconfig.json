@@ -1,0 +1,26 @@
+{
+  "include": ["**/*.ts", "**/*.tsx"],
+  "compilerOptions": {
+    "target": "ES2024",
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "isolatedModules": true
+  },
+  "exclude": ["node_modules", "dist"]
+}

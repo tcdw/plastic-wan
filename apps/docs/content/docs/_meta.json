@@ -1,0 +1,8 @@
+[
+  "index",
+  { "type": "dir", "name": "start", "label": "开始使用", "collapsible": false },
+  { "type": "dir", "name": "configure", "label": "配置与接入", "collapsible": false },
+  { "type": "dir", "name": "guides", "label": "把碗配置成自己的", "collapsible": false },
+  { "type": "dir", "name": "operations", "label": "维护与排障", "collapsible": false },
+  { "type": "dir", "name": "reference", "label": "参考", "collapsible": false }
+]

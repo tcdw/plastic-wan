@@ -1,0 +1,133 @@
+:root {
+  --rp-c-brand: #286f64;
+  --rp-c-brand-light: #28796c;
+  --rp-c-brand-lighter: #398b7d;
+  --rp-c-brand-dark: #205c53;
+  --rp-c-brand-darker: #174b44;
+  --rp-home-hero-name-color: var(--rp-c-text-1);
+  --rp-home-hero-name-background: none;
+  --rp-font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
+.dark {
+  --rp-c-brand: #80c6b8;
+  --rp-c-brand-light: #9ad6ca;
+  --rp-c-brand-lighter: #b3e4da;
+  --rp-c-brand-dark: #65b5a5;
+  --rp-c-brand-darker: #4ba290;
+}
+
+body {
+  text-autospace: normal;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.rp-home-background {
+  display: none;
+}
+.home-intro {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 1rem 2rem 3rem;
+}
+.home-intro h2 {
+  font-size: 1.4rem;
+  font-weight: 650;
+  margin-bottom: 1rem;
+}
+.home-intro p {
+  line-height: 1.9;
+  margin-bottom: 1rem;
+}
+.home-intro a,
+.version-notice a {
+  color: var(--rp-c-brand);
+  transition: color 200ms;
+  text-underline-offset: 4px;
+}
+.home-intro a:hover,
+.version-notice a:hover {
+  color: var(--rp-c-brand-dark);
+}
+button:focus-visible,
+.home-intro a:focus-visible,
+.version-notice a:focus-visible {
+  outline: 2px solid var(--rp-c-brand);
+  outline-offset: 4px;
+}
+.home-intro__columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4rem;
+  align-items: center;
+}
+.home-intro__example {
+  background: var(--rp-c-bg-soft);
+  padding: 2rem;
+  border-radius: 1.5rem;
+}
+.home-intro__caption {
+  font-size: 0.875rem;
+  color: var(--rp-c-text-2);
+}
+.home-intro__tasks {
+  margin-top: 4rem;
+}
+.home-intro__tasks ul {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem 4rem;
+  list-style: none;
+  padding: 0;
+}
+.home-intro__tasks a {
+  font-weight: 600;
+  display: inline-block;
+  padding-block: 0.5rem;
+}
+.home-intro__tasks span {
+  display: block;
+  color: var(--rp-c-text-2);
+  font-size: 0.925rem;
+}
+.home-intro__footer {
+  margin-top: 4rem;
+}
+.version-notice {
+  color: var(--rp-c-text-2);
+  font-size: 0.8125rem;
+  line-height: 1.8;
+  margin-bottom: 1.5rem;
+  overflow-wrap: anywhere;
+}
+.rp-doc code {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .home-intro {
+    padding: 1rem 1.5rem 2rem;
+  }
+  .home-intro__columns,
+  .home-intro__tasks ul {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+  .home-intro__example {
+    padding: 0;
+    background: none;
+  }
+  .home-intro__tasks,
+  .home-intro__footer {
+    margin-top: 3rem;
+  }
+}

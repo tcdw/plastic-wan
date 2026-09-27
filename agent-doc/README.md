@@ -29,6 +29,7 @@
 | 本地启动、安装媒体依赖、部署或排障 | [operations.md](operations.md) |
 | 修改 Admin Panel 认证、审计 API 或前端 | [admin-panel.md](admin-panel.md) |
 | 决定该运行哪些验证 | [verification.md](verification.md) |
+| 维护公开用户文档、首页、生成参考与静态构建 | [文档站维护](../apps/docs/README.md) |
 
 ## 历史资料索引（仅按明确请求读取）
 
@@ -52,6 +53,7 @@
 ## 文档边界
 
 - `AGENTS.md`：稳定入口、仓库规则、命令和主题目录。
+- `apps/docs/content/`：面向用户的公开任务指南，不复制本目录或历史设计；行为、配置和运维变化时，同步对应用户指南、示例和离线检查，维护约定见 [文档站维护](../apps/docs/README.md)。
 - 本目录正文：保留源码难以表达的决策理由、跨模块契约、例外与故障处理；完整注册表、表结构和依赖版本链接到源码，不维护数量或本地运行状态的副本。
 - 工具调用契约集中在 [telegram-agent-flow.md](telegram-agent-flow.md#skills-与受控能力调用)，架构页只解释分层与信任边界；逐文件清单只在 `AGENTS.md` 的 Project Structure 维护。
 - Bucket 节拍、system prompt 稳定段/注入段拆分等跨模块行为只在 [telegram-agent-flow.md](telegram-agent-flow.md) 维护；[configuration.md](configuration.md) 只写字段语义、覆盖关系与 `check-config` 校验，行为细节用小节链接指过去。

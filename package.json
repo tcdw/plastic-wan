@@ -11,12 +11,17 @@
     "plasticwan": "./src/cli.ts"
   },
   "scripts": {
-    "check": "tsc --noEmit && pnpm --filter plasticwan-admin-next run check",
+    "check": "tsc --noEmit && pnpm --filter plasticwan-admin-next run check && pnpm run docs:check",
     "test": "vitest run",
     "start": "node src/cli.ts serve",
     "admin:dev": "pnpm --filter plasticwan-admin-next run dev",
     "admin:build": "pnpm --filter plasticwan-admin-next run build",
     "admin:test:e2e": "pnpm --filter plasticwan-admin-next run test:e2e",
+    "docs:dev": "pnpm --filter plasticwan-docs run dev",
+    "docs:build": "pnpm --filter plasticwan-docs run build",
+    "docs:preview": "pnpm --filter plasticwan-docs run preview",
+    "docs:check": "pnpm --filter plasticwan-docs run check",
+    "docs:verify": "node scripts/docs-verify.ts",
     "lint": "biome lint . && biome format .",
     "lint:fix": "biome lint --write --unsafe . && biome format --write ."
   },

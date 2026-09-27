@@ -1,0 +1,81 @@
+{
+  // Copy this file to config/config.jsonc beside system-prompt.md.
+  // Supply the three environment variables through Docker Compose or your supervisor.
+  "version": 1,
+  "data_dir": "/data",
+  "timezone": "Asia/Shanghai",
+  "telegram": {
+    "token": { "env": "TELEGRAM_BOT_TOKEN" },
+    "process_bot_messages": false,
+    "bucket_window_seconds": 15,
+    "chats": [
+      {
+        "id": 123456789
+      }
+    ]
+  },
+  "providers": {
+    "gateway": {
+      "kind": "custom",
+      "base_url": "https://api.example.com/v1",
+      "api": "openai-responses",
+      "api_key": { "env": "PLASTICWAN_API_KEY" },
+      "models": [
+        {
+          "id": "replace-with-your-text-and-image-model",
+          "name": "Replace with an available model",
+          "reasoning": false,
+          "input": ["text", "image"],
+          "context_window": 128000,
+          "max_tokens": 8192,
+          "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 }
+        }
+      ]
+    }
+  },
+  "agent": {
+    "provider": "gateway",
+    "model": "replace-with-your-text-and-image-model",
+    "daily_budget": { "max_tokens": 300000 },
+    "thinking_level": "off",
+    "system_prompt_file": "system-prompt.md",
+    "max_concurrency": 4,
+    "context_stop_ratio": 0.7,
+    "history_messages": 20,
+    "context": {
+      "retained_sends_target": 2,
+      "retained_sends_max": 3,
+      "hard_token_ratio": 0.6,
+      "ref_ttl_hours": 72,
+      "idle_grace_seconds": 30,
+      "max_wall_clock_seconds": 900,
+      "agent_cache_size": 8
+    },
+    "rate_limits": {
+      "sends_per_window": 6,
+      "window_seconds": 300,
+      "turns_per_injection": 8
+    }
+  },
+  "vision": {
+    "provider": "gateway",
+    "model": "replace-with-your-text-and-image-model",
+    "max_output_tokens": 2048,
+    "max_concurrency": 2,
+    "background_sticker_concurrency": 1,
+    "prompt_version": 1,
+    "daily_budget": { "max_tokens": 200000, "max_images": 200 }
+  },
+  "retention": { "online_days": 30, "backup_copies": 7 },
+  "paths": {
+    "database": "/data/plasticwan.sqlite",
+    "media_cache": "/data/media-cache",
+    "backups": "/data/backups"
+  },
+  "admin": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 8787,
+    "session_ttl_hours": 24
+  }
+}

@@ -9,7 +9,10 @@
       "!!**/*.tsbuildinfo",
       "!!**/routeTree.gen.ts",
       "!!dev-data",
-      "!!skills/**/examples"
+      "!!skills/**/examples",
+      "!!apps/docs/content/public/examples",
+      "!!apps/docs/content/public/config.schema.json",
+      "!!apps/docs/content/public/build-info.json"
     ]
   },
   "formatter": {
@@ -45,7 +48,7 @@
   },
   "overrides": [
     {
-      "includes": ["apps/admin-next/**"],
+      "includes": ["apps/admin-next/**", "apps/docs/theme/**"],
       "linter": {
         "domains": {
           "react": "recommended"

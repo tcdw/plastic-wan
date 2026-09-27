@@ -1,0 +1,5 @@
+[
+  { "text": "快速开始", "link": "/docs/start/quick-start" },
+  { "text": "文档", "link": "/docs/", "activeMatch": "/docs/" },
+  { "text": "GitHub", "link": "https://github.com/tcdw/plastic-wan", "position": "right" }
+]

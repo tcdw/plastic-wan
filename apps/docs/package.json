@@ -1,0 +1,21 @@
+{
+  "name": "plasticwan-docs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node ../../scripts/docs-prepare.ts && rspress dev --host 127.0.0.1 --port 5274",
+    "build": "node ../../scripts/docs-prepare.ts && rspress build",
+    "preview": "rspress preview --host 127.0.0.1 --port 5274",
+    "check": "node ../../scripts/docs-prepare.ts && tsc --noEmit"
+  },
+  "devDependencies": {
+    "@rspress/core": "2.0.22",
+    "@types/node": "^24.13.5",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.0.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "typescript": "5.9.3"
+  }
+}

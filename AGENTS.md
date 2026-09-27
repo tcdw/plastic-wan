@@ -40,6 +40,7 @@ plasticwan/
 ├── test/                   # vitest 行为测试与 MCP fixture
 ├── scripts/                # 一次性维护脚本（直连 better-sqlite3，不属于业务层）
 ├── apps/admin-next/        # Rsbuild + React + Tailwind + shadcn Admin Panel 前端（纯静态 SPA）
+├── apps/docs/              # Rspress 中文官网与用户指南（独立静态站）
 ├── Dockerfile              # 两阶段镜像；媒体依赖打包在内
 ├── docker-compose.yml      # Docker 部署模板（/config 与 /data 两个卷）
 ├── agent-doc/              # 面向 agent 的按主题文档
@@ -84,6 +85,7 @@ Invocation 是运行窗口而不是一次问答：`agent.context.idle_grace_seco
 | 本地运行、依赖、Docker 部署、诊断和故障处理 | [agent-doc/operations.md](agent-doc/operations.md) |
 | Admin Panel 认证、审计 API 与前端 | [agent-doc/admin-panel.md](agent-doc/admin-panel.md) |
 | 测试命令与真实验收矩阵 | [agent-doc/verification.md](agent-doc/verification.md) |
+| 用户文档、首页、生成参考与静态站维护 | [apps/docs/README.md](apps/docs/README.md) |
 | 审计某次 Invocation、排查 bot 为什么不回复 | [.agents/skills/plastic-wan-audit/SKILL.md](.agents/skills/plastic-wan-audit/SKILL.md)、[scripts/audit.ts](scripts/audit.ts) |
 
 历史资料的按需索引与读取边界见 [agent-doc/README.md](agent-doc/README.md#历史归档读取规则)。判断当前行为只看源码与上表主题文档，不以历史设计作为当前约束或待办。
@@ -101,10 +103,14 @@ node src/cli.ts backup --config dev-data/config.jsonc
 node src/cli.ts configure --config dev-data/config.jsonc
 pnpm run admin:build
 pnpm run admin:dev
+pnpm run docs:dev
+pnpm run docs:build
+pnpm run docs:verify
+pnpm run docs:preview
 ```
 
 - 包管理器为 pnpm（`pnpm-lock.yaml`）；运行时为 Node.js ≥24，测试运行器为 vitest（`pnpm test`），CLI 入口为 `node src/cli.ts …`。
-- `pnpm run check`：严格 TypeScript 检查，不生成文件。
+- `pnpm run check`：严格 TypeScript 检查（runtime/Admin/docs）；文档检查前会准备被忽略的版本元数据、字段参考和示例，不输出编译 JS。
 - `pnpm test`：运行全部行为测试。
 - `check-config`：只验证 JSONC Schema、语义与引用，输出配置哈希。
 - `doctor`：执行 SQLite/Sharp/FFmpeg/Lottie、Provider、Vision、Telegram 与 required MCP 的真实探针。
@@ -113,6 +119,7 @@ pnpm run admin:dev
 - `configure`：`src/tui/` 的交互式配置向导，编辑既有配置的 Provider 与 thinking level，可从 Provider `/models` 拉取可路由模型 ID 后写回原文件。要求已存在可加载的配置且 stdin 是 TTY，非交互环境直接报错退出——agent 不要调用它。
 - `admin:build`：构建 `apps/admin-next` 生产 bundle（`apps/admin-next/dist`），供 `serve` 静态托管。
 - `admin:dev`：启动 Rsbuild dev server（监听 127.0.0.1:5273），`/api` 代理到运行中的 Admin Panel。
+- `docs:*`：独立静态文档站；`dev`/`preview` 监听 127.0.0.1:5274，`build` 输出 `apps/docs/dist`，`verify` 检查生产 HTML/Markdown/llms 与 HTTP。维护及部署边界见 [apps/docs/README.md](apps/docs/README.md)。用户可见行为、配置或运维改变时，同步更新相关指南、示例与测试，不把 `agent-doc/` 自动发布到站点。
 
 ## Long-Running Process Rules
 

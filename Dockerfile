@@ -13,6 +13,8 @@ RUN npm install --global pnpm@12.4.2
 
 # Cache layer: install deps before copying source
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# The shared lockfile validates patch hashes even when the docs workspace is absent.
+COPY patches ./patches
 COPY apps/admin-next/package.json ./apps/admin-next/
 RUN pnpm install --frozen-lockfile
 

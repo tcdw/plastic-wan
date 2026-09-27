@@ -8,3 +8,6 @@ allowBuilds:
   better-sqlite3: false
   esbuild: true
   protobufjs: true
+
+patchedDependencies:
+  '@rspress/core@2.0.22': patches/@rspress__core@2.0.22.patch

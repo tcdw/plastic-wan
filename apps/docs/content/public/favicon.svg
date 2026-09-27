@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="塑料碗">
+  <rect width="64" height="64" rx="18" fill="#205c53" />
+  <path d="M12 27h40c-2 16-9 23-20 23S14 43 12 27Z" fill="#fff" />
+  <ellipse cx="32" cy="25" rx="20" ry="7" fill="none" stroke="#fff" stroke-width="4" />
+</svg>

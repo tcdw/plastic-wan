@@ -112,14 +112,15 @@ export interface SendToolEnvironment {
   readonly holdForNewMessages?: () => boolean;
 }
 
-function alarmMention(
-  alarm: InvocationContext['alarm'],
+function completionMention(
+  completion: InvocationContext['completion'],
 ): { readonly text: string; readonly entity: MessageEntity; readonly url: string } | null {
-  if (alarm === null) {
+  const target = completion?.delivery.mentionUser;
+  if (target === undefined) {
     return null;
   }
-  const text = alarm.displayName.length > 0 ? `@${alarm.displayName}` : `@${alarm.userId.toString()}`;
-  const url = `tg://user?id=${alarm.userId.toString()}`;
+  const text = target.displayName.length > 0 ? `@${target.displayName}` : `@${target.userId.toString()}`;
+  const url = `tg://user?id=${target.userId.toString()}`;
   return {
     text,
     url,
@@ -139,7 +140,7 @@ function escapeMarkdownV2LinkText(text: string): string {
 export function createSendTool(
   environment: SendToolEnvironment,
 ): AgentTool<typeof SendInputSchema, { telegramMessageId: string }> {
-  let firstTextSent = false;
+  const mentionedTasks = new Set<bigint>();
   const textConstraints = [
     environment.maxTextLength === undefined
       ? 'Text must fit the schema limit.'
@@ -151,7 +152,7 @@ export function createSendTool(
   return {
     name: 'send',
     label: 'Send to Telegram',
-    description: `Publish exactly one warranted user-visible Telegram message or sticker. Use this only after deciding the new messages or an alarm task require a reply, clarification, or confirmation; do not use it merely because the tool is available, to answer history-only content, or to publish private reasoning. Keep the message concise and self-contained. For text, kind may be omitted; omit parse_mode for plain text, or set parse_mode to MarkdownV2 only when the text is correctly escaped. ${textConstraints} For a sticker, kind must be sticker and sticker_ref must be a stk_ value returned by the search_stickers capability (via execute); img_ refs cannot be sent. Set reply_to_message_id only to a message visible in this conversation, preferring the relevant new message. Success means Telegram accepted the send; if the tool fails or reports an unknown outcome, do not claim it was sent and do not blindly retry. Repeated sends are rate limited per chat, so say what matters in one message instead of splitting it.`,
+    description: `Publish exactly one warranted user-visible Telegram message or sticker. Use this only after deciding the new messages or a current task completion require a reply, clarification, or confirmation; do not use it merely because the tool is available, to answer history-only content, or to publish private reasoning. Keep the message concise and self-contained. For text, kind may be omitted; omit parse_mode for plain text, or set parse_mode to MarkdownV2 only when the text is correctly escaped. ${textConstraints} For a sticker, kind must be sticker and sticker_ref must be a stk_ value returned by the search_stickers capability (via execute); img_ refs cannot be sent. Set reply_to_message_id only to a message visible in this conversation, preferring the relevant new message. Success means Telegram accepted the send; if the tool fails or reports an unknown outcome, do not claim it was sent and do not blindly retry. Repeated sends are rate limited per chat, so say what matters in one message instead of splitting it.`,
     parameters: SendInputSchema,
     executionMode: 'sequential',
     execute: async (toolCallId, input, signal) => {
@@ -170,11 +171,12 @@ export function createSendTool(
       }
       const targetConversationId = replyTarget?.conversationId ?? environment.context.conversationId;
       const targetThreadId = replyTarget?.threadId ?? environment.context.threadId;
+      const completion = environment.context.completion;
       let mention: { readonly text: string; readonly entity: MessageEntity; readonly url: string } | null = null;
       let sendText = '';
       if (send.kind === 'text') {
-        if (!firstTextSent) {
-          mention = alarmMention(environment.context.alarm);
+        if (completion !== null && !mentionedTasks.has(completion.taskId)) {
+          mention = completionMention(completion);
         }
         if (mention === null) {
           sendText = send.text;
@@ -356,8 +358,8 @@ export function createSendTool(
               : `Telegram send failed: ${errorCode}`,
         );
       }
-      if (mention !== null) {
-        firstTextSent = true;
+      if (mention !== null && completion !== null) {
+        mentionedTasks.add(completion.taskId);
       }
       // Telegram has accepted the message from here on. A failure to record it
       // must not read as a failed send, or the model would send it again.

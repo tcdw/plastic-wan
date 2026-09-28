@@ -29,11 +29,11 @@ export function cancelOngoingSessions(orm: Orm, now = new Date()): CancelOngoing
           ))`),
       );
 
-      // A claimed alarm whose queued invocation is being aborted must close
-      // instead of staying `firing` until a later restart.
-      orm.run(sql`UPDATE alarms
-       SET state = 'cancelled', cancelled_at = ${timestamp}, cancel_reason = 'admin_cancel', admin_cancelled = 1, updated_at = ${timestamp}
-       WHERE state = 'firing' AND invocation_id IN (SELECT id FROM invocations WHERE state = 'queued')`);
+      // Cancel queued delivery, not the already-completed task. Running work
+      // settles its receipt after the scheduler aborts it.
+      orm.run(sql`UPDATE task_receipts
+       SET state = 'suppressed', cancelled_at = ${timestamp}, cancel_reason = 'admin_cancel', admin_cancelled = 1, updated_at = ${timestamp}
+       WHERE state = 'claimed' AND invocation_id IN (SELECT id FROM invocations WHERE state = 'queued')`);
 
       invocationResult = asRunResult(
         orm.run(sql`UPDATE invocations

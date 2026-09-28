@@ -775,7 +775,7 @@ describe('database', () => {
     const store = await SqliteStore.open(config);
     try {
       const prepared = store.orm.select().from(schemaMigrations).prepare();
-      expect(prepared.all()).toHaveLength(19);
+      expect(prepared.all()).toHaveLength(22);
       store.close();
       expect(() => prepared.all()).toThrow();
       await unlink(config.paths.database);
@@ -789,11 +789,14 @@ describe('database', () => {
     const { configPath } = await fixture();
     const { config } = await loadConfig(configPath);
     const store = await SqliteStore.open(config);
-    const version = store.db
-      .prepare<[], { version: bigint }>('SELECT MAX(version) AS version FROM schema_migrations')
-      .get();
-    expect(version?.version).toBe(19n);
-    store.close();
+    try {
+      const version = store.db
+        .prepare<[], { version: bigint }>('SELECT MAX(version) AS version FROM schema_migrations')
+        .get();
+      expect(version?.version).toBe(22n);
+    } finally {
+      store.close();
+    }
 
     const backupPath = await backupDatabase(config);
     expect(await pathExists(backupPath)).toBe(true);

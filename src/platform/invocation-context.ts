@@ -3,6 +3,36 @@
  * import any other src module, because context-builder, memory, and every tool
  * boundary depend on these types.
  */
+
+// ── JSON value types (leaf, shared by store and plugins) ───────────
+
+/** Serializable JSON values that survive TypeBox + JSON.stringify round-trips. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | { readonly [key: string]: JsonValue };
+
+/** Delivery policy frozen at task creation, consumed when the receipt is injected. */
+export interface DeliveryPolicy {
+  readonly bypassDailyBudget: boolean;
+  readonly mentionUser?:
+    | {
+        readonly userId: bigint;
+        readonly displayName: string;
+      }
+    | undefined;
+}
+
+/** Completion receipt currently being handled by the agent (one receipt per round). */
+export interface CompletionContext {
+  readonly taskId: bigint;
+  readonly pluginId: string;
+  readonly payload: JsonValue;
+  readonly status: 'completed' | 'failed' | 'cancelled';
+  readonly resultJson?: JsonValue;
+  readonly errorJson?: JsonValue;
+  readonly delivery: DeliveryPolicy;
+}
+
+// ── Invocation context ────────────────────────────────────────────
+
 export interface ReplyTarget {
   readonly conversationId: bigint;
   readonly threadId: bigint;
@@ -15,11 +45,6 @@ export interface VisibleSender {
   readonly userId: bigint;
   readonly displayName: string;
   readonly username: string | null;
-}
-export interface AlarmContext {
-  readonly userId: bigint;
-  readonly displayName: string;
-  readonly summary: string;
 }
 
 /**
@@ -59,7 +84,7 @@ export interface InvocationContext {
   readonly directImages: readonly DirectImage[];
   readonly visibleSenders: ReadonlyMap<string, VisibleSender>;
   readonly callerUserId: bigint | null;
-  readonly alarm: AlarmContext | null;
+  readonly completion: CompletionContext | null;
   readonly omittedNewMessages: number;
 }
 
@@ -81,7 +106,7 @@ export class InvocationContextState implements InvocationContext {
   #directImages: DirectImage[] = [];
   #visibleSenders = new Map<string, VisibleSender>();
   #callerUserId: bigint | null = null;
-  #alarm: AlarmContext | null = null;
+  #completion: CompletionContext | null = null;
   #omittedNewMessages = 0;
 
   constructor(identity: {
@@ -89,13 +114,13 @@ export class InvocationContextState implements InvocationContext {
     readonly conversationId: bigint;
     readonly chatId: bigint;
     readonly threadId: bigint;
-    readonly alarm: AlarmContext | null;
+    readonly completion: CompletionContext | null;
   }) {
     this.invocationId = identity.invocationId;
     this.conversationId = identity.conversationId;
     this.chatId = identity.chatId;
     this.threadId = identity.threadId;
-    this.#alarm = identity.alarm;
+    this.#completion = identity.completion;
   }
 
   get systemPrompt(): string {
@@ -113,8 +138,8 @@ export class InvocationContextState implements InvocationContext {
   get callerUserId(): bigint | null {
     return this.#callerUserId;
   }
-  get alarm(): AlarmContext | null {
-    return this.#alarm;
+  get completion(): CompletionContext | null {
+    return this.#completion;
   }
   get omittedNewMessages(): number {
     return this.#omittedNewMessages;
@@ -127,6 +152,7 @@ export class InvocationContextState implements InvocationContext {
   /** Applies one injected batch: the newest state wins, senders accumulate. */
   applyInjection(injection: {
     readonly callerUserId: bigint | null;
+    readonly completion: CompletionContext | null;
     readonly directImages: readonly DirectImage[];
     readonly omittedNewMessages: number;
     readonly text: string;
@@ -135,12 +161,19 @@ export class InvocationContextState implements InvocationContext {
     this.#userPrompt = injection.text;
     this.#directImages = [...injection.directImages];
     this.#omittedNewMessages = injection.omittedNewMessages;
-    if (injection.callerUserId !== null) {
+    this.#completion = injection.completion;
+    // A completion is not a new user request and must not inherit the previous
+    // speaker's authority to inspect or cancel their tasks.
+    if (injection.completion !== null || injection.callerUserId !== null) {
       this.#callerUserId = injection.callerUserId;
     }
     for (const sender of injection.visibleSenders) {
       this.#visibleSenders.set(sender.userId.toString(), sender);
     }
+  }
+
+  finishCompletion(): void {
+    this.#completion = null;
   }
 
   /** Drops state for messages that no longer exist in the retained segment. */
@@ -150,7 +183,7 @@ export class InvocationContextState implements InvocationContext {
 
   /** Recomputes the trusted caller after history was collected. */
   setCallerUserId(callerUserId: bigint | null): void {
-    this.#callerUserId = callerUserId;
+    this.#callerUserId = this.#completion === null ? callerUserId : null;
   }
 }
 
@@ -166,7 +199,7 @@ export function previewContext(): InvocationContext {
     directImages: [],
     visibleSenders: new Map(),
     callerUserId: null,
-    alarm: null,
+    completion: null,
     omittedNewMessages: 0,
   };
 }

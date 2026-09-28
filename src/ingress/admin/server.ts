@@ -13,7 +13,8 @@ import type { AgentModelOption, AgentModelSwitcher } from '../../platform/model-
 import type { BucketScheduler } from '../../orchestration/scheduler.ts';
 import { wakeFromSleep } from '../../store/sleep.ts';
 import { addBotAdmin, listBotAdmins, parseAdminUserId, removeBotAdmin } from '../../store/admins.ts';
-import { cancelAlarm, listAlarms, parseAlarmId } from './alarm-admin.ts';
+import { cancelAlarm, listAlarms, parseAlarmId } from '../../plugins/alarm/admin.ts';
+import { LongTaskService } from '../../store/long-tasks.ts';
 import {
   AdminQueryError,
   getConversationContext,
@@ -109,6 +110,7 @@ export interface AdminServerOptions {
   readonly store: SqliteStore;
   readonly configStore: RuntimeConfigurationStore;
   readonly scheduler?: BucketScheduler;
+  readonly tasks?: LongTaskService;
   readonly modelSwitcher?: AgentModelSwitcher;
   readonly configReloader?: ConfigReloader;
   /** Registers panel-supplied plaintext secrets before they are written or sent. */
@@ -142,6 +144,7 @@ export class AdminServer {
   readonly #admin: AdminConfig;
   readonly #auth: AdminAuth;
   readonly #scheduler: BucketScheduler | undefined;
+  readonly #tasks: LongTaskService;
   readonly #modelSwitcher: AgentModelSwitcher | undefined;
   readonly #configReloader: ConfigReloader | undefined;
   readonly #secrets: SecretStore | undefined;
@@ -161,6 +164,7 @@ export class AdminServer {
     this.#admin = admin;
     this.#auth = new AdminAuth(options.store.orm, admin.session_ttl_hours);
     this.#scheduler = options.scheduler;
+    this.#tasks = options.tasks ?? new LongTaskService(options.store.orm, () => this.#scheduler?.wake());
     this.#modelSwitcher = options.modelSwitcher;
     this.#configReloader = options.configReloader;
     this.#secrets = options.secrets;
@@ -352,8 +356,7 @@ export class AdminServer {
     }
     if (segments[0] === 'alarms' && segments.length === 2 && request.method === 'DELETE') {
       const id = parseAlarmId(segments[1] ?? '');
-      const result = cancelAlarm(this.#store.orm, id, session.username);
-      this.#scheduler?.wake();
+      const result = cancelAlarm(this.#tasks, this.#store.orm, id, session.username);
       return json(result);
     }
     if (route === 'model') {

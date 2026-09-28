@@ -25,7 +25,8 @@ pnpm test test/admin.test.ts test/admin-providers.test.ts test/admin-chats.test.
 pnpm test test/bot-commands.test.ts
 pnpm test test/config-diff.test.ts test/config-reload.test.ts test/chat-model-runtime.test.ts
 pnpm test test/memory.test.ts
-pnpm test test/alarm.test.ts test/alarm-internal-context.test.ts
+pnpm test test/long-tasks.test.ts test/long-tasks-migration.test.ts test/task-delivery.test.ts test/task-runtime.test.ts test/task-context.test.ts test/task-hot-injection.test.ts
+pnpm test test/alarm.test.ts test/alarm-context.test.ts
 pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-configure.test.ts
 ```
 
@@ -66,7 +67,13 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | `config-diff.test.ts` | 热更新白名单分类（hot/restart/outside_serve）、candidate 构造、Provider 的增删/改 kind/连接字段/模型定义全部取文件值、custom Provider `models[]` 对齐、新增 Chat 与 Prompt 内容比较 |
 | `config-reload.test.ts` | `ConfigReloader` 外部契约：generation 与两个 hash、`config_reloaded`/`config_reload_failed`/`model_switch_failed` 日志、待重启字段撤销与只改注释后 active hash 跟上文件 hash、两遍校验与 `candidate_invalid`、`secret_unresolved` 的整次拒绝、待重启列表、运行中 Invocation 钉住模型与 Provider 连接（两个本地端点验证换地址后的下一轮仍走旧地址）、`/model` 写入文件（保留注释、`0600`、符号链接拒绝）、`invocations.config_hash` 在 `queued → running` 写入、Admin `POST /config/apply` 与 `PUT /model` 的响应体；Chat 覆盖切换按文件 ID 定位（reorder 后仍解析正确、保留其它 Chat 与全局默认、文件里缺该 Chat 时拒绝写入不落盘）、并发 Chat 切换互不覆盖、发布前对全局与每个选中 Chat 模型逐一校验（删除在用 Chat 模型被拒、全局换模型拒绝继承不兼容的 thinking） |
 | `memory.test.ts` | 记忆持久化与 TTL、Conversation 隔离、Tool 审计、注入批次内 `<memory_list>` 的顺序与作用域、Admin 记忆 CRUD |
-| `alarm.test.ts` / `alarm-internal-context.test.ts` | Alarm 创建/触发/取消、creator-vs-target ownership、latest-new caller 解析、跨 invocation hidden mapping、状态变化安全失败、send 不泄漏、重启后 durable internal context |
+| `long-tasks.test.ts` | 任务/receipt 的 JSON 边界、终态 CAS 与唯一 receipt、plugin/Conversation/caller scope、quota（含取消记录）及外部 completion handle |
+| `long-tasks-migration.test.ts` | 使用历史迁移建立 019/020 测试库再升级至 022：ID、owner、取消后 Invocation 关联、四态迁移、NULL 创建者、丢弃旧旁路观察（含非法 payload）、canonical history/refs/正常审计与任务回执整行保留，并验证 022 为每个 receipt 建立唯一 `bucket_id`、重复打开及新库无旧表、Drizzle CHECK/partial index 与 SQLite 一致性 |
+| `task-delivery.test.ts` | 创建 Invocation 删除后的外部 complete/fail 真实内部链路、普通 assistant 不直发、目的地移除、queued 管理取消与 running AbortSignal 审计结算 |
+| `task-runtime.test.ts` | Scheduler 单一循环、Chat 串行/全局并发、同一 Conversation 运行中 attach 多个独立 receipt、closing 保持 pending、跨 Topic 串行、receipt 优先级、sleep 交界、busy timer 完成不空转、pending/claimed 的重启恢复、未消费 receipt 转移归属、Admin 取消当前会话仍保留未 claim 的 pending receipt |
+| `task-context.test.ts` | receipt opening 与后续普通注入的 canonical history/context refs/model audit、不可信数据边界、caller 清空、mention/bypass 不泄漏到普通批次、mention 仅首次成功文本发送、冻结预算豁免及 turn/send/context/wall-clock 限制 |
+| `task-hot-injection.test.ts` | 同一运行的多 receipt 等工具链结束后逐条独立注入、receipt 不触发 send barrier、独立 checkpoint/mention、idle grace 唤醒并正常完成、模型失败时未消费回执重排、`/pause`/Admin cancel 防止回执复活、跨回执与普通批次的 caller/budget/zzz 恢复 |
+| `alarm.test.ts` / `alarm-context.test.ts` | Alarm 输入与 ownership、列表/取消四态、canonical context_messages 保存与跨 Invocation/重启复用、checkpoint GC/话题清空遗忘、send 不泄漏、Admin 投影、pending/claimed 保留与终态 retention |
 | `prompt-template.test.ts` | Prompt 模板白名单变量渲染、未知与格式错误表达式拒绝 |
 | `prompt-markdown.test.ts` | HTML 注释剔除、纯注释行移除、跨行注释与未闭合注释保留 |
 | `tui-configure.test.ts` | `configure` 向导输出可被 `loadConfig` 接受、非法配置不落盘、会话期间被改过的文件不被覆盖、models.dev 能力/费用映射、Provider `/models` 拉取与去重、CLI 参数与 `--output-agent-prompt` 解析 |

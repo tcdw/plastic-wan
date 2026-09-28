@@ -5,7 +5,8 @@ import { type SqliteStore, asRunResult, isChatPaused, resolveChatConfig } from '
 import { snapshotInvocation } from '../store/invocation-snapshot.ts';
 import { ParticipationRegistry, isConversationActive } from '../store/participation.ts';
 import { activeSleepUntil } from '../store/sleep.ts';
-import { alarms, appState, bucketMessages, buckets, invocationBuckets, invocations } from '../store/schema.ts';
+import { appState, bucketMessages, buckets, invocationBuckets, invocations, taskReceipts } from '../store/schema.ts';
+import { LongTaskService } from '../store/long-tasks.ts';
 
 export const RECOVERY_MAX_AGE_MS = 5 * 60_000;
 export const STARTUP_CATCH_UP_STATE_KEY = 'telegram_startup_catch_up';
@@ -22,7 +23,7 @@ export interface BucketAttachmentTarget {
   isClosing(conversationId: bigint): boolean;
   /** True from the moment a batch is injected until that round's last turn ends. */
   isRoundInProgress(conversationId: bigint): boolean;
-  queueInjection(conversationId: bigint, bucketId: bigint): void;
+  queueInjection(conversationId: bigint, bucketId: bigint, kind?: 'messages' | 'completion'): void;
 }
 
 interface BucketRow {
@@ -52,13 +53,13 @@ interface StartupMessageRow {
   readonly telegram_date: string;
 }
 
-interface AlarmDueRow {
-  readonly id: bigint;
+interface ReceiptRow {
+  readonly task_id: bigint;
   readonly conversation_id: bigint;
   readonly chat_id: bigint;
   readonly telegram_chat_id: bigint;
   readonly message_thread_id: bigint;
-  readonly scheduled_at: string;
+  readonly bypass_daily_budget: bigint;
 }
 
 /**
@@ -86,7 +87,7 @@ export function attachBucketToInvocation(
 }
 
 /**
- * Synchronous state transitions that turn due buckets and alarms into queued
+ * Synchronous state transitions that turn due buckets and task receipts into queued
  * invocations, plus crash recovery and startup catch-up. No timers live here:
  * the scheduler drives these methods from its event loop.
  */
@@ -95,12 +96,19 @@ export class InvocationQueueService {
   readonly #configStore: RuntimeConfigurationStore;
   readonly #participation: ParticipationRegistry;
   readonly #attachment: BucketAttachmentTarget | undefined;
+  readonly #tasks: LongTaskService;
 
-  constructor(store: SqliteStore, configStore: RuntimeConfigurationStore, attachment?: BucketAttachmentTarget) {
+  constructor(
+    store: SqliteStore,
+    configStore: RuntimeConfigurationStore,
+    attachment?: BucketAttachmentTarget,
+    tasks = new LongTaskService(store.orm),
+  ) {
     this.#store = store;
     this.#configStore = configStore;
     this.#participation = new ParticipationRegistry(configStore.current().config);
     this.#attachment = attachment;
+    this.#tasks = tasks;
   }
 
   recover(now = new Date()): void {
@@ -119,6 +127,34 @@ export class InvocationQueueService {
       this.#store.orm.run(
         sql`UPDATE buckets SET state = CASE WHEN EXISTS (SELECT 1 FROM invocations i WHERE i.bucket_id = buckets.id AND i.state = 'outcome_unknown') THEN 'outcome_unknown' ELSE 'aborted' END, error_code = 'process_restart', finished_at = ${nowIso}, updated_at = ${nowIso} WHERE state = 'running'`,
       );
+      // A claim is never replayed: the send outcome can be unknown even when
+      // the invocation link is missing or already terminal. Close queued work
+      // before ordinary age-based recovery can overwrite its restart reason.
+      this.#store.orm.run(
+        sql`UPDATE buckets SET state = 'aborted', error_code = 'process_restart', finished_at = ${nowIso}, updated_at = ${nowIso}
+           WHERE id IN (
+             SELECT i.bucket_id FROM invocations i JOIN task_receipts r ON r.invocation_id = i.id
+             WHERE r.state = 'claimed' AND i.state = 'queued'
+             UNION
+             SELECT ib.bucket_id FROM invocation_buckets ib JOIN invocations i ON i.id = ib.invocation_id
+             JOIN task_receipts r ON r.invocation_id = i.id WHERE r.state = 'claimed' AND i.state = 'queued'
+           )`,
+      );
+      this.#store.orm.run(
+        sql`UPDATE invocations SET state = 'aborted', completion_reason = 'process_restart', finished_at = ${nowIso}
+           WHERE state = 'queued' AND id IN (SELECT invocation_id FROM task_receipts WHERE state = 'claimed')`,
+      );
+      this.#store.orm
+        .update(taskReceipts)
+        .set({
+          state: 'handled',
+          handledAt: nowIso,
+          updatedAt: nowIso,
+          invocationOutcome: 'outcome_unknown',
+          completionReason: 'outcome_unknown',
+        })
+        .where(eq(taskReceipts.state, 'claimed'))
+        .run();
       const expiring = this.#store.orm
         .select({ id: buckets.id })
         .from(buckets)
@@ -135,33 +171,6 @@ export class InvocationQueueService {
           .update(invocations)
           .set({ state: 'aborted', completionReason: 'recovery_age', finishedAt: nowIso })
           .where(and(eq(invocations.bucketId, bucket.id), eq(invocations.state, 'queued')))
-          .run();
-      }
-      // A firing alarm owns a claimed invocation. Recovery never returns it to
-      // pending: any queued result invocation is aborted, and the alarm closes as
-      // fired with an outcome_unknown result so it can never re-send.
-      const firing = this.#store.orm
-        .select({ id: alarms.id, invocationId: alarms.invocationId })
-        .from(alarms)
-        .where(eq(alarms.state, 'firing'))
-        .all();
-      for (const alarm of firing) {
-        if (alarm.invocationId !== null) {
-          this.#store.orm
-            .update(invocations)
-            .set({ state: 'aborted', completionReason: 'process_restart', finishedAt: nowIso })
-            .where(and(eq(invocations.id, alarm.invocationId), eq(invocations.state, 'queued')))
-            .run();
-        }
-        this.#store.orm
-          .update(alarms)
-          .set({
-            state: 'fired',
-            invocationOutcome: 'outcome_unknown',
-            completionReason: 'outcome_unknown',
-            updatedAt: nowIso,
-          })
-          .where(and(eq(alarms.id, alarm.id), eq(alarms.state, 'firing')))
           .run();
       }
     });
@@ -441,7 +450,11 @@ export class InvocationQueueService {
    */
   releaseUninjectedBuckets(invocationId: bigint, now: Date): void {
     const rows = this.#store.orm
-      .select({ bucketId: invocationBuckets.bucketId, conversationId: buckets.conversationId })
+      .select({
+        bucketId: invocationBuckets.bucketId,
+        conversationId: buckets.conversationId,
+        errorCode: buckets.errorCode,
+      })
       .from(invocationBuckets)
       .innerJoin(buckets, eq(buckets.id, invocationBuckets.bucketId))
       .innerJoin(invocations, eq(invocations.id, invocationBuckets.invocationId))
@@ -463,9 +476,37 @@ export class InvocationQueueService {
       // An admin cancel expires attached batches before aborting the run; those
       // must not come back as a new invocation.
       if (asRunResult(released).changes === 0) {
+        this.#store.orm
+          .update(taskReceipts)
+          .set({
+            state: 'suppressed',
+            cancelledAt: timestamp,
+            cancelReason: row.errorCode ?? 'bucket_unavailable',
+            adminCancelled: row.errorCode === 'admin_cancel',
+            updatedAt: timestamp,
+          })
+          .where(
+            and(
+              eq(taskReceipts.bucketId, row.bucketId),
+              eq(taskReceipts.invocationId, invocationId),
+              eq(taskReceipts.state, 'claimed'),
+            ),
+          )
+          .run();
         continue;
       }
-      this.#insertInvocation(row.bucketId, row.conversationId, now, false);
+      const nextInvocationId = this.#insertInvocation(row.bucketId, row.conversationId, now, false);
+      this.#store.orm
+        .update(taskReceipts)
+        .set({ invocationId: nextInvocationId, updatedAt: timestamp })
+        .where(
+          and(
+            eq(taskReceipts.bucketId, row.bucketId),
+            eq(taskReceipts.invocationId, invocationId),
+            eq(taskReceipts.state, 'claimed'),
+          ),
+        )
+        .run();
       console.log(
         JSON.stringify({
           event: 'bucket_requeued',
@@ -486,40 +527,108 @@ export class InvocationQueueService {
       .at(0)?.id;
   }
 
-  processAlarmsDue(now = new Date()): bigint[] {
+  processTasksDue(now = new Date()): bigint[] {
+    // Completion is independent of chat availability; only receipt delivery
+    // waits for a running chat or ordinary sleep policy.
+    this.#tasks.processDue(now);
     const nowIso = now.toISOString();
+    const sleepUntil = activeSleepUntil(this.#store.orm, now);
     return this.#store.transaction(() => {
-      const due = this.#store.orm.all<AlarmDueRow>(
-        sql`SELECT a.id, a.conversation_id, v.chat_id, c.telegram_chat_id, v.message_thread_id, a.scheduled_at
-         FROM alarms a
-         JOIN conversations v ON v.id = a.conversation_id
+      const pending = this.#store.orm.all<ReceiptRow>(
+        sql`SELECT r.task_id, t.conversation_id, v.chat_id, c.telegram_chat_id, v.message_thread_id,
+                   json_extract(t.delivery_json, '$.bypassDailyBudget') AS bypass_daily_budget
+         FROM task_receipts r JOIN long_tasks t ON t.id = r.task_id
+         JOIN conversations v ON v.id = t.conversation_id
          JOIN chats c ON c.id = v.chat_id
-         WHERE a.state = 'pending' AND a.scheduled_at <= ${nowIso}
-         ORDER BY a.scheduled_at, a.id`,
+         WHERE r.state = 'pending'
+         ORDER BY r.created_at, r.task_id`,
       );
-      const invocations: bigint[] = [];
-      for (const alarm of due) {
-        const cancelReason = this.#alarmCancelReason(alarm);
+      const invocationIds: bigint[] = [];
+      for (const receipt of pending) {
+        const cancelReason = this.#receiptCancelReason(receipt);
         if (cancelReason !== undefined) {
-          this.#cancelAlarm(alarm.id, cancelReason, nowIso);
-          continue;
-        }
-        if (this.#chatRunning(alarm.chat_id)) {
-          continue;
-        }
-        const claimed = asRunResult(
           this.#store.orm
-            .update(alarms)
-            .set({ state: 'firing', firedAt: nowIso, updatedAt: nowIso })
-            .where(and(eq(alarms.id, alarm.id), eq(alarms.state, 'pending')))
-            .run(),
-        );
+            .update(taskReceipts)
+            .set({
+              state: 'suppressed',
+              cancelledAt: nowIso,
+              cancelReason,
+              adminCancelled: false,
+              updatedAt: nowIso,
+            })
+            .where(and(eq(taskReceipts.taskId, receipt.task_id), eq(taskReceipts.state, 'pending')))
+            .run();
+          continue;
+        }
+        if (sleepUntil !== null && receipt.bypass_daily_budget !== 1n) {
+          continue;
+        }
+        const running = this.#runningInvocation(receipt.conversation_id);
+        if (running !== undefined) {
+          if (this.#attachment === undefined || this.#attachment.isClosing(receipt.conversation_id)) {
+            continue;
+          }
+        } else if (this.#chatRunning(receipt.chat_id)) {
+          continue;
+        }
+        const claimed = this.#store.orm
+          .update(taskReceipts)
+          .set({ state: 'claimed', claimedAt: nowIso, updatedAt: nowIso })
+          .where(and(eq(taskReceipts.taskId, receipt.task_id), eq(taskReceipts.state, 'pending')))
+          .run();
         if (claimed.changes !== 1) {
           continue;
         }
-        invocations.push(this.#insertAlarmInvocation(alarm, now));
+        const invocationId = this.#insertReceiptInvocation(receipt, now, running);
+        if (running === undefined) {
+          invocationIds.push(invocationId);
+        }
       }
-      return invocations;
+      return invocationIds;
+    });
+  }
+
+  /** Recheck destinations immediately before launch, not just when claiming. */
+  suppressInvalidQueuedReceipts(now = new Date()): void {
+    this.#store.transaction(() => {
+      const rows = this.#store.orm.all<ReceiptRow & { invocation_id: bigint }>(
+        sql`SELECT r.task_id, r.invocation_id, t.conversation_id, v.chat_id, c.telegram_chat_id,
+                   v.message_thread_id, json_extract(t.delivery_json, '$.bypassDailyBudget') AS bypass_daily_budget
+            FROM task_receipts r JOIN long_tasks t ON t.id = r.task_id
+            JOIN invocations i ON i.id = r.invocation_id
+            JOIN conversations v ON v.id = t.conversation_id JOIN chats c ON c.id = v.chat_id
+            WHERE r.state = 'claimed' AND i.state = 'queued'`,
+      );
+      const timestamp = now.toISOString();
+      for (const receipt of rows) {
+        const reason = this.#receiptCancelReason(receipt);
+        if (reason === undefined) {
+          continue;
+        }
+        this.#store.orm
+          .update(taskReceipts)
+          .set({
+            state: 'suppressed',
+            cancelledAt: timestamp,
+            cancelReason: reason,
+            updatedAt: timestamp,
+          })
+          .where(eq(taskReceipts.taskId, receipt.task_id))
+          .run();
+        this.#store.orm
+          .update(invocations)
+          .set({
+            state: 'aborted',
+            completionReason: reason,
+            finishedAt: timestamp,
+          })
+          .where(eq(invocations.id, receipt.invocation_id))
+          .run();
+        this.#store.orm.run(sql`UPDATE buckets SET state = 'aborted', error_code = ${reason},
+          finished_at = ${timestamp}, updated_at = ${timestamp}
+          WHERE id IN (SELECT bucket_id FROM invocation_buckets WHERE invocation_id = ${receipt.invocation_id})
+             OR id IN (SELECT bucket_id FROM invocations WHERE id = ${receipt.invocation_id})`);
+      }
     });
   }
 
@@ -531,7 +640,11 @@ export class InvocationQueueService {
          JOIN conversations v ON v.id = i.conversation_id
          JOIN chats c ON c.id = v.chat_id
          WHERE i.state = 'queued'
-           AND NOT EXISTS (SELECT 1 FROM alarms a WHERE a.invocation_id = i.id AND a.state = 'firing')
+           AND NOT EXISTS (
+             SELECT 1 FROM task_receipts r JOIN long_tasks t ON t.id = r.task_id
+             WHERE r.invocation_id = i.id AND r.state = 'claimed'
+               AND json_extract(t.delivery_json, '$.bypassDailyBudget') = 1
+           )
          ORDER BY i.id`,
       );
       for (const invocation of rows) {
@@ -541,10 +654,20 @@ export class InvocationQueueService {
           .set({ state: 'skipped_budget', completionReason: 'sleeping', finishedAt: nowIso })
           .where(and(eq(invocations.id, invocation.id), eq(invocations.state, 'queued')))
           .run();
+        this.#store.orm.run(sql`UPDATE buckets SET state = 'skipped_budget', error_code = 'sleeping',
+          finished_at = ${nowIso}, updated_at = ${nowIso}
+          WHERE id = ${invocation.bucket_id}
+             OR id IN (SELECT bucket_id FROM invocation_buckets WHERE invocation_id = ${invocation.id})`);
         this.#store.orm
-          .update(buckets)
-          .set({ state: 'skipped_budget', errorCode: 'sleeping', finishedAt: nowIso, updatedAt: nowIso })
-          .where(eq(buckets.id, invocation.bucket_id))
+          .update(taskReceipts)
+          .set({
+            state: 'handled',
+            handledAt: nowIso,
+            updatedAt: nowIso,
+            invocationOutcome: 'skipped_budget',
+            completionReason: 'sleeping',
+          })
+          .where(and(eq(taskReceipts.invocationId, invocation.id), eq(taskReceipts.state, 'claimed')))
           .run();
       }
       return rows;
@@ -567,17 +690,17 @@ export class InvocationQueueService {
     );
   }
 
-  #alarmCancelReason(alarm: AlarmDueRow): string | undefined {
-    const chatConfig = resolveChatConfig(this.#configStore.current().config, this.#store.orm, alarm.telegram_chat_id);
+  #receiptCancelReason(receipt: ReceiptRow): string | undefined {
+    const chatConfig = resolveChatConfig(this.#configStore.current().config, this.#store.orm, receipt.telegram_chat_id);
     if (chatConfig === undefined) {
       return 'chat_removed';
     }
-    if (isChatPaused(this.#store.orm, alarm.chat_id)) {
+    if (isChatPaused(this.#store.orm, receipt.chat_id)) {
       return 'chat_paused';
     }
     if (
       chatConfig.topic_ids !== undefined &&
-      !chatConfig.topic_ids.some((topicId) => BigInt(topicId) === alarm.message_thread_id)
+      !chatConfig.topic_ids.some((topicId) => BigInt(topicId) === receipt.message_thread_id)
     ) {
       return 'topic_removed';
     }
@@ -604,25 +727,18 @@ export class InvocationQueueService {
     );
   }
 
-  #cancelAlarm(alarmId: bigint, reason: string, nowIso: string): void {
-    this.#store.orm
-      .update(alarms)
-      .set({ state: 'cancelled', cancelledAt: nowIso, cancelReason: reason, adminCancelled: false, updatedAt: nowIso })
-      .where(and(eq(alarms.id, alarmId), eq(alarms.state, 'pending')))
-      .run();
-  }
-
-  #insertAlarmInvocation(alarm: AlarmDueRow, now: Date): bigint {
+  #insertReceiptInvocation(receipt: ReceiptRow, now: Date, running?: bigint): bigint {
     const timestamp = now.toISOString();
     const created = this.#store.orm
       .insert(buckets)
       .values({
-        conversationId: alarm.conversation_id,
-        state: 'queued',
+        conversationId: receipt.conversation_id,
+        state: running === undefined ? 'queued' : 'running',
         kind: 'realtime',
         firstReceivedAt: timestamp,
         deadlineAt: timestamp,
         queuedAt: timestamp,
+        startedAt: running === undefined ? null : timestamp,
         createdAt: timestamp,
         updatedAt: timestamp,
       })
@@ -632,8 +748,18 @@ export class InvocationQueueService {
       throw new Error('buckets insert returned no row');
     }
     const bucketId = created.id;
-    const invocationId = this.#insertInvocation(bucketId, alarm.conversation_id, now, true);
-    this.#store.orm.update(alarms).set({ invocationId }).where(eq(alarms.id, alarm.id)).run();
+    const invocationId = running ?? this.#insertInvocation(bucketId, receipt.conversation_id, now, true);
+    if (running !== undefined) {
+      this.#store.orm.insert(invocationBuckets).values({ invocationId, bucketId, attachedAt: timestamp }).run();
+    }
+    this.#store.orm
+      .update(taskReceipts)
+      .set({ invocationId, bucketId })
+      .where(eq(taskReceipts.taskId, receipt.task_id))
+      .run();
+    if (running !== undefined) {
+      this.#attachment?.queueInjection(receipt.conversation_id, bucketId, 'completion');
+    }
     return invocationId;
   }
 

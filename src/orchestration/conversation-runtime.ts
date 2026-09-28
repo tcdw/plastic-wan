@@ -26,7 +26,7 @@ export type InjectionWaitResult = 'pending' | 'timeout' | 'aborted';
 
 interface ConversationState {
   agent: CachedConversationAgent | undefined;
-  pendingBuckets: bigint[];
+  pendingBuckets: { bucketId: bigint; kind: 'messages' | 'completion' }[];
   wake: (() => void) | undefined;
   closing: boolean;
   roundInProgress: boolean;
@@ -125,9 +125,9 @@ export class ConversationRuntime {
   }
 
   /** Queues one attached bucket and wakes a run waiting for new messages. */
-  queueInjection(conversationId: bigint, bucketId: bigint): void {
+  queueInjection(conversationId: bigint, bucketId: bigint, kind: 'messages' | 'completion' = 'messages'): void {
     const state = this.#state(conversationId);
-    state.pendingBuckets.push(bucketId);
+    state.pendingBuckets.push({ bucketId, kind });
     const wake = state.wake;
     state.wake = undefined;
     wake?.();
@@ -140,11 +140,33 @@ export class ConversationRuntime {
     }
     const pending = state.pendingBuckets;
     state.pendingBuckets = [];
-    return pending;
+    return pending.map((entry) => entry.bucketId);
   }
 
-  hasPendingInjections(conversationId: bigint): boolean {
-    return (this.#states.get(conversationId.toString())?.pendingBuckets.length ?? 0) > 0;
+  /** One receipt owns a round; never merge its policy with a user batch or another receipt. */
+  takeNextInjections(conversationId: bigint, includeCompletion: boolean): bigint[] {
+    const state = this.#states.get(conversationId.toString());
+    if (state === undefined) {
+      return [];
+    }
+    const messages = state.pendingBuckets.filter((entry) => entry.kind === 'messages');
+    if (messages.length > 0) {
+      state.pendingBuckets = state.pendingBuckets.filter((entry) => entry.kind !== 'messages');
+      return messages.map((entry) => entry.bucketId);
+    }
+    if (!includeCompletion) {
+      return [];
+    }
+    const next = state.pendingBuckets.shift();
+    return next === undefined ? [] : [next.bucketId];
+  }
+
+  hasPendingInjections(conversationId: bigint, kind?: 'messages' | 'completion'): boolean {
+    return (
+      this.#states
+        .get(conversationId.toString())
+        ?.pendingBuckets.some((entry) => kind === undefined || entry.kind === kind) === true
+    );
   }
 
   /**

@@ -215,13 +215,16 @@ export class BotCommandService {
         .run();
       this.#store.orm.run(
         sql`UPDATE buckets SET state = 'expired', error_code = 'chat_paused', finished_at = ${timestamp}, updated_at = ${timestamp}
-           WHERE state IN ('collecting', 'queued') AND conversation_id IN (SELECT id FROM conversations WHERE chat_id = ${chatId})`,
+           WHERE conversation_id IN (SELECT id FROM conversations WHERE chat_id = ${chatId})
+             AND (state IN ('collecting', 'queued') OR (state = 'running' AND id IN (
+               SELECT ib.bucket_id FROM invocation_buckets ib JOIN invocations i ON i.id = ib.invocation_id
+               WHERE i.state = 'running' AND ib.injected_at IS NULL AND ib.bucket_id <> i.bucket_id
+             )))`,
       );
-      // A claimed alarm whose queued invocation is being aborted must close as
-      // cancelled/chat_paused rather than stay `firing` until a later restart.
+      // Suppress only queued deliveries. Running work settles normally after abort.
       this.#store.orm.run(
-        sql`UPDATE alarms SET state = 'cancelled', cancelled_at = ${timestamp}, cancel_reason = 'chat_paused', admin_cancelled = 0, updated_at = ${timestamp}
-           WHERE state = 'firing' AND invocation_id IN (
+        sql`UPDATE task_receipts SET state = 'suppressed', cancelled_at = ${timestamp}, cancel_reason = 'chat_paused', admin_cancelled = 0, updated_at = ${timestamp}
+           WHERE state = 'claimed' AND invocation_id IN (
              SELECT i.id FROM invocations i
              JOIN conversations v ON v.id = i.conversation_id
              WHERE i.state = 'queued' AND v.chat_id = ${chatId}

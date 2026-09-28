@@ -16,7 +16,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { serve, type ServerType } from '@hono/node-server';
+import { type ServerType, serve } from '@hono/node-server';
 import { and, eq, sql } from 'drizzle-orm';
 import { AdminServer } from '../../../src/ingress/admin/server.ts';
 import { type LoadedConfig, loadConfig } from '../../../src/platform/config.ts';
@@ -24,11 +24,11 @@ import { ConfigReloader } from '../../../src/platform/config-reload.ts';
 import { keyJarPath } from '../../../src/platform/key-jar.ts';
 import { AgentModelSwitcher } from '../../../src/platform/model-switch.ts';
 import { loadModelsDevCatalog } from '../../../src/platform/models-dev.ts';
-import { RuntimeConfigurationStore } from '../../../src/platform/runtime-config.ts';
 import { buildModelRegistry } from '../../../src/platform/providers.ts';
+import { RuntimeConfigurationStore } from '../../../src/platform/runtime-config.ts';
 import { SecretStore } from '../../../src/platform/secrets.ts';
 import { asRunResult, SqliteStore } from '../../../src/store/database.ts';
-import { adminSessions, alarms } from '../../../src/store/schema.ts';
+import { adminSessions, longTasks, taskReceipts } from '../../../src/store/schema.ts';
 import { enterSleep, wakeFromSleep } from '../../../src/store/sleep.ts';
 import { seedAdminBulkRows, seedAdminFixture } from '../../../test/fixtures/admin-seed.ts';
 import {
@@ -145,13 +145,38 @@ async function handleHook(request: Request, url: URL): Promise<Response> {
       return json({ error: 'store_closed' }, 500);
     }
     const now = new Date().toISOString();
+    const taskId = BigInt(id);
     const result = asRunResult(
       store.orm
-        .update(alarms)
-        .set({ state: 'fired', firedAt: now, updatedAt: now })
-        .where(and(eq(alarms.id, BigInt(id)), eq(alarms.state, 'pending')))
+        .update(longTasks)
+        .set({ state: 'completed', finishedAt: now, updatedAt: now })
+        .where(and(eq(longTasks.id, taskId), eq(longTasks.pluginId, 'alarm'), eq(longTasks.state, 'waiting')))
         .run(),
     );
+    if (result.changes > 0) {
+      store.orm
+        .insert(taskReceipts)
+        .values({
+          taskId,
+          status: 'completed',
+          resultJson: null,
+          errorJson: null,
+          state: 'handled',
+          createdAt: now,
+          updatedAt: now,
+          claimedAt: now,
+          handledAt: now,
+          invocationId: null,
+          invocationOutcome: null,
+          completionReason: null,
+          cancelledAt: null,
+          cancelledBy: null,
+          adminCancelled: false,
+          cancelReason: null,
+        })
+        .onConflictDoNothing()
+        .run();
+    }
     return json({ updated: Number(result.changes) });
   }
   if (request.method === 'GET' && route === '/alarm-state') {
@@ -161,11 +186,23 @@ async function handleHook(request: Request, url: URL): Promise<Response> {
     }
     const row =
       store?.orm
-        .select({ state: alarms.state, cancelledBy: alarms.cancelledBy })
-        .from(alarms)
-        .where(eq(alarms.id, BigInt(id)))
+        .select({ taskState: longTasks.state, receiptState: taskReceipts.state, cancelledBy: taskReceipts.cancelledBy })
+        .from(longTasks)
+        .leftJoin(taskReceipts, eq(taskReceipts.taskId, longTasks.id))
+        .where(and(eq(longTasks.id, BigInt(id)), eq(longTasks.pluginId, 'alarm')))
         .get() ?? null;
-    return row === null ? json({ state: null }) : json({ state: row.state, cancelled_by: row.cancelledBy });
+    if (row === null) {
+      return json({ state: null });
+    }
+    const state =
+      row.taskState === 'cancelled' || row.receiptState === 'suppressed'
+        ? 'cancelled'
+        : row.receiptState === 'claimed'
+          ? 'firing'
+          : row.receiptState === 'handled'
+            ? 'fired'
+            : 'pending';
+    return json({ state, cancelled_by: row.cancelledBy });
   }
   if (request.method === 'GET' && route === '/session-count') {
     const row = store?.orm.select({ count: sql`COUNT(*)` }).from(adminSessions).get();

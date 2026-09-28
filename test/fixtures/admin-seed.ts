@@ -1,8 +1,7 @@
 import { eq } from 'drizzle-orm';
-import type { SqliteStore } from '../../src/store/database.ts';
+import type { Orm, SqliteStore } from '../../src/store/database.ts';
 import {
   agentMessages,
-  alarms,
   buckets,
   chats,
   contextMessages,
@@ -12,6 +11,7 @@ import {
   dailyUsage,
   invocationMessages,
   invocations,
+  longTasks,
   media,
   mediaAnalyses,
   memories,
@@ -21,6 +21,7 @@ import {
   senders,
   stickerSets,
   stickers,
+  taskReceipts,
   telegramSends,
   toolCalls,
 } from '../../src/store/schema.ts';
@@ -76,6 +77,73 @@ const T = {
 } as const;
 
 const AT = '2026-09-10T08:00:00.000Z';
+
+interface AlarmTaskSeed {
+  readonly id: bigint;
+  readonly conversationId: bigint;
+  readonly targetUserId: bigint;
+  readonly summary: string;
+  readonly scheduledAt: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly createdByInvocationId?: bigint | null;
+  readonly state?: 'waiting' | 'cancelled';
+  readonly cancelledAt?: string;
+  readonly cancelledBy?: string;
+}
+
+function insertAlarmTask(orm: Orm, seed: AlarmTaskSeed): void {
+  const targetDisplayName = 'Alice';
+  const payload = JSON.stringify({
+    target_user_id: seed.targetUserId.toString(),
+    target_display_name: targetDisplayName,
+    summary: seed.summary,
+  });
+  orm
+    .insert(longTasks)
+    .values({
+      id: seed.id,
+      pluginId: 'alarm',
+      conversationId: seed.conversationId,
+      createdByInvocationId: seed.createdByInvocationId ?? null,
+      createdByUserId: seed.targetUserId,
+      payloadJson: payload,
+      state: seed.state ?? 'waiting',
+      scheduledAt: seed.scheduledAt,
+      timerResultJson: payload,
+      deliveryJson: JSON.stringify({
+        bypassDailyBudget: true,
+        mentionUser: { userId: seed.targetUserId.toString(), displayName: targetDisplayName },
+      }),
+      createdAt: seed.createdAt,
+      updatedAt: seed.updatedAt,
+      finishedAt: seed.cancelledAt ?? null,
+    })
+    .run();
+  if (seed.state === 'cancelled') {
+    orm
+      .insert(taskReceipts)
+      .values({
+        taskId: seed.id,
+        status: 'cancelled',
+        resultJson: null,
+        errorJson: null,
+        state: 'suppressed',
+        createdAt: seed.createdAt,
+        updatedAt: seed.updatedAt,
+        claimedAt: null,
+        handledAt: null,
+        invocationId: null,
+        invocationOutcome: null,
+        completionReason: null,
+        cancelledAt: seed.cancelledAt ?? seed.updatedAt,
+        cancelledBy: seed.cancelledBy ?? 'admin-panel',
+        adminCancelled: true,
+        cancelReason: 'admin_cancelled',
+      })
+      .run();
+  }
+}
 
 /** A JSON payload well above the frontend's 2_000-char collapse threshold. */
 export const OVERSIZED_REQUEST_JSON: string = JSON.stringify({
@@ -725,31 +793,17 @@ export function seedAdminFixture(store: SqliteStore): AdminSeedResult {
     })
     .run();
 
-  // --- alarm (pending) + memories (active + expired) ---
-  orm
-    .insert(alarms)
-    .values({
-      id: T.alarm,
-      conversationId: T.conversation,
-      targetUserId: 42n,
-      targetDisplayName: 'Alice',
-      summary: 'Remind Alice about the fixture data',
-      scheduledAt: '2026-09-10T20:00:00.000Z',
-      createdAt: '2026-09-10T08:00:11.000Z',
-      createdByInvocationId: T.invocationA,
-      state: 'pending',
-      firedAt: null,
-      invocationId: null,
-      invocationOutcome: null,
-      completionReason: null,
-      cancelledAt: null,
-      cancelledBy: null,
-      adminCancelled: false,
-      cancelReason: null,
-      updatedAt: '2026-09-10T08:00:11.000Z',
-      createdByUserId: 42n,
-    })
-    .run();
+  // --- alarm task (pending) + memories (active + expired) ---
+  insertAlarmTask(orm, {
+    id: T.alarm,
+    conversationId: T.conversation,
+    targetUserId: 42n,
+    summary: 'Remind Alice about the fixture data',
+    scheduledAt: '2026-09-10T20:00:00.000Z',
+    createdAt: '2026-09-10T08:00:11.000Z',
+    createdByInvocationId: T.invocationA,
+    updatedAt: '2026-09-10T08:00:11.000Z',
+  });
 
   const memoryActiveId = 'mem_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
   orm
@@ -1080,59 +1134,32 @@ export function seedAdminBulkRows(store: SqliteStore): AdminBulkSeedIds {
       .run();
   }
 
-  // --- 26 pending alarms + 1 pre-cancelled alarm ---
+  // --- 26 pending alarm tasks + 1 pre-cancelled task ---
   for (let index = 0; index < EXTRA_ALARMS; index += 1) {
     const alarmId = 10_100n + BigInt(index);
     const scheduled = iso(index + 20);
-    orm
-      .insert(alarms)
-      .values({
-        id: alarmId,
-        conversationId: T.conversation,
-        targetUserId: 42n,
-        targetDisplayName: 'Alice',
-        summary: `e2e alarm ${index + 1}`,
-        scheduledAt: scheduled,
-        createdAt: BULK_BASE,
-        createdByInvocationId: null,
-        state: 'pending',
-        firedAt: null,
-        invocationId: null,
-        invocationOutcome: null,
-        completionReason: null,
-        cancelledAt: null,
-        cancelledBy: null,
-        adminCancelled: false,
-        cancelReason: null,
-        updatedAt: scheduled,
-        createdByUserId: 42n,
-      })
-      .run();
-  }
-  orm
-    .insert(alarms)
-    .values({
-      id: 10_200n,
+    insertAlarmTask(orm, {
+      id: alarmId,
       conversationId: T.conversation,
       targetUserId: 42n,
-      targetDisplayName: 'Alice',
-      summary: 'e2e alarm already cancelled',
-      scheduledAt: '2026-09-11T10:00:00.000Z',
-      createdAt: '2026-09-11T08:00:00.000Z',
-      createdByInvocationId: null,
-      state: 'cancelled',
-      firedAt: null,
-      invocationId: null,
-      invocationOutcome: null,
-      completionReason: null,
-      cancelledAt: '2026-09-11T09:00:00.000Z',
-      cancelledBy: 'admin-panel',
-      adminCancelled: true,
-      cancelReason: 'admin_cancelled',
-      updatedAt: '2026-09-11T09:00:00.000Z',
-      createdByUserId: 42n,
-    })
-    .run();
+      summary: `e2e alarm ${index + 1}`,
+      scheduledAt: scheduled,
+      createdAt: BULK_BASE,
+      updatedAt: scheduled,
+    });
+  }
+  insertAlarmTask(orm, {
+    id: 10_200n,
+    conversationId: T.conversation,
+    targetUserId: 42n,
+    summary: 'e2e alarm already cancelled',
+    scheduledAt: '2026-09-11T10:00:00.000Z',
+    createdAt: '2026-09-11T08:00:00.000Z',
+    updatedAt: '2026-09-11T09:00:00.000Z',
+    state: 'cancelled',
+    cancelledAt: '2026-09-11T09:00:00.000Z',
+    cancelledBy: 'admin-panel',
+  });
 
   // --- 28 active memories with pattern-valid ids (`mem_` + 32 hex) ---
   const memoryFirstId = `mem_${'0'.repeat(31)}1`;

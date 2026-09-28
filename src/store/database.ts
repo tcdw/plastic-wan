@@ -280,23 +280,6 @@ export function purgeExpiredData(orm: Orm, config: RawConfig, now = new Date()):
       )
     `);
       orm.run(sql`
-      DELETE FROM internal_contexts
-      WHERE invocation_id IN (
-        SELECT id
-        FROM invocations
-        WHERE state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'skipped_budget')
-          AND COALESCE(finished_at, created_at) < ${cutoff}
-      )
-         OR source_agent_message_id IN (
-           SELECT am.id
-           FROM agent_messages am
-           JOIN invocations i ON i.id = am.invocation_id
-           WHERE i.state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'skipped_budget')
-             AND COALESCE(i.finished_at, i.created_at) < ${cutoff}
-         )
-         OR created_at < ${cutoff}
-    `);
-      orm.run(sql`
       DELETE FROM invocations
       WHERE state IN ('completed', 'failed', 'aborted', 'outcome_unknown', 'skipped_budget')
         AND COALESCE(finished_at, created_at) < ${cutoff}
@@ -355,9 +338,17 @@ export function purgeExpiredData(orm: Orm, config: RawConfig, now = new Date()):
       orm.run(
         sql`DELETE FROM model_calls WHERE invocation_id IS NULL AND state <> 'pending' AND created_at < ${cutoff}`,
       );
-      orm.run(
-        sql`DELETE FROM alarms WHERE state IN ('fired', 'cancelled') AND COALESCE(fired_at, cancelled_at, updated_at) < ${cutoff}`,
-      );
+      orm.run(sql`
+        DELETE FROM long_tasks
+        WHERE id IN (
+          SELECT lt.id
+          FROM long_tasks lt
+          JOIN task_receipts tr ON tr.task_id = lt.id
+          WHERE lt.state IN ('completed', 'failed', 'cancelled')
+            AND tr.state IN ('handled', 'suppressed')
+            AND COALESCE(tr.claimed_at, tr.cancelled_at, tr.updated_at, lt.finished_at, lt.updated_at) < ${cutoff}
+        )
+      `);
       orm.run(sql`DELETE FROM daily_usage WHERE utc_date < ${cutoff.slice(0, 10)}`);
       // Conversation Context housekeeping: soft-evicted rows and unused
       // references go first, then contexts that have been idle past retention.

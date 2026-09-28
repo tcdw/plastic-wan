@@ -3,7 +3,8 @@ import type { InvocationConfigSnapshot, RuntimeConfigurationStore } from '../pla
 import type { SqliteStore } from '../store/database.ts';
 import { InvocationQueueService, type BucketAttachmentTarget } from './invocation-queue.ts';
 import { activeSleepUntil } from '../store/sleep.ts';
-import { alarms, buckets, conversations, invocations } from '../store/schema.ts';
+import { buckets, conversations, invocations, taskReceipts } from '../store/schema.ts';
+import { LongTaskService } from '../store/long-tasks.ts';
 
 export interface InvocationOutcome {
   readonly state: 'completed' | 'failed' | 'aborted' | 'outcome_unknown';
@@ -38,7 +39,7 @@ interface InvocationRow {
 export { STARTUP_CATCH_UP_STATE_KEY } from './invocation-queue.ts';
 
 /**
- * Event loop and concurrency governor. Delegates bucket/alarm state
+ * Event loop and concurrency governor. Delegates bucket/receipt state
  * transitions to InvocationQueueService and agent execution to the
  * InvocationHandler, then persists terminal outcomes.
  */
@@ -46,6 +47,7 @@ export class BucketScheduler {
   readonly #store: SqliteStore;
   readonly #configStore: RuntimeConfigurationStore;
   readonly #queue: InvocationQueueService;
+  readonly #tasks: LongTaskService;
   readonly #handler: InvocationHandler;
   readonly #active = new Map<string, ActiveInvocation>();
   #running = false;
@@ -58,10 +60,12 @@ export class BucketScheduler {
     configStore: RuntimeConfigurationStore,
     handler: InvocationHandler,
     attachment?: BucketAttachmentTarget,
+    tasks = new LongTaskService(store.orm),
   ) {
     this.#store = store;
     this.#configStore = configStore;
-    this.#queue = new InvocationQueueService(store, configStore, attachment);
+    this.#tasks = tasks;
+    this.#queue = new InvocationQueueService(store, configStore, attachment, tasks);
     this.#handler = handler;
   }
 
@@ -154,13 +158,13 @@ export class BucketScheduler {
     return this.#queue.processDue(now);
   }
 
-  processAlarmsDue(now = new Date()): bigint[] {
-    return this.#queue.processAlarmsDue(now);
+  processTasksDue(now = new Date()): bigint[] {
+    return this.#queue.processTasksDue(now);
   }
 
   async #loop(): Promise<void> {
     while (this.#running) {
-      this.processAlarmsDue();
+      this.processTasksDue();
       this.processDue();
       this.#launchQueued();
       const delay = this.#nextDelayMilliseconds();
@@ -202,21 +206,29 @@ export class BucketScheduler {
     if (bucket !== undefined) {
       deadlines.push(Date.parse(bucket.deadline_at));
     }
-    const alarm = this.#store.orm
-      .all<{ scheduled_at: string }>(
-        sql`SELECT a.scheduled_at FROM alarms a
-         JOIN conversations v ON v.id = a.conversation_id
-         WHERE a.state = 'pending'
+    const timerDeadline = this.#tasks.nextDeadline();
+    if (timerDeadline !== undefined) {
+      deadlines.push(Date.parse(timerDeadline));
+    }
+    const sleepUntil = activeSleepUntil(this.#store.orm);
+    if (sleepUntil !== null) {
+      deadlines.push(Date.parse(sleepUntil));
+    }
+    const receipt = this.#store.orm
+      .all<{ created_at: string }>(
+        sql`SELECT r.created_at FROM task_receipts r JOIN long_tasks t ON t.id = r.task_id
+         JOIN conversations v ON v.id = t.conversation_id
+         WHERE r.state = 'pending'
+           AND (${sleepUntil} IS NULL OR json_extract(t.delivery_json, '$.bypassDailyBudget') = 1)
            AND NOT EXISTS (
-             SELECT 1 FROM invocations i
-             JOIN conversations v2 ON v2.id = i.conversation_id
-             WHERE v2.chat_id = v.chat_id AND i.state IN ('queued', 'running')
+             SELECT 1 FROM invocations i JOIN conversations v2 ON v2.id = i.conversation_id
+             WHERE v2.chat_id = v.chat_id AND i.state = 'running'
            )
-         ORDER BY a.scheduled_at, a.id LIMIT 1`,
+         ORDER BY r.created_at, r.task_id LIMIT 1`,
       )
       .at(0);
-    if (alarm !== undefined) {
-      deadlines.push(Date.parse(alarm.scheduled_at));
+    if (receipt !== undefined) {
+      deadlines.push(Date.parse(receipt.created_at));
     }
     if (deadlines.length === 0) {
       return 60_000;
@@ -226,25 +238,30 @@ export class BucketScheduler {
   }
 
   #launchQueued(): void {
-    const sleepUntil = activeSleepUntil(this.#store.orm);
-    if (sleepUntil !== null) {
-      this.#queue.skipQueuedInvocations(sleepUntil, new Date());
-    }
-    while (this.#running && this.#active.size < this.#configStore.current().config.agent.max_concurrency) {
+    while (this.#running) {
+      const now = new Date();
+      this.#queue.suppressInvalidQueuedReceipts(now);
+      const sleepUntil = activeSleepUntil(this.#store.orm, now);
+      if (sleepUntil !== null) {
+        this.#queue.skipQueuedInvocations(sleepUntil, now);
+      }
+      if (this.#active.size >= this.#configStore.current().config.agent.max_concurrency) {
+        return;
+      }
       const launched = this.#store.transaction(() => {
         const candidate = this.#store.orm
           .all<InvocationRow>(
             sql`SELECT i.id, i.bucket_id, i.conversation_id FROM invocations i
              JOIN buckets b ON b.id = i.bucket_id
              JOIN conversations v ON v.id = i.conversation_id
-             LEFT JOIN alarms a ON a.invocation_id = i.id AND a.state = 'firing'
+             LEFT JOIN task_receipts r ON r.invocation_id = i.id AND r.state = 'claimed'
              WHERE i.state = 'queued' AND b.deadline_at <= ${new Date().toISOString()}
                AND NOT EXISTS (
                  SELECT 1 FROM invocations r
                  JOIN conversations v2 ON v2.id = r.conversation_id
                  WHERE v2.chat_id = v.chat_id AND r.state = 'running'
                )
-             ORDER BY CASE WHEN a.id IS NOT NULL THEN 0 ELSE 1 END, i.id
+             ORDER BY CASE WHEN r.task_id IS NOT NULL THEN 0 ELSE 1 END, i.id
              LIMIT 1`,
           )
           .at(0);
@@ -353,21 +370,22 @@ export class BucketScheduler {
                AND state = 'collecting' AND deadline_at < ${nextDeadline}`,
         );
         this.#store.orm
-          .update(alarms)
+          .update(taskReceipts)
           .set({
-            state: 'fired',
+            state: 'handled',
+            handledAt: nowIso,
             invocationOutcome: outcome.state,
             completionReason: outcome.reason,
             updatedAt: nowIso,
           })
-          .where(and(eq(alarms.invocationId, invocation.id), eq(alarms.state, 'firing')))
+          .where(and(eq(taskReceipts.invocationId, invocation.id), eq(taskReceipts.state, 'claimed')))
           .run();
       });
       persisted = true;
     } finally {
       this.#active.delete(invocation.id.toString());
       if (persisted) {
-        this.processAlarmsDue(finishedAt);
+        this.processTasksDue(finishedAt);
         this.processDue(finishedAt);
       }
       this.#logInvocationDiagnostic(

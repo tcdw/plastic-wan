@@ -127,7 +127,7 @@ export function renderInvocationContext(
     invocationId,
     chatId: identity.chatId,
     threadId: identity.threadId,
-    alarm: identity.alarm,
+    completion: identity.completion,
     systemPrompt: stable.systemPrompt,
     userPrompt: injection.text,
     conversationId: identity.conversationId,

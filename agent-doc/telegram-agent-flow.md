@@ -142,11 +142,11 @@ T+94   若期间再没有新 Bucket 到期，空闲等待耗尽，I 结束
 
 system prompt 拆分（文档中只在此处维护；`ContextBuilder.buildSystemPrompt` 产出稳定段，`renderInjection` 产出注入段）：
 
-- **稳定段**只包含不随 Invocation 变化的内容：Core Agent Protocol、System Skill 索引、图片/Sticker 说明、人格 Prompt、私聊/群聊模式、Chat instructions、记忆与 internal context 的使用说明。Core Protocol 规定消息分区、Tool 选择原则与副作用成功判定；人格 Prompt 只负责身份和表达风格；稳定段不写「什么时候该参与」——是否发言由模型按当前批次判断；群聊的消息准入由运行期 participation 闸门决定（配置了才生效）。它对一个 Conversation Context 保持逐字节稳定，这样每次请求的前缀能被 provider prefix cache 命中。Sticker 目录（`sticker_id:emoji`）是**不可信数据**，因此随批次注入，不进入稳定段；它只在与保留 transcript 里最新一份不同时才重新附带（被 GC 淘汰后也会重新附带），不是每批都带一份。
-- **注入段**是一条 `user` 消息，依次为：可信的 `<runtime_state>`（当前时间、睡眠状态、Alarm 任务、Startup catch-up 说明、`<memory_list>`、`<internal_context_history>`）、可选的 `<untrusted_sticker_catalog>`、可选的 `<untrusted_telegram_history>`（见下一条）、`<untrusted_new_messages>`（本批 Telegram 快照）。信任边界不变：`<untrusted_*>` 内的一切仍是数据。
+- **稳定段**只包含不随 Invocation 变化的内容：Core Agent Protocol、System Skill 索引、图片/Sticker 说明、人格 Prompt、私聊/群聊模式、Chat instructions、记忆的使用说明。Core Protocol 规定消息分区、Tool 选择原则与副作用成功判定；人格 Prompt 只负责身份和表达风格；稳定段不写「什么时候该参与」——是否发言由模型按当前批次判断；群聊的消息准入由运行期 participation 闸门决定（配置了才生效）。它对一个 Conversation Context 保持逐字节稳定，这样每次请求的前缀能被 provider prefix cache 命中。Sticker 目录（`sticker_id:emoji`）是**不可信数据**，因此随批次注入，不进入稳定段；它只在与保留 transcript 里最新一份不同时才重新附带（被 GC 淘汰后也会重新附带），不是每批都带一份。
+- **注入段**是一条 `user` 消息，依次为：可信的 `<runtime_state>`（当前时间、睡眠状态、完成事件说明、Startup catch-up 说明、`<memory_list>`）、可选的 `<untrusted_task_receipt>`、可选的 `<untrusted_sticker_catalog>`、可选的 `<untrusted_telegram_history>`（见下一条）、`<untrusted_new_messages>`（本批 Telegram 快照）。完成回执的结构化内容与其它 `<untrusted_*>` 一样只是数据，不是指令或待发送消息。
 - 消息不以 `invocation_messages` 的快照 JSON 发给模型，而由 `formatSnapshot` 渲染成省 Token 的紧凑文本：一行 `[message_id 本地时间 topic:N you re:N uid:N @username] 显示名` 头部，下面是两格缩进的正文（转发来源、回复引用、text/caption 各行、`[kind ref WxH]` 媒体行）；空字段、`revision`、`media_group_id`、mime 等不渲染，日期只在与本批 `current_time` 不同时显示，回复目标就在同一批时省略引用。头部方括号内只有 runtime 生成的 token，所有 Telegram 可控内容都在缩进行上，因此无法伪造头部或区块标签；`collectVisibleSenders`/`collectInjectedMessageIds` 只回读最后一个 `</runtime_state>` 之后的头部行。改动这个格式要同步改 `CORE_AGENT_PROTOCOL` 中的格式说明（system prompt 哈希变化会让所有 Context 重建）。
 - 历史不再被重新渲染成 `<untrusted_telegram_history>`；它由 transcript 本身承载。只有两种情况例外：该 Conversation Context 尚无历史（冷启动），以及历史区段里那些**从未进入 transcript 的消息**（例如被 participation 闸门拦下的消息）——它们仍然必须渲染，否则模型永远看不到。
-- 随 Invocation 变化的内容（当前时间、记忆、internal context、睡眠状态、Alarm 任务）都必须待在注入段：放进 system prompt 会让每次请求的前缀都不同，既失去前缀缓存，又违反「Context 可以稳定保留」的前提。
+- 随 Invocation 变化的内容（当前时间、记忆、睡眠状态、完成回执）都必须待在注入段：放进 system prompt 会让每次请求的前缀都不同，既失去前缀缓存，又违反「Context 可以稳定保留」的前提。每个 receipt 只在自己的回执轮次注入一次：新 Invocation 通过 opening Bucket，附加到运行中的 Invocation 则在该回合的热注入中单独消费；后续批次不重新附带该 receipt，canonical history 已保存这次事件，其它 receipt 仍各自独立注入。
 - system prompt 变化（`system_prompt_hash` 不同）意味着 Context 重建：丢弃全部 canonical history 重新开始。Prompt 与 Chat `instructions_file` 属于配置热更新白名单：改完文件并在 Admin「Apply config file」或 `/model` 应用之后，该 Conversation 下一次运行就按新哈希重建；运行时切换模型若改变了模板渲染结果或图片说明，同样会重建。清单见 [configuration.md](configuration.md#运行时配置热更新)。
 
 垃圾回收（GC）是**只删不摘要**的 checkpoint 滑动窗口，挂点只有一个：`prepareNextTurnWithContext`（位于流式输出之后、Tool 批次闭合之后，是唯一安全的裁剪点）。
@@ -186,7 +186,7 @@ participation 放行 = 未配置 participation || 处于活跃时段 || 更新�
 - 编辑消息不触发、不刷新窗口、不开 Bucket，但仍写入 Revision，并在后续 Invocation 中作为 history 出现。
 - 闸门只阻止**创建** Bucket：已有 `collecting` Bucket 时，被抑制的消息仍按原逻辑追加进去。被拦下的消息照常写入 `messages`、`message_revisions` 与 `media`。
 - 命中时打印 `agent_attention_triggered`（`chat_id`、`conversation_id`、`trigger_kind`、`telegram_message_id`、`expires_at`）；被抑制的消息不打印，避免静默期每条消息一行。
-- 私聊永不受闸门影响；`/pause` 优先（暂停期间既不建 Bucket 也不记窗口）；Alarm 的排期 Invocation 不受影响。
+- 私聊永不受闸门影响；`/pause` 优先（暂停期间既不建 Bucket 也不记窗口）；任务 timer 仍可完成，但回执投递会在 pause/目的地无效时结算为 suppressed。
 - 启动追赶同样过闸门：追赶 Bucket 只在处于时段内或窗口未过期时创建，否则记为 `skipped_budget`/`participation_gated`。追赶期间收到的命中消息同样会刷新窗口，因此停机期间被 @ 不会丢。
 
 ## Context
@@ -194,13 +194,13 @@ participation 放行 = 未配置 participation || 处于活跃时段 || 更新�
 一次 Invocation 的模型输入由 `ContextBuilder` 的两半拼成：稳定的 `systemPrompt` 与一批注入消息，两者各含什么见 [Context 生命周期：system prompt 拆分](#context-生命周期)。项目里不再有「每次重新渲染全部历史」的 `userPrompt`——历史由 Conversation Context 的 transcript 承载。本节只记录拆分之外的组装产物与规则：
 
 - `directImages`：当 `agent` 模型支持 image 时，**本批**消息里的 Photo/图片 Document 经标准化后成为同一 User Message 的多模态内容，并按 `figure_N` 与消息媒体行中的引用对应。媒体行同时带稳定的 `img_` 引用（`[photo figure_1 img_xxx WxH]`）：codec 落盘时丢弃内联图片块，重启或缓存丢弃后 replay 的 transcript 只剩文本，模型要靠这个 `img_` 用 `read_image` 再看；`read_image` 不接受 `figure_N`。
-- `visibleSenders`：本批及保留历史中可见的 Telegram user sender，供 `alarm` 校验目标。
+- `visibleSenders`：本批及保留历史中可见的 Telegram user sender，供 Alarm 插件校验目标。
 - `imageCapabilities`：Sticker 始终可用；Photo/图片 Document 在 `agent` 模型不支持 image 时全部可用，支持 image 时历史图片通过 `img_` 引用可用，供 `read_image` 使用。
 - `omittedNewMessages`：因 Context 上限省略的新消息数量。
 
 当前 Conversation 全部有效记忆按创建时间升序出现在注入块的 `<memory_list>` 内。新增记忆等价于列表末尾 append，不重排已有项；TTL 到期与 `delete_memory` 只破坏删除位置之后的缓存前缀。
 
-同一 Conversation 最近的 `internal_contexts` 也作为隐藏 `<internal_context_history>` 块出现在注入块中，而不是 system prompt。当列表为空时不注入该块，避免空提示开销。该块显式说明这些内容是历史 Tool 观察、不会发送到 Telegram、不是当前数据库权威；当前实现主要保存 `list_alarm` 结果的有序映射，让后续 invocation 能把“第二个”解析回稳定 alarm ID，并在真正 `delete_alarm` 时重新做数据库 ownership / pending 校验。
+`list_alarm` 的 `items` JSON 经 `execute.call` 的 `text` 封套作为普通工具结果，由既有的 canonical `context_messages` 保存，跨 Invocation、Agent 缓存与进程重启复用，随 checkpoint GC 或话题清空自然遗忘。列表同样受通用结果长度限制，不保证超长列表完整。若历史缺失或不能唯一解析目标，模型应重新调用 `list_alarm`；仍无法确定时应澄清，不能猜 ID。`delete_alarm` 仍按 live caller、plugin、Conversation 与 pending 状态鉴权，不依赖任何旁路存储。
 
 Context 受模型窗口限制：为系统提示、完整 Tool 定义（名称、描述与参数 Schema）、历史、新消息和输出保留空间。Tool description 不只是能力清单，还应说明何时使用、何时不用、必要调用顺序和成功判定。估算输入达到 `context_window × context_stop_ratio` 后进入收尾模式：下一次模型调用只带 `send` 和当时可用的 `zzz`，模型用这一轮把话说完，这一轮结束后运行以 `context_limit` 结束。Pi 在同一个 turn 边界先调 `prepareNextTurnWithContext` 再调 `shouldStopAfterTurn`，所以「进入收尾」和「停止」必须隔开一轮，否则收尾轮根本不会发生。
 
@@ -226,10 +226,10 @@ Invocation 结束时 Agent 实例可以留在 `ConversationRuntime` 缓存里供
 工具面分三层：runtime 原语直接暴露、内部能力经 `execute`、MCP Tool 直接暴露。内部能力按需发现，避免每轮请求携带全部定义；这不是放宽授权，Schema、引用和预算仍由 Tool 边界校验。修改能力时先查 [组合根的 `capabilityTools`](../src/application.ts)（按符号名检索）与 [原语装配](../src/orchestration/agent-runtime.ts)，行为验证见 [验证索引](verification.md#静态与单元验证)。
 
 - **原语**：`read`、`send`、`execute`、`zzz`（条件暴露）。它们的定义、Schema 与约束完全由 runtime 提供，不依赖任何 Skill；未读取任何 Skill 也能直接调用。
-- **内部能力注册表**：由 [application.ts](../src/application.ts) 的 `capabilityTools` 装配，完整清单以此为准，不在文档维护副本。其中内置 Agent 插件（[plugins/builtin.ts](../src/plugins/builtin.ts)，目前只有 `web-fetch`）经 `loadPlugins` 校验 id 后按 Invocation 贡献能力；插件只拿到 `InvocationScope`（活的 Invocation 上下文、deadline 与绑定本 Invocation 的 `ToolAudit`），不持有 Store 或 Runtime。插件能力与其他内部能力走同一条 `execute` 注册、校验、分发与审计路径。模型经 `execute` 的 search/help/call 按需发现与调用；调用前按目标能力的参数 Schema 校验，input 超 32 KiB 拒绝。
+- **内部能力注册表**：由 [application.ts](../src/application.ts) 的 `capabilityTools` 装配，完整清单以此为准，不在文档维护副本。其中内置 Agent 插件（[plugins/builtin.ts](../src/plugins/builtin.ts)，当前为 `web-fetch` 与 `alarm`）经 `loadPlugins` 校验 id 后按 Invocation 贡献能力；插件只拿到 `InvocationScope`（活的 Invocation 上下文、deadline、绑定本 Invocation 的 `ToolAudit` 与自身 plugin/Conversation 的 task scope），不持有 Store 或 Runtime。插件能力与其他内部能力走同一条 `execute` 注册、校验、分发与审计路径。模型经 `execute` 的 search/help/call 按需发现与调用；调用前按目标能力的参数 Schema 校验，input 超 32 KiB 拒绝。
 - **MCP Tool**：按配置 allowlist 直接暴露，不进入 `execute` 注册表。
 
-`execute.call` 的结果是 `{text, refs}` 封套：`text` 截断到 32 KiB 并带 `[content truncated]` 标记；`refs` 是本次调用产生的 Conversation Context 级引用 token（目前只有 `search_stickers` 的 `sticker_ref`，带 TTL），只能交给对应消费 Tool 在边界校验后使用。`execute` 拒绝四个原语（`execute_primitive_rejected`）与未知能力（`unknown_capability`），也不会递归调用自己。运行已被 abort 时 `execute.call` 不再 dispatch：内部能力不一定理会 signal（例如 `alarm`），所以在调用之前检查，外层 `tool_calls` 记为 `error`/`aborted`，不产生内层记录。
+`execute.call` 的结果是 `{text, refs}` 封套：内层 `text` 上限 30 KiB，序列化后的整体上限 32 KiB，超限截断带 `[content truncated]` 标记；`refs` 是本次调用产生的 Conversation Context 级引用 token（目前只有 `search_stickers` 的 `sticker_ref`，带 TTL），只能交给对应消费 Tool 在边界校验后使用。`execute` 拒绝四个原语（`execute_primitive_rejected`）与未知能力（`unknown_capability`），也不会递归调用自己。运行已被 abort 时 `execute.call` 不再 dispatch：内部能力不一定理会 signal（例如 `alarm`），所以在调用之前检查，外层 `tool_calls` 记为 `error`/`aborted`，不产生内层记录。
 
 System Skills 是随 runtime 发布的只读文档包，位于 `src/system-resources/skills/<name>/SKILL.md`，或由内置插件以 Skill 目录声明（如 `src/plugins/web-fetch/skills/web-fetch/`），统一挂载在 `system:///skills/<name>/` 下（Docker 镜像随 `src/` 打包）。`SKILL.md` 头部 frontmatter 声明 `name`（必须等于目录名）与 `description`；Skill 重名（包括插件与内置树之间）或加载失败即启动失败。system prompt 只注入索引（名称、描述、`system:///skills/<name>/SKILL.md` URI）；正文由模型用 `read` 按需读取，即 progressive disclosure。`read` 只接受 `system:///` 绝对 URI 或「相对引用 + base」，路径段校验拒绝 `..`、反斜杠、百分号转义，只允许 `.md`，结果 32 KiB 截断。Skill 是文档不是授权：不能覆盖 Tool 约束、协议或预算。
 
@@ -251,15 +251,23 @@ System Skills 是随 runtime 发布的只读文档包，位于 `src/system-resou
 
 ## Alarm / Deferred Invocation
 
-Agent 通过 `alarm` 能力（经 `execute.call` 调用）创建一个绑定当前 conversation 的未来 Invocation，而不是延迟发送预生成文本。另有 `list_alarm`/`delete_alarm`：前者只从可信 invocation 身份列出当前调用者自己仍可操作的 pending alarms，并把结果以 durable hidden internal context 保存；后者只允许把该调用者自己的 pending alarm 原子置为现有终态 `cancelled`，对不存在 / 他人所有 / 状态变化统一返回 `alarm_not_found`：
+`LongTaskService` 保存脱离创建 Invocation 继续存活的通用任务。插件只能取得绑定自身 plugin 与当前 Conversation 的 scope：创建时由可信插件冻结 payload 与 delivery policy；以后可用同一绑定 scope 的 completion handle `complete`/`fail`，不依赖创建 Invocation 或其 `AbortSignal`。没有通用后台 worker、executor、running/progress 或 retry。
 
-1. Tool 校验 `target_user_id` 必须是当前 Invocation 实际可见消息中的 Telegram **user** sender（sender_chat 与任意 ID 拒绝）、`summary` 为 1–500 字符任务说明、`datetime` 为带显式 offset/`Z` 的绝对时间且严格未来、不超 365 天；同一 Invocation 最多成功创建 3 个。
-2. Alarm 的 owner 是“创建者”而不是 target。创建者来自冻结 invocation 的 `new` 区段中**最新一条** Telegram user sender；不会扫描 `visibleSenders` 做唯一值猜测。若 `new` 区段里没有可靠 user sender（例如 alarm invocation、sender_chat、仅 bot/service），`alarm`/`list_alarm`/`delete_alarm` 全部 fail closed，返回 `alarm_caller_not_available`。
-3. 成功创建是副作用，写入 `alarms`（含原 conversation/Forum Topic、目标 ID 与显示名快照、UTC deadline、`created_by_user_id`、`created_by_invocation_id`），并返回 Alarm ID/scheduled UTC。历史旧行若 `created_by_user_id IS NULL`，不会被用户列出或删除；不会把 target 冒充 creator 回填。
-4. Scheduler 的动态等待同时考虑最近 Bucket deadline 与最近 pending Alarm `scheduled_at`；到期 Alarm 在 Chat 空闲时原子 `pending → firing`，再创建不携带任何 Telegram Update/Message/Revision 的真实 `alarm` Invocation。
-5. Alarm Invocation 仍走普通 Context/Agent/send pipeline；注入块临时加入任务说明（summary 是任务描述，不是待发送文本），首次成功文本 `send` 自动在开头加入目标用户的 Telegram text mention。
-6. Alarm Invocation 绕过全局每日 Token gate 与预算触发的 `zzz`/sleep，且不暴露 `zzz`；仍受 pause、Chat/Topic 配置、同 Chat 串行、并发、`agent.context.max_wall_clock_seconds`、`agent.rate_limits`、capability 与 Telegram 错误约束。
-7. Invocation 无论何种终态都关闭 Alarm 且不重试；进程恢复遗留 `firing` 关闭为 `fired`/`outcome_unknown`。到期时 Chat/Topic 停用、移出配置或 pause 则置 `cancelled` 并记录稳定原因。
+1. 任务先处于 `waiting`。有 timer 的任务由唯一 Scheduler 到期完成；无 timer 的任务等待插件的外部 completion handle。完成、失败或取消在同一事务写入唯一 receipt，任务状态与投递状态分别是真相。
+2. Scheduler 先处理到期 timer，再按创建时间/ID 选择 pending receipt。目的地 allowlist、Topic 与 pause 仍在投递前检查；每次 claim 都创建一个独立的空 Bucket，不伪造 Telegram Update/Message/Revision。
+   - 如果同一 Conversation 已有 running Invocation 且仍接受注入，receipt 的 Bucket 会 attach 到该 Invocation，不另开 Invocation；同一 Invocation 可以拥有多个 receipt。
+   - 如果同 Chat 没有运行中的 Invocation，则创建 queued receipt Invocation，启动时优先于普通 Bucket，但仍受 Chat 串行与全局并发。
+   - 如果同一 Conversation 的运行正在 closing，或同 Chat 另一 Topic 正在运行，receipt 保持 `pending`，等可接收时再 claim。
+3. receipt 的 opening 或热注入都包含可信的“当前完成事件”说明及不可信结构化 receipt。运行中的注入在工具链结束后一次注入一条 receipt，和普通消息不混合为同一 round；若尚未开始回执轮，已 attach 的普通消息批次优先。receipt 不触发普通回复的 `send` barrier；已经开始的回执轮也不会被新消息拦下发送，普通批次等回执轮结束再注入。模型自行决定是否、如何回复；普通 assistant 文本仍不会发布，只有 `send` 能产生 Telegram 副作用。task 完成不等于模型已发言或 Telegram 已送达。
+4. pending receipt 可在完成后被取消投递（任务结果不回退）；claimed 不可单独取消。未消费的 attached receipt 在运行失败或结束时重排给新 Invocation 并转移归属；已 claim 的进程恢复收为 handled/`outcome_unknown`，绝不重放。`/pause` 或 Admin cancel 会让尚未注入的 attached bucket 过期，避免之后复活。Admin「Cancel ongoing」只取消已排队或运行的会话工作，不取消尚未 claim 的 pending receipt；这些回执仍可在后续调度中投递。
+5. delivery policy 默认走普通预算、也不自动 mention。可信代码创建时冻结 `bypassDailyBudget` 才可绕过 sleep 与每日 Token gate，且仍受目的地、pause、串行、并发、wall-clock、发送限流和失败处理约束；它不赋予其它豁免。`zzz` 与预算状态按当前回执轮动态恢复，caller 清空；mention/bypass 只对当前回执轮次有效，冻结 mention 只在该轮第一次成功文本发送时附加一次。
+
+Alarm 是第一个 `plugin_id = "alarm"` 的 consumer，通过 `execute.call` 暴露 `alarm`、`list_alarm`、`delete_alarm`；它不直接发送 Telegram 文本：
+
+1. `alarm` 要求 `target_user_id` 是当前 Invocation 可见的 Telegram **user** sender（sender_chat 与任意 ID 拒绝）、`summary` 为 1–500 字符、`datetime` 是带 `Z` 或显式 offset 的严格未来绝对时间且不超过 365 天；同一 Invocation 最多创建 3 个。
+2. owner 是创建者而非 target。没有可靠 caller 时三个工具都 fail closed 为 `alarm_caller_not_available`；历史 `created_by_user_id IS NULL` 行不能被用户 list/delete，也不会把 target 回填为 owner。
+3. Alarm 创建一个带 timer 的任务，冻结目标 mention 及预算豁免；到期结果是结构化 reminder 数据，不是预生成聊天文本。`list_alarm` 保留 waiting 或 completed+pending 的本人项目；`delete_alarm` 可取消 waiting Alarm 或尚未投递的 pending receipt。不存在、他人、已 claimed/已结算项目统一为 `alarm_not_found`。
+4. Admin 继续以四态 Alarm 投影展示：waiting 或 completed+pending 为 pending、claimed 为 firing、handled 为 fired、取消任务或 suppressed 投递为 cancelled。completed+pending 仍可 list/cancel；claimed 不可单独取消。
 
 ## send Tool
 
@@ -292,7 +300,7 @@ Agent 通过 `alarm` 能力（经 `execute.call` 调用）创建一个绑定当�
 约束：
 
 - **每轮至多拦一次**：`barrierSpent` 只在 Agent 空下来（`freeAgent`：该轮结束或运行结束）时重置，屏障自己触发的注入不重置它。所以群里一直有人说话时，第二次 `send` 照常发出，之后到达的消息按原规则等下一轮。
-- 已排队、尚未注入的批次会拦下同一 turn 里之后的所有 `send`，直到模型读过它，不会出现「第一条被拦、第二条先发出去」。
+- 已排队、尚未注入的普通消息批次会拦下同一 turn 里之后的所有 `send`，直到模型读过它，不会出现「第一条被拦、第二条先发出去」。待注入的 receipt 不触发这个屏障；当前处于回执轮时也不因新用户消息拦下 `send`，避免把回执政策与普通批次混合。
 - 运行处于收尾（`context_stop_ratio` 的 send-only 轮，或已 `beginClosing`）时屏障放行：收尾之后不再注入，拦下只会丢掉这次回复。已 attach 未注入的批次按原规则在运行结束时由 `releaseUninjectedBuckets` 重新排队。
 - 只看已开 Bucket 的消息：被参与闸门拦下、其他 Bot 的消息、不开桶的单独 Sticker 都不会触发屏障。
 - 触发时日志输出 `send_barrier`（`invocation_id`、`bucket_id`、`conversation_id`、`chat_id`）。

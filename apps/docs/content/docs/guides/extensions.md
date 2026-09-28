@@ -5,7 +5,7 @@ description: 区分只读 System Skills、内置 Agent Plugin 和配置的 MCP T
 
 # 使用 Skills、Plugin 与 MCP
 
-这三类扩展都能让 Agent 获得额外能力，但来源、发现方式和安全边界不同。当前发行版内置 Plugin 只有 `web_fetch`；不要把本页当成插件市场或第三方扩展承诺。
+这三类扩展都能让 Agent 获得额外能力，但来源、发现方式和安全边界不同。当前发行版内置 Plugin 包含 `web_fetch` 与 Alarm；不要把本页当成插件市场或第三方扩展承诺。
 
 ## System Skills：只读操作说明
 
@@ -15,9 +15,12 @@ Skill 是说明书，不是权限文件：不能绕过 Tool Schema、Conversatio
 
 ## 内置 Plugin：由运行时装配的能力
 
-Plugin 是运行时随发行版装配的 Agent 扩展。当前可用的内置 Plugin 提供 `web_fetch`，模型通过 `execute` 的 search/help/call 发现和调用它。它执行无 Cookie、无认证 Header 的 HTTP(S) GET，并限制目标地址、重定向、响应类型、大小和超时；网页返回内容仍是不可信数据。
+Plugin 是运行时随发行版装配的 Agent 扩展。模型通过 `execute` 的 search/help/call 发现和调用它们。
 
-因此，使用 `web_fetch` 前应先读取相应 Skill（如果索引中提供），再 `execute.search`/`help` 了解参数，最后 `execute.call`。不要在配置中寻找“安装插件市场”的入口；当前没有这样的用户承诺。
+- `web_fetch` 执行无 Cookie、无认证 Header 的 HTTP(S) GET，并限制目标地址、重定向、响应类型、大小和超时；网页返回内容仍是不可信数据。
+- Alarm 提供“稍后提醒”的 `alarm`、`list_alarm`、`delete_alarm` 能力。它创建持久任务，到期后生成完成回执：若同一会话已有可接收注入的运行，回执会在当前工具链结束后独立注入；否则等待可启动时开启新的运行。Agent 决定是否通过 `send` 跟进，而不是预先保存并自动发送一段话。它不是通用后台 worker，也不会执行任意外部任务。
+
+使用任一内部能力前，模型应先读取相应 Skill（如果索引中提供），再 `execute.search`/`help` 了解参数，最后 `execute.call`。不要在配置中寻找“安装插件市场”的入口；当前没有这样的用户承诺。
 
 ## MCP：显式配置的外部 Tool
 

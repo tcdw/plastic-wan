@@ -18,7 +18,8 @@ Config + SecretStore
         ├─ BucketScheduler
         ├─ BotCommandService / AgentModelSwitcher / ConfigReloader
         ├─ AdminServer（仅 admin.enabled = true）
-        └─ Alarm persistence (alarms table / alarm tool)
+        ├─ LongTaskService（long_tasks / task_receipts）
+        └─ 内置 Plugin（含 alarm）
 ```
 
 启动顺序有语义：先加载并校验配置与权限，再取得单实例锁、迁移数据库、连接 Telegram、同步 Sticker Set；随后排空 Telegram pending updates，按 Conversation 创建 startup catch-up Invocation；最后启动 MCP、Scheduler、Admin Panel 和常规 long polling。启动时加载的配置是 active 配置的起点：运行期只有白名单字段可以被 `ConfigReloader` 应用到当前进程，其余字段仍要重启，见 [配置：运行时配置热更新](configuration.md#运行时配置热更新)。关闭时停止 Bot，先停 Admin Panel 再等待 Scheduler（最多 30 秒），停止 Sticker/MCP 服务，关闭数据库并释放锁。
@@ -46,7 +47,7 @@ BucketScheduler / ConversationRuntime
         ▼
 ContextBuilder（稳定 system prompt + 本批注入块）
   ├─ 稳定段：Core Agent Protocol、System Skill 索引、人格与 Chat 指令、能力说明
-  ├─ 注入段：当前时间、睡眠状态、Alarm 任务、Memory、Internal context + 本批新消息
+  ├─ 注入段：当前时间、睡眠状态、完成回执、Memory + 本批新消息
   ├─ 历史来自 canonical Conversation Context，不重新渲染
   ├─ Reply 可见集合来自 context_refs
   ├─ 模型支持 image：本批 Photo/图片 Document 多模态载荷
@@ -73,10 +74,10 @@ send Tool → Telegram API → 审计
 | 组合根（`src/` 根文件与 `tui/`） | 进程装配、CLI、诊断、启动追赶、配置向导 |
 | `ingress/` | 外部输入边界：Telegram Update 入库、Admin Panel HTTP、认证与审计查询 |
 | `orchestration/` | Bucket → Invocation 状态转换、调度与并发、Agent 运行循环、Bot 命令 |
-| `plugins/` | 内置 Agent 插件：`definePlugin` 定义、`loadPlugins` 校验与装配、`builtin.ts` 清单；目前只有 `web-fetch` |
-| `capabilities/` | 模型可调用的 Tool 与外部能力（原语、媒体、Sticker、MCP、Alarm） |
-| `context/` | Conversation Context：canonical history 存储、GC、引用、编解码、模型输入组装、记忆 |
-| `store/` | SQLite 连接、schema 与迁移、跨层共享的持久化状态 |
+| `plugins/` | 内置 Agent 插件：`definePlugin` 定义、`loadPlugins` 校验与装配、`builtin.ts` 清单；包含 `web-fetch` 与 `alarm`。插件只获得 invocation scope、审计和绑定任务服务，不直接持有 Store 或 Runtime |
+| `capabilities/` | 模型可调用的 Tool 与外部能力（原语、媒体、Sticker、MCP） |
+| `context/` | Conversation Context：canonical history 存储、GC、引用、编解码、模型输入组装、记忆与完成回执注入 |
+| `store/` | SQLite 连接、schema 与迁移、通用 `long-tasks` 服务及跨层共享的持久化状态 |
 | `platform/` | 无业务依赖的基础模块：配置、Secret、Provider、并发、子进程、Prompt 模板等 |
 | `system-resources/` | 随 runtime 发布的 `system:///` 只读资源树（System Skills） |
 
@@ -85,8 +86,8 @@ send Tool → Telegram API → 审计
 - `application.ts` 装配的 AgentRuntime 与 Scheduler 共享一个 `ConversationRuntime`；`orchestration/conversation-runtime.ts` 拥有 Agent 实例 LRU 缓存与「已 attach 待注入的 Bucket」队列，是 runtime 与调度之间的唯一握手点。
 - `platform/agent-protocol.ts` 是代码固化的 **Core Agent Protocol**——消息分区、Tool 选择原则与副作用成功判定都在这里，不在人格 Prompt 文件里。它属于稳定段：改动它等于重建所有 Conversation Context。稳定段不写参与时机：是否发言由模型按当前批次自行判断；群聊的消息准入由运行期 participation 闸门决定（配置了才生效）。
 - [platform/system-resources.ts](../src/platform/system-resources.ts) 加载只读 **System Skills**；索引注入、按需读取和调用契约统一见 [Skills 与受控能力调用](telegram-agent-flow.md#skills-与受控能力调用)。Skill 提供操作知识而不授予权限，能力是否注册仍由组合根决定。
-- 不是所有 Agent Tool 都在 `capabilities/`：`zzz` 定义在 `store/sleep.ts`，`add_memory`/`delete_memory` 定义在 `context/memory.ts`，`web_fetch` 在 `plugins/web-fetch/`，各自与所属状态放在一起。找某个 Tool 的实现时按名字 grep，别只翻 `capabilities/`。
-- `store/invocation-snapshot.ts` 是 Invocation 消息快照的冻结边界；`orchestration/invocation-queue.ts` 负责 Bucket/Alarm → Invocation 的同步状态转换、attach、恢复与 Startup Catch-up。这两个名字容易和 `scheduler.ts` 混淆——Scheduler 只管事件循环与并发。
+- 不是所有 Agent Tool 都在 `capabilities/`：`zzz` 定义在 `store/sleep.ts`，`add_memory`/`delete_memory` 定义在 `context/memory.ts`，`web_fetch` 在 `plugins/web-fetch/`，Alarm 在 `plugins/alarm/`，各自与所属状态放在一起。找某个 Tool 的实现时按名字 grep，别只翻 `capabilities/`。
+- `store/long-tasks.ts` 持久化 plugin/Conversation 绑定的任务及唯一完成回执；timer 任务和外部 `complete`/`fail` 都写入同一套终态/receipt，未实现通用后台 executor、running/progress 或 retry。`store/invocation-snapshot.ts` 是 Invocation 消息快照的冻结边界；`orchestration/invocation-queue.ts` 负责 Bucket/receipt → Invocation 的同步状态转换、attach、恢复与 Startup Catch-up。这两个名字容易和 `scheduler.ts` 混淆——Scheduler 是唯一的 timer、回执投递、事件循环与并发驱动。
 - `platform/invocation-context.ts` 是无依赖的叶子类型模块，存在的唯一目的是打断 import 环，不要往里加逻辑；它同时定义 `CapabilityRefResolver`（引用解析边界）与 `InvocationContextState`（一次运行中可被新批次刷新的可变上下文）。
 - `platform/config-reload.ts` 的 `ConfigReloader` 是配置热更新的唯一入口：`reloadFromFile()`、`setAgentModel()`（全局默认）与 `setChatModel()`/`resetChatModel()`（单个 Chat 的模型覆盖写入与清除）把 `config.jsonc` 中白名单字段的变化发布到 `RuntimeConfigurationStore`（generation + 1），其余字段只报告为待重启。每次发布都带着这一代的模型注册表（`platform/providers.ts` 的 `buildModelRegistry`）：连接字段没变的 Provider 沿用进程里已有的对象，新增或连接变化的 Provider 重新解析 SecretRef，所以一次 reload 会重建注册表并把注册表与配置一起发布。白名单只定义在 `platform/config-diff.ts`；写配置文件走 `platform/config-file.ts`（保留注释，先写同目录临时文件并校验再 rename；带 Secret 的写入把明文放进同目录的 key jar `key.json`，见 `platform/key-jar.ts`）。语义见 [配置：运行时配置热更新](configuration.md#运行时配置热更新)。
 
@@ -103,8 +104,8 @@ send Tool → Telegram API → 审计
 
 - 进程启动时恢复未完成 Bucket/Invocation。
 - 小于 5 分钟的工作可重新排队；更旧工作标记为过期或恢复失败，避免无限重放。
-- 到期 Alarm 先原子 `pending → firing` 再创建 Invocation；进程恢复遗留 `firing` 关闭为 `fired`/`outcome_unknown`，绝不退回 `pending`。
-- 同一 Chat 最多一个 queued/running Invocation；Bucket deadline 只会被往后推、从不提前裁剪，完整节拍规则见 [会话节拍与 Bucket](telegram-agent-flow.md#会话节拍与-bucket)。
+- Scheduler 先完成到期 timer 任务，再原子 claim pending 完成回执并创建独立 Bucket，按会话状态附加到运行中的 Invocation 或排队新 Invocation；任务完成不等于聊天已处理。进程恢复时所有 claimed receipt 都关闭为 handled/`outcome_unknown`，绝不退回 pending 或重放。
+- 同一 Chat 最多一个 running Invocation；完成回执可与普通 Invocation 同时 queued，启动时回执优先，但不会并行执行。若同一 Conversation 的运行仍接受注入，回执使用自己的空 Bucket attach 到该 Invocation；同一 Invocation 可有多个 receipt，跨 Topic 仍维持 Chat 级串行。Bucket deadline 只会被往后推、从不提前裁剪，完整节拍规则见 [会话节拍与 Bucket](telegram-agent-flow.md#会话节拍与-bucket)。
 - attach 到运行中 Invocation 但从未注入的 Bucket 在运行结束时重新排队成新 Invocation，不会被静默丢弃。
 - 一旦 Tool 产生不可逆副作用，未知结果不得盲目重试；状态进入 `outcome_unknown` 供审计处理。
 

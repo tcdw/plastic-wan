@@ -16,6 +16,8 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 迁移文件位于 `src/store/migrations/`，文件名为 `NNN_name.sql`，按编号排序。每个迁移在 IMMEDIATE transaction 中执行并记录到 `schema_migrations`。已有数据库存在待执行迁移时，先在备份目录创建 `pre-migration-*.sqlite`。
 
+迁移 `021` 删除旧 `internal_contexts` 旁路观察，不向 canonical history 回填，也不删任务、回执或正常审计。工具结果只随 `context_messages` 保留；本次移除旧提示词也会改变稳定 prompt hash，升级后首次打开 Conversation 时仍按既有规则重建 Context，不为旧外挂保留兼容通道。迁移 `022` 为既有回执回填其所属 Invocation 的 Bucket，并把唯一性从 Invocation 转为非空 `bucket_id`；因此同一 Invocation 可保留多个 receipt。
+
 新增迁移时：
 
 1. 创建下一个连续编号文件。
@@ -74,7 +76,7 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 - 查询始终带 `context_id`，因此**引用永不跨 Conversation 解析**：另一个 Chat/Topic 的引用即使格式相同也解析不出来。
 - `expires_at = 写入时刻 + agent.context.ref_ttl_hours`（reply 引用每次重新注册都会续期）；同一 (context, media) 在未过期时复用同一条 `ref`，避免前缀抖动。
 
-`invocation_buckets` 是 Bucket 到 Invocation 的 join 表：长生命周期的 Invocation 会消费多个 Bucket，`invocations.bucket_id` 只保留「开场 Bucket」这一历史字段。
+`invocation_buckets` 是 Bucket 到 Invocation 的 join 表：长生命周期的 Invocation 会消费多个 Bucket，`invocations.bucket_id` 只保留「开场 Bucket」这一历史字段。完成回执在 claim 时各自创建一个无消息的 Bucket，以唯一的非空 `task_receipts.bucket_id` 关联；尚未 claim 的 receipt 仍可没有 Bucket。同一 Invocation 可通过多个 join 行消费多个 receipt。receipt 的 Bucket 不含 `bucket_messages`，但仍参与注入、终态、重排与过期处理。
 
 - 主键 `(invocation_id, bucket_id)`，`attached_at` 是挂载时间。
 - `injected_at` 为 `NULL` 表示「已挂到该 Invocation，但还没进入模型 transcript」。Invocation 结束时 `releaseUninjectedBuckets` 把这些 Bucket（开场 Bucket 除外）重新排队成新的 Invocation，批次不会被静默丢弃。
@@ -82,13 +84,19 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 `/status` 命令与 Admin Panel 的 `contexts` 接口只读展示 `head_seq`/`next_seq`/`send_count_total`、保留消息数与最近 GC 时间，不写入该表组。
 
-### 隐藏工作上下文
+### 长程任务与完成回执
 
-`internal_contexts` 保存同一 Conversation 中先前 Tool 结果产生的隐藏观察。当前实现由 `list_alarm` 持久化 `alarm_list`/`v1`，payload 内含稳定 `kind` discriminator、`version`、`observed_at` 与有序 `items`（`id`/`scheduled_at`/`summary`），并通过 `source_agent_message_id` 关联产生该观察的内部 transcript 行。
+`long_tasks` 是任务状态唯一事实源：任务归属 plugin 与 Conversation，创建 Invocation 在删除后置 `NULL`；它保存有界 JSON payload、可选 timer deadline/result、创建时冻结的 delivery policy，以及 `waiting`、`completed`、`failed`、`cancelled` 四态。`task_receipts` 是每个终态任务至多一份的投递状态唯一事实源：`pending`、`claimed`、`handled`、`suppressed` 与结果/错误、关联 Invocation（删除后置 `NULL`）、取消和结算审计分离保存。
+
+- payload、timer result、result 各不超过 16 KiB UTF-8；error 不超过 8 KiB，delivery 不超过 4 KiB。服务层拒绝非 JSON 值、非有限数、循环、稀疏数组、访问器和非 plain object；DDL 同时以 `json_valid` 与字节长度 CHECK 兜底。
+- 到期 timer 从 `waiting` 原子转为 `completed` 并生成 pending receipt；插件也可在以后通过绑定 plugin/Conversation 的 completion handle 完成或失败无 timer 的任务。本期不提供通用 executor、running/progress 或 retry。
+- 取消 waiting 任务会生成 suppressed cancelled receipt；已完成但 pending 的 receipt 可以被取消投递，任务本身仍保持完成。claimed 不可单独取消。重启时 claimed receipt 结算为 handled/`outcome_unknown`，绝不重放。
+- `delivery_json` 只在创建时由可信插件代码写入；默认普通预算且不 mention。可信 `bypassDailyBudget` 会令该 receipt 投递跳过 sleep 与每日 token gate，但不绕过 Chat/Topic 配置、pause、串行、并发、wall-clock、发送限流或失败处理。外部完成默认仍走普通预算。
+- retention 不删除 waiting 任务或 pending/claimed receipt。无 timer 的任务依赖插件显式完成、失败或取消；创建 Invocation 结束或删除不表示任务已失效，不能据此清理。只有任务已终态且 receipt 已 handled/suppressed 才按在线窗口一起删除；不单独删 receipt，以免留下孤立任务。删除 Conversation 级联两表。
 
 ### Alarm owner
 
-`alarms.created_by_user_id` 是可信 owner：新建 alarm 时由应用从冻结 invocation 的最新 `new` user sender 写入。迁移历史行允许为 `NULL`，这些旧行不会被用户 list/delete，也不会把 target 冒充 creator 回填。
+Alarm 是 `plugin_id = 'alarm'` 的任务投影。`long_tasks.created_by_user_id` 是可信 owner：新建时由当前 Invocation 的可靠 caller 写入；迁移历史行允许为 `NULL`，这些旧行不会被用户 list/delete，也不会把 target 冒充 creator 回填。
 
 ### 短期记忆
 
@@ -141,8 +149,7 @@ Admin 侧的 `admin_users`/`admin_sessions`/`bot_admins` 语义见 [admin-panel.
 - 仍被快照引用的旧 Message 保留身份，但匿名化 Revision 文本、Sender、Reply/Forward 和 Service 内容。
 - 删除无引用 Sender、过期普通图片分析、独立 Doctor 模型调用与旧 `daily_usage` 日期。
 - Sticker 长期视觉索引不按普通图片策略删除。
-- `alarms` 的 `pending`/`firing` 行保留（未来仍需执行）；`fired`/`cancelled` 终态行随在线审计窗口清理。
-- `internal_contexts` 不是长期 memory，也不单独配置 TTL；它随在线会话窗口清理，默认保留到 `created_at < now - retention.online_days` 时删除。
+- `long_tasks` 的 waiting 行及 pending/claimed `task_receipts` 永不因 online cutoff 删除；任务终态且 receipt 已 handled/suppressed 后才随在线窗口一起清理。
 - `context_refs` 中 `expires_at <= now` 的行（TTL 到期即删，与在线保留窗口无关）。
 - `context_messages` 中已软标记 `evicted_at` 且早于在线窗口的行；软标记本身保留一个在线窗口，便于审计 GC 丢掉了什么。
 - `last_active_at` 早于在线窗口的 `conversation_contexts`，连带级联删除其 `context_messages` 与 `context_refs`；空闲 Conversation 的长期 transcript 因此不会无限增长。

@@ -7,10 +7,12 @@ import { getJsonSchemaToolParameters } from '@earendil-works/pi-ai/api/constrain
 import { GrammyError } from 'grammy';
 import type { Update } from 'grammy/types';
 import { Compile } from 'typebox/compile';
-import { cancelAlarm, listAlarms } from '../src/ingress/admin/alarm-admin.ts';
+import { cancelAlarm, listAlarms } from '../src/plugins/alarm/admin.ts';
 import { AdminServer } from '../src/ingress/admin/server.ts';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
-import { AlarmInputSchema, createAlarmTool, createListAlarmTool } from '../src/capabilities/alarm.ts';
+import { AlarmInputSchema } from '../src/plugins/alarm/alarm.ts';
+import { alarmTools, getAlarmTask } from './alarm-fixtures.ts';
+import { LongTaskService } from '../src/store/long-tasks.ts';
 import { BotCommandService } from '../src/orchestration/bot-commands.ts';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
@@ -37,10 +39,10 @@ import {
 const directories: string[] = [];
 
 afterAll(async () => {
-  await Promise.all(
-    directories.map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })),
-  );
-});
+  for (const directory of directories) {
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+}, 30_000);
 
 async function setup(registry?: TestRegistry) {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-alarm-'));
@@ -55,6 +57,7 @@ async function setup(registry?: TestRegistry) {
     configPath,
     loaded,
     configStore,
+    config: loaded.config,
     store,
     ingestion: new TelegramIngestion(store, configStore, { id: 999 }),
     scheduler: new BucketScheduler(store, configStore, async () => ({
@@ -173,30 +176,55 @@ function insertAlarm(
     invocationId?: bigint;
   } = {},
 ): bigint {
-  const created = store.db
-    .prepare(
-      `INSERT INTO alarms(conversation_id, target_user_id, created_by_user_id, target_display_name, summary,
-                          scheduled_at, created_at, state, invocation_id, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      conversationId,
-      options.targetUserId ?? 42n,
-      options.targetUserId ?? 42n,
-      options.displayName ?? 'Alice',
-      options.summary ?? 'test alarm',
+  const targetUserId = options.targetUserId ?? 42n;
+  const displayName = options.displayName ?? 'Alice';
+  const payload = {
+    target_user_id: targetUserId.toString(),
+    target_display_name: displayName,
+    summary: options.summary ?? 'test alarm',
+  };
+  const createdAt = new Date(Date.parse(scheduledAt) - 60_000).toISOString();
+  const taskId = new LongTaskService(store.orm).scoped('alarm', conversationId).create(
+    {
+      payload,
       scheduledAt,
-      new Date(Date.parse(scheduledAt) - 60_000).toISOString(),
-      options.state ?? 'pending',
-      options.invocationId ?? null,
-      new Date().toISOString(),
-    );
-  return BigInt(created.lastInsertRowid);
+      timerResult: payload,
+      delivery: { bypassDailyBudget: true, mentionUser: { userId: targetUserId, displayName } },
+    },
+    new Date(createdAt),
+  ).taskId;
+  const state = options.state ?? 'pending';
+  if (state !== 'pending') {
+    new LongTaskService(store.orm).processDue(new Date(scheduledAt));
+    if (state === 'firing' || state === 'fired') {
+      store.db
+        .prepare(
+          `UPDATE task_receipts SET state = ?, invocation_id = ?, claimed_at = ?, handled_at = ?, updated_at = ? WHERE task_id = ?`,
+        )
+        .run(
+          state === 'firing' ? 'claimed' : 'handled',
+          options.invocationId ?? null,
+          scheduledAt,
+          state === 'fired' ? scheduledAt : null,
+          scheduledAt,
+          taskId,
+        );
+    } else if (state === 'cancelled') {
+      store.db
+        .prepare(`UPDATE long_tasks SET state = 'cancelled', updated_at = ?, finished_at = ? WHERE id = ?`)
+        .run(scheduledAt, scheduledAt, taskId);
+      store.db
+        .prepare(
+          `UPDATE task_receipts SET status = 'cancelled', result_json = NULL, state = 'suppressed', cancelled_at = ?, updated_at = ? WHERE task_id = ?`,
+        )
+        .run(scheduledAt, scheduledAt, taskId);
+    }
+  }
+  return taskId;
 }
-
 describe('alarm tool', () => {
   test('validates schema boundaries and persists a pending alarm with UTC deadline', async () => {
-    const { store, ingestion, scheduler, build } = await setup();
+    const { store, config, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
@@ -220,7 +248,7 @@ describe('alarm tool', () => {
     );
 
     const scheduled = futureIso(3_600_000);
-    const tool = createAlarmTool({ store, context });
+    const tool = alarmTools(store, config, context).alarm;
     expect(tool.description).toContain('Use only when a new user message explicitly requests a future reminder');
     expect(tool.description).toContain('use send to clarify instead of calling alarm');
     expect(tool.description).toContain('After success, use send to briefly confirm');
@@ -233,10 +261,11 @@ describe('alarm tool', () => {
     const row = store.db
       .prepare<
         [string],
-        { state: string; target_user_id: bigint; created_by_user_id: bigint | null; scheduled_at: string }
-      >('SELECT state, target_user_id, created_by_user_id, scheduled_at FROM alarms WHERE id = ?')
+        { state: string; target_user_id: string; created_by_user_id: bigint | null; scheduled_at: string }
+      >(`SELECT state, json_extract(payload_json, '$.target_user_id') AS target_user_id,
+                created_by_user_id, scheduled_at FROM long_tasks WHERE id = ?`)
       .get(result.details.id);
-    expect(row).toEqual({ state: 'pending', target_user_id: 42n, created_by_user_id: 42n, scheduled_at: scheduled });
+    expect(row).toEqual({ state: 'waiting', target_user_id: '42', created_by_user_id: 42n, scheduled_at: scheduled });
     const audit = store.db
       .prepare<[], { state: string; error_code: string | null; result_text: string | null }>(
         'SELECT state, error_code, result_text FROM tool_calls',
@@ -249,12 +278,12 @@ describe('alarm tool', () => {
   });
 
   test('rejects unauthorized targets, bad datetimes, and enforces a per-invocation quota', async () => {
-    const { store, ingestion, scheduler, build } = await setup();
+    const { store, config, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello', 42), received);
     const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
     const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
-    const tool = createAlarmTool({ store, context });
+    const tool = alarmTools(store, config, context).alarm;
 
     await expect(
       tool.execute('unauthorized', { target_user_id: '999', summary: 'x', datetime: futureIso(3600_000) }),
@@ -300,30 +329,21 @@ describe('alarm tool', () => {
         .prepare<[], { error_code: string | null }>("SELECT error_code FROM tool_calls WHERE tool_call_id = 'quota-3'")
         .get()?.error_code,
     ).toBe('alarm_quota_exceeded');
-    expect(store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM alarms').get()?.count).toBe(3n);
+    expect(
+      store.db
+        .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM long_tasks WHERE plugin_id = 'alarm'")
+        .get()?.count,
+    ).toBe(3n);
     store.close();
   });
 
   test('list_alarm parameters schema is a strict empty object accepted by provider adapters', async () => {
-    const { store, ingestion, scheduler, build } = await setup();
+    const { store, config, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
     const context = build(invocationId, { contextWindow: 200_000, maxOutputTokens: 32768 });
-    const tool = createListAlarmTool({
-      store,
-      context,
-      runtime: {
-        recordAgentMessage: (currentInvocationId, role, text) => {
-          const created = store.db
-            .prepare(
-              "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, 1, ?, ?, '', ?)",
-            )
-            .run(currentInvocationId, role, text, '2026-08-15T00:00:15.000Z');
-          return BigInt(created.lastInsertRowid);
-        },
-      },
-    });
+    const tool = alarmTools(store, config, context).list_alarm;
     expect(tool.description).toContain('Use when the user asks what reminders they have');
     expect(tool.description).toContain('call delete_alarm directly');
     expect(tool.description).toContain('never expose internal alarm IDs');
@@ -365,7 +385,7 @@ describe('alarm tool', () => {
       provider: 'agent',
       models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
     });
-    const { store, ingestion, scheduler, configStore } = await setup(fauxRegistry(faux));
+    const { store, config, ingestion, scheduler, configStore } = await setup(fauxRegistry(faux));
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, '我有哪些闹钟'), received);
     const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));
@@ -419,31 +439,7 @@ describe('alarm tool', () => {
       bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
       modelGate: new KeyedSemaphore(),
       systemResources: SystemResources.empty(),
-      capabilityTools: (context) => [
-        capability(
-          createListAlarmTool({
-            store,
-            context,
-            runtime: {
-              recordAgentMessage: (currentInvocationId, role, text) => {
-                const sequence =
-                  store.db
-                    .prepare<[bigint], { value: bigint }>(
-                      'SELECT COALESCE(MAX(sequence_no), 0) + 1 AS value FROM agent_messages WHERE invocation_id = ?',
-                    )
-                    .get(currentInvocationId)?.value ?? 1n;
-                const created = store.db
-                  .prepare(
-                    "INSERT INTO agent_messages(invocation_id, sequence_no, role, text, thinking_text, created_at) VALUES (?, ?, ?, ?, '', ?)",
-                  )
-                  .run(currentInvocationId, sequence, role, text, '2026-08-15T00:00:15.000Z');
-                return BigInt(created.lastInsertRowid);
-              },
-            },
-          }),
-          false,
-        ),
-      ],
+      capabilityTools: (context) => [capability(alarmTools(store, config, context).list_alarm, false)],
     });
     expect(await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal)).toEqual({
       state: 'completed',
@@ -487,20 +483,18 @@ describe('alarm scheduler', () => {
       throw new Error('Expected conversation');
     }
     const alarmId = insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z');
-    const invocations = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
+    const invocations = scheduler.processTasksDue(new Date('2026-08-15T00:00:00.000Z'));
     expect(invocations).toHaveLength(1);
-    const alarm = store.db
-      .prepare<[bigint], { state: string; invocation_id: bigint | null }>(
-        'SELECT state, invocation_id FROM alarms WHERE id = ?',
-      )
-      .get(alarmId);
+    const alarm = getAlarmTask(store, alarmId);
+    expect(alarm?.task_state).toBe('completed');
+    expect(alarm?.receipt_state).toBe('claimed');
     expect(alarm?.state).toBe('firing');
     expect(alarm?.invocation_id).toBe(invocations[0]);
     const context = build(invocations[0] ?? 0n, { contextWindow: 200_000, maxOutputTokens: 32768 });
-    expect(context.alarm?.userId).toBe(42n);
+    expect(context.completion?.delivery.mentionUser?.userId).toBe(42n);
     // The alarm task is per-invocation state and travels with the injected batch.
     expect(context.userPrompt).toContain('test alarm');
-    expect(context.userPrompt).toContain('triggered by an alarm');
+    expect(context.userPrompt).toContain('long-running task has finished');
     expect(context.systemPrompt).not.toContain('test alarm');
     const newCount = store.db
       .prepare<[bigint], { count: bigint }>(
@@ -521,14 +515,13 @@ describe('alarm scheduler', () => {
     store.db
       .prepare('INSERT INTO chat_pause(chat_id, paused_at) VALUES (?, ?)')
       .run(chat?.chat_id ?? 0n, new Date().toISOString());
-    scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
-    expect(
-      store.db
-        .prepare<[bigint], { state: string; cancel_reason: string | null }>(
-          'SELECT state, cancel_reason FROM alarms WHERE id = ?',
-        )
-        .get(pausedAlarm),
-    ).toEqual({ state: 'cancelled', cancel_reason: 'chat_paused' });
+    scheduler.processTasksDue(new Date('2026-08-15T00:00:00.000Z'));
+    expect(getAlarmTask(store, pausedAlarm)).toMatchObject({
+      task_state: 'completed',
+      receipt_state: 'suppressed',
+      state: 'cancelled',
+      cancel_reason: 'chat_paused',
+    });
 
     const removedChat = store.db
       .prepare<[string], { id: bigint }>(
@@ -541,14 +534,13 @@ describe('alarm scheduler', () => {
       )
       .get(removedChat?.id ?? 0n, new Date().toISOString(), new Date().toISOString());
     const removedAlarm = insertAlarm(store, removedConversation?.id ?? 0n, '2026-08-14T23:59:00.000Z');
-    scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
-    expect(
-      store.db
-        .prepare<[bigint], { state: string; cancel_reason: string | null }>(
-          'SELECT state, cancel_reason FROM alarms WHERE id = ?',
-        )
-        .get(removedAlarm),
-    ).toEqual({ state: 'cancelled', cancel_reason: 'chat_removed' });
+    scheduler.processTasksDue(new Date('2026-08-15T00:00:00.000Z'));
+    expect(getAlarmTask(store, removedAlarm)).toMatchObject({
+      task_state: 'completed',
+      receipt_state: 'suppressed',
+      state: 'cancelled',
+      cancel_reason: 'chat_removed',
+    });
     store.close();
   });
 
@@ -562,17 +554,15 @@ describe('alarm scheduler', () => {
     }
     const alarmId = insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z', { state: 'firing' });
     scheduler.recover(new Date('2026-08-15T00:00:00.000Z'));
-    expect(
-      store.db
-        .prepare<[bigint], { state: string; invocation_outcome: string | null }>(
-          'SELECT state, invocation_outcome FROM alarms WHERE id = ?',
-        )
-        .get(alarmId),
-    ).toEqual({ state: 'fired', invocation_outcome: 'outcome_unknown' });
+    expect(getAlarmTask(store, alarmId)).toMatchObject({
+      task_state: 'completed',
+      receipt_state: 'handled',
+      state: 'fired',
+      invocation_outcome: 'outcome_unknown',
+      completion_reason: 'outcome_unknown',
+    });
     scheduler.recover(new Date('2026-08-15T00:00:01.000Z'));
-    expect(
-      store.db.prepare<[bigint], { state: string }>('SELECT state FROM alarms WHERE id = ?').get(alarmId)?.state,
-    ).toBe('fired');
+    expect(getAlarmTask(store, alarmId)?.state).toBe('fired');
     store.close();
   });
 });
@@ -603,7 +593,7 @@ describe('alarm runtime budget bypass', () => {
       .run(today, '123456789', BigInt(loaded.config.agent.daily_budget.max_tokens), new Date().toISOString());
 
     insertAlarm(store, conversation.id, new Date(start - 60_000).toISOString());
-    const [alarmInvocation] = scheduler.processAlarmsDue(new Date(start));
+    const [alarmInvocation] = scheduler.processTasksDue(new Date(start));
     if (alarmInvocation === undefined) {
       throw new Error('Expected alarm invocation');
     }
@@ -658,7 +648,7 @@ describe('alarm runtime budget bypass', () => {
 
 describe('alarm send mention', () => {
   test('prefixes the first successful text send with a target mention and leaves later sends alone', async () => {
-    const { store, loaded, ingestion, scheduler, build } = await setup();
+    const { store, config, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.prepare<[], { id: bigint }>('SELECT id FROM conversations').get();
@@ -666,12 +656,12 @@ describe('alarm send mention', () => {
       throw new Error('Expected conversation');
     }
     insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z', { displayName: 'Alice' });
-    const [alarmInvocation] = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
+    const [alarmInvocation] = scheduler.processTasksDue(new Date('2026-08-15T00:00:00.000Z'));
     if (alarmInvocation === undefined) {
       throw new Error('Expected alarm invocation');
     }
     const context = build(alarmInvocation, { contextWindow: 200_000, maxOutputTokens: 32768 });
-    expect(context.alarm).not.toBe(null);
+    expect(context.completion).not.toBe(null);
 
     const requests: Array<{ text: string; options: Parameters<TelegramSendApi['sendMessage']>[2] }> = [];
     const api: TelegramSendApi = {
@@ -681,7 +671,7 @@ describe('alarm send mention', () => {
       },
       sendSticker: async () => ({ message_id: 600, date: 1_700_000_101, chat: { id: 123456789 } }),
     };
-    const capabilities = invocationCapabilities(store, loaded.config, context.header);
+    const capabilities = invocationCapabilities(store, config, context.header);
     const tool = createSendTool({
       store,
       api,
@@ -720,7 +710,9 @@ describe('alarm admin', () => {
     const pending1 = insertAlarm(store, conversation, '2026-08-15T02:00:00.000Z', { summary: 'pending 1' });
     const pending2 = insertAlarm(store, conversation, '2026-08-15T01:00:00.000Z', { summary: 'pending 2' });
     const fired = insertAlarm(store, conversation, '2026-08-15T00:30:00.000Z', { state: 'fired', summary: 'fired' });
-    store.db.prepare('UPDATE alarms SET fired_at = ? WHERE id = ?').run('2026-08-15T00:30:00.000Z', fired);
+    store.db
+      .prepare('UPDATE task_receipts SET claimed_at = ?, handled_at = ?, updated_at = ? WHERE task_id = ?')
+      .run('2026-08-15T00:30:00.000Z', '2026-08-15T00:30:00.000Z', '2026-08-15T00:30:00.000Z', fired);
 
     const first = listAlarms(store.orm, { limit: '2' });
     expect(first.items.map((item) => item.id)).toEqual([pending2.toString(), pending1.toString()]);
@@ -752,12 +744,13 @@ describe('alarm admin', () => {
     const { store } = await setup();
     const conversation = ensureConversation(store);
     const pending = insertAlarm(store, conversation, '2026-08-15T01:00:00.000Z');
-    expect(cancelAlarm(store.orm, pending, 'owner')).toEqual({ status: 'cancelled' });
+    expect(cancelAlarm(new LongTaskService(store.orm), store.orm, pending, 'owner')).toEqual({ status: 'cancelled' });
     const row = store.db
       .prepare<
         [bigint],
         { state: string; cancelled_by: string | null; admin_cancelled: bigint; cancel_reason: string | null }
-      >('SELECT state, cancelled_by, admin_cancelled, cancel_reason FROM alarms WHERE id = ?')
+      >(`SELECT lt.state, tr.cancelled_by, tr.admin_cancelled, tr.cancel_reason
+         FROM long_tasks lt JOIN task_receipts tr ON tr.task_id = lt.id WHERE lt.id = ?`)
       .get(pending);
     expect(row).toEqual({
       state: 'cancelled',
@@ -765,8 +758,10 @@ describe('alarm admin', () => {
       admin_cancelled: 1n,
       cancel_reason: 'admin_cancelled',
     });
-    expect(() => cancelAlarm(store.orm, pending, 'owner')).toThrow('Only pending alarms can be cancelled');
-    expect(() => cancelAlarm(store.orm, 999999n, 'owner')).toThrow('does not exist');
+    expect(() => cancelAlarm(new LongTaskService(store.orm), store.orm, pending, 'owner')).toThrow(
+      'Only pending alarms can be cancelled',
+    );
+    expect(() => cancelAlarm(new LongTaskService(store.orm), store.orm, 999999n, 'owner')).toThrow('does not exist');
     store.close();
   });
 });
@@ -803,7 +798,9 @@ describe('alarm scheduling behavior', () => {
     recording.start(new Date('2026-08-15T00:00:00.000Z'));
     await firstSignal;
     const alarmInvocation = store.db
-      .prepare<[], { invocation_id: bigint }>("SELECT invocation_id FROM alarms WHERE state IN ('firing', 'fired')")
+      .prepare<[], { invocation_id: bigint }>(
+        "SELECT invocation_id FROM task_receipts WHERE state IN ('claimed', 'handled') ORDER BY task_id LIMIT 1",
+      )
       .get()?.invocation_id;
     if (alarmInvocation === undefined) {
       throw new Error('Expected alarm invocation');
@@ -843,7 +840,9 @@ describe('alarm scheduling behavior', () => {
     await recording.stop(30_000);
 
     const alarmInvocation = store.db
-      .prepare<[], { invocation_id: bigint }>("SELECT invocation_id FROM alarms WHERE state = 'fired'")
+      .prepare<[], { invocation_id: bigint }>(
+        "SELECT invocation_id FROM task_receipts WHERE state = 'handled' ORDER BY task_id LIMIT 1",
+      )
       .get()?.invocation_id;
     if (alarmInvocation === undefined) {
       throw new Error('Expected alarm invocation');
@@ -875,10 +874,12 @@ describe('alarm scheduling behavior', () => {
     }
     const alarmId = insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z');
 
-    expect(scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'))).toEqual([]);
-    expect(
-      store.db.prepare<[bigint], { state: string }>('SELECT state FROM alarms WHERE id = ?').get(alarmId)?.state,
-    ).toBe('pending');
+    expect(scheduler.processTasksDue(new Date('2026-08-15T00:00:00.000Z'))).toEqual([]);
+    expect(getAlarmTask(store, alarmId)).toMatchObject({
+      task_state: 'completed',
+      receipt_state: 'pending',
+      state: 'pending',
+    });
 
     store.db
       .prepare("UPDATE invocations SET state = 'completed', finished_at = ? WHERE id = ?")
@@ -889,11 +890,13 @@ describe('alarm scheduling behavior', () => {
       )
       .run('2026-08-15T00:00:01.000Z', invocationId);
 
-    const claimed = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:01.000Z'));
+    const claimed = scheduler.processTasksDue(new Date('2026-08-15T00:00:01.000Z'));
     expect(claimed).toHaveLength(1);
-    expect(
-      store.db.prepare<[bigint], { state: string }>('SELECT state FROM alarms WHERE id = ?').get(alarmId)?.state,
-    ).toBe('firing');
+    expect(getAlarmTask(store, alarmId)).toMatchObject({
+      task_state: 'completed',
+      receipt_state: 'claimed',
+      state: 'firing',
+    });
     store.close();
   });
 
@@ -901,7 +904,7 @@ describe('alarm scheduling behavior', () => {
     const { store, scheduler, configStore } = await setup();
     const conversation = ensureConversation(store);
     const alarmId = insertAlarm(store, conversation, '2026-08-14T23:59:00.000Z');
-    const [invocationId] = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
+    const [invocationId] = scheduler.processTasksDue(new Date('2026-08-15T00:00:00.000Z'));
     if (invocationId === undefined) {
       throw new Error('Expected claimed alarm invocation');
     }
@@ -922,12 +925,13 @@ describe('alarm scheduling behavior', () => {
       ),
     ).toContain('已暂停');
 
-    const alarm = store.db
-      .prepare<[bigint], { state: string; cancel_reason: string | null; admin_cancelled: bigint }>(
-        'SELECT state, cancel_reason, admin_cancelled FROM alarms WHERE id = ?',
-      )
-      .get(alarmId);
-    expect(alarm).toEqual({ state: 'cancelled', cancel_reason: 'chat_paused', admin_cancelled: 0n });
+    expect(getAlarmTask(store, alarmId)).toMatchObject({
+      task_state: 'completed',
+      receipt_state: 'suppressed',
+      state: 'cancelled',
+      cancel_reason: 'chat_paused',
+      admin_cancelled: 0n,
+    });
     expect(
       store.db
         .prepare<[bigint], { state: string; completion_reason: string | null }>(
@@ -952,12 +956,9 @@ describe('alarm scheduling behavior', () => {
       const scheduler = new BucketScheduler(store, configStore, async () => outcome);
       scheduler.start(new Date('2026-08-15T00:00:00.000Z'));
       await scheduler.stop(30_000);
-      const row = store.db
-        .prepare<[bigint], { state: string; invocation_outcome: string | null; completion_reason: string | null }>(
-          'SELECT state, invocation_outcome, completion_reason FROM alarms WHERE id = ?',
-        )
-        .get(alarmId);
-      expect(row).toEqual({
+      expect(getAlarmTask(store, alarmId)).toMatchObject({
+        task_state: 'completed',
+        receipt_state: 'handled',
         state: 'fired',
         invocation_outcome: outcome.state,
         completion_reason: outcome.reason,
@@ -976,27 +977,42 @@ describe('alarm retention', () => {
     const fired = insertAlarm(store, conversation, '2026-01-01T00:00:00.000Z', { state: 'fired' });
     const cancelled = insertAlarm(store, conversation, '2026-01-01T00:00:00.000Z', { state: 'cancelled' });
     store.db
-      .prepare('UPDATE alarms SET fired_at = ?, updated_at = ? WHERE id = ?')
-      .run('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', fired);
+      .prepare('UPDATE long_tasks SET finished_at = ?, updated_at = ? WHERE id IN (?, ?)')
+      .run('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', fired, cancelled);
     store.db
-      .prepare('UPDATE alarms SET cancelled_at = ?, updated_at = ? WHERE id = ?')
+      .prepare('UPDATE task_receipts SET claimed_at = ?, handled_at = ?, updated_at = ? WHERE task_id = ?')
+      .run('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', fired);
+    store.db
+      .prepare('UPDATE task_receipts SET cancelled_at = ?, updated_at = ? WHERE task_id = ?')
       .run('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', cancelled);
 
     purgeExpiredData(store.orm, loaded.config, new Date('2026-03-01T00:00:00.000Z'));
     const ids = [pending, firing, fired, cancelled];
-    const states = store.db
-      .prepare<bigint[], { id: bigint; state: string }>(
-        'SELECT id, state FROM alarms WHERE id IN (?, ?, ?, ?) ORDER BY id',
+    const tasks = store.db
+      .prepare<bigint[], { id: bigint; task_state: string; receipt_state: string | null }>(
+        `SELECT lt.id, lt.state AS task_state, tr.state AS receipt_state
+           FROM long_tasks lt LEFT JOIN task_receipts tr ON tr.task_id = lt.id
+          WHERE lt.id IN (?, ?, ?, ?) ORDER BY lt.id`,
       )
       .all(...ids);
-    expect(states.map((row) => row.state)).toEqual(['pending', 'firing']);
+    expect(tasks).toEqual([
+      { id: pending, task_state: 'completed', receipt_state: 'pending' },
+      { id: firing, task_state: 'completed', receipt_state: 'claimed' },
+    ]);
+    expect(
+      store.db
+        .prepare<bigint[], { count: bigint }>(
+          'SELECT COUNT(*) AS count FROM task_receipts WHERE task_id IN (?, ?, ?, ?)',
+        )
+        .get(...ids)?.count,
+    ).toBe(2n);
     store.close();
   });
 });
 
 describe('alarm send mention', () => {
   test('retries the first target contact after a Telegram text failure', async () => {
-    const { store, loaded, ingestion, scheduler, build } = await setup();
+    const { store, config, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.prepare<[], { id: bigint }>('SELECT id FROM conversations').get();
@@ -1004,7 +1020,7 @@ describe('alarm send mention', () => {
       throw new Error('Expected conversation');
     }
     insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z', { displayName: 'Alice' });
-    const [alarmInvocation] = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
+    const [alarmInvocation] = scheduler.processTasksDue(new Date('2026-08-15T00:00:00.000Z'));
     if (alarmInvocation === undefined) {
       throw new Error('Expected alarm invocation');
     }
@@ -1028,7 +1044,7 @@ describe('alarm send mention', () => {
       },
       sendSticker: async () => ({ message_id: 600, date: 1_700_000_200, chat: { id: 123456789 } }),
     };
-    const capabilities = invocationCapabilities(store, loaded.config, context.header);
+    const capabilities = invocationCapabilities(store, config, context.header);
     const tool = createSendTool({
       store,
       api,
@@ -1060,7 +1076,7 @@ describe('alarm send mention', () => {
   });
 
   test('keeps MarkdownV2 parsing while adding the first-text mention', async () => {
-    const { store, loaded, ingestion, scheduler, build } = await setup();
+    const { store, config, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.prepare<[], { id: bigint }>('SELECT id FROM conversations').get();
@@ -1068,7 +1084,7 @@ describe('alarm send mention', () => {
       throw new Error('Expected conversation');
     }
     insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z', { displayName: 'Back\\slash!ok[test]' });
-    const [alarmInvocation] = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
+    const [alarmInvocation] = scheduler.processTasksDue(new Date('2026-08-15T00:00:00.000Z'));
     if (alarmInvocation === undefined) {
       throw new Error('Expected alarm invocation');
     }
@@ -1082,7 +1098,7 @@ describe('alarm send mention', () => {
       },
       sendSticker: async () => ({ message_id: 600, date: 1_700_000_200, chat: { id: 123456789 } }),
     };
-    const capabilities = invocationCapabilities(store, loaded.config, context.header);
+    const capabilities = invocationCapabilities(store, config, context.header);
     const tool = createSendTool({
       store,
       api,
@@ -1102,7 +1118,7 @@ describe('alarm send mention', () => {
   });
 
   test('applies length and blank-line checks after adding the mention prefix', async () => {
-    const { store, loaded, ingestion, scheduler, build } = await setup();
+    const { store, config, ingestion, scheduler, build } = await setup();
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, 'hello'), received);
     const conversation = store.db.prepare<[], { id: bigint }>('SELECT id FROM conversations').get();
@@ -1110,7 +1126,7 @@ describe('alarm send mention', () => {
       throw new Error('Expected conversation');
     }
     insertAlarm(store, conversation.id, '2026-08-14T23:59:00.000Z', { displayName: 'Alice' });
-    const [alarmInvocation] = scheduler.processAlarmsDue(new Date('2026-08-15T00:00:00.000Z'));
+    const [alarmInvocation] = scheduler.processTasksDue(new Date('2026-08-15T00:00:00.000Z'));
     if (alarmInvocation === undefined) {
       throw new Error('Expected alarm invocation');
     }
@@ -1124,7 +1140,7 @@ describe('alarm send mention', () => {
       },
       sendSticker: async () => ({ message_id: 600, date: 1_700_000_200, chat: { id: 123456789 } }),
     };
-    const capabilities = invocationCapabilities(store, loaded.config, context.header);
+    const capabilities = invocationCapabilities(store, config, context.header);
     const tool = createSendTool({
       store,
       api,

@@ -3,12 +3,7 @@ import { Bot, type Context } from 'grammy';
 import { seedConfigAdmins } from './store/admins.ts';
 import { AdminServer } from './ingress/admin/server.ts';
 import { AgentRuntime, type CapabilityToolFactory, type ToolFactory } from './orchestration/agent-runtime.ts';
-import {
-  createAlarmTool,
-  createDeleteAlarmTool,
-  createListAlarmTool,
-  type AgentMessageRecorder,
-} from './capabilities/alarm.ts';
+import { LongTaskService } from './store/long-tasks.ts';
 import {
   BOT_COMMANDS,
   BotCommandService,
@@ -158,31 +153,23 @@ export async function serve(configPath: string, takeover = false): Promise<void>
     const mcpManager = new McpManager(store, loaded.config, secrets);
     mcp = mcpManager;
     const memoryStore = new MemoryStore(store.orm);
+    const tasks = new LongTaskService(store.orm, () => scheduler?.wake());
     const plugins = loadPlugins(BUILTIN_PLUGINS);
     const systemResources = await SystemResources.load(BUNDLED_SYSTEM_RESOURCES_DIR, plugins.skillDirectories);
     logEvent('system_skills_loaded', { skills: systemResources.skills.map((skill) => skill.name).join(',') });
     const conversationRuntime = new ConversationRuntime({
       agentCacheSize: loaded.config.agent.context.agent_cache_size,
     });
-    let runtime: AgentRuntime;
-    const alarmToolRuntime: AgentMessageRecorder = {
-      recordAgentMessage(invocationId, role, text) {
-        return runtime.recordAgentMessage(invocationId, role, text);
-      },
-    };
     // Runtime-internal capabilities: dispatched through the execute primitive.
     const capabilityTools: CapabilityToolFactory = (context, deadline, capabilities) => [
       capability(media.createReadImageTool(context, capabilities, deadline), false),
       capability(stickerService.createSearchTool(context, capabilities), false),
       ...createMemoryTools(memoryStore, context).map((tool) => capability(tool, true)),
-      capability(createAlarmTool({ store: openedStore, context }), true),
-      capability(createListAlarmTool({ store: openedStore, context, runtime: alarmToolRuntime }), false),
-      capability(createDeleteAlarmTool({ store: openedStore, context }), true),
-      ...plugins.capabilities(openedStore, configStore.current().config, context, deadline),
+      ...plugins.capabilities(openedStore, configStore.current().config, context, deadline, tasks),
     ];
     // Directly exposed non-primitive tools: allowlisted MCP tools only.
     const additionalTools: ToolFactory = (context, deadline) => [...mcpManager.createTools(context, deadline)];
-    runtime = new AgentRuntime({
+    const runtime = new AgentRuntime({
       store,
       configStore,
       secrets,
@@ -204,6 +191,7 @@ export async function serve(configPath: string, takeover = false): Promise<void>
       configStore,
       (invocationId, snapshot, signal) => runtime.run(invocationId, snapshot, signal),
       conversationRuntime,
+      tasks,
     );
     scheduler = startedScheduler;
     const preview = previewContext();
@@ -258,6 +246,7 @@ export async function serve(configPath: string, takeover = false): Promise<void>
         store,
         configStore,
         scheduler: startedScheduler,
+        tasks,
         modelSwitcher,
         configReloader,
         secrets,

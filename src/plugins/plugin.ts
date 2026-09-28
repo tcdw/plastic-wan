@@ -1,7 +1,8 @@
 import type { ExecutableCapability } from '../capabilities/execute-tool.ts';
 import type { RawConfig } from '../platform/config.ts';
 import type { InvocationContext } from '../platform/invocation-context.ts';
-import { finishToolCall, startToolCall, type SqliteStore } from '../store/database.ts';
+import { finishToolCall, rejectToolCall, startToolCall, type SqliteStore } from '../store/database.ts';
+import { LongTaskService, type PluginTaskScope } from '../store/long-tasks.ts';
 
 const PLUGIN_ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 
@@ -12,6 +13,7 @@ const PLUGIN_ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
  */
 export interface ToolAudit {
   start(toolCallId: string, toolName: string, argumentsJson: string, sideEffect: boolean): ToolAuditRecord;
+  reject(toolCallId: string, toolName: string, argumentsJson: string, sideEffect: boolean, errorCode: string): void;
 }
 
 export interface ToolAuditRecord {
@@ -29,6 +31,8 @@ export interface InvocationScope {
   readonly context: InvocationContext;
   readonly deadline: number;
   readonly audit: ToolAudit;
+  /** Per-plugin task scope bound to the current conversation. */
+  readonly tasks: PluginTaskScope;
 }
 
 /**
@@ -56,6 +60,7 @@ export interface LoadedPlugins {
     config: RawConfig,
     context: InvocationContext,
     deadline: number,
+    tasks?: LongTaskService,
   ): readonly ExecutableCapability[];
 }
 
@@ -77,14 +82,19 @@ export function loadPlugins(plugins: readonly AgentPlugin[]): LoadedPlugins {
   }
   return {
     skillDirectories: plugins.flatMap((plugin) => plugin.skills ?? []),
-    capabilities: (store, config, context, deadline) => {
-      const scope: InvocationScope = {
-        config,
-        context,
-        deadline,
-        audit: createToolAudit(store, context.invocationId),
-      };
-      return plugins.flatMap((plugin) => plugin.capabilities?.(scope) ?? []);
+    capabilities: (store, config, context, deadline, suppliedTasks) => {
+      const audit = createToolAudit(store, context.invocationId);
+      const service = suppliedTasks ?? new LongTaskService(store.orm);
+      return plugins.flatMap((plugin) => {
+        const scope: InvocationScope = {
+          config,
+          context,
+          deadline,
+          audit,
+          tasks: context.invocationId === 0n ? unavailableTasks() : service.invocationScope(plugin.id, context),
+        };
+        return plugin.capabilities?.(scope) ?? [];
+      });
     },
   };
 }
@@ -101,5 +111,22 @@ export function createToolAudit(store: SqliteStore, invocationId: bigint): ToolA
           finishToolCall(store.orm, auditId, 'error', null, errorCode, { startedAt, pendingOnly: true }),
       };
     },
+    reject(toolCallId, toolName, argumentsJson, sideEffect, errorCode) {
+      rejectToolCall(store.orm, invocationId, toolCallId, toolName, argumentsJson, sideEffect, errorCode);
+    },
+  };
+}
+
+function unavailableTasks(): PluginTaskScope {
+  const unavailable = (): never => {
+    throw new Error('LongTaskService is not available outside a live invocation');
+  };
+  return {
+    create: unavailable,
+    get: unavailable,
+    list: unavailable,
+    complete: unavailable,
+    fail: unavailable,
+    cancel: unavailable,
   };
 }

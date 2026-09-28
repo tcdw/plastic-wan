@@ -217,7 +217,7 @@ describe('send tool', () => {
       bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
     });
     expect(tool.description).toContain(
-      'Use this only after deciding the new messages or an alarm task require a reply',
+      'Use this only after deciding the new messages or a current task completion require a reply',
     );
     expect(tool.description).toContain('Text must fit the schema limit.');
     expect(tool.description).toContain('do not claim it was sent and do not blindly retry');

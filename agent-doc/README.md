@@ -21,7 +21,7 @@
 | --- | --- |
 | 理解整体进程、模块和信任边界 | [architecture.md](architecture.md) |
 | 修改 JSONC、Provider、Chat/Topic、Sticker Set 或 MCP | [configuration.md](configuration.md) |
-| 修改 SQLite、迁移、保留、备份或审计（含 durable internal context） | [data-layer.md](data-layer.md) |
+| 修改 SQLite、迁移、保留、备份或审计 | [data-layer.md](data-layer.md) |
 | 修改 Telegram 入库、调度、Context、Tool 或媒体 | [telegram-agent-flow.md](telegram-agent-flow.md) |
 | 修改 Conversation Context、GC、热注入或引用 TTL | [telegram-agent-flow.md](telegram-agent-flow.md#context-生命周期) |
 | 实现/排查 Skills、`read`/`execute` 原语与内部能力注册表 | [telegram-agent-flow.md](telegram-agent-flow.md#skills-与受控能力调用) |

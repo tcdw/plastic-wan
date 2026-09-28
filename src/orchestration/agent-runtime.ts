@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Agent, type AgentMessage, type AgentTool } from '@earendil-works/pi-agent-core';
+import { Agent, type AgentContext, type AgentMessage, type AgentTool } from '@earendil-works/pi-agent-core';
 import {
   type Api,
   type AssistantMessage,
@@ -263,7 +263,6 @@ export class AgentRuntime {
       this.#conversationRuntime.forget(identity.conversationId);
       this.#logContextRebuilt(identity, stable.systemPromptHash);
     }
-    const isAlarm = identity.alarm !== null;
     const startedAt = Date.now();
     const deadline = startedAt + config.agent.context.max_wall_clock_seconds * 1_000;
     const contextState = new InvocationContextState({
@@ -271,8 +270,9 @@ export class AgentRuntime {
       conversationId: identity.conversationId,
       chatId: identity.chatId,
       threadId: identity.threadId,
-      alarm: identity.alarm,
+      completion: identity.completion,
     });
+    const bypassDailyBudget = (): boolean => contextState.completion?.delivery.bypassDailyBudget === true;
     contextState.setSystemPrompt(stable.systemPrompt);
     const capabilities = this.#capabilitiesFor(header);
     const state: RunState = {
@@ -301,7 +301,7 @@ export class AgentRuntime {
       this.#store.orm,
       this.#configStore.current().config.agent.daily_budget.max_tokens,
     );
-    let zzzExposed = !isAlarm && isLowDailyTokenBudget(initialBudget);
+    let zzzExposed = !bypassDailyBudget() && isLowDailyTokenBudget(initialBudget);
     if (zzzExposed) {
       this.#logZzzExposure(invocationId, identity.chatId, initialBudget);
     }
@@ -315,14 +315,14 @@ export class AgentRuntime {
     const holdForNewMessages = (): boolean => {
       const conversationRuntime = this.#conversationRuntime;
       const conversationId = identity.conversationId;
-      // A closing run never injects again, so holding its last send back would
-      // only lose that reply; an attached batch is re-queued when the run ends.
-      if (state.contextClosing || conversationRuntime.isClosing(conversationId)) {
+      // A closing run never injects again. A receipt also finishes its own round
+      // before user batches, so neither may hold a send for pending messages.
+      if (state.contextClosing || conversationRuntime.isClosing(conversationId) || contextState.completion !== null) {
         return false;
       }
       // A batch the barrier already queued holds back every later send of the
       // same turn too, so no reply goes out before the model has read it.
-      if (conversationRuntime.hasPendingInjections(conversationId)) {
+      if (conversationRuntime.hasPendingInjections(conversationId, 'messages')) {
         return true;
       }
       if (state.barrierSpent) {
@@ -443,7 +443,8 @@ export class AgentRuntime {
         }
       }
       contextState.retainVisibleSenders([...senders.values()]);
-      if (callerUserId !== null) {
+      // Retained history is not a fresh authorization for a receipt-only round.
+      if (contextState.callerUserId !== null) {
         contextState.setCallerUserId(callerUserId);
       }
       // A GC can evict the batch that carried the catalog; the next batch must then
@@ -474,7 +475,9 @@ export class AgentRuntime {
         bucketId,
         seq: header.nextSeq,
         injectedMessageIds: collectTranscriptMessageIds(agent.state.messages),
-        sleepy: zzzExposed,
+        sleepy: isLowDailyTokenBudget(
+          readDailyTokenBudget(this.#store.orm, this.#configStore.current().config.agent.daily_budget.max_tokens),
+        ),
         supportsImages,
         contextWindow: model.contextWindow,
         toolDefinitionCharacters,
@@ -505,8 +508,11 @@ export class AgentRuntime {
         timestamp: Date.now(),
       };
     };
-    const injectPending = async (): Promise<boolean> => {
-      const pending = runtime.takeInjections(conversationId);
+    const injectPending = async (includeCompletion: boolean, turnContext: AgentContext): Promise<boolean> => {
+      if (contextState.completion !== null) {
+        return false;
+      }
+      const pending = runtime.takeNextInjections(conversationId, includeCompletion);
       if (pending.length === 0) {
         return false;
       }
@@ -516,6 +522,9 @@ export class AgentRuntime {
         // un-injected and `releaseUninjectedBuckets` re-queues the batch.
         agent.steer(await injectBatch(bucketId));
       }
+      // Pi prepares tools before shouldStopAfterTurn. An injection after that
+      // boundary (including an idle wake) must refresh this same loop snapshot.
+      refreshZzz(turnContext);
       return true;
     };
     /**
@@ -540,7 +549,7 @@ export class AgentRuntime {
 
     agent.streamFunction = async (streamModel, modelContext, options) => {
       if (
-        !isAlarm &&
+        !bypassDailyBudget() &&
         isDailyTokenBudgetReached(
           readDailyTokenBudget(this.#store.orm, this.#configStore.current().config.agent.daily_budget.max_tokens),
         )
@@ -600,14 +609,19 @@ export class AgentRuntime {
       }
     };
     agent.beforeToolCall = async ({ toolCall }) => {
-      if (toolCall.name !== 'zzz' && !isAlarm && (state.sleepRequested || activeSleepUntil(this.#store.orm) !== null)) {
+      if (
+        toolCall.name !== 'zzz' &&
+        !bypassDailyBudget() &&
+        (state.sleepRequested || activeSleepUntil(this.#store.orm) !== null)
+      ) {
         return { block: true, reason: 'The bot is sleeping', terminate: true };
       }
       if (
         toolCall.name === 'zzz' &&
-        !isLowDailyTokenBudget(
-          readDailyTokenBudget(this.#store.orm, this.#configStore.current().config.agent.daily_budget.max_tokens),
-        )
+        (bypassDailyBudget() ||
+          !isLowDailyTokenBudget(
+            readDailyTokenBudget(this.#store.orm, this.#configStore.current().config.agent.daily_budget.max_tokens),
+          ))
       ) {
         return { block: true, reason: 'You are no longer sleepy' };
       }
@@ -622,27 +636,31 @@ export class AgentRuntime {
         .run();
       return undefined;
     };
-    agent.prepareNextTurnWithContext = async (turn) => {
-      let nextTools = turn.context.tools;
-      let registryChanged = false;
+    const refreshZzz = (turnContext: AgentContext): boolean => {
       const budget = readDailyTokenBudget(
         this.#store.orm,
         this.#configStore.current().config.agent.daily_budget.max_tokens,
       );
-      const shouldExposeZzz = !isAlarm && isLowDailyTokenBudget(budget);
-      if (shouldExposeZzz !== zzzExposed) {
-        zzzExposed = shouldExposeZzz;
-        nextTools = shouldExposeZzz
-          ? [...(nextTools ?? tools), zzz]
-          : (nextTools ?? tools).filter((tool) => tool.name !== 'zzz');
-        validateToolRegistry(nextTools, model.contextWindow);
-        this.#recordToolRegistry(invocationId, nextTools);
-        if (shouldExposeZzz) {
-          this.#logZzzExposure(invocationId, identity.chatId, budget);
-          state.estimatedInputTokens += Math.ceil(estimateToolDefinitionCharacters(zzz) / 4);
-        }
-        registryChanged = true;
+      const shouldExposeZzz = !bypassDailyBudget() && isLowDailyTokenBudget(budget);
+      if (shouldExposeZzz === zzzExposed) {
+        return false;
       }
+      zzzExposed = shouldExposeZzz;
+      const nextTools = (turnContext.tools ?? tools).filter((tool) => tool.name !== 'zzz');
+      if (shouldExposeZzz) {
+        nextTools.push(zzz);
+        this.#logZzzExposure(invocationId, identity.chatId, budget);
+        state.estimatedInputTokens += Math.ceil(estimateToolDefinitionCharacters(zzz) / 4);
+      }
+      validateToolRegistry(nextTools, model.contextWindow);
+      this.#recordToolRegistry(invocationId, nextTools);
+      turnContext.tools = nextTools;
+      agent.state.tools = nextTools;
+      return true;
+    };
+    agent.prepareNextTurnWithContext = async (turn) => {
+      const registryChanged = refreshZzz(turn.context);
+      const nextTools = turn.context.tools;
       // The only safe collection point: after the tool batch closed, before the
       // next model call. Never during streaming.
       const collected = this.#maybeCollect(
@@ -689,11 +707,11 @@ export class AgentRuntime {
       };
     };
     agent.shouldStopAfterTurn = async (turn) => {
-      if (!isAlarm && (state.sleepRequested || activeSleepUntil(this.#store.orm) !== null)) {
+      if (!bypassDailyBudget() && (state.sleepRequested || activeSleepUntil(this.#store.orm) !== null)) {
         return stop('sleep');
       }
       if (
-        !isAlarm &&
+        !bypassDailyBudget() &&
         isDailyTokenBudgetReached(
           readDailyTokenBudget(this.#store.orm, this.#configStore.current().config.agent.daily_budget.max_tokens),
         )
@@ -735,9 +753,25 @@ export class AgentRuntime {
           return false;
         }
       }
-      // A bucket attached while the model was working is injected before any
-      // stop decision, so an attach never loses its batch.
-      if (await injectPending()) {
+      if (!hasToolCalls && contextState.completion !== null) {
+        // A receipt's exemption ends with its round, not with the Invocation.
+        // Pending ordinary messages must never spend that exemption.
+        contextState.finishCompletion();
+        refreshZzz(turn.context);
+        if (
+          state.sleepRequested ||
+          activeSleepUntil(this.#store.orm) !== null ||
+          isDailyTokenBudgetReached(
+            readDailyTokenBudget(this.#store.orm, this.#configStore.current().config.agent.daily_budget.max_tokens),
+          )
+        ) {
+          return stop('completed');
+        }
+      }
+      // User batches keep their existing turn-boundary semantics. Completion
+      // receipts enter one at a time between rounds, never interrupting tools or
+      // merging independent mention/budget policies into one model response.
+      if (await injectPending(!hasToolCalls, turn.context)) {
         return false;
       }
       const idleGraceMilliseconds = config.agent.context.idle_grace_seconds * 1_000;
@@ -759,7 +793,7 @@ export class AgentRuntime {
           Math.min(idleGraceMilliseconds, Math.max(0, deadline - Date.now())),
           signal,
         );
-        if (waited === 'pending' && (await injectPending())) {
+        if (waited === 'pending' && (await injectPending(true, turn.context))) {
           return false;
         }
         if (waited === 'aborted') {

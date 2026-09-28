@@ -497,7 +497,7 @@ describe('participation gate', () => {
         threadId: 0n,
         chatType: 'supergroup',
         bucketKind: 'realtime',
-        alarm: null,
+        completion: null,
         timezone: config.timezone,
       },
       false,

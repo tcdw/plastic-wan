@@ -89,7 +89,7 @@ for (const page of pages) {
   assert.equal([...html.matchAll(/<h1\b/g)].length, 1, `Expected one HTML H1: ${page}`);
   for (const text of [markdown, html]) {
     assert(text.includes(commit), `Missing provenance: ${page}`);
-    assert.equal(text.includes('含未提交修改'), dirty, `Wrong dirty marker: ${page}`);
+    assert.equal(text.includes('（含未提交修改，仅供本地预览）'), dirty, `Wrong dirty marker: ${page}`);
     assert.equal(text.split('文档对应源码提交：').length - 1, 1, `Duplicate provenance: ${page}`);
   }
   assert(!/<(?:!doctype|html|script)\b/i.test(markdown), `HTML leaked into Markdown: ${page}`);

@@ -50,6 +50,7 @@
 | [20260920 Admin 模型管理器设计计划](design/20260920%20Admin%20模型管理器设计计划.md) | Admin「模型服务」页：屏蔽 Pi 模型目录改由配置 `models[]` 启用、元数据来源、compat 高级设置、SecretRef 只写不读 | 已实现（见 [交付报告](design/20260920%20Admin%20模型管理器交付报告.md)、[admin-panel.md](admin-panel.md)）；「改完要重启」部分由下一行取代 |
 | [20260921 Models 页全量热切换设计计划](design/20260921%20Models%20页全量热切换设计计划.md) | Models 页全部操作热切换：模型注册表进入配置快照、每个 Invocation 钉住模型与 Provider 连接 | 已实现（2026-09-21），见 [交付报告](design/20260921%20Models%20页全量热切换交付报告.md)、[configuration.md](configuration.md#运行时配置热更新)、[admin-panel.md](admin-panel.md) |
 | [20260927 动图分析设计](design/20260927%20动图分析设计.md) | GIF / Telegram MP4 animation、每张最多 12 帧 storyboard、按时间补帧、观察缓存与现有媒体链路接入 | 初步认可方向，未实施；补帧总量、轮数、资源预算和时间/缓存策略待定 |
+| [20260928 Core 与 Telegram Adapter 分离 Epic](design/20260928%20Plaswan%20Core%20与%20Telegram%20Adapter%20分离%20Epic.md) | 保持 Telegram Bot 定位，分离 Harness 与 Host 的工具、输入、授权、调度、存储及 Admin 后端边界；前端保持 Telegram 一体化 | 规划完成，未实施；3 个交付里程碑、11 个任务，第一刀为注入 Telegram 输出工具；不实施其他 IM Adapter |
 
 ## 文档边界
 

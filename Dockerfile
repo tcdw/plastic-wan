@@ -20,7 +20,9 @@ RUN pnpm install --frozen-lockfile
 
 # Copy source and build admin panel
 COPY . .
-RUN pnpm run admin:build
+# A cached install layer looks stale next to freshly checked-out manifests;
+# skip pnpm's pre-run reinstall, which fails on the docs-only patch.
+RUN pnpm --config.verify-deps-before-run=false run admin:build
 
 # Prune devDependencies — runtime only needs production deps
 RUN pnpm install --prod --frozen-lockfile

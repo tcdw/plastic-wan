@@ -44,11 +44,17 @@ afterAll(async () => {
   }
 }, 30_000);
 
-async function setup(registry?: TestRegistry) {
+async function setup(registry?: TestRegistry, recordPayloads = false) {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-alarm-'));
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
-  await writeTestConfig(directory, configPath);
+  await writeTestConfig(
+    directory,
+    configPath,
+    testConfigJsonc(directory, (config) => {
+      config.developer = { record_model_payloads: recordPayloads };
+    }),
+  );
   const loaded = await loadConfig(configPath);
   const configStore = await testConfigStore(loaded, registry);
   const store = await SqliteStore.open(loaded.config);
@@ -385,7 +391,7 @@ describe('alarm tool', () => {
       provider: 'agent',
       models: [{ id: 'agent-model', input: ['text'], contextWindow: 200_000, maxTokens: 32_768 }],
     });
-    const { store, config, ingestion, scheduler, configStore } = await setup(fauxRegistry(faux));
+    const { store, config, ingestion, scheduler, configStore } = await setup(fauxRegistry(faux), true);
     const received = new Date('2026-08-15T00:00:00.000Z');
     ingestion.ingest(update(1, 10, '我有哪些闹钟'), received);
     const invocationId = processDue(scheduler, new Date(received.getTime() + 15_000));

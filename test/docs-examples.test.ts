@@ -87,6 +87,7 @@ test('schema reference covers nested arrays, union policies and required/optiona
     'agent.context.ref_ttl_hours',
     'retention.online_days',
     'web_fetch',
+    'developer.record_model_payloads',
   ]) {
     expect(fields).toContain(name);
   }

@@ -165,6 +165,7 @@ function checkpointTexts(store: SqliteStore) {
 
 test('receipt is escaped and injected once; later user batches do not renew its authority or mention', async () => {
   const f = await fixture((config) => {
+    config.developer = { record_model_payloads: true };
     config.agent.send_barrier_enabled = true;
     config.agent.context.idle_grace_seconds = 1;
   });

@@ -1051,6 +1051,31 @@ export function getConfigStatus(): Promise<ConfigStatus> {
   return call<ConfigStatus>('/config/status');
 }
 
+export interface DeveloperSettings {
+  readonly revision: string;
+  readonly record_model_payloads: boolean;
+  readonly active_record_model_payloads: boolean;
+}
+
+export function getDeveloperSettings(): Promise<DeveloperSettings> {
+  return call<DeveloperSettings>('/developer');
+}
+
+export function updateDeveloperSettings(
+  enabled: boolean,
+  revision: string,
+): Promise<DeveloperSettings & { readonly apply: ModelApplySummary }> {
+  return call('/developer', {
+    method: 'PUT',
+    headers: writeHeaders(revision),
+    body: JSON.stringify({ record_model_payloads: enabled }),
+  });
+}
+
+export function clearModelPayloads(): Promise<{ readonly cleared_model_calls: number }> {
+  return call('/developer/model-payloads', { method: 'DELETE' });
+}
+
 export function applyConfigFile(): Promise<ConfigApplyResponse> {
   return call<ConfigApplyResponse>('/config/apply', { method: 'POST' });
 }

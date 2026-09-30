@@ -2,6 +2,7 @@ import { Link, useLocation } from '@tanstack/react-router';
 import {
   Bell,
   Brain,
+  Bug,
   Cpu,
   FileText,
   LayoutDashboard,
@@ -56,6 +57,7 @@ const NAV_GROUPS: NavGroup[] = [
       { title: 'Bot admins', url: '/admins', icon: Shield },
       { title: 'Models', url: '/models', icon: Cpu },
       { title: 'Chats', url: '/chats', icon: MessagesSquare },
+      { title: 'Developer', url: '/developer', icon: Bug },
     ],
   },
   {

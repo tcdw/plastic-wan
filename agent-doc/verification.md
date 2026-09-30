@@ -17,6 +17,7 @@ pnpm test test/scheduler.test.ts test/sleep.test.ts
 pnpm test test/context-store.test.ts test/context-gc.test.ts test/context-hot-inject.test.ts
 pnpm test test/context-send.test.ts test/cut-topic.test.ts
 pnpm test test/agent-runtime.test.ts test/model-request-audit.test.ts
+pnpm test test/admin-developer.test.ts
 pnpm test test/skills.test.ts test/system-resources.test.ts test/plugins.test.ts
 pnpm test test/media.test.ts test/stickers.test.ts
 pnpm test test/mcp.test.ts test/web-fetch.test.ts
@@ -53,6 +54,7 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | `system-resources.test.ts` | Skill manifest 校验与启动失败、插件 Skill 目录挂载与重名拒绝、`system:///` 绝对/相对 URI 解析、越界与非 Markdown 拒绝、32 KiB 截断、progressive disclosure fixture |
 | `plugins.test.ts` | 插件 id 校验与重名拒绝、内置插件清单装配 |
 | `model-request-audit.test.ts` | `request_json` 中 inline base64 图片被结构化摘要替换、其余请求数据保留、重复清洗幂等 |
+| `admin-developer.test.ts` | 旧配置缺省关闭、显式开关与 JSONC 持久化/热应用、权限/Origin/revision/类型校验、应用失败后文件与运行态分离、分批清除只置空报文且保留审计/关联/统计、重复清除与并发写入 |
 | `media.test.ts` | 图片标准化、缓存和 Vision reasoning、换 vision 模型后按新 `analysis_version` 重新分析 |
 | `stickers.test.ts` | Set 同步、结构化视觉 Tool Call、索引、搜索、发送 |
 | `media-image.test.ts` | 视频 Sticker 只按 WebM 解码（其他容器冒充时拒绝）、真实 WebM 仍能取帧、解压超过 8 MiB 的 TGS 在转换前拒绝；本机没有 ffmpeg/ffprobe 时整组跳过 |
@@ -189,6 +191,7 @@ pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.t
      Alarm 取消成功与 409 冲突路径（`alarm_not_pending` + 列表刷新到新状态）、
      Overview 的 Cancel ongoing 与睡眠态 Wake now；Models 页并发编辑（模型编辑输掉 revision 竞争后关闭而不覆盖、
      连接卡片的旧草稿不能删掉期间新增的 header、header 名可逐键输入不丢焦点）。
+     Developer 页默认关闭、开关持久化、应用失败与恢复、取消/确认清除、清除前后其它审计不变，以及移动端暗色布局。
   6. 只读保证：浏览全部审计页面时记录网络请求，断言没有任何 POST/PUT/DELETE 打到
      `/api/**`。
   7. 安全：生产静态托管（非 dev server）下断言 CSP 头（`default-src 'none'` /
@@ -237,7 +240,7 @@ pnpm run admin:test:e2e     # Playwright 套件（apps/admin-next/e2e/**/*.e2e.t
 这一节的检查在真实群里只能靠日志与数据库对照，不能只看 Telegram 上的回复：
 
 - 同一次运行里连续回答两条消息：`invocations` 只有一行、`invocation_buckets` 有两行，两次 `context_injected` 的 `invocation_id` 相同而 `seq` 递增，`buckets` 两行都以 `completed` 收尾。
-- 重启进程后继续同一 Conversation：新 Invocation 的 `model_calls.request_json` 仍带着重启前的 transcript（含上次的 assistant 文本与 `send` 结果），`conversation_contexts.head_seq` 保持不变；`context_rebuilt` 只在 system prompt 或 Chat instructions 变化时出现，出现即表示整段上下文已重建。
+- 在 Developer 开启调试报文记录后，重启进程并继续同一 Conversation：新 Invocation 的 `model_calls.request_json` 仍带着重启前的 transcript（含上次的 assistant 文本与 `send` 结果），`conversation_contexts.head_seq` 保持不变；`context_rebuilt` 只在 system prompt 或 Chat instructions 变化时出现，出现即表示整段上下文已重建。
 - 连续对话直到保留段超过 `retained_sends_max`：日志出现 `context_gc`，`target_seq` 落在 checkpoint 上、`previous_head_seq` 小于 `target_seq`、保留段仍含至少 `retained_sends_target` 次 `send`；之后请求里不再出现被淘汰的那几轮，`head_seq` 与日志一致。
 - 被 GC 淘汰的消息携带的引用立即失效：引用旧 `img_`/`stk_`/reply 的 `send` 必须被拒绝，而不是照旧发出。
 - 睡眠状态只随注入批次下发：`zzz` 暴露前后两次请求的 system prompt 逐字节相同，睡眠状态出现在注入批次的 `<runtime_state>` 里；`zzz` 结束时 Invocation 的 `completion_reason` 是 `sleep`。

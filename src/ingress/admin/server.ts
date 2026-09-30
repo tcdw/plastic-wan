@@ -51,6 +51,7 @@ import {
   updateChat,
 } from './chats-admin.ts';
 import { cancelOngoingSessions } from './operations.ts';
+import { clearModelPayloads, parseDeveloperSettings } from './developer-admin.ts';
 import {
   appendModels,
   createProvider,
@@ -152,6 +153,7 @@ export class AdminServer {
   readonly #staticDir: string;
   readonly #memoryWarningDays: number;
   #server: ServerType | undefined;
+  #payloadClear: Promise<number> | undefined;
 
   constructor(options: AdminServerOptions) {
     const config = options.configStore.current().config;
@@ -219,6 +221,7 @@ export class AdminServer {
   async stop(): Promise<void> {
     const server = this.#server;
     this.#server = undefined;
+    await this.#payloadClear?.catch(() => undefined);
     if (server === undefined) {
       return;
     }
@@ -309,6 +312,20 @@ export class AdminServer {
         this.#scheduler?.wake();
       }
       return json({ status: 'awake', was_sleeping: wasSleeping });
+    }
+    if (route === 'developer/model-payloads' && request.method === 'DELETE') {
+      if (this.#payloadClear !== undefined) {
+        return json({ error: 'clear_in_progress', message: 'Model payload cleanup is already running' }, 409);
+      }
+      this.#payloadClear = clearModelPayloads(this.#store.orm);
+      try {
+        return json({ cleared_model_calls: await this.#payloadClear });
+      } finally {
+        this.#payloadClear = undefined;
+      }
+    }
+    if (route === 'developer') {
+      return await this.#developer(request);
     }
     const query: ListQuery = {
       limit: url.searchParams.get('limit'),
@@ -626,7 +643,7 @@ export class AdminServer {
     if (revision === null) {
       return revisionRequired();
     }
-    const { loaded, revision: currentRevision } = await this.#chatFile(reloader);
+    const { loaded, revision: currentRevision } = await this.#configFile(reloader);
     if (revision !== currentRevision) {
       return json({ error: 'config_conflict', message: 'The configuration file changed; reload before editing' }, 409);
     }
@@ -654,7 +671,7 @@ export class AdminServer {
     });
   }
 
-  async #chatFile(reloader: ConfigReloader) {
+  async #configFile(reloader: ConfigReloader) {
     try {
       // A revision must describe the very file used to build the view and edit paths,
       // never a newer file read after an intervening write.
@@ -677,7 +694,7 @@ export class AdminServer {
   }
 
   async #chatsView(reloader: ConfigReloader) {
-    const { loaded, revision } = await this.#chatFile(reloader);
+    const { loaded, revision } = await this.#configFile(reloader);
     return listChats(
       loaded.fileConfig,
       this.#configStore.current().config,
@@ -685,6 +702,47 @@ export class AdminServer {
       revision,
       reloader.status().restartRequired,
     );
+  }
+
+  async #developer(request: Request): Promise<Response> {
+    if (request.method !== 'GET' && request.method !== 'PUT') {
+      return json({ error: 'method_not_allowed', message: 'Unsupported Developer operation' }, 405);
+    }
+    const reloader = this.#configReloader;
+    if (reloader === undefined) {
+      return json({ error: 'developer_unavailable', message: 'Configuration reloading is not wired' }, 503);
+    }
+    if (request.method === 'GET') {
+      return json(await this.#developerView(reloader));
+    }
+    const revision = requiredRevision(request);
+    if (revision === null) {
+      return revisionRequired();
+    }
+    const body = parseDeveloperSettings(await readJsonObject(request));
+    const result = await reloader.writeAndApply(
+      [{ path: ['developer', 'record_model_payloads'], value: body.record_model_payloads }],
+      revision,
+    );
+    if (!result.ok) {
+      const message = result.fileWritten
+        ? `config.jsonc was updated but not applied: ${result.message}`
+        : result.message;
+      return json({ error: result.code, message }, CONFIG_WRITE_STATUS[result.code] ?? 409);
+    }
+    return json({
+      ...(await this.#developerView(reloader)),
+      apply: { applied: result.applied, restart_required: result.restartRequired, outside_serve: result.outsideServe },
+    });
+  }
+
+  async #developerView(reloader: ConfigReloader) {
+    const { loaded, revision } = await this.#configFile(reloader);
+    return {
+      revision,
+      record_model_payloads: loaded.config.developer.record_model_payloads,
+      active_record_model_payloads: this.#configStore.current().config.developer.record_model_payloads,
+    };
   }
 
   /** A read-shaped POST: provider discovery and metadata lookup write nothing. */

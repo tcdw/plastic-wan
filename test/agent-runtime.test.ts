@@ -12,6 +12,7 @@ import { AgentRuntime } from '../src/orchestration/agent-runtime.ts';
 import { KeyedSemaphore } from '../src/platform/concurrency.ts';
 import { loadConfig } from '../src/platform/config.ts';
 import { SqliteStore } from '../src/store/database.ts';
+import { modelCalls } from '../src/store/schema.ts';
 import { previewContext } from '../src/platform/invocation-context.ts';
 import type { MediaDownloader } from '../src/capabilities/media/media-download.ts';
 import { MediaService } from '../src/capabilities/media/media.ts';
@@ -32,117 +33,176 @@ afterAll(async () => {
   );
 });
 
-test('a fresh Agent publishes only through send and audits model usage', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-'));
-  directories.push(directory);
-  const configPath = join(directory, 'config.jsonc');
-  await writeTestConfig(directory, configPath);
-  const loaded = await loadConfig(configPath);
-  const faux = fauxProvider({
-    provider: 'agent',
-    models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
-  });
-  const configStore = await testConfigStore(loaded, fauxRegistry(faux));
-  const store = await SqliteStore.open(loaded.config);
-  const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
-  const update: Update = {
-    update_id: 1,
-    message: {
-      message_id: 10,
-      date: 1_700_000_000,
-      chat: { id: 123456789, type: 'private', first_name: 'Owner' },
-      from: { id: 42, is_bot: false, first_name: 'Alice' },
-      text: 'hello',
-    },
-  };
-  const received = new Date('2026-08-15T00:00:00.000Z');
-  ingestion.ingest(update, received);
-  const scheduler = new BucketScheduler(store, configStore, async () => ({
-    state: 'completed',
-    reason: 'done',
-  }));
-  const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
-  if (invocationId === undefined) {
-    throw new Error('Expected a due invocation');
-  }
+test.each([undefined, false, true])(
+  'a fresh Agent preserves auditing and hot-applies payload recording from %s',
+  async (recordPayloads) => {
+    const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-'));
+    directories.push(directory);
+    const configPath = join(directory, 'config.jsonc');
+    await writeTestConfig(
+      directory,
+      configPath,
+      testConfigJsonc(directory, (config) => {
+        if (recordPayloads !== undefined) {
+          config.developer = { record_model_payloads: recordPayloads };
+        }
+      }),
+    );
+    const loaded = await loadConfig(configPath);
+    const faux = fauxProvider({
+      provider: 'agent',
+      models: [{ id: 'agent-model', input: ['text', 'image'], contextWindow: 200_000, maxTokens: 32_768 }],
+    });
+    const configStore = await testConfigStore(loaded, fauxRegistry(faux));
+    const store = await SqliteStore.open(loaded.config);
+    const ingestion = new TelegramIngestion(store, configStore, { id: 999 });
+    const update: Update = {
+      update_id: 1,
+      message: {
+        message_id: 10,
+        date: 1_700_000_000,
+        chat: { id: 123456789, type: 'private', first_name: 'Owner' },
+        from: { id: 42, is_bot: false, first_name: 'Alice' },
+        text: 'hello',
+      },
+    };
+    const received = new Date('2026-08-15T00:00:00.000Z');
+    ingestion.ingest(update, received);
+    const scheduler = new BucketScheduler(store, configStore, async () => ({
+      state: 'completed',
+      reason: 'done',
+    }));
+    const [invocationId] = scheduler.processDue(new Date(received.getTime() + 15_000));
+    if (invocationId === undefined) {
+      throw new Error('Expected a due invocation');
+    }
 
-  faux.setResponses([
-    (context, options) => {
-      // The faux provider never touches the network, so the snapshot hooks are
-      // triggered manually to mirror what real adapters do.
-      options?.onPayload?.({ model: 'agent-model', messages: context.messages }, faux.getModel());
-      void options?.onResponse?.({ status: 200, headers: {} }, faux.getModel());
-      // OpenAI-compatible endpoints reject a tool whose `parameters` is not a root
-      // object schema; the top-level union `execute` used to carry failed every
-      // gpt-4o invocation with 400 invalid_function_parameters.
-      const tools = context.tools ?? [];
-      expect(tools.map((tool) => tool.name)).toEqual(['read', 'send', 'execute']);
-      for (const tool of tools) {
-        expect(tool.parameters).toMatchObject({ type: 'object' });
-      }
-      return fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'published' }), { stopReason: 'toolUse' });
-    },
-    fauxAssistantMessage('private assistant text'),
-  ]);
-  let messageId = 500;
-  const api: TelegramSendApi = {
-    sendMessage: async () => ({ message_id: ++messageId, date: 1_700_000_100, chat: { id: 123456789 } }),
-    sendSticker: async () => ({ message_id: ++messageId, date: 1_700_000_100, chat: { id: 123456789 } }),
-  };
-  const runtime = new AgentRuntime({
-    store,
-    configStore,
-    secrets: new SecretStore(),
-    telegramApi: api,
-    bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
-    systemResources: SystemResources.empty(),
-  });
-  const outcome = await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
-  expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
-  expect(
-    store.db
-      .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM telegram_sends WHERE state = 'success'")
-      .get()?.count,
-  ).toBe(1n);
-  expect(
-    store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM messages WHERE sent_by_bot = 1').get()
-      ?.count,
-  ).toBe(1n);
-  const assistantTexts = store.db
-    .prepare<[], { text: string }>("SELECT text FROM agent_messages WHERE role = 'assistant' ORDER BY sequence_no")
-    .all()
-    .map((row) => row.text);
-  expect(assistantTexts).toContain('private assistant text');
-  expect(
-    store.db.prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM model_calls WHERE state = 'success'").get()
-      ?.count,
-  ).toBe(2n);
-  const presented = store.db
-    .prepare<[], { tools_json: string | null }>(
-      "SELECT tools_json FROM model_calls WHERE role = 'agent' ORDER BY id LIMIT 1",
-    )
-    .get();
-  expect(presented?.tools_json).toBe(JSON.stringify(['read', 'send', 'execute']));
-  const snapshot = store.db
-    .prepare<[], { request_json: string | null; response_json: string | null }>(
-      "SELECT request_json, response_json FROM model_calls WHERE role = 'agent' AND request_json IS NOT NULL ORDER BY id LIMIT 1",
-    )
-    .get();
-  expect(String(snapshot?.request_json)).toContain('"messages"');
-  expect(snapshot?.response_json).toBe(JSON.stringify({ status: 200 }));
-  const registryRow = store.db
-    .prepare<[bigint], { tool_registry_json: string | null }>('SELECT tool_registry_json FROM invocations WHERE id = ?')
-    .get(invocationId);
-  expect(registryRow?.tool_registry_json).toContain('"name":"send"');
-  expect(registryRow?.tool_registry_json).toContain('"label":"Send to Telegram"');
-  expect(registryRow?.tool_registry_json).toContain('Publish exactly one warranted user-visible Telegram message');
-  expect(
-    store.db
-      .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM agent_messages WHERE role = 'harness_nudge'")
-      .get()?.count,
-  ).toBe(0n);
-  store.close();
-});
+    faux.setResponses([
+      (context, options) => {
+        // The faux provider never touches the network, so the snapshot hooks are
+        // triggered manually to mirror what real adapters do.
+        options?.onPayload?.({ model: 'agent-model', messages: context.messages }, faux.getModel());
+        void options?.onResponse?.({ status: 200, headers: {} }, faux.getModel());
+        // OpenAI-compatible endpoints reject a tool whose `parameters` is not a root
+        // object schema; the top-level union `execute` used to carry failed every
+        // gpt-4o invocation with 400 invalid_function_parameters.
+        const tools = context.tools ?? [];
+        expect(tools.map((tool) => tool.name)).toEqual(['read', 'send', 'execute']);
+        for (const tool of tools) {
+          expect(tool.parameters).toMatchObject({ type: 'object' });
+        }
+        const current = configStore.current();
+        configStore.publish({
+          ...current,
+          config: { ...current.config, developer: { record_model_payloads: !recordPayloads } },
+        });
+        return fauxAssistantMessage(fauxToolCall('send', { kind: 'text', text: 'published' }), {
+          stopReason: 'toolUse',
+        });
+      },
+      (context, options) => {
+        options?.onPayload?.({ model: 'agent-model', messages: context.messages }, faux.getModel());
+        void options?.onResponse?.({ status: 200, headers: {} }, faux.getModel());
+        return fauxAssistantMessage('private assistant text');
+      },
+    ]);
+    let messageId = 500;
+    const api: TelegramSendApi = {
+      sendMessage: async () => ({ message_id: ++messageId, date: 1_700_000_100, chat: { id: 123456789 } }),
+      sendSticker: async () => ({ message_id: ++messageId, date: 1_700_000_100, chat: { id: 123456789 } }),
+    };
+    const runtime = new AgentRuntime({
+      store,
+      configStore,
+      secrets: new SecretStore(),
+      telegramApi: api,
+      bot: { id: 999n, displayName: 'Plastic Wan', username: 'plasticwan' },
+      systemResources: SystemResources.empty(),
+    });
+    const outcome = await runtime.run(invocationId, configStore.beginInvocation(), new AbortController().signal);
+    expect(outcome).toEqual({ state: 'completed', reason: 'completed' });
+    expect(
+      store.db
+        .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM telegram_sends WHERE state = 'success'")
+        .get()?.count,
+    ).toBe(1n);
+    expect(
+      store.db.prepare<[], { count: bigint }>('SELECT COUNT(*) AS count FROM messages WHERE sent_by_bot = 1').get()
+        ?.count,
+    ).toBe(1n);
+    const assistantTexts = store.db
+      .prepare<[], { text: string }>("SELECT text FROM agent_messages WHERE role = 'assistant' ORDER BY sequence_no")
+      .all()
+      .map((row) => row.text);
+    expect(assistantTexts).toContain('private assistant text');
+    expect(
+      store.db.prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM model_calls WHERE state = 'success'").get()
+        ?.count,
+    ).toBe(2n);
+    const presented = store.db
+      .prepare<[], { tools_json: string | null }>(
+        "SELECT tools_json FROM model_calls WHERE role = 'agent' ORDER BY id LIMIT 1",
+      )
+      .get();
+    expect(presented?.tools_json).toBe(JSON.stringify(['read', 'send', 'execute']));
+    const snapshot = store.db
+      .prepare<[], { request_json: string | null; response_json: string | null }>(
+        "SELECT request_json, response_json FROM model_calls WHERE role = 'agent' ORDER BY id LIMIT 1",
+      )
+      .get();
+    if (recordPayloads === true) {
+      expect(String(snapshot?.request_json)).toContain('"messages"');
+      expect(snapshot?.response_json).toBe(JSON.stringify({ status: 200 }));
+    } else {
+      expect(snapshot).toEqual({ request_json: null, response_json: null });
+    }
+    const nextCall = store.db
+      .prepare<[], { request_json: string | null; response_json: string | null }>(
+        'SELECT request_json, response_json FROM model_calls ORDER BY id DESC LIMIT 1',
+      )
+      .get();
+    if (recordPayloads === true) {
+      expect(nextCall).toEqual({ request_json: null, response_json: null });
+    } else {
+      expect(nextCall?.request_json).toContain('"messages"');
+      expect(nextCall?.response_json).toBe('{"status":200}');
+    }
+    const auditedCalls = store.orm.select().from(modelCalls).all();
+    for (const call of auditedCalls) {
+      expect(call.outputTokens).toBeGreaterThan(0n);
+      expect(call.totalTokens).toBe(
+        call.inputTokens! + call.outputTokens! + call.cacheReadTokens! + call.cacheWriteTokens!,
+      );
+      expect(call.cost).toBe(0);
+      expect(call.cacheReadTokens).toBeGreaterThanOrEqual(0n);
+      expect(call.cacheWriteTokens).toBeGreaterThanOrEqual(0n);
+      expect(call.finishedAt).not.toBeNull();
+    }
+    expect(
+      store.db
+        .prepare(
+          "SELECT amount FROM daily_usage WHERE scope = 'chat' AND resource = '123456789' AND metric = 'model_tokens'",
+        )
+        .get(),
+    ).toEqual({
+      amount: auditedCalls.reduce((total, call) => total + call.totalTokens!, 0n),
+    });
+    const registryRow = store.db
+      .prepare<[bigint], { tool_registry_json: string | null }>(
+        'SELECT tool_registry_json FROM invocations WHERE id = ?',
+      )
+      .get(invocationId);
+    expect(registryRow?.tool_registry_json).toContain('"name":"send"');
+    expect(registryRow?.tool_registry_json).toContain('"label":"Send to Telegram"');
+    expect(registryRow?.tool_registry_json).toContain('Publish exactly one warranted user-visible Telegram message');
+    expect(
+      store.db
+        .prepare<[], { count: bigint }>("SELECT COUNT(*) AS count FROM agent_messages WHERE role = 'harness_nudge'")
+        .get()?.count,
+    ).toBe(0n);
+    store.close();
+  },
+);
 
 test('an invocation keeps running past the removed per-invocation tool-call cap and still audits the count', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-no-tool-cap-'));
@@ -331,7 +391,13 @@ test('passes Telegram photos directly to the multimodal agent and keeps stickers
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-agent-image-'));
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
-  await writeTestConfig(directory, configPath);
+  await writeTestConfig(
+    directory,
+    configPath,
+    testConfigJsonc(directory, (config) => {
+      config.developer = { record_model_payloads: true };
+    }),
+  );
   const loaded = await loadConfig(configPath);
   const faux = fauxProvider({
     provider: 'agent',
@@ -923,6 +989,7 @@ test('a model that declares minimal tool-schema keywords is sent reduced tool de
         throw new Error('Expected an agent model fixture');
       }
       model.tool_schema_keywords = 'minimal';
+      config.developer = { record_model_payloads: true };
     }),
   );
   const loaded = await loadConfig(configPath);

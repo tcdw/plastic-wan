@@ -2,6 +2,7 @@ import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import {
   getChats,
   getConfigStatus,
+  getDeveloperSettings,
   getConversationContext,
   getInvocation,
   getMessage,
@@ -120,6 +121,12 @@ export const providerPresetsQuery = queryOptions({
 export const configStatusQuery = queryOptions({
   queryKey: ['config-status'],
   queryFn: getConfigStatus,
+});
+
+export const developerQuery = queryOptions({
+  queryKey: ['developer'],
+  queryFn: getDeveloperSettings,
+  staleTime: 0,
 });
 
 export function invocationQuery(id: string) {

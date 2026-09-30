@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { adminUrl, authStoragePath, watchPageIssues } from './helpers.ts';
 
 /**
- * The 14 business routes and their deep links render real content (not the
+ * The business routes and their deep links render real content (not the
  * error boundary, not a blank page) with an authenticated session.
  */
 test.use({ storageState: authStoragePath() });
@@ -11,7 +11,7 @@ const INVOCATION_A = '4001';
 const CONVERSATION_ID = '2001';
 const MESSAGE_A = '6001';
 
-test.describe('14 routes and deep links', () => {
+test.describe('routes and deep links', () => {
   test('/ overview renders the real stats and bot status', async ({ page }) => {
     await page.goto(await adminUrl('/'));
     await expect(page.getByText('Stored messages')).toBeVisible();
@@ -135,6 +135,12 @@ test.describe('14 routes and deep links', () => {
     await expect(page.getByRole('button', { name: 'Apply config file' })).toBeVisible();
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
   });
+
+  test('/developer renders the recording switch and cleanup action', async ({ page }) => {
+    await page.goto(await adminUrl('/developer'));
+    await expect(page.getByRole('switch', { name: '记录原始请求报文以便调试' })).not.toBeChecked();
+    await expect(page.getByRole('button', { name: '清除此前记录的原始请求报文', exact: true })).toBeVisible();
+  });
 });
 
 test.describe('no page errors while deep-linking', () => {
@@ -153,6 +159,7 @@ test.describe('no page errors while deep-linking', () => {
     '/models',
     '/stickers',
     '/settings',
+    '/developer',
   ];
   for (const route of routes) {
     test(`browsing ${route} raises no pageerror`, async ({ page }) => {

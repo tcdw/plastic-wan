@@ -230,7 +230,7 @@ export class AgentRuntime {
     schedulerSignal: AbortSignal,
   ): Promise<InvocationOutcome> {
     // Every runtime-policy read below comes from the snapshot this run was
-    // started with; only the global daily budget is re-read live. The snapshot
+    // started with; the global daily budget and debug recording switch are re-read live. The snapshot
     // carries its own model registry, so a configuration published while this
     // run is in flight never reaches it — neither its models nor its provider
     // connections — and a model that is no longer registered fails the run
@@ -565,6 +565,7 @@ export class AgentRuntime {
         streamModel,
         modelContext.tools?.map((tool) => tool.name) ?? [],
       );
+      const recordPayloads = this.#configStore.current().config.developer.record_model_payloads;
       try {
         const stream = snapshot.models.streamSimple(streamModel, modelContext, {
           ...options,
@@ -576,11 +577,15 @@ export class AgentRuntime {
           // retaining inline image bytes, plus the HTTP response status, so
           // rendered context and transport outcome stay inspectable.
           onPayload: (payload) => {
-            this.#recordModelCallRequest(callId, payload);
+            if (recordPayloads && this.#configStore.current().config.developer.record_model_payloads) {
+              this.#recordModelCallRequest(callId, payload);
+            }
             return undefined;
           },
           onResponse: (response) => {
-            this.#recordModelCallResponse(callId, response);
+            if (recordPayloads && this.#configStore.current().config.developer.record_model_payloads) {
+              this.#recordModelCallResponse(callId, response);
+            }
           },
         });
         void stream

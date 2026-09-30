@@ -115,7 +115,11 @@ Alarm 是 `plugin_id = 'alarm'` 的任务投影。`long_tasks.created_by_user_id
 
 `invocations.tool_registry_hash` 之外还有 `tool_registry_json`：本次 Invocation 实际展示给模型的完整工具快照（`name`/`label`/`description`）；hash 覆盖名称、描述和参数 Schema，Tool 使用策略变化也会产生新 hash。`model_calls.tools_json` 记录该次请求真正附带的工具名数组——Agent 循环在 context 接近上限时会把工具裁剪到 `send` 和当时可用的 `zzz`，因此同一 Invocation 内不同请求的工具列表可能不同；这两列共同回答“模型当时能看到哪些工具”。
 
-`model_calls.request_json` 保存 Provider 请求审计快照，但不会复制 `data:image/*;base64,...` 图片正文；对应字符串会替换为包含 MIME、Base64 字符数、解码字节数与 SHA-256 的结构化摘要，真实 Provider 请求不受影响。`side_effect_started` 和 `outcome_unknown` 用于阻止不可逆 Tool 的盲目重试。审计记录应保留稳定错误码；不要依赖解析自由文本错误。
+仅在 `developer.record_model_payloads = true` 时保存模型调用的原始报文快照，缺省关闭。`model_calls.request_json` 不复制 `data:image/*;base64,...` 图片正文；对应字符串替换为包含 MIME、Base64 字符数、解码字节数与 SHA-256 的结构化摘要，真实 Provider 请求不受影响。现有 `response_json` 捕获的是 HTTP status 快照，并非完整流式响应体。关闭仅跳过这些调试快照，正常模型调用、工具、usage、费用、状态与错误审计照常记录；旧快照不自动删除。
+
+Developer 清除端点按主键范围分批把 `model_calls.request_json` / `response_json` 置为 `NULL`，不删除行、不改变关联或 retention，也不触碰 `telegram_sends` 的同名字段。两列本来就可空，无需新增迁移；释放空间供 SQLite 复用，不保证文件立即缩小，不执行 `VACUUM`，不修改旧备份。
+
+`side_effect_started` 和 `outcome_unknown` 用于阻止不可逆 Tool 的盲目重试。审计记录应保留稳定错误码；不要依赖解析自由文本错误。
 
 ### 媒体与 Sticker 缓存
 

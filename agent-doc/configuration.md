@@ -31,6 +31,7 @@ node src/cli.ts check-config --config dev-data/config.jsonc
 | --- | --- |
 | `agent.provider`、`agent.model` | 永远热更新：目标 Provider 可以是同一次修改里新增的，reload 会重建模型注册表并随配置一起发布 |
 | `agent.system_prompt_file` | 路径或文件内容变化都算；内容变化会重建每个 Conversation 的 Context |
+| `developer`、`developer.record_model_payloads` | 可选节/字段的增删都热应用，缺省为 `false`；每次模型调用读取当前开关，关闭时后续快照回调停止写入 |
 | 其余 agent 字段：`thinking_level`、`context_stop_ratio`、`send_max_text_length`、`send_disallow_blank_lines`、`send_nudge_enabled`、`send_barrier_enabled`、`daily_budget.max_tokens`、`max_concurrency`、`history_messages`、`context.max_wall_clock_seconds`、`context.idle_grace_seconds`、`rate_limits.*` | 下一次 Invocation 使用新值；运行中的 Invocation 继续用它启动时的快照。唯一例外是 `daily_budget.max_tokens`：日预算在运行期实时读取，调低后下一次模型调用立即被拦截 |
 | `telegram.chats[<id>].instructions_file` | 仅限两边都存在的 Chat；路径或内容变化都算 |
 | `telegram.chats[<id>].provider` / `.model` / `.thinking_level` | 仅限两边都存在的 Chat 的按群模型覆盖（语义与校验见「Telegram Chat 与 Topic」）；新增/删除 Chat 仍是 restart |
@@ -113,6 +114,7 @@ command SecretRef：
 | `vision` | Sticker 视觉模型、并发、Prompt 版本和预算 |
 | `mcp` | 可选的 stdio/Streamable HTTP Server |
 | `admin` | 可选的 Admin Panel（审计只读 + 受控管理写端点） |
+| `developer` | 可选的开发者调试配置；`record_model_payloads` 缺省为 `false` |
 | `retention` | 在线保留天数与备份份数 |
 | `paths` | SQLite、媒体缓存和备份目录 |
 
@@ -461,6 +463,8 @@ Streamable HTTP 使用 `url` 与可选 SecretRef `headers`，且 `follow_redirec
 - 修改后需要重启（不在热更新白名单内）。
 
 ## Admin Panel
+
+Developer 页使用可选的 `developer.record_model_payloads`（boolean，缺省 `false`）；整个 `developer` 节也可省略。文件层保留缺省状态，`assembleRawConfig` 将运行时值归一为 boolean。该设置可热应用，每个模型调用开始时读取当前值；关闭期间已在途调用的后续快照回调也停止写入。开启不会补录关闭时启动的调用。正常审计、错误与历史快照不受开关影响，历史报文必须通过 Developer 清除操作主动删除。
 
 ```jsonc
 {

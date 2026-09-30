@@ -167,7 +167,9 @@ async function finished(f: Awaited<ReturnType<typeof fixture>>, count: bigint) {
 }
 
 test('two hot receipts wait for the ordinary tool chain, keep independent checkpoints and mentions, and never trip its send barrier', async () => {
-  const f = await fixture();
+  const f = await fixture((config) => {
+    config.developer = { record_model_payloads: true };
+  });
   const requests: string[] = [];
   f.faux.setResponses([
     (context, options) => {

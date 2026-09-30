@@ -67,6 +67,8 @@
     "daily_budget": { "max_tokens": 200000, "max_images": 200 }
   },
   "retention": { "online_days": 30, "backup_copies": 7 },
+  // 可省略；仅在排查模型调用时开启，历史报文在 Developer 页面手动清除。
+  "developer": { "record_model_payloads": false },
   "paths": {
     "database": "/data/plasticwan.sqlite",
     "media_cache": "/data/media-cache",

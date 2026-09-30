@@ -65,7 +65,7 @@ Playwright 套件位于 `e2e/**/*.e2e.ts`（文件名不以 `.test.ts` 结尾，
 SQLite + `test/fixtures/admin-seed.ts` 合成数据 + 真实 `AdminServer`
 （`static_dir` 指向本包 `dist`），回环随机端口；`globalTeardown` 关闭并清理。
 用例覆盖认证状态机、路由深链接、列表过滤与 Load more 游标分页、Invocation
-六 Tab、记忆/管理员/模型/Chats/告警/Overview 写操作与冲突路径、只读保证与 CSP 同源
+六 Tab、记忆/管理员/模型/Chats/Developer/告警/Overview 写操作与冲突路径、只读保证与 CSP 同源
 安全断言。真实命令与契约清单见
 [agent-doc/verification.md](../../agent-doc/verification.md#admin-panel-浏览器-e2e)。
 
@@ -96,6 +96,12 @@ models.dev 目录缓存——`GET /providers/discover` 与 `lookup-metadata` 因
 - 空 Topic 输入表示不限制 Topic；Global default 恢复模型与 thinking 继承，也可只覆盖 thinking。选了 Chat 模型时 thinking 必须显式指定（不提供继承项）。可选模型与思考档取自服务端，换模型自动选最弱档。
 - 表单与删除确认打开时冻结 revision 和数据快照。后台刷新不能升级草稿的 `If-Match`；`config_conflict` 关闭旧对话框并要求重新打开。写入成功或失败都刷新 Chats / Models / config-status，因为失败也可能已写文件但未应用；错误仍内联展示。Settings 应用配置也使这三个视图失效。
 - `e2e/09-chats.e2e.ts` 覆盖增删、Topic 待重启、热切模型与恢复继承、并发修改/删除、真实保存后应用失败与恢复、移动端暗色表单。
+
+### Developer 页（`src/pages/developer.tsx`）
+
+- Manage → Developer 通过现有配置写入流程管理可选的 `developer.record_model_payloads`（默认关闭），保存后热应用，保留文件与运行态不一致时的反馈。
+- 清除历史报文使用 `ConfirmDialog` 明确确认；成功展示清除调用数，并使 Invocation 详情缓存失效。仅清除请求/响应快照，正常审计不变；说明 SQLite 文件未必缩小。
+- `e2e/10-developer.e2e.ts` 覆盖默认值、切换与刷新持久化、取消/确认清除、详情空报文状态。
 
 ### Models 页（`src/pages/models.tsx`）写入约定
 

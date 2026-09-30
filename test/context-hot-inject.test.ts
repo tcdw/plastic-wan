@@ -1667,7 +1667,10 @@ describe('conversation continuity', () => {
   }, 30_000);
 
   test('a later invocation replays the earlier transcript instead of re-rendering history', async () => {
-    const fixtureSetup = await fixture(withoutIdleWait);
+    const fixtureSetup = await fixture((config) => {
+      withoutIdleWait(config);
+      config.developer = { record_model_payloads: true };
+    });
     const faux = fauxAgent();
     // Each invocation in this test needs its own call the way the loop drives
     // them: the opening answer, its closing turn, then one turn per later run.

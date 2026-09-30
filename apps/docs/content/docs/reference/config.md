@@ -19,6 +19,7 @@ description: 按配置节理解 Plastic Wan 的必填项、覆盖关系与运行
 | `agent` | 主模型、Prompt、全局 Token 预算、并发、Context 和发送限流。 |
 | `vision` | 图片/Sticker 模型、并发、独立 Token 与图片日预算。 |
 | `admin` | 本地管理面板；修改后重启。 |
+| `developer` | 可选调试设置；`record_model_payloads` 可省略，默认 `false`，可热应用。详见[Developer 页面](../configure/admin.md#开发者调试报文)。 |
 | `mcp` | 受限 stdio 或 Streamable HTTP Tool；修改后重启。 |
 | `retention` | 在线保留天数与备份份数，仅下次备份使用。 |
 

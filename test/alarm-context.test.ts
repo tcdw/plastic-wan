@@ -217,7 +217,9 @@ async function runBatch(f: Awaited<ReturnType<typeof runtimeFixture>>, id: numbe
 
 describe('alarm canonical context', () => {
   test('list result has one canonical result and ordinary audit; only explicit send reaches Telegram', async () => {
-    const f = await runtimeFixture();
+    const f = await runtimeFixture((config) => {
+      config.developer = { record_model_payloads: true };
+    });
     const scheduledAt = futureIso();
     const a1 = insertAlarmTask(f.store, 1n, 42n, 'morning', scheduledAt);
     const a2 = insertAlarmTask(f.store, 1n, 42n, 'evening', scheduledAt);

@@ -38,6 +38,8 @@ type RawChat = RawConfig['telegram']['chats'][number];
  * the schema stays restart-only until it is listed.
  */
 const HOT_PATHS: ReadonlySet<string> = new Set([
+  'developer',
+  'developer.record_model_payloads',
   'agent.provider',
   'agent.model',
   'agent.system_prompt_file',

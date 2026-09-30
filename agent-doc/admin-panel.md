@@ -2,7 +2,7 @@
 
 Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Session（Invocation）、收到的 Telegram 消息、媒体视觉分析、已配置 Sticker Set 的可搜索索引、Agent 短期记忆（`memories`）以及 Alarm（通用长程任务的闹钟投影）。后端在 `src/ingress/admin/`，前端在 `apps/admin-next/`（Rsbuild + React + Tailwind 4 + shadcn/Base UI + TanStack Query + TanStack Router），构建产物是**纯静态 SPA**，由 `AdminServer` 同源托管，不依赖任何 Node/Nitro 运行时。
 
-审计数据只读；记忆管理、Bot 管理员列表管理、Chat/Topic 白名单与按群模型管理（Chats 页）、模型与 Provider 管理（Models 页）、配置文件应用、立即重启、解除睡眠、取消挂起会话与取消 pending Alarm 是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume`、`/cut_topic` 等 Bot 管理员命令的 Telegram 用户，在 Models 页维护 Provider 与模型列表（写回 `config.jsonc` 并重新加载）、切换全局 agent 与 vision 模型并设置全局 thinking 级别（Models 页端点仍是全局语义）；在 Chats 页增删 Chat、编辑 Topic 白名单与 Chat 范围的模型/thinking 覆盖（同群所有 Topic 共用，支持恢复继承全局），唤醒/取消挂起会话，取消尚未触发的 Alarm，把配置文件中的热更新白名单字段应用到运行中的进程，或在有待重启字段时直接重启 `serve`。写入只发生在 [API](#api) 白名单里的端点。配置修改经 `writeConfigEdits` 校验并原子写入后，再由 `ConfigReloader` 尝试应用；应用失败时文件保留已写入内容，运行中的配置不变。
+审计查询只读；Developer 调试配置与历史报文清除、记忆管理、Bot 管理员列表管理、Chat/Topic 白名单与按群模型管理（Chats 页）、模型与 Provider 管理（Models 页）、配置文件应用、立即重启、解除睡眠、取消挂起会话与取消 pending Alarm 是受控的控制端点。管理员可以增删改查记忆、按群聊过滤，并对长 TTL 记忆做人工判断（保留 / 删除 / 提升进 `agents.md`），也可以指派/移除能执行 `/pause`、`/resume`、`/cut_topic` 等 Bot 管理员命令的 Telegram 用户，在 Models 页维护 Provider 与模型列表（写回 `config.jsonc` 并重新加载）、切换全局 agent 与 vision 模型并设置全局 thinking 级别（Models 页端点仍是全局语义）；在 Chats 页增删 Chat、编辑 Topic 白名单与 Chat 范围的模型/thinking 覆盖（同群所有 Topic 共用，支持恢复继承全局），唤醒/取消挂起会话，取消尚未触发的 Alarm，把配置文件中的热更新白名单字段应用到运行中的进程，或在有待重启字段时直接重启 `serve`。写入只发生在 [API](#api) 白名单里的端点。配置修改经 `writeConfigEdits` 校验并原子写入后，再由 `ConfigReloader` 尝试应用；应用失败时文件保留已写入内容，运行中的配置不变。
 
 `admin` section 的字段语义见 [configuration.md](configuration.md#admin-panel)；`admin.host` 不限制取值，绑定地址与暴露风险由运维负责（推荐回环 + 反向代理）。`admin.*` 不在热更新白名单里：改动后进入待重启列表，重启 `serve` 才生效。热更新白名单与语义见 [configuration.md](configuration.md#运行时配置热更新)。
 
@@ -77,6 +77,8 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 | --- | --- |
 | `POST /auth/setup` / `POST /auth/login` | 首次建号与登录，约束见「认证」 |
 | `POST /auth/logout` / `POST /auth/credentials` | 改凭据会撤销该用户**全部** Session（含当前）并签发新 Cookie |
+| `PUT /developer` | 保存并热应用 `developer.record_model_payloads`，沿用配置 revision、校验与原子写入机制，见「Developer 页」 |
+| `DELETE /developer/model-payloads` | 分批置空历史 `model_calls.request_json` / `response_json`，保留所有审计行与关联；不执行 `VACUUM`，见「Developer 页」 |
 | `POST /wake` | 删除持久化睡眠状态并唤醒 Scheduler；幂等，重复调用保持 `awake` |
 | `POST /cancel-ongoing-sessions` | 中断所有 running Invocation（经 Scheduler abort），同时 abort queued Invocation、过期 `collecting`/`queued` Bucket 与已 attach 未注入的 Bucket，被中断的运行不会把批次重新排队；已发出的 Telegram 消息不撤回 |
 | `POST` / `PUT` / `DELETE /memories[/:id]` | 创建时若 `(chat_id, message_thread_id)` 的 Conversation 不存在会自动建；`PUT` 至少要提供 `content` 或 `ttl_seconds` 之一 |
@@ -159,6 +161,16 @@ Chats 的编辑与删除确认在打开时冻结数据与 revision，后台刷�
 输入校验在 `src/ingress/admin/audit.ts`：`state`/`set` 必须匹配 `^[A-Za-z0-9._-]{1,64}$`，`chat`/`cursor` 必须是整数，`search` 最长 100 字符且 `LIKE` 通配符经过转义。非法输入返回 400 与稳定错误码（`invalid_limit`、`invalid_state`、`invalid_cursor`…）。所有查询使用绑定参数。
 
 SQLite `bigint` ID 在 JSON 中字符串化，Token/计数等小整数转 `number`。Alarm 列表是 `plugin_id = "alarm"` 对 `long_tasks`/`task_receipts` 的兼容投影：waiting 或 completed+pending 为 `pending`，claimed 为 `firing`，handled 为 `fired`，取消任务或 suppressed 投递为 `cancelled`。列表项把 `message_thread_id`、目标 User ID、conversation ID 与关联 Invocation ID 全部字符串化，展开详情展示完整 summary、原始 UTC 计划时间、conversation ID、Telegram Chat ID、thread ID、目标 User ID、创建/触发/取消时间、取消者、取消原因、Invocation 结果、`admin_cancelled` 标记与 `updated_at`。
+
+## Developer 页
+
+Manage → Developer 独立管理调试选项。`GET /developer` 返回 `revision`、文件值 `record_model_payloads` 和运行值 `active_record_model_payloads`；缺少整个 `developer` 节或其中的字段都等价于 `false`。读取与修改配置需要 `ConfigReloader`，不可用时返回 503 `developer_unavailable`。
+
+`PUT /developer` 接受严格的 `{ record_model_payloads: boolean }`，必须带上述 revision 的 `If-Match`。通过 `ConfigReloader.writeAndApply` 保留 JSONC 注释、校验并原子写入，再热应用；revision、失败后文件/运行态分离等契约与其它配置端点一致。成功返回更新后的视图与 `apply`。页面立即保存开关，成功或失败后都刷新配置相关视图；应用失败时展示当前运行状态。
+
+`DELETE /developer/model-payloads` 需要登录和与其它写端点相同的 Origin 校验，但不依赖配置文件有效。页面必须先通过 `ConfirmDialog` 确认。后端固定清理开始时最大的 model call ID，按主键范围每批最多 100 行做集合更新，批次之间释放写锁并让出事件循环；不会把报文加载进 JS。仅将两列置为 `NULL`，不删除 Invocation、model/tool call、Telegram 发送、关联、Token/cache usage、费用、状态或错误。成功返回 `{ cleared_model_calls }`，没有报文时为 0；同一进程已有清除操作时返回 409 `clear_in_progress`。中途失败时已完成的批次保留，可安全重试。
+
+开关不删除历史报文，清除也不关闭记录：开启记录时，新报文仍可继续写入。详情对空快照显示未记录或已清除。无数据库迁移，不自动清理历史；原有 retention 不变。清理只影响在线数据库，不修改既有备份；SQLite 释放的页可供复用，文件未必立即变小，端点不执行 `VACUUM`。
 
 ## 静态资源
 

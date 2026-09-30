@@ -380,6 +380,9 @@ function ModelCallCard({ model }: { readonly model: ModelCallEntry }): React.Rea
           ) : null}
         </LazyDetails>
       ) : null}
+      {model.request_json === null && model.response_json === null ? (
+        <p className="text-muted-foreground text-xs">Raw payloads unavailable (not recorded or cleared).</p>
+      ) : null}
     </TimelineCard>
   );
 }
@@ -548,6 +551,9 @@ function ModelCallsTab({ invocation }: { readonly invocation: InvocationDetail }
       <p className="text-muted-foreground text-xs">
         Total is Input + Output + Cache read + Cache write — the same definition the daily budget meters. The provider's
         raw total is exposed by the API as <code className="font-mono">provider_total_tokens</code>.
+      </p>
+      <p className="text-muted-foreground text-xs">
+        Raw payloads may be unavailable because recording was disabled or they were cleared.
       </p>
       <TableShell
         columns={MODEL_CALL_COLUMNS}

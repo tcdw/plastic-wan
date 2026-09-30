@@ -14,6 +14,7 @@ import { Route as AdminsRouteImport } from './routes/admins'
 import { Route as AlarmsRouteImport } from './routes/alarms'
 import { Route as ChatsRouteImport } from './routes/chats'
 import { Route as ContextsRouteImport } from './routes/contexts'
+import { Route as DeveloperRouteImport } from './routes/developer'
 import { Route as InvocationsRouteImport } from './routes/invocations'
 import { Route as MemoriesRouteImport } from './routes/memories'
 import { Route as MessagesRouteImport } from './routes/messages'
@@ -47,6 +48,11 @@ const ChatsRoute = ChatsRouteImport.update({
 const ContextsRoute = ContextsRouteImport.update({
   id: '/contexts',
   path: '/contexts',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeveloperRoute = DeveloperRouteImport.update({
+  id: '/developer',
+  path: '/developer',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InvocationsRoute = InvocationsRouteImport.update({
@@ -101,6 +107,7 @@ export interface FileRoutesByFullPath {
   '/alarms': typeof AlarmsRoute
   '/chats': typeof ChatsRoute
   '/contexts': typeof ContextsRoute
+  '/developer': typeof DeveloperRoute
   '/invocations': typeof InvocationsRoute
   '/memories': typeof MemoriesRoute
   '/messages': typeof MessagesRoute
@@ -117,6 +124,7 @@ export interface FileRoutesByTo {
   '/alarms': typeof AlarmsRoute
   '/chats': typeof ChatsRoute
   '/contexts': typeof ContextsRoute
+  '/developer': typeof DeveloperRoute
   '/invocations': typeof InvocationsRoute
   '/memories': typeof MemoriesRoute
   '/messages': typeof MessagesRoute
@@ -134,6 +142,7 @@ export interface FileRoutesById {
   '/alarms': typeof AlarmsRoute
   '/chats': typeof ChatsRoute
   '/contexts': typeof ContextsRoute
+  '/developer': typeof DeveloperRoute
   '/invocations': typeof InvocationsRoute
   '/memories': typeof MemoriesRoute
   '/messages': typeof MessagesRoute
@@ -152,6 +161,7 @@ export interface FileRouteTypes {
     | '/alarms'
     | '/chats'
     | '/contexts'
+    | '/developer'
     | '/invocations'
     | '/memories'
     | '/messages'
@@ -168,6 +178,7 @@ export interface FileRouteTypes {
     | '/alarms'
     | '/chats'
     | '/contexts'
+    | '/developer'
     | '/invocations'
     | '/memories'
     | '/messages'
@@ -184,6 +195,7 @@ export interface FileRouteTypes {
     | '/alarms'
     | '/chats'
     | '/contexts'
+    | '/developer'
     | '/invocations'
     | '/memories'
     | '/messages'
@@ -201,6 +213,7 @@ export interface RootRouteChildren {
   AlarmsRoute: typeof AlarmsRoute
   ChatsRoute: typeof ChatsRoute
   ContextsRoute: typeof ContextsRoute
+  DeveloperRoute: typeof DeveloperRoute
   InvocationsRoute: typeof InvocationsRoute
   MemoriesRoute: typeof MemoriesRoute
   MessagesRoute: typeof MessagesRoute
@@ -247,6 +260,13 @@ declare module '@tanstack/react-router' {
       path: '/contexts'
       fullPath: '/contexts'
       preLoaderRoute: typeof ContextsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/developer': {
+      id: '/developer'
+      path: '/developer'
+      fullPath: '/developer'
+      preLoaderRoute: typeof DeveloperRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/invocations': {
@@ -321,6 +341,7 @@ const rootRouteChildren: RootRouteChildren = {
   AlarmsRoute: AlarmsRoute,
   ChatsRoute: ChatsRoute,
   ContextsRoute: ContextsRoute,
+  DeveloperRoute: DeveloperRoute,
   InvocationsRoute: InvocationsRoute,
   MemoriesRoute: MemoriesRoute,
   MessagesRoute: MessagesRoute,

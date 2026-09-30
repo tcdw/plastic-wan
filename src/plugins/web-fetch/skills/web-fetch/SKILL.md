@@ -17,6 +17,8 @@ Do not use it to browse speculatively, as a web search engine, for private or lo
 
 `execute.call` with tool `web_fetch` and input `{ "url": "https://example.test/page" }`.
 
+HTML pages come back as their main content converted to Markdown (navigation, scripts, and images removed), with a `Title:` line in the header. Add `"raw": true` only when you need the original HTML, for example when the Markdown is empty or you need markup the conversion dropped. Other content types (JSON, plain text, XML) are returned as-is either way.
+
 If you are unsure about the exact input contract, run `execute` with action `help`, tool `web_fetch` first.
 
 ## Constraints and result handling

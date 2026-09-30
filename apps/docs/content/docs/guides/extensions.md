@@ -59,7 +59,7 @@ MCP 配置修改需要重启；required Server 启动失败会阻止服务成功
 
 - Skill 是文档，不是插件安装器，也不能扩大权限。
 - 内置 Plugin 与 MCP 不同：Plugin 随 runtime 发布；MCP 由管理员显式配置外部 Server。
-- `web_fetch` 不是任意 HTTP 客户端，不支持 Cookie、认证 Header 或不受限内网访问。
+- `web_fetch` 不是任意 HTTP 客户端，不支持 Cookie、认证 Header 或非默认端口。内网与环回地址默认拒绝；`web_fetch.dangerously_allow_all_ip_addresses: true` 会取消全部地址限制，让任何能触发 bot 的人借模型访问你的内网，只在完全信任这些人时开启。
 - MCP Tool 没有默认的每日调用次数上限，但仍受配置的只读策略、超时、大小和审计约束。
 
 相关页面：[配置文件](../configure/config-file.md)、[模型](../configure/models.md)、[CLI](../reference/cli.md)、[排障](../operations/troubleshooting.md)。

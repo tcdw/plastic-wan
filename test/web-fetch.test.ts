@@ -2,14 +2,15 @@ import { afterAll, expect, test, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig } from '../src/platform/config.ts';
+import { type FileConfig, type RawConfig, loadConfig } from '../src/platform/config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import type { InvocationContext } from '../src/platform/invocation-context.ts';
 import { BucketScheduler } from '../src/orchestration/scheduler.ts';
 import { TelegramIngestion } from '../src/ingress/telegram-ingestion.ts';
-import { createToolAudit } from '../src/plugins/plugin.ts';
+import { BUILTIN_PLUGINS } from '../src/plugins/builtin.ts';
+import { createToolAudit, loadPlugins } from '../src/plugins/plugin.ts';
 import { createWebFetchTool } from '../src/plugins/web-fetch/web-fetch.ts';
-import { renderInvocationContext, testConfigStore, writeTestConfig } from './helpers.ts';
+import { renderInvocationContext, testConfigJsonc, testConfigStore, writeTestConfig } from './helpers.ts';
 
 const directories: string[] = [];
 
@@ -21,14 +22,15 @@ afterAll(async () => {
 
 interface Fixture {
   readonly store: SqliteStore;
+  readonly config: RawConfig;
   readonly context: InvocationContext;
 }
 
-async function fixture(): Promise<Fixture> {
+async function fixture(transform?: (config: FileConfig) => void): Promise<Fixture> {
   const directory = await mkdtemp(join(tmpdir(), 'plasticwan-web-fetch-'));
   directories.push(directory);
   const configPath = join(directory, 'config.jsonc');
-  await writeTestConfig(directory, configPath);
+  await writeTestConfig(directory, configPath, testConfigJsonc(directory, transform));
   const loaded = await loadConfig(configPath);
   const configStore = await testConfigStore(loaded);
   const store = await SqliteStore.open(loaded.config);
@@ -59,7 +61,7 @@ async function fixture(): Promise<Fixture> {
     contextWindow: 200_000,
     maxOutputTokens: 32768,
   });
-  return { store, context };
+  return { store, config: loaded.config, context };
 }
 
 test('proxy synthetic DNS answers are refused unless the deployment opts in', async () => {
@@ -122,6 +124,60 @@ test('web_fetch returns bounded untrusted text through proxy synthetic DNS and a
         )
         .get(),
     ).toEqual({ state: 'success', side_effect: 0n, result_text: text });
+  } finally {
+    store.close();
+  }
+});
+
+test('web_fetch config flags reach the built-in plugin tool', async () => {
+  const { store, config, context } = await fixture((file) => {
+    file.web_fetch = { dangerously_allow_all_ip_addresses: true };
+  });
+  try {
+    const plugins = loadPlugins(BUILTIN_PLUGINS);
+    const tool = plugins
+      .capabilities(store, config, context, Date.now() + 30_000)
+      .find((entry) => entry.tool.name === 'web_fetch')?.tool;
+    expect(tool?.description).toContain('This deployment also allows private and local addresses.');
+  } finally {
+    store.close();
+  }
+});
+
+test('dangerously_allow_all_ip_addresses skips address checks but keeps URL rules', async () => {
+  const { store, context } = await fixture();
+  try {
+    const addresses: string[] = [];
+    const tool = createWebFetchTool({
+      audit: createToolAudit(store, context.invocationId),
+      invocationDeadline: Date.now() + 30_000,
+      allowAllAddresses: true,
+      resolveHostname: async () => [{ address: '10.0.0.8', family: 4 }],
+      requestResolved: async (url, address) => {
+        addresses.push(address);
+        if (url.pathname === '/start') {
+          return new Response(null, { status: 302, headers: { location: 'http://127.0.0.1/admin' } });
+        }
+        return new Response('ok', { headers: { 'content-type': 'text/plain' } });
+      },
+    });
+    expect(tool.description).toContain('This deployment also allows private and local addresses.');
+    expect(tool.description).not.toContain('use it for private/local resources');
+    await tool.execute('web-lan', { url: 'http://nas.lan/status' });
+    await tool.execute('web-loopback', { url: 'http://[::1]/' });
+    await tool.execute('web-redirect-local', { url: 'https://public.example/start' });
+    expect(addresses).toEqual(['10.0.0.8', '::1', '10.0.0.8', '127.0.0.1']);
+    await expect(tool.execute('web-port', { url: 'http://127.0.0.1:8080/' })).rejects.toThrow('default ports');
+    expect(
+      store.db
+        .prepare<[], { tool_call_id: string; state: string }>('SELECT tool_call_id, state FROM tool_calls ORDER BY id')
+        .all(),
+    ).toEqual([
+      { tool_call_id: 'web-lan', state: 'success' },
+      { tool_call_id: 'web-loopback', state: 'success' },
+      { tool_call_id: 'web-redirect-local', state: 'success' },
+      { tool_call_id: 'web-port', state: 'error' },
+    ]);
   } finally {
     store.close();
   }

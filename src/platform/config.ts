@@ -331,6 +331,9 @@ export const ConfigSchema = Type.Object(
           // 198.18.0.0/15 address; only such deployments may accept it, since
           // anywhere else a hostname resolving there is an SSRF attempt.
           allow_proxy_synthetic_addresses: Type.Optional(Type.Boolean()),
+          // Lets the model reach loopback, LAN and cloud metadata endpoints; only
+          // for trusted single-user deployments that fetch their own services.
+          dangerously_allow_all_ip_addresses: Type.Optional(Type.Boolean()),
         },
         Strict,
       ),

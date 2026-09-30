@@ -12,6 +12,7 @@ export default definePlugin({
         audit,
         invocationDeadline: deadline,
         allowProxySyntheticAddresses: config.web_fetch?.allow_proxy_synthetic_addresses === true,
+        allowAllAddresses: config.web_fetch?.dangerously_allow_all_ip_addresses === true,
       }),
       false,
     ),

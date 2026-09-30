@@ -455,6 +455,7 @@ Streamable HTTP 使用 `url` 与可选 SecretRef `headers`，且 `follow_redirec
   "web_fetch": {
     "allow_proxy_synthetic_addresses": false,
     "dangerously_allow_all_ip_addresses": false,
+    "accept_markdown": true,
   },
 }
 ```
@@ -462,6 +463,7 @@ Streamable HTTP 使用 `url` 与可选 SecretRef `headers`，且 `follow_redirec
 - 整个 section 可省略。`allow_proxy_synthetic_addresses` 默认 `false`：域名解析到 `198.18.0.0/15` 时 `web_fetch` 拒绝访问，因为任何人都能把自己的域名解析到这个网段，所在网络恰好路由它时就成了 SSRF。
 - 只有在 fake-ip 代理后运行（Clash、Surge 等把所有域名都解析到该网段）的部署才设为 `true`，否则 `web_fetch` 取不到任何网页。即使开启，模型直接提交该网段的 IP 仍会被拒绝。
 - `dangerously_allow_all_ip_addresses` 默认 `false`。设为 `true` 后跳过全部目标地址校验：环回、私网、链路本地（含云厂商 `169.254.169.254` 元数据端点）、IP 字面量与跳转到这些地址的目标都会放行，此时 `allow_proxy_synthetic_addresses` 不再起作用。URL 规则不变：仍只允许 HTTP(S) 默认端口、禁止 URL 凭据与 fragment、最多 3 次跳转、不发 Cookie。群聊里任何人都能让模型访问内网，只应在信任所有可触发 bot 的人、且确实需要读取自有内网服务的部署中开启。开启后 Tool 描述会告知模型可以访问私网地址。
+- `accept_markdown` 默认 `true`：请求的 `Accept` 以 `text/markdown` 优先（HTML 降为 `q=0.9`）。支持内容协商的站点（如开启 Cloudflare「Markdown for Agents」的站点）会直接返回自己的 Markdown，原样交给模型，不再经过本地 HTML 抽取。设为 `false` 时 `Accept` 恢复为不含 Markdown 的旧值；站点返回的 Markdown 质量不如本地抽取时可以关闭。模型传 `raw: true` 时无论开关如何都不声明 Markdown。
 - 修改后需要重启（不在热更新白名单内）。
 
 ## Admin Panel

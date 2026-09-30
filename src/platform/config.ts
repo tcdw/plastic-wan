@@ -334,6 +334,8 @@ export const ConfigSchema = Type.Object(
           // Lets the model reach loopback, LAN and cloud metadata endpoints; only
           // for trusted single-user deployments that fetch their own services.
           dangerously_allow_all_ip_addresses: Type.Optional(Type.Boolean()),
+          // Defaults to true: advertise text/markdown so negotiating sites skip HTML extraction.
+          accept_markdown: Type.Optional(Type.Boolean()),
         },
         Strict,
       ),

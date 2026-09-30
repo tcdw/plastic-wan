@@ -403,3 +403,62 @@ test('web_fetch HTML conversion makes no network requests of its own', async () 
     store.close();
   }
 });
+
+test('web_fetch asks for Markdown and passes site-served Markdown through unchanged', async () => {
+  const { store, context } = await fixture();
+  try {
+    const accepts: string[] = [];
+    const markdown = '# Workers\n\n<p>Served as Markdown, not converted.</p>\n';
+    const tool = createWebFetchTool({
+      audit: createToolAudit(store, context.invocationId),
+      invocationDeadline: Date.now() + 30_000,
+      resolveHostname: async () => [{ address: '203.0.114.10', family: 4 }],
+      requestResolved: async (_url, _address, accept) => {
+        accepts.push(accept);
+        return accept.startsWith('text/markdown')
+          ? new Response(markdown, { headers: { 'content-type': 'text/markdown; charset=utf-8' } })
+          : htmlResponse('<html><body><p>html body</p></body></html>');
+      },
+    });
+    const served = await tool.execute('web-served-md', { url: 'https://docs.example/workers' });
+    const text = served.content[0]?.type === 'text' ? served.content[0].text : '';
+    expect(text).toContain('Content-Type: text/markdown; charset=utf-8');
+    expect(text).toContain('Format: Markdown served by the site');
+    expect(text.endsWith(markdown)).toBe(true);
+    expect(served.details).toMatchObject({ format: 'markdown', truncated: false });
+
+    const raw = await tool.execute('web-served-raw', { url: 'https://docs.example/workers', raw: true });
+    const rawText = raw.content[0]?.type === 'text' ? raw.content[0].text : '';
+    expect(rawText).toContain('<p>html body</p>');
+    expect(raw.details).toMatchObject({ format: 'raw' });
+
+    expect(accepts[0]?.startsWith('text/markdown, text/html;q=0.9')).toBe(true);
+    expect(accepts[1]).not.toContain('text/markdown');
+  } finally {
+    store.close();
+  }
+});
+
+test('web_fetch.accept_markdown false loads and stops advertising Markdown', async () => {
+  const { store, config, context } = await fixture((file) => {
+    file.web_fetch = { accept_markdown: false };
+  });
+  try {
+    expect(config.web_fetch).toEqual({ accept_markdown: false });
+    const accepts: string[] = [];
+    const tool = createWebFetchTool({
+      audit: createToolAudit(store, context.invocationId),
+      invocationDeadline: Date.now() + 30_000,
+      acceptMarkdown: false,
+      resolveHostname: async () => [{ address: '203.0.114.10', family: 4 }],
+      requestResolved: async (_url, _address, accept) => {
+        accepts.push(accept);
+        return new Response('ok', { headers: { 'content-type': 'text/plain' } });
+      },
+    });
+    await tool.execute('web-no-md', { url: 'https://docs.example/' });
+    expect(accepts).toEqual(['text/html, application/xhtml+xml, application/json, text/plain;q=0.9, */*;q=0.1']);
+  } finally {
+    store.close();
+  }
+});

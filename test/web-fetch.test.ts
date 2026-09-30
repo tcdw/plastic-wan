@@ -126,6 +126,31 @@ test('web_fetch returns bounded untrusted text through proxy synthetic DNS and a
   }
 });
 
+test('web_fetch allows public IPv4 answers and still blocks IPv4-mapped IPv6 literals', async () => {
+  const { store, context } = await fixture();
+  try {
+    let requests = 0;
+    const tool = createWebFetchTool({
+      audit: createToolAudit(store, context.invocationId),
+      invocationDeadline: Date.now() + 30_000,
+      resolveHostname: async () => [
+        { address: '93.184.216.34', family: 4 },
+        { address: '2606:2800:220:1::1', family: 6 },
+      ],
+      requestResolved: async (_url, address) => {
+        requests += 1;
+        expect(address).toBe('93.184.216.34');
+        return new Response('ok', { headers: { 'content-type': 'text/plain' } });
+      },
+    });
+    await tool.execute('web-public-v4', { url: 'https://public.example/' });
+    await expect(tool.execute('web-mapped', { url: 'http://[::ffff:7f00:1]/' })).rejects.toThrow('non-public address');
+    expect(requests).toBe(1);
+  } finally {
+    store.close();
+  }
+});
+
 test('web_fetch blocks IPv6 transition addresses that embed an IPv4 destination', async () => {
   const { store, context } = await fixture();
   try {

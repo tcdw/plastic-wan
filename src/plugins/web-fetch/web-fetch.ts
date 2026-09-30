@@ -35,10 +35,12 @@ for (const [address, prefix] of [
 ] as const) {
   blockedAddresses.addSubnet(address, prefix, 'ipv4');
 }
+// IPv4-mapped ::ffff:0:0/96 is deliberately absent: BlockList matches IPv4 lookups
+// against it, which would block every IPv4 address. The 2000::/3 check in
+// isPublicAddress already rejects mapped addresses.
 for (const [address, prefix] of [
   ['::', 128],
   ['::1', 128],
-  ['::ffff:0:0', 96],
   ['64:ff9b::', 96],
   ['64:ff9b:1::', 48],
   ['100::', 64],

@@ -92,6 +92,8 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 列表过滤同样只在少数端点上有效：`/alarms` 按 `state`(`pending`/`firing`/`fired`/`cancelled`)/`chat`/`target`，`/memories` 按 `chat`/`state`(`active`/`expired`/`long_ttl`)，`/stickers` 按 `set`/`state`，`/contexts` 只按 `chat`。记忆列表项带 `expired` 与 `long_ttl` 布尔标记，`long_ttl` 表示剩余寿命超过 `agent.memory_ttl_warning_days`。Alarm 列表把 `pending` 按 `scheduled_at, id` 升序置顶，非 pending 历史按最近状态时间/id 倒序。
 
+Invocation 列表与详情的统计按 `invocation_id` 查询 `model_calls` / `tool_calls`，依赖迁移 `023` 添加的关联索引。模型调用行包含大型请求/响应快照；缺少索引时，一页的多个统计子查询会反复扫描整张审计表，显著增加 TTFB，并阻塞与面板共用进程的 Bot。性能回归测试检查实际列表 SQL 的查询计划，避免用依赖机器速度的耗时阈值。
+
 ## Chats 页端点
 
 `GET /chats` 返回配置管理视图，不是数据库中所有 Chat 的历史列表：

@@ -3,6 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq, sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { listInvocations } from '../src/ingress/admin/audit.ts';
 import { type LoadedConfig, loadConfig, type FileConfig, resolveAgentSettings } from '../src/platform/config.ts';
 import { SqliteStore } from '../src/store/database.ts';
 import {
@@ -17,6 +19,8 @@ import {
   telegramUpdates,
 } from '../src/store/schema.ts';
 import { testConfigJsonc, writeTestConfig } from './helpers.ts';
+import * as schema from '../src/store/schema.ts';
+import { seedAdminFixture } from './fixtures/admin-seed.ts';
 
 const directories: string[] = [];
 
@@ -48,6 +52,71 @@ test('drizzle layer reads migration versions as bigint', async () => {
     for (const version of versions) {
       expect(typeof version).toBe('bigint');
     }
+  } finally {
+    store.close();
+  }
+});
+
+test.each(['fresh', 'upgraded'])('invocation audit uses indexed calls in %s databases', async (mode) => {
+  const fixture = await openStore();
+  let store = fixture.store;
+  try {
+    const seed = seedAdminFixture(store);
+    const auditBefore = {
+      models: store.db.prepare('SELECT * FROM model_calls ORDER BY id').all(),
+      tools: store.db.prepare('SELECT * FROM tool_calls ORDER BY id').all(),
+    };
+    if (mode === 'upgraded') {
+      store.db.exec(`
+        DROP INDEX IF EXISTS model_calls_invocation_idx;
+        DROP INDEX IF EXISTS tool_calls_invocation_idx;
+        DELETE FROM schema_migrations WHERE version = 23;
+      `);
+      store.close();
+      store = await SqliteStore.open(fixture.loaded.config);
+      store.close();
+      store = await SqliteStore.open(fixture.loaded.config);
+    }
+    const plans: string[] = [];
+    const orm = drizzle(store.db, {
+      schema,
+      logger: {
+        logQuery(query, params) {
+          const plan = store.db.prepare<unknown[], { detail: string }>(`EXPLAIN QUERY PLAN ${query}`).all(...params);
+          plans.push(...plan.map((row) => row.detail));
+        },
+      },
+    });
+    const first = listInvocations(orm, { limit: '1' });
+    expect(first.items).toMatchObject([
+      { id: seed.invocationB.toString(), state: 'failed', tool_call_count: 1, total_tokens: 0, total_cost: null },
+    ]);
+    expect(first.next_cursor).toBe(seed.invocationB.toString());
+    const second = listInvocations(orm, {
+      limit: '25',
+      cursor: first.next_cursor,
+      chat: '123456789',
+      state: 'completed',
+    });
+    expect(second.items).toMatchObject([
+      {
+        id: seed.invocationA.toString(),
+        state: 'completed',
+        tool_call_count: 2,
+        total_tokens: 3930,
+        cache_read_tokens: 1400,
+        cache_write_tokens: 0,
+      },
+    ]);
+    expect(second.items[0]?.total_cost).toBeCloseTo(0.0048);
+    expect(second.next_cursor).toBeNull();
+    expect(listInvocations(orm, { chat: '-999' }).items).toEqual([]);
+    expect(plans.some((detail) => /SCAN (?:mc|tc)\b/.test(detail))).toBe(false);
+    expect(plans.some((detail) => /SEARCH mc USING .*INDEX .*\(invocation_id=\?\)/.test(detail))).toBe(true);
+    expect(plans.some((detail) => /SEARCH tc USING .*INDEX .*\(invocation_id=\?\)/.test(detail))).toBe(true);
+    expect(store.db.prepare('SELECT * FROM model_calls ORDER BY id').all()).toEqual(auditBefore.models);
+    expect(store.db.prepare('SELECT * FROM tool_calls ORDER BY id').all()).toEqual(auditBefore.tools);
+    expect(store.db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   } finally {
     store.close();
   }

@@ -340,7 +340,8 @@ export const modelCalls = sqliteTable(
     createdAt: text('created_at').notNull(),
     finishedAt: text('finished_at'),
   },
-  () => [
+  (t) => [
+    index('model_calls_invocation_idx').on(t.invocationId),
     check('model_calls_role_check', sql`role IN ('agent', 'vision_chat', 'vision_sticker', 'doctor')`),
     check(
       'model_calls_state_check',
@@ -387,7 +388,8 @@ export const toolCalls = sqliteTable(
     createdAt: text('created_at').notNull(),
     finishedAt: text('finished_at'),
   },
-  () => [
+  (t) => [
+    index('tool_calls_invocation_idx').on(t.invocationId),
     check('tool_calls_state_check', sql`state IN ('pending', 'success', 'error', 'outcome_unknown', 'blocked_budget')`),
   ],
 );

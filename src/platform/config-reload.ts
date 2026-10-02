@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { type Api, getSupportedThinkingLevels, type Model } from '@earendil-works/pi-ai';
 import {
-  assertConfigPermissions,
   type AgentSettings,
+  assertConfigPermissions,
   type FileConfig,
   type LoadedConfig,
   loadConfig,
@@ -10,11 +10,22 @@ import {
   validateSemantics,
 } from './config.ts';
 import { type ConfigChange, type ConfigSource, diffConfig } from './config-diff.ts';
-import { ConfigWriteError, type ConfigEdit, readConfigRevision, writeConfigEdits } from './config-file.ts';
+import { type ConfigEdit, ConfigWriteError, readConfigRevision, writeConfigEdits } from './config-file.ts';
 import { type AgentModelSwitcher, ModelSwitchError } from './model-switch.ts';
 import { buildModelRegistry, configuredAgentModels } from './providers.ts';
 import type { ConfigurationModels, RuntimeConfigurationStore } from './runtime-config.ts';
-import { type SecretStore, SecretResolutionError } from './secrets.ts';
+import { SecretResolutionError, type SecretStore } from './secrets.ts';
+
+/**
+ * The image configuration gateway. The reloader prepares a candidate snapshot
+ * (resolving SecretRefs) before anything is published and republishes it
+ * together with the configuration; a failed prepare keeps the old snapshot.
+ * Optional: absent when the process runs without the image service.
+ */
+export interface ImageConfigGateway {
+  prepare: (candidate: RawConfig) => Promise<unknown>;
+  publish: (snapshot: unknown) => void;
+}
 
 export type ConfigErrorCode =
   | 'config_permissions'
@@ -72,6 +83,8 @@ export interface ConfigReloaderOptions {
   readonly validateAgentModel: (model: Model<Api>) => void;
   /** Called after every successful publish; the composition root wakes the scheduler. */
   readonly onPublished: () => void;
+  /** Optional image configuration gateway; present when the image service runs. */
+  readonly imageConfig?: ImageConfigGateway;
 }
 
 /**
@@ -90,6 +103,9 @@ export class ConfigReloader {
   readonly #secrets: SecretStore;
   readonly #validateAgentModel: (model: Model<Api>) => void;
   readonly #onPublished: () => void;
+  readonly #imageConfig: ImageConfigGateway | undefined;
+  /** Identity of the last published image snapshot; detects key-jar-only rotations. */
+  #imageSnapshotId: string | null = null;
   #activeFile: FileConfig;
   #fileHash: string;
   #restartRequired: readonly string[] = [];
@@ -104,6 +120,7 @@ export class ConfigReloader {
     this.#secrets = options.secrets;
     this.#validateAgentModel = options.validateAgentModel;
     this.#onPublished = options.onPublished;
+    this.#imageConfig = options.imageConfig;
     this.#activeFile = structuredClone(options.loaded.fileConfig);
     this.#fileHash = options.loaded.hash;
   }
@@ -295,9 +312,30 @@ export class ConfigReloader {
     } catch (error) {
       return this.#failure('model_unusable', messageOf(error), false);
     }
+    // The image candidate is prepared with every apply — including ones where
+    // the file is unchanged — so a key-jar rotation is picked up by the next
+    // explicit reload even though the configuration file hash did not move.
+    let imageSnapshot: unknown;
+    let imageSnapshotId: string | null;
+    if (this.#imageConfig === undefined) {
+      imageSnapshot = undefined;
+      imageSnapshotId = null;
+    } else {
+      try {
+        imageSnapshot = await this.#imageConfig.prepare(diff.candidate.raw);
+      } catch (error) {
+        const code = error instanceof SecretResolutionError ? 'secret_unresolved' : 'config_invalid';
+        return this.#failure(code, messageOf(error), false);
+      }
+      imageSnapshotId =
+        imageSnapshot === undefined
+          ? null
+          : createHash('sha256').update(JSON.stringify(imageSnapshot)).digest('hex').slice(0, 32);
+    }
+    const imageChanged = imageSnapshotId !== this.#imageSnapshotId;
     const applied = pathsOf(diff.changes, 'hot');
     const outsideServe = pathsOf(diff.changes, 'outside_serve');
-    const changed = applied.length > 0 || outsideServe.length > 0;
+    const changed = applied.length > 0 || outsideServe.length > 0 || imageChanged;
     const currentHash = this.#store.current().hash;
     // With nothing pending, the candidate is exactly the file, so its hash is the
     // file hash and stays comparable with `check-config` output. With fields
@@ -333,6 +371,12 @@ export class ConfigReloader {
     this.#fileHash = file.hash;
     this.#restartRequired = restartRequired;
     this.#lastError = null;
+    if (this.#imageConfig !== undefined && imageSnapshot !== undefined) {
+      // Same synchronous section as the configuration publish: no run can
+      // observe a configuration whose image snapshot has not been swapped.
+      this.#imageConfig.publish(imageSnapshot);
+    }
+    this.#imageSnapshotId = imageSnapshotId;
     this.#onPublished();
     this.#logReloaded(applied, restartRequired, outsideServe);
     return this.#applied(applied, restartRequired, outsideServe);

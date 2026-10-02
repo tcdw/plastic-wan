@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { type JSONPath, parse as parseJsonc, printParseErrorCode, type ParseError } from 'jsonc-parser';
+import { type JSONPath, type ParseError, parse as parseJsonc, printParseErrorCode } from 'jsonc-parser';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import type { TLocalizedValidationError } from 'typebox/error';
@@ -310,6 +310,42 @@ export const ConfigSchema = Type.Object(
       },
       Strict,
     ),
+    image: Type.Optional(
+      Type.Object(
+        {
+          // Credential name -> SecretRef. Values are resolved per candidate
+          // apply (never at diff time), so the core only ever sees strings.
+          credentials: Type.Record(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), SecretRefSchema),
+          // Structurally validated here; the exact capability/enum contract is
+          // enforced by the image-service package when a snapshot is prepared.
+          models: Type.Array(
+            Type.Object(
+              {
+                id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }),
+                name: Type.String({ minLength: 1, maxLength: 80 }),
+                provider: Type.String({ minLength: 1, maxLength: 40 }),
+                upstreamModel: Type.String({ pattern: '^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$' }),
+                credentialRef: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }),
+                providerTag: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}(?:\\/[a-zA-Z0-9_-]{1,80})?$' }),
+                capabilities: Type.Object(
+                  {
+                    imageInput: Type.Boolean(),
+                    maxInputImages: Type.Integer({ minimum: 0, maximum: 16 }),
+                    maxOutputs: Type.Integer({ minimum: 1, maximum: 10 }),
+                    aspectRatios: Type.Array(Type.String(), { minItems: 1 }),
+                    resolutionClasses: Type.Array(Type.String(), { minItems: 1 }),
+                  },
+                  { additionalProperties: false },
+                ),
+              },
+              { additionalProperties: false },
+            ),
+            { maxItems: 64 },
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     retention: Type.Object({ online_days: PositiveInteger, backup_copies: PositiveInteger }, Strict),
     paths: Type.Object(
       {
@@ -373,6 +409,7 @@ export type RawConfig = Omit<FileConfig, 'agent' | 'telegram' | 'developer'> & {
     chats: Array<Omit<FileChat, 'instructions_file'> & { instructions: string }>;
   };
 };
+export type ImageConfig = RawConfig['image'];
 export type ProviderConfig = RawConfig['providers'][string];
 export type McpServerConfig = NonNullable<RawConfig['mcp']>['servers'][number];
 

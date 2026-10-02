@@ -57,15 +57,18 @@ const HOT_PATHS: ReadonlySet<string> = new Set([
   'vision.provider',
   'vision.model',
   'vision.max_output_tokens',
+  'image',
 ]);
 
 /**
  * `agent.rate_limits` is hot as a whole; its three fields are listed for the
  * report. Every provider field is hot — connection fields, the model list and
  * per-model paths, which are built dynamically — because a reload rebuilds the
- * model registry and publishes it with the configuration.
+ * model registry and publishes it with the configuration. The image section is
+ * hot as a whole for the same reason: a reload re-resolves its SecretRefs and
+ * republishes the image snapshot atomically.
  */
-const HOT_PREFIXES: readonly string[] = ['agent.rate_limits.', 'providers.'];
+const HOT_PREFIXES: readonly string[] = ['agent.rate_limits.', 'providers.', 'image.'];
 
 /**
  * `serve` reads these only through `backup` and the pre-migration backup, so

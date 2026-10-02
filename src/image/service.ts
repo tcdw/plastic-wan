@@ -1,14 +1,19 @@
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import {
+  createImageConfigSnapshot,
   createImageCore,
   createOpenRouterAdapter,
+  type ImageConfigSnapshot,
   type ImageCore,
   type ImageProviderAdapter,
   ImageStore,
   imageSchema,
+  modelDefinitionSchema,
 } from '@plasticwan/image-service';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { RawConfig } from '../platform/config.ts';
+import type { SecretStore } from '../platform/secrets.ts';
 import type { SqliteStore } from '../store/database.ts';
 
 /**
@@ -25,6 +30,16 @@ export type ImageService = {
   /** Directory that holds the original image files, next to the database. */
   imageDir: string;
   stop(): Promise<void>;
+  /**
+   * Candidate preparation for `ConfigReloader`: resolves the image section's
+   * SecretRefs against the key jar and validates the models through the
+   * package contract. Returns undefined when no image section is configured.
+   * Throws `SecretResolutionError` or a zod error; the caller reports the
+   * failure and keeps the previously published snapshot.
+   */
+  prepareConfig(candidate: RawConfig, secrets: SecretStore): Promise<ImageConfigSnapshot | undefined>;
+  /** Atomically republishes a prepared snapshot; queued work wakes on publish. */
+  publishConfig(snapshot: ImageConfigSnapshot): void;
 };
 
 export type ImageServiceOptions = {
@@ -64,5 +79,27 @@ export function createImageService(
     core,
     imageDir,
     stop: () => core.stop(),
+    async prepareConfig(candidate, secrets) {
+      const image = candidate.image;
+      if (image === undefined) {
+        return undefined;
+      }
+      const credentials: Record<string, string> = {};
+      for (const [name, ref] of Object.entries(image.credentials)) {
+        credentials[name] = await secrets.resolve(ref);
+      }
+      const models = image.models.map((model) => modelDefinitionSchema.parse(model));
+      return createImageConfigSnapshot({
+        // The snapshot's identity covers models and resolved credential values
+        // alike, so a key-jar rotation yields a new version even when the
+        // configuration file itself did not change.
+        version: createHash('sha256').update(JSON.stringify({ models, credentials })).digest('hex').slice(0, 32),
+        models,
+        credentials,
+      });
+    },
+    publishConfig(snapshot) {
+      core.updateConfig(snapshot);
+    },
   };
 }

@@ -206,6 +206,11 @@ export async function serve(configPath: string, takeover = false): Promise<void>
       store: configStore,
       modelSwitcher,
       secrets,
+      imageConfig: {
+        prepare: (candidate) =>
+          imageService === undefined ? Promise.resolve(undefined) : imageService.prepareConfig(candidate, secrets),
+        publish: (snapshot) => imageService?.publishConfig(snapshot as Parameters<ImageService['publishConfig']>[0]),
+      },
       validateAgentModel: (model) =>
         runtime.validateAdditionalTools(
           preview,

@@ -118,7 +118,12 @@ export function createPromptService(deps: { db: ImageDatabase }) {
 
   function update(
     id: string,
-    patch: Partial<{ name: string; body: string; description: string; category: string }>,
+    patch: {
+      name?: string | undefined;
+      body?: string | undefined;
+      description?: string | undefined;
+      category?: string | undefined;
+    },
   ): PromptAsset {
     const row = db.select().from(prompts).where(eq(prompts.id, id)).get();
     if (row === undefined) {
@@ -254,7 +259,14 @@ export function createImageService(deps: { db: ImageDatabase; store: ImageStore 
     return row === undefined ? null : toImageAsset(row);
   }
 
-  function update(id: string, patch: Partial<{ name: string; description: string; category: string }>): ImageAsset {
+  function update(
+    id: string,
+    patch: {
+      name?: string | undefined;
+      description?: string | undefined;
+      category?: string | undefined;
+    },
+  ): ImageAsset {
     const row = db.select().from(images).where(eq(images.id, id)).get();
     if (row === undefined) {
       throw notFound('图片素材不存在');

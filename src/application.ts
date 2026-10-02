@@ -241,8 +241,7 @@ export async function serve(configPath: string, takeover = false): Promise<void>
       capabilityTools,
       additionalTools,
       conversationRuntime,
-      skillVisibility: (skill) =>
-        skill.name !== 'image-generation' || (imageBridge !== undefined && imageBridge.enabled()),
+      skillVisibility: (skill) => skill.name !== 'image-generation' || (imageBridge?.enabled() ?? false),
     });
     const startedScheduler = new BucketScheduler(
       store,
@@ -314,6 +313,8 @@ export async function serve(configPath: string, takeover = false): Promise<void>
         configReloader,
         secrets,
         requestRestart,
+        imageService,
+        imageBridge,
       });
       admin = adminServer;
       const listening = await adminServer.start();

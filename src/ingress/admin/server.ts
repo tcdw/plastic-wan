@@ -2,7 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 import { type ServerType, serve } from '@hono/node-server';
+import { Compile } from 'typebox/compile';
 import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from '../../context/memory.ts';
+import type { ImageBridge } from '../../image/bridge.ts';
+import type { ImageService } from '../../image/service.ts';
 import type { BucketScheduler } from '../../orchestration/scheduler.ts';
 import { assertConfigPermissions, loadConfig, type RawConfig } from '../../platform/config.ts';
 import { type ConfigEdit, readConfigRevision } from '../../platform/config-file.ts';
@@ -41,6 +44,7 @@ import {
   updateChat,
 } from './chats-admin.ts';
 import { clearModelPayloads, parseDeveloperSettings } from './developer-admin.ts';
+import { createImageAdminHandler } from './image-admin.ts';
 import {
   createMemory,
   deleteMemory,
@@ -116,6 +120,10 @@ export interface AdminServerOptions {
   readonly configReloader?: ConfigReloader;
   /** Registers panel-supplied plaintext secrets before they are written or sent. */
   readonly secrets?: SecretStore;
+  /** Image generation service; absent when the host runs without one. */
+  readonly imageService?: ImageService;
+  /** The image bridge; absent without image generation. */
+  readonly imageBridge?: ImageBridge;
   /** Starts the graceful shutdown that exits with the restart code. */
   readonly requestRestart?: () => void;
 }
@@ -146,6 +154,8 @@ export class AdminServer {
   readonly #auth: AdminAuth;
   readonly #scheduler: BucketScheduler | undefined;
   readonly #tasks: LongTaskService;
+  readonly #image: ReturnType<typeof createImageAdminHandler> | undefined;
+  readonly #imageBridge: ImageBridge | undefined;
   readonly #modelSwitcher: AgentModelSwitcher | undefined;
   readonly #configReloader: ConfigReloader | undefined;
   readonly #secrets: SecretStore | undefined;
@@ -167,6 +177,14 @@ export class AdminServer {
     this.#auth = new AdminAuth(options.store.orm, admin.session_ttl_hours);
     this.#scheduler = options.scheduler;
     this.#tasks = options.tasks ?? new LongTaskService(options.store.orm, () => this.#scheduler?.wake());
+    this.#image =
+      options.imageService === undefined || options.imageBridge === undefined
+        ? undefined
+        : createImageAdminHandler({
+            service: options.imageService,
+            bridge: options.imageBridge,
+          });
+    this.#imageBridge = options.imageBridge;
     this.#modelSwitcher = options.modelSwitcher;
     this.#configReloader = options.configReloader;
     this.#secrets = options.secrets;
@@ -415,6 +433,27 @@ export class AdminServer {
     }
     if (segments[0] === 'chats') {
       return await this.#chats(request, segments);
+    }
+    if (segments[0] === 'image') {
+      const handler = this.#image;
+      if (handler === undefined) {
+        return json({ error: 'image_unavailable', message: 'Image generation is not wired' }, 503);
+      }
+      const response = await handler(
+        request,
+        segments,
+        url,
+        { username: session.username },
+        (maxBytes) => readJsonObject(request, maxBytes),
+        async (body) => await this.#applyImageConfig(body),
+      );
+      if ('bytes' in response) {
+        return new Response(new Uint8Array(response.bytes), {
+          status: response.status,
+          headers: { 'content-type': response.mime, 'cache-control': 'private, no-store' },
+        });
+      }
+      return json(response.body, response.status);
     }
     if (route === 'vision' && request.method === 'PUT') {
       const body = parseVisionBody(await readJsonObject(request));
@@ -798,6 +837,75 @@ export class AdminServer {
    * disk is known to load. A process that cannot come back up stops the bot
    * until an operator intervenes, so this check is not optional.
    */
+  /**
+   * The image capability switch: enable writes the `image` section (plaintext
+   * credentials travel as edit keys into the key jar, the file keeps SecretRef
+   * names), disable removes the section — which also garbage-collects the
+   * now-unreferenced jar entries. Applies through the reloader lock, so the
+   * snapshot publishes without a restart.
+   */
+  async #applyImageConfig(body: Record<string, unknown>): Promise<Response> {
+    const reloader = this.#configReloader;
+    if (reloader === undefined) {
+      return json({ error: 'config_reload_unavailable', message: 'Configuration reloading is not wired' }, 503);
+    }
+    const enabled = body.enabled;
+    if (typeof enabled !== 'boolean') {
+      return json({ error: 'invalid_body', message: 'enabled must be a boolean' }, 400);
+    }
+    const revision = await readConfigRevision(reloader.configPath);
+    let edits: readonly ConfigEdit[];
+    if (!enabled) {
+      edits = [{ path: ['image'], value: undefined }];
+    } else {
+      const credentials = body.credentials;
+      const models = body.models;
+      if (typeof credentials !== 'object' || credentials === null || !Array.isArray(models) || models.length === 0) {
+        return json(
+          { error: 'invalid_body', message: 'enabling requires credentials (name -> secret) and a models array' },
+          400,
+        );
+      }
+      const credentialNames: Record<string, string> = {};
+      const secretRefs: Record<string, { jar: string }> = {};
+      for (const [name, plaintext] of Object.entries(credentials)) {
+        if (!/^[a-zA-Z0-9_-]{1,80}$/.test(name) || typeof plaintext !== 'string' || plaintext.length === 0) {
+          return json({ error: 'invalid_body', message: `invalid credential entry: ${name}` }, 400);
+        }
+        credentialNames[name] = plaintext;
+        secretRefs[name] = { jar: name };
+      }
+      const { ImageSectionSchema } = await import('../../platform/config.ts');
+      const sectionValidator = Compile(ImageSectionSchema);
+      if (!sectionValidator.Check({ credentials: secretRefs, models })) {
+        const detail = [...sectionValidator.Errors({ credentials: secretRefs, models })]
+          .slice(0, 3)
+          .map((error) => `${error.instancePath}: ${error.message ?? 'invalid'}`)
+          .join('; ');
+        return json({ error: 'invalid_body', message: `image section is invalid: ${detail}` }, 400);
+      }
+      for (const plaintext of Object.values(credentialNames)) {
+        this.#secrets?.remember(plaintext);
+      }
+      edits = [
+        { path: ['image', 'credentials'], value: secretRefs, keys: credentialNames },
+        { path: ['image', 'models'], value: models },
+      ];
+    }
+    const result = await reloader.writeAndApply(edits, revision);
+    if (!result.ok) {
+      const message = result.fileWritten
+        ? `config.jsonc was updated but not applied: ${result.message}`
+        : result.message;
+      return json({ error: result.code, message }, CONFIG_WRITE_STATUS[result.code] ?? 409);
+    }
+    const bridgeEnabled = this.#imageBridge?.enabled() ?? false;
+    return json({
+      enabled: enabled && bridgeEnabled,
+      apply: { applied: result.applied, restart_required: result.restartRequired },
+    });
+  }
+
   async #restart(): Promise<Response> {
     if (!supervisedRestartEnabled()) {
       return json(

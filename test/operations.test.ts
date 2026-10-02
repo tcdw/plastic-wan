@@ -114,8 +114,15 @@ test('retention scrubs referenced history and backup keeps seven consistent copi
       await utimes(path, new Date(0), new Date(index * 1_000));
     }),
   );
+  // An image asset directory must ride along beside the SQLite snapshot, so the
+  // restore path can rebuild both stores from one backup point.
+  const imageDir = join(loaded.config.data_dir, 'images');
+  await mkdir(join(imageDir, 'assets'), { recursive: true, mode: 0o700 });
+  await writeFile(join(imageDir, 'assets', 'ref-1.png'), 'png-bytes');
   const backupPath = await backupDatabase(loaded.config);
   expect(await pathExists(backupPath)).toBe(true);
+  const imageBackupDir = backupPath.replace(/\.sqlite$/, '.images');
+  expect(await pathExists(join(imageBackupDir, 'assets', 'ref-1.png'))).toBe(true);
   const backups = (await readdir(loaded.config.paths.backups)).filter((name) => name.endsWith('.sqlite'));
   expect(backups).toHaveLength(7);
   const backup = new DatabaseSync(backupPath, { readOnly: true });

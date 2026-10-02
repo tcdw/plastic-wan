@@ -22,10 +22,15 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 # A cached install layer looks stale next to freshly checked-out manifests;
 # skip pnpm's pre-run reinstall, which fails on the docs-only patch.
-RUN pnpm --config.verify-deps-before-run=false run admin:build
+# The image-service build is explicit: its dist/ must exist before the prod
+# prune, whose --ignore-scripts flag (below) skips the prepare script.
+RUN pnpm --config.verify-deps-before-run=false run admin:build \
+    && pnpm --config.verify-deps-before-run=false run --filter @plasticwan/image-service build
 
-# Prune devDependencies — runtime only needs production deps
-RUN pnpm install --prod --frozen-lockfile
+# Prune devDependencies — runtime only needs production deps.
+# --ignore-scripts: the workspace package's prepare runs tsc, which the prune
+# is about to remove; dist/ was already built by the explicit step above.
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts
 
 # ── Stage 2: Runtime (Node.js 24) ───────────────────────────────
 FROM node:24-bookworm-slim
@@ -48,9 +53,16 @@ RUN groupadd --system plasticwan \
 
 WORKDIR /app
 
-# Copy built application from builder
+# Copy built application from builder.
+# packages/image-service is resolved through a workspace symlink from the root
+# node_modules, so the package directory itself must ship: manifest, built
+# dist/, and its own node_modules (whose relative symlinks point back into the
+# copied root node_modules/.pnpm store).
 COPY --from=builder --chown=plasticwan:plasticwan /app/src ./src
 COPY --from=builder --chown=plasticwan:plasticwan /app/node_modules ./node_modules
+COPY --from=builder --chown=plasticwan:plasticwan /app/packages/image-service/package.json ./packages/image-service/package.json
+COPY --from=builder --chown=plasticwan:plasticwan /app/packages/image-service/dist ./packages/image-service/dist
+COPY --from=builder --chown=plasticwan:plasticwan /app/packages/image-service/node_modules ./packages/image-service/node_modules
 COPY --from=builder --chown=plasticwan:plasticwan /app/apps/admin-next/dist ./apps/admin-next/dist
 COPY --from=builder --chown=plasticwan:plasticwan /app/apps/admin-next/LICENSE ./apps/admin-next/LICENSE
 COPY --from=builder --chown=plasticwan:plasticwan /app/apps/admin-next/NOTICE ./apps/admin-next/NOTICE

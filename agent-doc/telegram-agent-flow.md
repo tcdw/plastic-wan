@@ -328,6 +328,19 @@ Tool 只返回文本、JSON、XML 或 JavaScript 响应，拒绝压缩和二进�
 
 直传图片在首次 Agent 请求前下载到 `paths.media_cache` 临时目录，并执行下载大小、真实格式、像素数、EXIF 移除、最大边长与标准化输出大小限制；请求载荷完成构造后立即删除临时文件。下载或校验失败会使 Invocation 失败，不会把缺失图片伪装成成功。
 
+## Image 生成
+
+图片生成把「Agent 提交意图 → 后台生成 → 回执注入 → `send` 交付」拆成两个模型回合，全部经由既有机制，没有第二条投递路径：
+
+- **工具挂载**：`image_generate` 是内置插件（`src/plugins/image/`）经 `execute` 暴露的内部能力，不是 MCP，也不在四个 runtime 原语里。图片功能禁用（`image` 段缺失、被剥离或刚被删除）时该能力与 `image-generation` 技能都不会出现在 Agent 的工具注册表与 Skill 索引里——技能索引按 `skillVisibility` 过滤，模型不会看到「存在但不可用」的图片工具。
+- **输入授权**：`input_image_refs` 只接受本 Conversation Context 授权的 `img_` 引用（经 `resolveMedia` 解析为真实 Media ID），任意 file ID、URL 或其它会话的引用在提交前就被拒绝并审计（`image_input_ref_unauthorized`）。
+- **提交与幂等**：bridge 以 actor `agent:<conversationId>` 向 image core 提交生成意图（idempotency key 绑定 Conversation），同一 Conversation 内同内容重复提交返回既有 generation（`replayed: true`），不重复计费；每个 Invocation 最多 3 次提交。工具立即返回 `generation_id`，图片此时还不存在。
+- **回执**：生成落定（成功、部分成功、失败、重启后由 `reconcile` 对账）时，bridge 经 long task 完成对应任务，Scheduler 把任务完成回执作为消息注入原 Conversation——回执是**不可信数据**（`generation_id`、status、输出清单），与 Alarm 回执同一通道。进程重启不影响未完成生成：启动时 reconcile 重建 core 状态，晚到的结果照常投递，不会重复回执。
+- **交付**：模型回执后用 `send kind:"image"` + `image_generation_id` 交付。运行时按「该 generation 的 actor 是否就是本 Conversation」解析输出（`sendableOutputs`，跨 Conversation 引用拒绝），一次 send 把该 generation 的全部已完成输出作为一个相册发送（单图 sendPhoto，2 张以上 sendMediaGroup），并审计 `telegram_sends.kind='image'`、bot 消息与生成的 `media` 行，纳入 canonical history 与引用 TTL。模型不能发送它没有在本会话收到过 `generation_id` 的生成，也不能只发送部分输出。
+- **失败语义**：失败/中断的轮次同样完成任务（回执带失败状态）；模型用自己的话解释失败，重试是新的 `image_generate` 提交，未送达的输出没有隐藏重发路径。
+
+配置段（模型、凭据、能力契约、热更新、软降级）见 [configuration.md](configuration.md#image-生成)；Admin 三页与启用开关见 [admin-panel.md](admin-panel.md#api)。
+
 ## `read_image`
 
 `read_image` 是经 `execute.call` 调用的内部能力。模型只能使用 Context 中展示的不透明 `image_ref`。多模态 Agent 获得 Sticker 与历史区段 Photo/图片 Document 的引用；新消息中的普通图片直传主模型，不再保留对应 `read_image` 引用。text-only Agent 获得所有可见区段中 Sticker、Photo 与图片 Document 的引用。Tool 不接受原始 Telegram file ID、任意 URL 或任意 Media ID。

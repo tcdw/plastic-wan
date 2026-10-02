@@ -41,6 +41,9 @@ export function HomeIntro() {
             <a href={pageLink('/docs/guides/budgets.html')}>控制用量</a> <span>全局预算与运行限制</span>
           </li>
           <li>
+            <a href={pageLink('/docs/guides/images.html')}>让碗画图</a> <span>启用生图、聊天改图与图片管理</span>
+          </li>
+          <li>
             <a href={pageLink('/docs/operations/troubleshooting.html')}>排查为什么不回复</a>{' '}
             <span>从消息可见性到模型调用</span>
           </li>

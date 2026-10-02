@@ -37,6 +37,7 @@ node src/cli.ts check-config --config dev-data/config.jsonc
 | `telegram.chats[<id>].provider` / `.model` / `.thinking_level` | 仅限两边都存在的 Chat 的按群模型覆盖（语义与校验见「Telegram Chat 与 Topic」）；新增/删除 Chat 仍是 restart |
 | `providers.<alias>`（新增、删除、改 kind）与 `providers.<alias>.*`（连接字段、模型列表） | Provider 的每个字段都热更新：reload 按新定义重建注册表。模型列表变化只替换该 Provider 的模型；连接字段变化会重新解析它的 SecretRef |
 | `vision.provider`、`vision.model`、`vision.max_output_tokens` | 下一次 vision 分析使用新模型；`max_output_tokens` 在构建注册表时与新模型的上限一起校验，并和模型一起在分析开始时从同一份快照取出，等待中发布的新值只影响之后的分析 |
+| `image`（整段：存在性、`credentials`、`models` 及所有子字段） | 图片功能启停与配置都热应用：reload 重新解析 image SecretRef 并原子发布新的图片快照，下一次提交生效；进行中的生成继续用它开始时的凭据快照。段被剥离（结构不合法）或删除都等于禁用，Agent 与 Admin 同步失去图片工具与页面能力，不需要重启 |
 
 `outside_serve` 字段（`serve` 从不读取，下一次 `backup` 生效，既不算已应用也不算待重启）：`paths.backups`、`retention.online_days`、`retention.backup_copies`。
 
@@ -369,6 +370,50 @@ Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用
 - `background_sticker_concurrency` 当前必须为 `1`。
 - `prompt_version` 参与视觉缓存版本；改变描述规则时递增。
 - `daily_budget` 同时限制 Token 和图片数，但只作用于后台 Sticker 索引（`daily_usage` 的 `system`/`sticker_index`）；聊天触发的 `read_image` 计入全局 `agent.daily_budget.max_tokens`。
+
+## Image 生成
+
+`image` 段是**可选**段：没有该段就是「图片生成禁用」，bot 照常启动。段的增删与内部任何字段都属热更新（见热更新白名单，`image` 整段在 `HOT_PREFIXES` 里）：Admin「图片设置」页的启用开关写 `image` 段并立即重载，禁用→启用→再禁用全程不需要重启。
+
+结构：
+
+```jsonc
+{
+  "image": {
+    "credentials": {
+      "openrouter": { "env": "OPENROUTER_API_KEY" }
+    },
+    "models": [
+      {
+        "id": "gpt-image-1",
+        "name": "GPT Image",
+        "provider": "openrouter",
+        "upstreamModel": "openai/gpt-image-1",
+        "credentialRef": "openrouter",
+        "providerTag": "openrouter",
+        "capabilities": {
+          "imageInput": true,
+          "maxInputImages": 4,
+          "maxOutputs": 4,
+          "aspectRatios": ["1:1", "3:4", "4:3", "9:16", "16:9"],
+          "resolutionClasses": ["low", "medium", "high"]
+        }
+      }
+    ]
+  }
+}
+```
+
+字段语义：
+
+- `credentials`: 凭据名 → SecretRef，与 Provider 的 SecretRef 同一机制（明文只能进 key jar，文件里写 `{jar}` / `{env}` / `{command}` 引用）。Admin 设置页保存时，编辑请求里附带的明文凭据写入 jar，文件只留条目名；删除段后不再被任何 `credentialRef` 引用的 jar 条目会被回收。
+- `models[]`: 可路由的生图模型，上限 64 个。`id` 是模型在 Admin 下拉与 Agent 工具参数里的标识；`credentialRef` 必须指向 `credentials` 里的条目；`provider`/`providerTag` 描述经哪个 Provider 连接与上游打标；`upstreamModel` 是上游真实模型 ID。`capabilities` 由 image-service 包在准备快照时做能力契约校验（host schema 只做结构校验）：`imageInput` 决定能否携带参考图，`maxInputImages`/`maxOutputs` 约束参考图数量与单次输出数，`aspectRatios`/`resolutionClasses` 是参数白名单——模型接受的取值必须列在这里，否则该次提交在参数校验阶段就被拒绝。
+- **软校验降级**：`loadConfig` 对 `image` 段单独校验，结构不合法的段被剥离（记录 warning），进程以「图片生成禁用」状态启动——坏掉的 image 段永远不会阻止 bot 上线，管理员随后经 Admin 面板修复或启用。剥离信息记录在 `LoadedConfig.warnings`，Admin 配置状态页可见。
+- 图片快照随每次 reload 原子发布：reload 重新解析 `credentials` 的 SecretRef 并重建快照，同一轮生成的凭据在轮次开始时固定（轮次中途轮换密钥不影响进行中的生成）；运行中的生成不受 reload 影响，下一次提交才用新配置。
+- 原始生成图与参考图存放在 `<data_dir>/images`，按 SQLite 中的资产行索引；`backup` 把该目录快照为备份文件旁的 `<备份名>.images/`（best-effort：目录缺失就跳过，拷贝失败只记日志不中断备份；SQLite 快照与目录拷贝之间没有跨库原子性）。
+- 数据保留遵循 `retention.online_days`：图片生成记录与资产行随在线数据一起清理，原图文件随目录清理。
+
+Agent 侧使用（`image_generate` 工具、图片技能、发送与审计链路）见 [telegram-agent-flow.md](telegram-agent-flow.md#image-生成)；Admin 三页与启用开关的端点语义见 [admin-panel.md](admin-panel.md#api)。
 
 ## Conversation Context
 

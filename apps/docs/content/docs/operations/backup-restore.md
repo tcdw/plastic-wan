@@ -7,6 +7,8 @@ description: 创建数据库备份、理解保留策略，并在隔离环境验�
 
 在线数据由 `retention.online_days` 保留；`backup` 会先清理再创建 SQLite 备份，并按 `retention.backup_copies` 轮换。配置、Prompt 和密钥不在数据库中，必须纳入单独且受保护的备份策略。
 
+启用了图片生成时，`backup` 还会把原图目录（`<data_dir>/images`）一并拷贝为备份文件旁的同名 `.images` 目录（如 `plasticwan-….sqlite.images/`）。目录不存在时跳过；拷贝失败只记日志，不影响 SQLite 备份的有效性。恢复时把 `.images` 目录放回 `data_dir` 下的 `images/`，与 SQLite 文件配套使用——两个快照之间没有跨库原子性，恢复后个别最新记录可能引用尚未拷入的图片文件。
+
 ## 创建备份
 
 Docker：

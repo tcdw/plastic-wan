@@ -1,5 +1,5 @@
 import { createImageService, createPromptService, type ImageService, type PromptService } from './assets.ts';
-import { ImageConfigStore, type ImageConfigHandle, type ImageConfigSnapshot } from './config.ts';
+import { type ImageConfigHandle, type ImageConfigSnapshot, ImageConfigStore } from './config.ts';
 import type { ImageDatabase } from './db.ts';
 import { createGenerationService, type GenerationService } from './generations.ts';
 import type { ImageStore } from './image-store.ts';
@@ -77,5 +77,4 @@ export function createImageCore(options: ImageCoreOptions) {
   };
 }
 
-export type { ImageConfigHandle, ImageConfigSnapshot };
-export type { PromptService, ImageService, GenerationService, ProviderClient };
+export type { GenerationService, ImageConfigHandle, ImageConfigSnapshot, ImageService, PromptService, ProviderClient };

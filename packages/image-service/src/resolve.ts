@@ -1,16 +1,16 @@
+import type { ImageService, PromptService } from './assets.ts';
 import {
   effectiveParameters,
-  scanReferences,
   type GenerationInput,
   type GenerationSnapshot,
   type ImageAsset,
   type ModelDefinition,
   type PromptAsset,
   type Reference,
+  scanReferences,
 } from './contracts.ts';
 import { inputError } from './errors.ts';
 import { ADAPTER_VERSION } from './openrouter.ts';
-import type { ImageService, PromptService } from './assets.ts';
 
 export type ResolveDeps = {
   prompts: PromptService;

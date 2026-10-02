@@ -1,19 +1,19 @@
-import { test } from 'vitest';
 import assert from 'node:assert/strict';
+import { test } from 'vitest';
+import type { Generation, GenerationInput } from '../src/contracts.ts';
+import { listSchema } from '../src/contracts.ts';
+import { assertIdempotencyKey, fingerprintOf } from '../src/generations.ts';
 import {
   adminActor,
   createTestCore,
   fakeProvider,
   keyActor,
+  PROVIDER_KEY,
   parseInput,
   pngBytes,
   publishDefaultConfig,
-  PROVIDER_KEY,
   waitFor,
 } from './helpers.ts';
-import { fingerprintOf, assertIdempotencyKey } from '../src/generations.ts';
-import { listSchema } from '../src/contracts.ts';
-import type { Generation, GenerationInput } from '../src/contracts.ts';
 
 const baseInput = parseInput({ authoredPrompt: '一只猫', modelId: 'gpt-image-1' });
 

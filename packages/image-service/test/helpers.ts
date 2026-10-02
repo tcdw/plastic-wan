@@ -1,21 +1,21 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import sharp from 'sharp';
 import { createImageConfigSnapshot, ImageConfigStore } from '../src/config.ts';
-import { createImageCore, type ImageCore } from '../src/core.ts';
-import type { ImageDatabase } from '../src/db.ts';
 import {
-  generationCreateSchema,
   type GenerationActor,
   type GenerationInput,
+  generationCreateSchema,
   type ModelDefinition,
 } from '../src/contracts.ts';
-import { imageSchema } from '../src/schema.ts';
+import { createImageCore, type ImageCore } from '../src/core.ts';
+import type { ImageDatabase } from '../src/db.ts';
 import { ImageStore } from '../src/image-store.ts';
+import { imageSchema } from '../src/schema.ts';
 
 /**
  * Domain DDL for tests only. The authoritative migration SQL lives in the host's

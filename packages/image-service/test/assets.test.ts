@@ -1,10 +1,10 @@
-import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { readdirSync } from 'node:fs';
 import sharp from 'sharp';
+import { test } from 'vitest';
+import { listSchema, promptCreateSchema } from '../src/contracts.ts';
 import { conflict } from '../src/errors.ts';
 import { adminActor, createTestCore, pngBytes, publishDefaultConfig } from './helpers.ts';
-import { listSchema, promptCreateSchema } from '../src/contracts.ts';
 
 test('prompt assets support CRUD, search and archive semantics', async () => {
   const run = await createTestCore({ providerFetch: async () => new Response('{}', { status: 500 }) });

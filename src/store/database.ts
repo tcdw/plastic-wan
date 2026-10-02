@@ -1,24 +1,25 @@
-import Database from 'better-sqlite3';
 import {
   access,
   chmod,
+  cp,
   type FileHandle,
   mkdir,
   open,
   readdir,
   readFile,
   rename,
+  rm,
   stat,
   unlink,
   writeFile,
 } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import Database from 'better-sqlite3';
 import { and, eq, sql } from 'drizzle-orm';
-import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import { type BetterSQLite3Database, drizzle } from 'drizzle-orm/better-sqlite3';
 import type { RawConfig } from '../platform/config.ts';
 import * as schema from './schema.ts';
 import { chatMigrations, chatPause, toolCalls } from './schema.ts';
-
 export type Orm = BetterSQLite3Database<typeof schema>;
 
 /**
@@ -250,16 +251,35 @@ export async function backupDatabase(config: RawConfig): Promise<string> {
     source.exec('PRAGMA busy_timeout = 5000;');
     const sourceOrm = drizzle(source, { schema });
     purgeExpiredData(sourceOrm, config);
-    const path = await createBackupFile(
-      source,
-      config.paths.backups,
-      `plasticwan-${timestampForFile()}-${crypto.randomUUID()}.sqlite`,
-    );
+    const filename = `plasticwan-${timestampForFile()}-${crypto.randomUUID()}.sqlite`;
+    const path = await createBackupFile(source, config.paths.backups, filename);
+    // Original image files live outside SQLite; snapshot them next to the copy
+    // so a backup restores both. Best-effort: a missing directory simply means
+    // no image assets exist yet, and a copy failure is logged, not fatal — the
+    // SQLite snapshot stays valid. There is no cross-store atomicity: rows
+    // committed after the VACUUM snapshot may reference images copied earlier
+    // or later than the exact backup point.
+    await snapshotImageDirectory(config, path);
     await rotateBackups(config.paths.backups, config.retention.backup_copies);
     return path;
   } finally {
     source.close();
   }
+}
+
+/**
+ * Copies the image asset directory to `<backup-basename>.images/` beside the
+ * SQLite backup file. Skipped entirely when the directory does not exist.
+ */
+async function snapshotImageDirectory(config: RawConfig, sqliteBackupPath: string): Promise<void> {
+  const imageDir = join(config.data_dir, 'images');
+  if (!(await fileExists(imageDir))) {
+    return;
+  }
+  const target = sqliteBackupPath.replace(/\.sqlite$/, '.images');
+  await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+  await cp(imageDir, target, { recursive: true, verbatimSymlinks: false });
+  await chmod(target, 0o700).catch(() => undefined);
 }
 
 export function purgeExpiredData(orm: Orm, config: RawConfig, now = new Date()): void {
@@ -493,6 +513,13 @@ async function rotateBackups(backupDir: string, keep: number): Promise<void> {
   );
   files.sort((left, right) => right.modified - left.modified);
   await Promise.all(files.slice(keep).map((file) => unlink(file.path)));
+  // Drop the image snapshots that belong to rotated-away SQLite copies.
+  const rotated = new Set(files.slice(keep).map((file) => basename(file.path, '.sqlite')));
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && rotated.has(basename(entry.name, '.images')))
+      .map((entry) => rm(join(backupDir, entry.name), { recursive: true })),
+  );
 }
 
 async function loadMigrations(): Promise<Migration[]> {

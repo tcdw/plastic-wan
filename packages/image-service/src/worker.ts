@@ -1,16 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq } from 'drizzle-orm';
-import type { GenerationStatus, SafeError } from './contracts.ts';
-import { AppError, storageFailure } from './errors.ts';
-import type { ImageDatabase } from './db.ts';
-import { generationAttempts, generations } from './schema.ts';
+import type { ImageService } from './assets.ts';
 import type { ImageConfigHandle } from './config.ts';
+import type { GenerationStatus, SafeError } from './contracts.ts';
+import type { ImageDatabase } from './db.ts';
+import { AppError, storageFailure } from './errors.ts';
+import { type AttemptRow, computeStatus, firstError, type GenerationRow } from './generations.ts';
+import { decodeBase64Image, type ImageStore, MAX_IMAGE_BYTES } from './image-store.ts';
+import { ProviderCallError, type ProviderClient, type ProviderResult } from './openrouter.ts';
 import type { Redactor } from './redactor.ts';
 import { redactWith } from './redactor.ts';
-import { ProviderCallError, type ProviderClient, type ProviderResult } from './openrouter.ts';
-import type { ImageService } from './assets.ts';
-import { computeStatus, firstError, type AttemptRow, type GenerationRow } from './generations.ts';
-import { decodeBase64Image, MAX_IMAGE_BYTES, type ImageStore } from './image-store.ts';
+import { generationAttempts, generations } from './schema.ts';
 
 /** Simple FIFO counting semaphore; bounds provider calls across the whole process. */
 class Semaphore {

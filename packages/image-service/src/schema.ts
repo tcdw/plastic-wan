@@ -1,5 +1,21 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { customType, index, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import type { GenerationSnapshot, SafeError } from './contracts.ts';
+
+/**
+ * SQLite INTEGER column that maps to TypeScript `number`.
+ *
+ * The host connection runs `defaultSafeIntegers(true)` so every INTEGER column
+ * arrives as `bigint`; image-domain values are counters and dimensions that must
+ * stay plain numbers (they round-trip through JSON snapshots and API payloads,
+ * where BigInt serialization would throw). `fromDriver` coerces both bigint and
+ * number driver values back to `number`, keeping the core correct regardless of
+ * the connection's safeIntegers mode. Values are always within the safe range.
+ */
+export const safeInteger = customType<{ data: number; driverData: number | bigint }>({
+  dataType: () => 'integer',
+  toDriver: (value) => value,
+  fromDriver: (value) => Number(value),
+});
 
 /**
  * Drizzle table definitions for the image domain. The authoritative DDL lives in
@@ -29,16 +45,16 @@ export const images = sqliteTable(
     id: text('id').primaryKey(),
     name: text('name').notNull(),
     mime: text('mime').notNull(),
-    width: integer('width').notNull(),
-    height: integer('height').notNull(),
-    bytes: integer('bytes').notNull(),
+    width: safeInteger('width').notNull(),
+    height: safeInteger('height').notNull(),
+    bytes: safeInteger('bytes').notNull(),
     sha256: text('sha256').notNull(),
     fileName: text('file_name').notNull(),
     description: text('description').notNull().default(''),
     category: text('category').notNull().default(''),
     source: text('source').$type<'upload' | 'generation'>().notNull(),
     generationId: text('generation_id'),
-    outputIndex: integer('output_index'),
+    outputIndex: safeInteger('output_index'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
     deletedAt: text('deleted_at'),
@@ -60,7 +76,7 @@ export const generations = sqliteTable(
     actorName: text('actor_name').notNull(),
     snapshot: text('snapshot', { mode: 'json' }).$type<GenerationSnapshot>().notNull(),
     configVersion: text('config_version').notNull(),
-    round: integer('round').notNull().default(1),
+    round: safeInteger('round').notNull().default(1),
     error: text('error', { mode: 'json' }).$type<SafeError | null>(),
     createdAt: text('created_at').notNull(),
     startedAt: text('started_at'),
@@ -77,8 +93,8 @@ export const generationAttempts = sqliteTable(
   {
     id: text('id').primaryKey(),
     generationId: text('generation_id').notNull(),
-    round: integer('round').notNull(),
-    itemIndex: integer('item_index').notNull(),
+    round: safeInteger('round').notNull(),
+    itemIndex: safeInteger('item_index').notNull(),
     status: text('status').$type<'running' | 'succeeded' | 'failed' | 'interrupted'>().notNull(),
     startedAt: text('started_at').notNull(),
     finishedAt: text('finished_at'),

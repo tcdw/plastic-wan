@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { modelDefinitionSchema, type ModelDefinition, type PublicModel } from './contracts.ts';
+import { type ModelDefinition, modelDefinitionSchema, type PublicModel } from './contracts.ts';
 import { configUnavailable, providerFailure } from './errors.ts';
 import { Redactor } from './redactor.ts';
 

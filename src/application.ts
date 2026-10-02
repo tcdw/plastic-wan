@@ -1,39 +1,40 @@
 import { eq } from 'drizzle-orm';
 import { Bot, type Context } from 'grammy';
-import { seedConfigAdmins } from './store/admins.ts';
+import { capability } from './capabilities/execute-tool.ts';
+import { McpManager } from './capabilities/mcp.ts';
+import { MediaService } from './capabilities/media/media.ts';
+import { TelegramMediaClient } from './capabilities/media/media-download.ts';
+import { StickerService } from './capabilities/stickers.ts';
+import { createMemoryTools, MemoryStore } from './context/memory.ts';
+import { createImageService, type ImageService } from './image/service.ts';
 import { AdminServer } from './ingress/admin/server.ts';
+import { TelegramIngestion } from './ingress/telegram-ingestion.ts';
 import { AgentRuntime, type CapabilityToolFactory, type ToolFactory } from './orchestration/agent-runtime.ts';
-import { LongTaskService } from './store/long-tasks.ts';
 import {
   BOT_COMMANDS,
   BotCommandService,
   type ParsedCommand,
   registerBotCommands,
 } from './orchestration/bot-commands.ts';
+import { ConversationRuntime } from './orchestration/conversation-runtime.ts';
+import { BucketScheduler } from './orchestration/scheduler.ts';
 import { KeyedSemaphore } from './platform/concurrency.ts';
 import { assertConfigPermissions, loadConfig } from './platform/config.ts';
 import { ConfigReloader } from './platform/config-reload.ts';
-import { ServeLock, SqliteStore, stopRunningInstance, watchStopRequests } from './store/database.ts';
 import { previewContext, unavailableCapabilities } from './platform/invocation-context.ts';
-import { McpManager } from './capabilities/mcp.ts';
-import { TelegramMediaClient } from './capabilities/media/media-download.ts';
-import { MediaService } from './capabilities/media/media.ts';
-import { createMemoryTools, MemoryStore } from './context/memory.ts';
+import { keyJarPath } from './platform/key-jar.ts';
 import { AgentModelSwitcher } from './platform/model-switch.ts';
 import { buildModelRegistry, configuredAgentModels } from './platform/providers.ts';
 import { RuntimeConfigurationStore } from './platform/runtime-config.ts';
-import { BucketScheduler } from './orchestration/scheduler.ts';
-import { ConversationRuntime } from './orchestration/conversation-runtime.ts';
-import { keyJarPath } from './platform/key-jar.ts';
 import { SecretStore } from './platform/secrets.ts';
-import { runStartupCatchUp } from './startup-catch-up.ts';
-import { appState } from './store/schema.ts';
-import { StickerService } from './capabilities/stickers.ts';
-import { TelegramIngestion } from './ingress/telegram-ingestion.ts';
-import { capability } from './capabilities/execute-tool.ts';
+import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from './platform/system-resources.ts';
 import { BUILTIN_PLUGINS } from './plugins/builtin.ts';
 import { loadPlugins } from './plugins/plugin.ts';
-import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from './platform/system-resources.ts';
+import { runStartupCatchUp } from './startup-catch-up.ts';
+import { seedConfigAdmins } from './store/admins.ts';
+import { ServeLock, SqliteStore, stopRunningInstance, watchStopRequests } from './store/database.ts';
+import { LongTaskService } from './store/long-tasks.ts';
+import { appState } from './store/schema.ts';
 
 const ALLOWED_UPDATES = ['message', 'edited_message', 'my_chat_member'] as const;
 
@@ -51,6 +52,7 @@ export async function serve(configPath: string, takeover = false): Promise<void>
   let lock: ServeLock | undefined;
   let stopWatcher: (() => void) | undefined;
   let store: SqliteStore | undefined;
+  let imageService: ImageService | undefined;
   let bot: Bot | undefined;
   let scheduler: BucketScheduler | undefined;
   let stickers: StickerService | undefined;
@@ -106,6 +108,10 @@ export async function serve(configPath: string, takeover = false): Promise<void>
     });
     store = await SqliteStore.open(loaded.config);
     const openedStore = store;
+    imageService = createImageService(openedStore, loaded.config, {
+      logger: { warn: (message) => logEvent('image_service_warning', { message }) },
+    });
+    logEvent('image_service_started', { image_dir: imageService.imageDir });
     seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? []);
     bot = new Bot(token);
     // The registry is built once here and republished by every reload; the
@@ -274,6 +280,10 @@ export async function serve(configPath: string, takeover = false): Promise<void>
     stopWatcher?.();
     await admin?.stop();
     await scheduler?.stop(30_000);
+    // The image worker borrows the SQLite connection; it must settle (marking
+    // late results interrupted if the shutdown budget expires) before the
+    // store closes underneath it.
+    await imageService?.stop();
     await stickers?.stop();
     await mcp?.stop();
     store?.close();

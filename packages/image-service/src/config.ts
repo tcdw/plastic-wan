@@ -97,12 +97,20 @@ export class ImageConfigStore {
   }
 
   /**
-   * Atomically publishes a validated snapshot and notifies listeners. Secrets are
-   * registered for redaction and never removed here: removing them while an older
-   * round is still running would leak the value into a log line.
+   * Atomically publishes a validated snapshot and notifies listeners, or
+   * reverts to the disabled state (`undefined`) when image generation is
+   * removed from the configuration. Secrets are registered for redaction and
+   * never removed here: removing them while an older round is still running
+   * would leak the value into a log line.
    */
-  updateConfig(next: ImageConfigSnapshot): void {
-    this.snapshot = next;
+  updateConfig(next: ImageConfigSnapshot | undefined): void {
+    this.snapshot = next ?? null;
+    if (next === undefined) {
+      for (const listener of this.listeners) {
+        listener();
+      }
+      return;
+    }
     for (const value of Object.values(next.credentials)) {
       this.redactorInstance.add(value);
     }

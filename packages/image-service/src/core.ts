@@ -67,8 +67,8 @@ export function createImageCore(options: ImageCoreOptions) {
     adapter: provider,
     worker,
     config,
-    /** Publishes a validated configuration snapshot atomically (or keeps the old one). */
-    updateConfig: (snapshot: ImageConfigSnapshot): void => {
+    /** Publishes a validated configuration snapshot atomically; `undefined` reverts to the disabled state. */
+    updateConfig: (snapshot: ImageConfigSnapshot | undefined): void => {
       config.updateConfig(snapshot);
     },
     async stop(): Promise<void> {

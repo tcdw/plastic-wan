@@ -327,9 +327,11 @@ export class ConfigReloader {
         const code = error instanceof SecretResolutionError ? 'secret_unresolved' : 'config_invalid';
         return this.#failure(code, messageOf(error), false);
       }
+      // `undefined` (no image section) is the disabled state with its own
+      // stable identity, so disabling and re-enabling each count as changes.
       imageSnapshotId =
         imageSnapshot === undefined
-          ? null
+          ? 'disabled'
           : createHash('sha256').update(JSON.stringify(imageSnapshot)).digest('hex').slice(0, 32);
     }
     const imageChanged = imageSnapshotId !== this.#imageSnapshotId;
@@ -371,9 +373,11 @@ export class ConfigReloader {
     this.#fileHash = file.hash;
     this.#restartRequired = restartRequired;
     this.#lastError = null;
-    if (this.#imageConfig !== undefined && imageSnapshot !== undefined) {
+    if (this.#imageConfig !== undefined) {
       // Same synchronous section as the configuration publish: no run can
       // observe a configuration whose image snapshot has not been swapped.
+      // `undefined` publishes the disabled state: a missing (or stripped)
+      // image section is a valid target state, not an error.
       this.#imageConfig.publish(imageSnapshot);
     }
     this.#imageSnapshotId = imageSnapshotId;

@@ -38,8 +38,11 @@ export type ImageService = {
    * failure and keeps the previously published snapshot.
    */
   prepareConfig(candidate: RawConfig, secrets: SecretStore): Promise<ImageConfigSnapshot | undefined>;
-  /** Atomically republishes a prepared snapshot; queued work wakes on publish. */
-  publishConfig(snapshot: ImageConfigSnapshot): void;
+  /**
+   * Atomically republishes a prepared snapshot; queued work wakes on publish.
+   * `undefined` reverts to the disabled state (callers fail config_unavailable).
+   */
+  publishConfig(snapshot: ImageConfigSnapshot | undefined): void;
 };
 
 export type ImageServiceOptions = {
@@ -99,6 +102,8 @@ export function createImageService(
       });
     },
     publishConfig(snapshot) {
+      // `undefined` = the configuration no longer carries a usable image
+      // section; the core returns to the disabled state.
       core.updateConfig(snapshot);
     },
   };

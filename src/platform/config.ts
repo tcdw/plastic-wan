@@ -241,6 +241,47 @@ const AdminSchema = Type.Object(
   Strict,
 );
 
+/**
+ * The image section is soft-validated: `loadConfig` strips an invalid section
+ * (recording a warning) instead of rejecting the whole configuration, so a
+ * broken image block degrades to "image generation disabled" and can never
+ * keep the bot from starting. The section's absence is simply "disabled".
+ */
+export const ImageSectionSchema = Type.Object(
+  {
+    // Credential name -> SecretRef. Values are resolved per candidate
+    // apply (never at diff time), so the core only ever sees strings.
+    credentials: Type.Record(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), SecretRefSchema),
+    // Structurally validated here; the exact capability/enum contract is
+    // enforced by the image-service package when a snapshot is prepared.
+    models: Type.Array(
+      Type.Object(
+        {
+          id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }),
+          name: Type.String({ minLength: 1, maxLength: 80 }),
+          provider: Type.String({ minLength: 1, maxLength: 40 }),
+          upstreamModel: Type.String({ pattern: '^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$' }),
+          credentialRef: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }),
+          providerTag: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}(?:\\/[a-zA-Z0-9_-]{1,80})?$' }),
+          capabilities: Type.Object(
+            {
+              imageInput: Type.Boolean(),
+              maxInputImages: Type.Integer({ minimum: 0, maximum: 16 }),
+              maxOutputs: Type.Integer({ minimum: 1, maximum: 10 }),
+              aspectRatios: Type.Array(Type.String(), { minItems: 1 }),
+              resolutionClasses: Type.Array(Type.String(), { minItems: 1 }),
+            },
+            { additionalProperties: false },
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      { maxItems: 64 },
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export const ConfigSchema = Type.Object(
   {
     version: Type.Literal(1),
@@ -310,42 +351,7 @@ export const ConfigSchema = Type.Object(
       },
       Strict,
     ),
-    image: Type.Optional(
-      Type.Object(
-        {
-          // Credential name -> SecretRef. Values are resolved per candidate
-          // apply (never at diff time), so the core only ever sees strings.
-          credentials: Type.Record(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), SecretRefSchema),
-          // Structurally validated here; the exact capability/enum contract is
-          // enforced by the image-service package when a snapshot is prepared.
-          models: Type.Array(
-            Type.Object(
-              {
-                id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }),
-                name: Type.String({ minLength: 1, maxLength: 80 }),
-                provider: Type.String({ minLength: 1, maxLength: 40 }),
-                upstreamModel: Type.String({ pattern: '^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$' }),
-                credentialRef: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }),
-                providerTag: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}(?:\\/[a-zA-Z0-9_-]{1,80})?$' }),
-                capabilities: Type.Object(
-                  {
-                    imageInput: Type.Boolean(),
-                    maxInputImages: Type.Integer({ minimum: 0, maximum: 16 }),
-                    maxOutputs: Type.Integer({ minimum: 1, maximum: 10 }),
-                    aspectRatios: Type.Array(Type.String(), { minItems: 1 }),
-                    resolutionClasses: Type.Array(Type.String(), { minItems: 1 }),
-                  },
-                  { additionalProperties: false },
-                ),
-              },
-              { additionalProperties: false },
-            ),
-            { maxItems: 64 },
-          ),
-        },
-        { additionalProperties: false },
-      ),
-    ),
+    image: Type.Optional(ImageSectionSchema),
     retention: Type.Object({ online_days: PositiveInteger, backup_copies: PositiveInteger }, Strict),
     paths: Type.Object(
       {
@@ -418,9 +424,16 @@ export interface LoadedConfig {
   readonly fileConfig: FileConfig;
   readonly configPath: string;
   readonly hash: string;
+  /**
+   * Soft-failure notices. Today only the image section degrades: a structurally
+   * invalid block is stripped (so the process starts with image generation
+   * disabled) and its schema errors are reported here instead of thrown.
+   */
+  readonly warnings: readonly string[];
 }
 
 const validator = Compile(ConfigSchema);
+const imageValidator = Compile(ImageSectionSchema);
 
 function describeOffset(source: string, offset: number): string {
   let line = 0;
@@ -456,6 +469,24 @@ export async function loadConfig(path: string): Promise<LoadedConfig> {
       `Invalid config: plaintext secrets are not accepted; move them into ${KEY_JAR_FILE} and reference them as { "jar": "<name>" }: ${plaintext.map((secret) => secret.path.join('.')).join(', ')}`,
     );
   }
+  // The image section degrades instead of failing the load: a structurally
+  // invalid block is stripped so the process starts with image generation
+  // disabled, and the schema errors surface as warnings (`check-config`,
+  // serve logs). A structurally valid section that the package contract
+  // rejects is handled later, at snapshot-prepare time.
+  const warnings: string[] = [];
+  const root = asRecord(parsed);
+  if (root.image !== undefined && !imageValidator.Check(root.image)) {
+    const details = imageValidator
+      .Errors(root.image)
+      .slice(0, 5)
+      .map((error) => `${error.instancePath || '/image'}: ${formatValidationError(error)}`)
+      .join('; ');
+    warnings.push(
+      `image generation disabled: the "image" section is invalid and was ignored (${details}); fix or remove it to enable image generation`,
+    );
+    delete root.image;
+  }
   if (!validator.Check(parsed)) {
     const details = validator
       .Errors(parsed)
@@ -471,7 +502,7 @@ export async function loadConfig(path: string): Promise<LoadedConfig> {
   for (const file of promptFiles) {
     hash.update(`\u0000${file.content}`);
   }
-  return { config, fileConfig: parsed, configPath, hash: hash.digest('hex') };
+  return { config, fileConfig: parsed, configPath, hash: hash.digest('hex'), warnings };
 }
 
 /**

@@ -111,7 +111,15 @@ export async function serve(configPath: string, takeover = false): Promise<void>
     imageService = createImageService(openedStore, loaded.config, {
       logger: { warn: (message) => logEvent('image_service_warning', { message }) },
     });
-    logEvent('image_service_started', { image_dir: imageService.imageDir });
+    logEvent('image_service_started', {
+      image_dir: imageService.imageDir,
+      // Disabled = no (or an ignored) image section; the admin panel can
+      // enable it later without a restart.
+      enabled: imageService.core.config.hasValidConfig(),
+    });
+    if (loaded.warnings.length > 0) {
+      logEvent('config_warnings', { warnings: loaded.warnings.join(' | ') });
+    }
     seedConfigAdmins(store.orm, loaded.config.telegram.admins ?? []);
     bot = new Bot(token);
     // The registry is built once here and republished by every reload; the

@@ -13,7 +13,14 @@ try {
   switch (options.command) {
     case 'check-config': {
       const loaded = await loadConfig(options.configPath);
-      console.log(JSON.stringify({ status: 'ok', config_hash: loaded.hash }));
+      console.log(
+        JSON.stringify({
+          status: 'ok',
+          config_hash: loaded.hash,
+          warnings: loaded.warnings,
+          image_enabled: loaded.config.image !== undefined,
+        }),
+      );
       break;
     }
     case 'backup': {

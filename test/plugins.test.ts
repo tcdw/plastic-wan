@@ -11,5 +11,5 @@ test('loadPlugins rejects invalid and duplicate plugin ids', () => {
 
 test('built-in plugins load with unique ids and their skill directories', () => {
   const loaded = loadPlugins(BUILTIN_PLUGINS);
-  expect(loaded.skillDirectories.map((directory) => directory.split(/[\\/]/).at(-1))).toEqual(['web-fetch', 'alarms']);
+  expect(loaded.skillDirectories.map((directory) => directory.split(/[\\/]/).at(-1))).toEqual(['web-fetch', 'image-generation', 'alarms']);
 });

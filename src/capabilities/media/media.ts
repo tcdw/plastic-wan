@@ -111,6 +111,57 @@ export class MediaService {
     };
   }
 
+  /**
+   * Prepares one stored media row as generation input: downloads and normalizes
+   * it like the direct-image path, but addressed by media id so a caller can
+   * turn a conversation-authorized media reference into image bytes. Returns
+   * base64 plus the normalized mime type; the temporary file is removed.
+   */
+  async prepareInputImage(
+    mediaId: bigint,
+    signal: AbortSignal,
+  ): Promise<{ readonly base64: string; readonly mime: string }> {
+    const media = this.#store.orm
+      .select({
+        id: mediaTable.id,
+        kind: mediaTable.kind,
+        fileId: mediaTable.fileId,
+        fileUniqueId: mediaTable.fileUniqueId,
+        mimeType: mediaTable.mimeType,
+        fileSize: mediaTable.fileSize,
+        telegramJson: mediaTable.telegramJson,
+      })
+      .from(mediaTable)
+      .where(eq(mediaTable.id, mediaId))
+      .get();
+    if (media === undefined || media.kind === 'sticker') {
+      throw new Error('Media is unavailable as generation input');
+    }
+    if (media.fileSize !== null && media.fileSize > BigInt(MAX_DOWNLOAD_BYTES)) {
+      throw new Error('Telegram media exceeds 20 MB');
+    }
+    const mediaCache = this.#configStore.current().config.paths.media_cache;
+    const temporaryDirectory = await mkdtemp(join(mediaCache, 'gen-input-'));
+    if (process.platform !== 'win32') {
+      await chmod(temporaryDirectory, 0o700);
+    }
+    try {
+      const normalized = await prepareMediaImage(
+        media,
+        join(temporaryDirectory, 'input'),
+        temporaryDirectory,
+        this.#mediaClient,
+        signal,
+      );
+      return {
+        base64: Buffer.from(await readFile(normalized.path)).toString('base64'),
+        mime: normalized.mimeType,
+      };
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
+
   async loadDirectImages(images: readonly DirectImage[], signal: AbortSignal): Promise<ImageContent[]> {
     if (images.length === 0) {
       return [];

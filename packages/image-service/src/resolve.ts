@@ -66,6 +66,21 @@ export function resolveSnapshot(deps: ResolveDeps, input: GenerationInput, model
     }
   }
 
+  // Explicit intent-level inputs join the ordered list after the inline ones.
+  for (const id of input.inputImages) {
+    if (imageAssets.has(id)) {
+      continue;
+    }
+    const asset = deps.images.get(id);
+    if (asset === null) {
+      throw inputError('missing_reference', '引用的输入图片不存在');
+    }
+    if (asset.deletedAt !== null) {
+      throw inputError('missing_reference', '引用的输入图片已归档');
+    }
+    imageAssets.set(id, asset);
+  }
+
   // Capability checks happen before any paid call: unsupported intent is
   // reported explicitly, never silently simulated (lossy abstraction).
   try {

@@ -414,7 +414,7 @@ export const telegramSends = sqliteTable(
     finishedAt: text('finished_at'),
   },
   () => [
-    check('telegram_sends_kind_check', sql`kind IN ('text', 'sticker')`),
+    check('telegram_sends_kind_check', sql`kind IN ('text', 'sticker', 'image')`),
     check('telegram_sends_state_check', sql`state IN ('pending', 'success', 'error', 'outcome_unknown')`),
   ],
 );

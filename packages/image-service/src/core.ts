@@ -1,5 +1,6 @@
 import { createImageService, createPromptService, type ImageService, type PromptService } from './assets.ts';
 import { type ImageConfigHandle, type ImageConfigSnapshot, ImageConfigStore } from './config.ts';
+import type { GenerationStatus } from './contracts.ts';
 import type { ImageDatabase } from './db.ts';
 import { createGenerationService, type GenerationService } from './generations.ts';
 import type { ImageStore } from './image-store.ts';
@@ -70,6 +71,15 @@ export function createImageCore(options: ImageCoreOptions) {
     /** Publishes a validated configuration snapshot atomically; `undefined` reverts to the disabled state. */
     updateConfig: (snapshot: ImageConfigSnapshot | undefined): void => {
       config.updateConfig(snapshot);
+    },
+    /**
+     * Registers a terminal-state listener (succeeded / partial / failed /
+     * interrupted). Returns an unsubscribe function. Delivery stays the host's
+     * job; this only tells the host that a generation settled.
+     */
+    onFinished: (listener: (generationId: string, status: GenerationStatus) => void): (() => void) => {
+      worker.onFinished.add(listener);
+      return () => worker.onFinished.delete(listener);
     },
     async stop(): Promise<void> {
       await worker.stop();

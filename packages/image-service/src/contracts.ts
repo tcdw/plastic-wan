@@ -144,6 +144,12 @@ export const generationCreateSchema = z
     aspectRatio: z.enum(aspectRatios).default('auto'),
     resolution: z.enum(resolutionClasses).default('auto'),
     outputCount: z.number().int().min(1).max(10).default(1),
+    /**
+     * Explicit input images as asset ids. This is the intent-level form of
+     * "optional input images"; the `{{image:UUID}}` prompt syntax remains the
+     * inline alternative. Both merge into one ordered, de-duplicated list.
+     */
+    inputImages: z.array(z.string().uuid()).max(16).default([]),
     extendedData: extendedDataSchema.optional(),
   })
   .strict();

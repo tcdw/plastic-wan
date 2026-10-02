@@ -35,7 +35,7 @@ import {
 import { serializeModelRequestForAudit } from '../platform/model-request-audit.ts';
 import type { InvocationConfigSnapshot, RuntimeConfigurationStore } from '../platform/runtime-config.ts';
 import type { SecretStore } from '../platform/secrets.ts';
-import type { SystemResources } from '../platform/system-resources.ts';
+import type { SystemResources, SystemSkill } from '../platform/system-resources.ts';
 import { applyToolSchemaKeywords } from '../platform/tool-schema.ts';
 import { resolveChatConfig, type SqliteStore } from '../store/database.ts';
 import {
@@ -86,6 +86,15 @@ export interface AgentRuntimeOptions {
   readonly systemResources: SystemResources;
   /** Runtime-internal capabilities dispatched through the execute primitive. */
   readonly capabilityTools?: CapabilityToolFactory;
+  /** Per-invocation skill visibility rule; hides skills of disabled capabilities. */
+  readonly skillVisibility?: (skill: SystemSkill) => boolean;
+  /** Resolves generated pictures for the send tool; absent without image generation. */
+  readonly imageGeneration?: {
+    readonly resolve: (
+      generationId: string,
+      conversationId: bigint,
+    ) => readonly { readonly assetId: string; readonly bytes: Uint8Array; readonly fileName: string }[] | undefined;
+  };
   /** Directly exposed non-primitive tools (allowlisted MCP tools). */
   readonly additionalTools?: ToolFactory;
   readonly directImageLoader?: DirectImageLoader;
@@ -143,12 +152,23 @@ export class AgentRuntime {
   readonly #bot: AgentRuntimeOptions['bot'];
   readonly #systemResources: SystemResources;
   readonly #capabilityTools: CapabilityToolFactory | undefined;
+  /** Per-invocation skill visibility; used to hide disabled capability skills. */
+  readonly #skillVisibility: ((skill: SystemSkill) => boolean) | undefined;
   readonly #additionalTools: ToolFactory | undefined;
   readonly #directImageLoader: DirectImageLoader | undefined;
   readonly #modelGate: KeyedSemaphore;
   readonly #contextBuilder: ContextBuilder;
   readonly #contexts: ConversationContextStore;
   readonly #refs: ContextRefStore;
+  /** Resolves generated pictures for delivery; absent without image generation. */
+  readonly #imageGeneration:
+    | {
+        readonly resolve: (
+          generationId: string,
+          conversationId: bigint,
+        ) => readonly { readonly assetId: string; readonly bytes: Uint8Array; readonly fileName: string }[] | undefined;
+      }
+    | undefined;
   readonly #conversationRuntime: ConversationRuntime;
 
   constructor(options: AgentRuntimeOptions) {
@@ -159,12 +179,14 @@ export class AgentRuntime {
     this.#bot = options.bot;
     this.#systemResources = options.systemResources;
     this.#capabilityTools = options.capabilityTools;
+    this.#skillVisibility = options.skillVisibility;
     this.#additionalTools = options.additionalTools;
     this.#directImageLoader = options.directImageLoader;
     this.#modelGate = options.modelGate ?? new KeyedSemaphore();
     const config = options.configStore.current().config;
     this.#contexts = new ConversationContextStore(options.store);
     this.#refs = new ContextRefStore(options.store, { ttlHours: config.agent.context.ref_ttl_hours });
+    this.#imageGeneration = options.imageGeneration;
     this.#conversationRuntime =
       options.conversationRuntime ?? new ConversationRuntime({ agentCacheSize: config.agent.context.agent_cache_size });
     this.#contextBuilder = new ContextBuilder(options.store, this.#refs, options.systemResources.skills);
@@ -251,10 +273,16 @@ export class AgentRuntime {
     // schema mid-run.
     const toolSchemaKeywords = configuredToolSchemaKeywords(config, settings.provider, settings.model);
     const supportsImages = model.input.includes('image');
-    const stable = this.#contextBuilder.buildSystemPrompt(config, identity, supportsImages, {
-      provider: model.provider,
-      model: model.id,
-    });
+    const stable = this.#contextBuilder.buildSystemPrompt(
+      config,
+      identity,
+      supportsImages,
+      {
+        provider: model.provider,
+        model: model.id,
+      },
+      this.#skillVisibility === undefined ? undefined : { skillFilter: this.#skillVisibility },
+    );
     const opened = this.#contexts.open(identity.conversationId, stable.systemPromptHash);
     const header = opened.header;
     if (opened.rebuilt) {
@@ -378,6 +406,7 @@ export class AgentRuntime {
         deadline,
         bot: this.#bot,
         ...(config.agent.send_barrier_enabled === true ? { holdForNewMessages } : {}),
+        ...(this.#imageGeneration === undefined ? {} : { imageGeneration: this.#imageGeneration }),
       }),
       createExecuteTool({
         store: this.#store,

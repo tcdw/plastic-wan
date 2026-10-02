@@ -219,6 +219,8 @@ export class ContextBuilder {
     identity: ContextIdentity,
     supportsImages: boolean,
     agentModel: PromptTemplateModel,
+    /** Optional per-invocation visibility rule; hides capability skills that are off. */
+    options?: { readonly skillFilter?: (skill: SystemSkill) => boolean },
   ): StablePrompt {
     const chatConfig = resolveChatConfig(config, this.#store.orm, identity.chatId);
     if (chatConfig === undefined) {
@@ -244,7 +246,9 @@ export class ContextBuilder {
     // next invocation.
     const systemPrompt = [
       CORE_AGENT_PROTOCOL,
-      renderSkillIndexPrompt(this.#skills),
+      renderSkillIndexPrompt(
+        options?.skillFilter === undefined ? this.#skills : this.#skills.filter(options.skillFilter),
+      ),
       imageHandling,
       stickerCatalogHandling,
       renderPromptTemplate(config.agent.system_prompt, templateValues),

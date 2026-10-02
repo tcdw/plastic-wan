@@ -128,6 +128,13 @@ export class GenerationWorker {
   private stopping = false;
   private started = false;
   private unsubConfig: (() => void) | null = null;
+  /**
+   * Terminal-state listeners, fired once per `finalize` that actually settles a
+   * generation (succeeded / partial / failed / interrupted). Hosts use this to
+   * reconcile delivery with their own task bookkeeping; the core itself never
+   * delivers anything.
+   */
+  readonly onFinished = new Set<(generationId: string, status: GenerationStatus) => void>();
 
   constructor(deps: GenerationWorkerDeps) {
     this.db = deps.db;
@@ -509,15 +516,27 @@ export class GenerationWorker {
     }
     const attempts = this.attemptsForRound(generationId, round);
     const verdict = roundVerdict(attempts, row.snapshot.authored.outputCount);
+    const settled = verdict.status !== 'queued' && verdict.status !== 'running';
     this.db
       .update(generations)
       .set({
         status: verdict.status,
         error: verdict.error,
-        finishedAt: verdict.status === 'queued' || verdict.status === 'running' ? null : new Date().toISOString(),
+        finishedAt: settled ? new Date().toISOString() : null,
       })
       .where(eq(generations.id, generationId))
       .run();
+    if (settled) {
+      for (const listener of this.onFinished) {
+        try {
+          listener(generationId, verdict.status);
+        } catch (error) {
+          this.logger?.warn(
+            `image generation finished listener failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+    }
   }
 }
 

@@ -20,10 +20,11 @@ import {
 
 export const SendInputSchema = Type.Object(
   {
-    kind: Type.Optional(Type.Enum({ text: 'text', sticker: 'sticker' })),
+    kind: Type.Optional(Type.Enum({ text: 'text', sticker: 'sticker', image: 'image' })),
     text: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
     parse_mode: Type.Optional(Type.Literal('MarkdownV2')),
     sticker_ref: Type.Optional(Type.String({ minLength: 1 })),
+    image_generation_id: Type.Optional(Type.String({ pattern: '^[0-9a-f-]{36}$' })),
     reply_to_message_id: Type.Optional(Type.String({ pattern: '^[1-9][0-9]*$' })),
   },
   { additionalProperties: false },
@@ -46,26 +47,57 @@ export type SendToolInput =
       readonly parse_mode?: 'MarkdownV2';
       readonly reply_to_message_id?: string;
     }
-  | { readonly kind: 'sticker'; readonly sticker_ref: string; readonly reply_to_message_id?: string };
+  | { readonly kind: 'sticker'; readonly sticker_ref: string; readonly reply_to_message_id?: string }
+  | {
+      readonly kind: 'image';
+      readonly image_generation_id: string;
+      readonly text?: string;
+      readonly reply_to_message_id?: string;
+    };
 
 function narrowSendInput(input: Static<typeof SendInputSchema>): SendToolInput | undefined {
-  const kind = input.kind ?? (input.text !== undefined && input.sticker_ref === undefined ? 'text' : undefined);
+  const kind =
+    input.kind ??
+    (input.text !== undefined && input.sticker_ref === undefined && input.image_generation_id === undefined
+      ? 'text'
+      : undefined);
   if (kind === undefined || (kind === 'sticker' && input.parse_mode !== undefined)) {
     return undefined;
   }
-  const field = kind === 'text' ? ('text' as const) : ('sticker_ref' as const);
-  if (input[field] === undefined) {
+  const reply = input.reply_to_message_id === undefined ? {} : { reply_to_message_id: input.reply_to_message_id };
+  if (kind === 'text') {
+    if (input.text === undefined) {
+      return undefined;
+    }
+    const parseMode = input.parse_mode !== undefined ? { parse_mode: input.parse_mode } : {};
+    return { kind, text: input.text, ...parseMode, ...reply };
+  }
+  if (kind === 'sticker') {
+    if (input.sticker_ref === undefined) {
+      return undefined;
+    }
+    return { kind, sticker_ref: input.sticker_ref, ...reply };
+  }
+  if (input.image_generation_id === undefined) {
     return undefined;
   }
-  const reply = input.reply_to_message_id === undefined ? {} : { reply_to_message_id: input.reply_to_message_id };
-  const parseMode = kind === 'text' && input.parse_mode !== undefined ? { parse_mode: input.parse_mode } : {};
-  return { kind, [field]: input[field], ...parseMode, ...reply } as SendToolInput;
+  const caption = input.text === undefined ? {} : { text: input.text };
+  return { kind: 'image', image_generation_id: input.image_generation_id, ...caption, ...reply };
 }
 
 interface TelegramSendResponse {
   readonly message_id: number;
   readonly date: number;
   readonly chat: { readonly id: number };
+  /** Sizes of a sent photo (largest last); present on image deliveries. */
+  readonly photo?:
+    | readonly {
+        readonly file_id: string;
+        readonly file_unique_id: string;
+        readonly width: number;
+        readonly height: number;
+      }[]
+    | undefined;
 }
 
 export interface TelegramSendApi {
@@ -87,6 +119,31 @@ export interface TelegramSendApi {
       readonly reply_parameters?: { readonly message_id: number };
     },
   ): Promise<TelegramSendResponse>;
+  /**
+   * Delivers one generated picture. Optional so hosts that never ship image
+   * generation can reuse this interface; the send tool rejects image sends
+   * with a clear error when it is missing.
+   */
+  sendGeneratedPhoto?(
+    chatId: string,
+    bytes: Uint8Array,
+    fileName: string,
+    options: {
+      readonly message_thread_id?: number;
+      readonly reply_parameters?: { readonly message_id: number };
+      readonly caption?: string;
+    },
+  ): Promise<TelegramSendResponse>;
+  /** Delivers several pictures of one generation as a single album. */
+  sendGeneratedPhotoGroup?(
+    chatId: string,
+    pictures: readonly { readonly bytes: Uint8Array; readonly fileName: string }[],
+    options: {
+      readonly message_thread_id?: number;
+      readonly reply_parameters?: { readonly message_id: number };
+      readonly caption?: string;
+    },
+  ): Promise<TelegramSendResponse[]>;
 }
 
 export interface SendToolEnvironment {
@@ -110,6 +167,17 @@ export interface SendToolEnvironment {
    * barrier is off.
    */
   readonly holdForNewMessages?: () => boolean;
+  /**
+   * Resolves a generated picture set for delivery. Authorization is the
+   * generation's owning conversation: `undefined` for unknown or foreign ids.
+   * Absent when the host runs without image generation.
+   */
+  readonly imageGeneration?: {
+    readonly resolve: (
+      generationId: string,
+      conversationId: bigint,
+    ) => readonly { readonly assetId: string; readonly bytes: Uint8Array; readonly fileName: string }[] | undefined;
+  };
 }
 
 function completionMention(
@@ -205,6 +273,26 @@ export function createSendTool(
         recordRejectedSend(environment, toolCallId, input, 'sticker_ref_not_authorized');
         throw new Error('sticker_ref is not authorized in this conversation context');
       }
+      const resolvedPictures =
+        send.kind === 'image'
+          ? environment.imageGeneration?.resolve(send.image_generation_id, environment.context.conversationId)
+          : undefined;
+      const generationPictures =
+        send.kind === 'image' ? (resolvedPictures === undefined ? [] : resolvedPictures) : undefined;
+      if (send.kind === 'image' && resolvedPictures === undefined) {
+        recordRejectedSend(environment, toolCallId, input, 'image_generation_not_authorized');
+        throw new Error(
+          'image_generation_id does not name a finished generation of this conversation; use ids from tool results or receipts here',
+        );
+      }
+      if (send.kind === 'image' && (generationPictures?.length ?? 0) === 0) {
+        recordRejectedSend(environment, toolCallId, input, 'image_generation_no_outputs');
+        throw new Error('that generation produced no pictures to send');
+      }
+      if (send.kind === 'image' && (send.text?.length ?? 0) > 1024) {
+        recordRejectedSend(environment, toolCallId, input, 'send_caption_too_long');
+        throw new Error('image caption must not exceed 1024 characters');
+      }
       // A cancelled or expired run must not start a side effect: the model may
       // have queued this call before the abort or deadline landed.
       if (signal?.aborted === true || Date.now() >= environment.deadline) {
@@ -259,7 +347,13 @@ export function createSendTool(
             toolCallId: toolId,
             conversationId: targetConversationId,
             kind: send.kind,
-            requestJson: JSON.stringify({ kind: send.kind, reply_to_message_id: send.reply_to_message_id ?? null }),
+            requestJson: JSON.stringify({
+              kind: send.kind,
+              reply_to_message_id: send.reply_to_message_id ?? null,
+              ...(send.kind === 'image'
+                ? { generation_id: send.image_generation_id, pictures: generationPictures?.length ?? 0 }
+                : {}),
+            }),
             state: 'pending',
             createdAt: now,
           })
@@ -293,16 +387,47 @@ export function createSendTool(
           try {
             if (send.kind === 'text') {
               response = await environment.api.sendMessage(environment.context.chatId.toString(), sendText, options);
-            } else if (stickerFileId !== undefined) {
+              break;
+            }
+            if (stickerFileId !== undefined) {
               response = await environment.api.sendSticker(
                 environment.context.chatId.toString(),
                 stickerFileId,
                 options,
               );
-            } else {
-              throw new Error('sticker_ref is not authorized in this conversation context');
+              break;
             }
-            break;
+            if (generationPictures !== undefined) {
+              const pictures = generationPictures;
+              const sendPhoto = environment.api.sendGeneratedPhoto;
+              const sendPhotoGroup = environment.api.sendGeneratedPhotoGroup;
+              if (sendPhoto === undefined || sendPhotoGroup === undefined) {
+                throw new Error('picture delivery is not wired into this runtime');
+              }
+              const caption = send.kind === 'image' && send.text !== undefined ? { caption: send.text } : {};
+              const responses =
+                pictures.length === 1
+                  ? [
+                      await sendPhoto(
+                        environment.context.chatId.toString(),
+                        pictures[0]?.bytes ?? new Uint8Array(),
+                        pictures[0]?.fileName ?? 'image.png',
+                        { ...options, ...caption },
+                      ),
+                    ]
+                  : await sendPhotoGroup(
+                      environment.context.chatId.toString(),
+                      pictures.map((picture) => ({ bytes: picture.bytes, fileName: picture.fileName })),
+                      { ...options, ...caption },
+                    );
+              const first = responses[0];
+              if (first === undefined) {
+                throw new Error('Telegram returned no message for the delivered pictures');
+              }
+              response = first;
+              break;
+            }
+            throw new Error('sticker_ref is not authorized in this conversation context');
           } catch (error) {
             if (!(error instanceof GrammyError) || error.error_code !== 429) {
               throw error;
@@ -531,9 +656,14 @@ function recordOutgoingMessage(
       senderId: sender.id,
       kind: input.kind,
       text: input.kind === 'text' ? sentText : null,
+      caption: input.kind === 'image' ? (input.text ?? null) : null,
       replyToMessageId: input.reply_to_message_id === undefined ? null : BigInt(input.reply_to_message_id),
       createdAt: recordedAt,
-      rawFragmentJson: JSON.stringify({ message_id: response.message_id, kind: input.kind }),
+      rawFragmentJson: JSON.stringify({
+        message_id: response.message_id,
+        kind: input.kind,
+        ...(input.kind === 'image' ? { generation_id: input.image_generation_id } : {}),
+      }),
     })
     .returning({ id: messageRevisions.id })
     .get();
@@ -542,6 +672,24 @@ function recordOutgoingMessage(
   }
   const revisionId = createdRevision.id;
   environment.store.orm.update(messages).set({ currentRevisionId: revisionId }).where(eq(messages.id, messageId)).run();
+  if (input.kind === 'image' && response.photo !== undefined && response.photo.length > 0) {
+    const largest = response.photo[response.photo.length - 1];
+    if (largest !== undefined) {
+      environment.store.orm
+        .insert(media)
+        .values({
+          revisionId,
+          kind: 'photo',
+          fileId: largest.file_id,
+          fileUniqueId: largest.file_unique_id,
+          mimeType: 'image/jpeg',
+          width: BigInt(largest.width),
+          height: BigInt(largest.height),
+          telegramJson: JSON.stringify({ sent: true, generated: true }),
+        })
+        .run();
+    }
+  }
   if (input.kind === 'sticker' && stickerFileId !== null) {
     const sticker = environment.store.orm
       .select({ fileUniqueId: stickers.fileUniqueId })

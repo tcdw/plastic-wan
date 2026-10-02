@@ -26,6 +26,35 @@ export interface ToolAuditRecord {
  * `context` is the live invocation state, refreshed by hot injection, so tools
  * read it at call time instead of copying it.
  */
+/**
+ * The image-generation bridge a plugin sees. `undefined` when the host has no
+ * image service wired (the plugin then contributes nothing).
+ */
+export interface ImagePluginBridge {
+  enabled(): boolean;
+  submit(
+    params: {
+      conversationId: bigint;
+      invocationId: bigint | null;
+      toolCallId: string;
+      authoredPrompt: string;
+      modelId: string | undefined;
+      aspectRatio: string | undefined;
+      resolution: string | undefined;
+      outputCount: number | undefined;
+      inputMediaIds: readonly bigint[];
+      extendedData: Record<string, unknown> | undefined;
+    },
+    signal?: AbortSignal,
+  ): Promise<{
+    generationId: string;
+    replayed: boolean;
+    modelId: string;
+    outputCount: number;
+  }>;
+  modelList(): readonly { readonly id: string; readonly name: string }[];
+}
+
 export interface InvocationScope {
   readonly config: RawConfig;
   readonly context: InvocationContext;
@@ -33,6 +62,13 @@ export interface InvocationScope {
   readonly audit: ToolAudit;
   /** Per-plugin task scope bound to the current conversation. */
   readonly tasks: PluginTaskScope;
+  /**
+   * Resolves a conversation-authorized media reference (img_…) to its media id.
+   * Absent when the host did not wire reference resolution.
+   */
+  readonly resolveMedia?: (ref: string) => bigint | undefined;
+  /** Image-generation bridge; `undefined` = the host runs without one. */
+  readonly image?: ImagePluginBridge;
 }
 
 /**
@@ -52,6 +88,13 @@ export function definePlugin<const T extends AgentPlugin>(plugin: T): T {
   return plugin;
 }
 
+export interface LoadPluginsOptions {
+  /** Image-generation bridge handed to plugins that opt in (`scope.image`). */
+  readonly image?: ImagePluginBridge;
+  /** Conversation media-reference resolver handed to plugins (`scope.resolveMedia`). */
+  readonly resolveMedia?: (ref: string) => bigint | undefined;
+}
+
 export interface LoadedPlugins {
   /** Mounted under system:///skills/ next to the bundled tree, see `SystemResources.load`. */
   readonly skillDirectories: readonly string[];
@@ -61,6 +104,7 @@ export interface LoadedPlugins {
     context: InvocationContext,
     deadline: number,
     tasks?: LongTaskService,
+    resolveMedia?: (ref: string) => bigint | undefined,
   ): readonly ExecutableCapability[];
 }
 
@@ -69,7 +113,7 @@ export interface LoadedPlugins {
  * conflicts surface when the skill directories are loaded, capability name
  * conflicts when the execute registry is built.
  */
-export function loadPlugins(plugins: readonly AgentPlugin[]): LoadedPlugins {
+export function loadPlugins(plugins: readonly AgentPlugin[], options: LoadPluginsOptions = {}): LoadedPlugins {
   const ids = new Set<string>();
   for (const plugin of plugins) {
     if (!PLUGIN_ID_PATTERN.test(plugin.id)) {
@@ -82,7 +126,7 @@ export function loadPlugins(plugins: readonly AgentPlugin[]): LoadedPlugins {
   }
   return {
     skillDirectories: plugins.flatMap((plugin) => plugin.skills ?? []),
-    capabilities: (store, config, context, deadline, suppliedTasks) => {
+    capabilities: (store, config, context, deadline, suppliedTasks, resolveMedia) => {
       const audit = createToolAudit(store, context.invocationId);
       const service = suppliedTasks ?? new LongTaskService(store.orm);
       return plugins.flatMap((plugin) => {
@@ -92,6 +136,8 @@ export function loadPlugins(plugins: readonly AgentPlugin[]): LoadedPlugins {
           deadline,
           audit,
           tasks: context.invocationId === 0n ? unavailableTasks() : service.invocationScope(plugin.id, context),
+          ...(resolveMedia === undefined ? {} : { resolveMedia }),
+          ...(options.image === undefined ? {} : { image: options.image }),
         };
         return plugin.capabilities?.(scope) ?? [];
       });

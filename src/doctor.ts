@@ -19,6 +19,7 @@ import { McpManager } from './capabilities/mcp.ts';
 import { MediaService } from './capabilities/media/media.ts';
 import { TelegramMediaClient } from './capabilities/media/media-download.ts';
 import { createLottieCommand } from './capabilities/media/media-image.ts';
+import { grammySendApi } from './capabilities/telegram-send-api.ts';
 import { AgentRuntime } from './orchestration/agent-runtime.ts';
 import { KeyedSemaphore } from './platform/concurrency.ts';
 import type { McpServerConfig, ProviderConfig, RawConfig, SecretRef } from './platform/config.ts';
@@ -178,7 +179,7 @@ async function runDoctorChecks(
       store,
       configStore,
       secrets,
-      telegramApi: bot.api,
+      telegramApi: grammySendApi(bot.api),
       bot: {
         id: BigInt(me.id),
         displayName: [me.first_name, me.last_name].filter((part) => part !== undefined).join(' '),

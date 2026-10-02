@@ -275,6 +275,21 @@ export class LongTaskService {
     this.#wake = wake;
   }
 
+  /**
+   * Scope bound to a fixed invocation id, for creators acting outside a live
+   * invocation (completion bridges): quota accounting still attributes the task
+   * to the invocation that submitted the work.
+   */
+  taskScope(pluginId: string, conversationId: bigint, invocationId: bigint | null): PluginTaskScope {
+    return this.#scope(
+      pluginId,
+      conversationId,
+      () => invocationId,
+      () => null,
+      false,
+    );
+  }
+
   scoped(pluginId: string, conversationId: bigint): PluginTaskScope {
     return this.#scope(
       pluginId,

@@ -5,7 +5,9 @@ import { McpManager } from './capabilities/mcp.ts';
 import { MediaService } from './capabilities/media/media.ts';
 import { TelegramMediaClient } from './capabilities/media/media-download.ts';
 import { StickerService } from './capabilities/stickers.ts';
+import { grammySendApi } from './capabilities/telegram-send-api.ts';
 import { createMemoryTools, MemoryStore } from './context/memory.ts';
+import { createImageBridge, type ImageBridge } from './image/bridge.ts';
 import { createImageService, type ImageService } from './image/service.ts';
 import { AdminServer } from './ingress/admin/server.ts';
 import { TelegramIngestion } from './ingress/telegram-ingestion.ts';
@@ -53,6 +55,7 @@ export async function serve(configPath: string, takeover = false): Promise<void>
   let stopWatcher: (() => void) | undefined;
   let store: SqliteStore | undefined;
   let imageService: ImageService | undefined;
+  let imageBridge: ImageBridge | undefined;
   let bot: Bot | undefined;
   let scheduler: BucketScheduler | undefined;
   let stickers: StickerService | undefined;
@@ -168,7 +171,17 @@ export async function serve(configPath: string, takeover = false): Promise<void>
     mcp = mcpManager;
     const memoryStore = new MemoryStore(store.orm);
     const tasks = new LongTaskService(store.orm, () => scheduler?.wake());
-    const plugins = loadPlugins(BUILTIN_PLUGINS);
+    const bridge = createImageBridge({
+      service: imageService,
+      store: openedStore,
+      tasks,
+      prepareInputImage: (mediaId, signal) => media.prepareInputImage(mediaId, signal),
+    });
+    imageBridge = bridge;
+    bridge.reconcile();
+    const plugins = loadPlugins(BUILTIN_PLUGINS, {
+      image: imageBridge,
+    });
     const systemResources = await SystemResources.load(BUNDLED_SYSTEM_RESOURCES_DIR, plugins.skillDirectories);
     logEvent('system_skills_loaded', { skills: systemResources.skills.map((skill) => skill.name).join(',') });
     const conversationRuntime = new ConversationRuntime({
@@ -179,7 +192,14 @@ export async function serve(configPath: string, takeover = false): Promise<void>
       capability(media.createReadImageTool(context, capabilities, deadline), false),
       capability(stickerService.createSearchTool(context, capabilities), false),
       ...createMemoryTools(memoryStore, context).map((tool) => capability(tool, true)),
-      ...plugins.capabilities(openedStore, configStore.current().config, context, deadline, tasks),
+      ...plugins.capabilities(
+        openedStore,
+        configStore.current().config,
+        context,
+        deadline,
+        tasks,
+        capabilities.resolveMedia,
+      ),
     ];
     // Directly exposed non-primitive tools: allowlisted MCP tools only.
     const additionalTools: ToolFactory = (context, deadline) => [...mcpManager.createTools(context, deadline)];
@@ -187,7 +207,29 @@ export async function serve(configPath: string, takeover = false): Promise<void>
       store,
       configStore,
       secrets,
-      telegramApi: bot.api,
+      telegramApi: grammySendApi(bot.api),
+      ...(imageBridge === undefined
+        ? {}
+        : {
+            imageGeneration: {
+              resolve: (generationId: string, conversationId: bigint) => {
+                const current = imageBridge;
+                if (current === undefined) {
+                  return undefined;
+                }
+                const outputs = current.sendableOutputs(generationId, conversationId);
+                if (outputs === undefined) {
+                  return undefined;
+                }
+                return outputs.flatMap((output) => {
+                  const content = current.assetContent(output.asset_id);
+                  return content === undefined
+                    ? []
+                    : [{ assetId: output.asset_id, bytes: content.bytes, fileName: output.file_name }];
+                });
+              },
+            },
+          }),
       bot: {
         id: BigInt(me.id),
         displayName: [me.first_name, me.last_name].filter((part) => part !== undefined).join(' '),
@@ -199,6 +241,8 @@ export async function serve(configPath: string, takeover = false): Promise<void>
       capabilityTools,
       additionalTools,
       conversationRuntime,
+      skillVisibility: (skill) =>
+        skill.name !== 'image-generation' || (imageBridge !== undefined && imageBridge.enabled()),
     });
     const startedScheduler = new BucketScheduler(
       store,
@@ -296,6 +340,7 @@ export async function serve(configPath: string, takeover = false): Promise<void>
     // The image worker borrows the SQLite connection; it must settle (marking
     // late results interrupted if the shutdown budget expires) before the
     // store closes underneath it.
+    imageBridge?.stop();
     await imageService?.stop();
     await stickers?.stop();
     await mcp?.stop();

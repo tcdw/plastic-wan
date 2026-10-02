@@ -1,21 +1,21 @@
 import { createHash } from 'node:crypto';
+import { sql } from 'drizzle-orm';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import { CORE_AGENT_PROTOCOL } from '../platform/agent-protocol.ts';
 import type { RawConfig } from '../platform/config.ts';
-import { resolveChatConfig, type SqliteStore } from '../store/database.ts';
 import type { CompletionContext, DirectImage, VisibleSender } from '../platform/invocation-context.ts';
-import { sql } from 'drizzle-orm';
-import { LongTaskService } from '../store/long-tasks.ts';
-import { type SystemSkill, renderSkillIndexPrompt } from '../platform/system-resources.ts';
-import { MemoryStore } from './memory.ts';
-import type { ContextHeader } from './context-store.ts';
-import type { ContextRefStore } from './context-refs.ts';
 import {
   type PromptTemplateModel,
   type PromptTemplateValues,
   renderPromptTemplate,
 } from '../platform/prompt-template.ts';
+import { renderSkillIndexPrompt, type SystemSkill } from '../platform/system-resources.ts';
+import { resolveChatConfig, type SqliteStore } from '../store/database.ts';
+import { LongTaskService } from '../store/long-tasks.ts';
+import type { ContextRefStore } from './context-refs.ts';
+import type { ContextHeader } from './context-store.ts';
+import { MemoryStore } from './memory.ts';
 
 const Strict = { additionalProperties: false } as const;
 const MediaSnapshotSchema = Type.Object(

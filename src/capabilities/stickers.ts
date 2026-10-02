@@ -3,10 +3,10 @@ import { and, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import type { RawConfig } from '../platform/config.ts';
-import { finishToolCall, startToolCall, type SqliteStore } from '../store/database.ts';
 import type { CapabilityRefResolver, InvocationContext } from '../platform/invocation-context.ts';
-import type { MediaService, StickerIndexAnalysis } from './media/media.ts';
+import { finishToolCall, type SqliteStore, startToolCall } from '../store/database.ts';
 import { mediaAnalyses, stickerSets, stickers } from '../store/schema.ts';
+import type { MediaService, StickerIndexAnalysis } from './media/media.ts';
 
 const StickerSetResponseSchema = Type.Object(
   {

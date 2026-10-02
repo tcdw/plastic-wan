@@ -1,8 +1,8 @@
 import { lookup } from 'node:dns/promises';
 import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import { Readable } from 'node:stream';
-import { request as httpsRequest } from 'node:https';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Defuddle } from 'defuddle/node';
 import Type from 'typebox';

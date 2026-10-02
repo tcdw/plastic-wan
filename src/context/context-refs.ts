@@ -1,7 +1,7 @@
 import { and, eq, gt, sql } from 'drizzle-orm';
+import type { CapabilityRefResolver } from '../platform/invocation-context.ts';
 import type { SqliteStore } from '../store/database.ts';
 import { contextRefs } from '../store/schema.ts';
-import type { CapabilityRefResolver } from '../platform/invocation-context.ts';
 import type { ContextHeader } from './context-store.ts';
 
 /**

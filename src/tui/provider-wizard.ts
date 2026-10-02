@@ -1,5 +1,5 @@
 import { confirm, input, search, select } from '@inquirer/prompts';
-import { supportedBuiltinApi, findBuiltinProvider, listBuiltinPresets } from '../platform/builtin-providers.ts';
+import { findBuiltinProvider, listBuiltinPresets, supportedBuiltinApi } from '../platform/builtin-providers.ts';
 import type {
   FileConfig,
   ModelCompatConfig,
@@ -7,7 +7,6 @@ import type {
   ThinkingLevelConfig,
   ToolSchemaKeywords,
 } from '../platform/config.ts';
-import { SecretStore } from '../platform/secrets.ts';
 import {
   fetchModelsDevCatalog,
   findModel,
@@ -18,20 +17,21 @@ import {
   toModelDefaults,
 } from '../platform/models-dev.ts';
 import {
-  promptApiAdapter,
+  assertBaseUrl,
+  type DiscoveredProviderModel,
+  fetchProviderModels,
+  planModelsEndpoint,
+} from '../platform/provider-models.ts';
+import { SecretStore } from '../platform/secrets.ts';
+import {
   type ApiAdapter,
+  promptApiAdapter,
   promptInputCapabilities,
   promptNonNegativeNumber,
   promptPositiveInteger,
   promptSecretRef,
   promptString,
 } from './prompts.ts';
-import {
-  type DiscoveredProviderModel,
-  assertBaseUrl,
-  fetchProviderModels,
-  planModelsEndpoint,
-} from '../platform/provider-models.ts';
 
 type BuiltinProviderConfig = {
   kind: 'builtin';

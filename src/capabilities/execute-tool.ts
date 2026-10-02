@@ -1,9 +1,9 @@
 import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
 import Type from 'typebox';
 import Compile from 'typebox/compile';
-import { finishToolCall, rejectToolCall, startToolCall, type SqliteStore } from '../store/database.ts';
 import type { InvocationContext } from '../platform/invocation-context.ts';
 import { safeJson, truncateUtf8 } from '../platform/truncate.ts';
+import { finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from '../store/database.ts';
 
 const Strict = { additionalProperties: false } as const;
 const ToolNamePattern = '^[A-Za-z0-9_-]{1,128}$';

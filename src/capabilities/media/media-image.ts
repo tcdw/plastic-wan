@@ -4,8 +4,8 @@ import { gunzipSync } from 'node:zlib';
 import sharp from 'sharp';
 import Type from 'typebox';
 import Compile from 'typebox/compile';
-import type { MediaDownloader } from './media-download.ts';
 import { pickEnv, readBoundedOutput, spawnProcess } from '../../platform/subprocess.ts';
+import type { MediaDownloader } from './media-download.ts';
 
 export const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 const MAX_DECODED_PIXELS = 40_000_000;

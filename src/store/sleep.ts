@@ -1,7 +1,7 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { and, eq, sql } from 'drizzle-orm';
 import Type from 'typebox';
-import { type Orm, asRunResult, finishToolCall, startToolCall } from './database.ts';
+import { asRunResult, finishToolCall, type Orm, startToolCall } from './database.ts';
 import { appState } from './schema.ts';
 
 export const SLEEP_REMAINING_BUDGET_PERCENT = 5n;

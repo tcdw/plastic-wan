@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { serve } from './application.ts';
 import { parseCli } from './cli-options.ts';
+import { runDoctor } from './doctor.ts';
 import { loadConfig } from './platform/config.ts';
 import { loadEnvFiles } from './platform/load-env.ts';
 import { backupDatabase } from './store/database.ts';
-import { runDoctor } from './doctor.ts';
 import { runConfigure } from './tui/configure.ts';
 
 try {

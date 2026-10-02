@@ -1,4 +1,3 @@
-import Database from 'better-sqlite3';
 import { mkdir, mkdtemp, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -12,28 +11,29 @@ import {
   type ModelThinkingLevel,
   type ThinkingLevel,
 } from '@earendil-works/pi-ai';
+import Database from 'better-sqlite3';
 import { Bot } from 'grammy';
 import sharp from 'sharp';
 import Type from 'typebox';
+import { McpManager } from './capabilities/mcp.ts';
+import { MediaService } from './capabilities/media/media.ts';
+import { TelegramMediaClient } from './capabilities/media/media-download.ts';
+import { createLottieCommand } from './capabilities/media/media-image.ts';
 import { AgentRuntime } from './orchestration/agent-runtime.ts';
 import { KeyedSemaphore } from './platform/concurrency.ts';
 import type { McpServerConfig, ProviderConfig, RawConfig, SecretRef } from './platform/config.ts';
 import { assertConfigPermissions, loadConfig } from './platform/config.ts';
-import { SqliteStore } from './store/database.ts';
 import { previewContext } from './platform/invocation-context.ts';
-import { pickEnv, spawnProcess } from './platform/subprocess.ts';
-import { McpManager } from './capabilities/mcp.ts';
-import { createLottieCommand } from './capabilities/media/media-image.ts';
-import { TelegramMediaClient } from './capabilities/media/media-download.ts';
-import { MediaService } from './capabilities/media/media.ts';
+import { keyJarPath } from './platform/key-jar.ts';
 import { type PromptTemplateValues, renderPromptTemplate } from './platform/prompt-template.ts';
 import { buildModelRegistry, configuredAgentModels } from './platform/providers.ts';
 import { RuntimeConfigurationStore } from './platform/runtime-config.ts';
-import { keyJarPath } from './platform/key-jar.ts';
 import { SecretStore } from './platform/secrets.ts';
+import { pickEnv, spawnProcess } from './platform/subprocess.ts';
 import { BUNDLED_SYSTEM_RESOURCES_DIR, SystemResources } from './platform/system-resources.ts';
 import { BUILTIN_PLUGINS } from './plugins/builtin.ts';
 import { loadPlugins } from './plugins/plugin.ts';
+import { SqliteStore } from './store/database.ts';
 
 export async function runDoctor(configPath: string, outputAgentPrompt = false): Promise<void> {
   const loaded = await loadConfig(configPath);

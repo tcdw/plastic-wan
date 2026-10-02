@@ -1,8 +1,8 @@
-import { confirm, select } from '@inquirer/prompts';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { confirm, select } from '@inquirer/prompts';
 import { type ParseError, parse } from 'jsonc-parser';
-import { loadConfig, type FileConfig, type ThinkingLevelConfig } from '../platform/config.ts';
+import { type FileConfig, loadConfig, type ThinkingLevelConfig } from '../platform/config.ts';
 import { writeConfigEdits } from '../platform/config-file.ts';
 import { keyJarPath, readKeyJar, referencedJarNames, updateKeyJar } from '../platform/key-jar.ts';
 import { supportedThinkingLevels } from '../platform/thinking-levels.ts';

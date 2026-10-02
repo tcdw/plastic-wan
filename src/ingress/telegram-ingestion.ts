@@ -3,7 +3,7 @@ import type { Message, Update } from 'grammy/types';
 import { conversationThreadId, type ParsedCommand, parseBotCommand } from '../orchestration/bot-commands.ts';
 import type { RuntimeConfigurationStore } from '../platform/runtime-config.ts';
 import { asRunResult, isChatPaused, resolveChatConfig, type SqliteStore } from '../store/database.ts';
-import { ParticipationRegistry, evaluateParticipation } from '../store/participation.ts';
+import { evaluateParticipation, ParticipationRegistry } from '../store/participation.ts';
 import {
   bucketMessages,
   buckets,

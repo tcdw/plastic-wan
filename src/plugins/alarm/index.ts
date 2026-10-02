@@ -3,8 +3,8 @@ import { capability } from '../../capabilities/execute-tool.ts';
 import { definePlugin } from '../plugin.ts';
 import { createAlarmTool, createDeleteAlarmTool, createListAlarmTool } from './alarm.ts';
 
-export { createAlarmTool, createDeleteAlarmTool, createListAlarmTool } from './alarm.ts';
 export { cancelAlarm, listAlarms, parseAlarmId } from './admin.ts';
+export { createAlarmTool, createDeleteAlarmTool, createListAlarmTool } from './alarm.ts';
 
 export default definePlugin({
   id: 'alarm',

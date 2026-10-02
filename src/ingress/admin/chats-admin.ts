@@ -1,6 +1,6 @@
+import { eq } from 'drizzle-orm';
 import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
-import { eq } from 'drizzle-orm';
 import {
   type AgentSettings,
   type FileChat,

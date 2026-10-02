@@ -1,8 +1,8 @@
-import { and, desc, eq, gte, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
+import { and, desc, eq, gte, isNull, lt, type SQL, sql } from 'drizzle-orm';
 import type { SqliteStore } from '../store/database.ts';
-import { conversationContexts, contextMessages, contextRefs, invocations } from '../store/schema.ts';
-import { decodeContextMessage, type ContextMessageRole } from './context-codec.ts';
+import { contextMessages, contextRefs, conversationContexts, invocations } from '../store/schema.ts';
+import { type ContextMessageRole, decodeContextMessage } from './context-codec.ts';
 
 /**
  * Canonical Conversation Context storage.

@@ -1,5 +1,5 @@
-import { readdir, readFile } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import Type from 'typebox';
 import Compile from 'typebox/compile';

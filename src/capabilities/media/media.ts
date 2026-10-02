@@ -7,15 +7,15 @@ import Type, { type Static } from 'typebox';
 import Compile from 'typebox/compile';
 import { AsyncSemaphore, type KeyedSemaphore } from '../../platform/concurrency.ts';
 import { configuredToolSchemaKeywords, type ToolSchemaKeywords } from '../../platform/config.ts';
-import { applyToolSchemaKeywords } from '../../platform/tool-schema.ts';
-import type { RuntimeConfigurationStore } from '../../platform/runtime-config.ts';
-import { finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from '../../store/database.ts';
 import type { CapabilityRefResolver, DirectImage, InvocationContext } from '../../platform/invocation-context.ts';
-import { MAX_DOWNLOAD_BYTES, type MediaRow, prepareMediaImage, stickerTelegramValidator } from './media-image.ts';
-import type { MediaDownloader } from './media-download.ts';
-import { dailyUsage, mediaAnalyses, media as mediaTable, modelCalls, stickers } from '../../store/schema.ts';
+import type { RuntimeConfigurationStore } from '../../platform/runtime-config.ts';
 import type { SecretStore } from '../../platform/secrets.ts';
+import { applyToolSchemaKeywords } from '../../platform/tool-schema.ts';
+import { finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from '../../store/database.ts';
+import { dailyUsage, mediaAnalyses, media as mediaTable, modelCalls, stickers } from '../../store/schema.ts';
 import { isDailyTokenBudgetReached, meteredTokens, readDailyTokenBudget } from '../../store/sleep.ts';
+import type { MediaDownloader } from './media-download.ts';
+import { MAX_DOWNLOAD_BYTES, type MediaRow, prepareMediaImage, stickerTelegramValidator } from './media-image.ts';
 
 const ReadImageSchema = Type.Object({ image_ref: Type.String({ minLength: 1 }) }, { additionalProperties: false });
 const StickerAnalysisSchema = Type.Object(

@@ -1,7 +1,7 @@
 import type { ExecutableCapability } from '../capabilities/execute-tool.ts';
 import type { RawConfig } from '../platform/config.ts';
 import type { InvocationContext } from '../platform/invocation-context.ts';
-import { finishToolCall, rejectToolCall, startToolCall, type SqliteStore } from '../store/database.ts';
+import { finishToolCall, rejectToolCall, type SqliteStore, startToolCall } from '../store/database.ts';
 import { LongTaskService, type PluginTaskScope } from '../store/long-tasks.ts';
 
 const PLUGIN_ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;

@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lt, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, or, type SQL, sql } from 'drizzle-orm';
 import type { Orm } from '../../store/database.ts';
 import {
   agentMessages,

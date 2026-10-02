@@ -1,6 +1,6 @@
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
-import Compile from 'typebox/compile';
 import Type, { type Static } from 'typebox';
+import Compile from 'typebox/compile';
 import { isThinkingLevel, THINKING_LEVELS } from './thinking-levels.ts';
 
 export const MODELS_DEV_URL = 'https://models.dev/api.json';

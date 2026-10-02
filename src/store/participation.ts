@@ -3,13 +3,13 @@ import type { Message } from 'grammy/types';
 import type { RawConfig } from '../platform/config.ts';
 import {
   type BotIdentity,
-  type ParticipationRule,
-  type TriggerKind,
   compileParticipation,
   isWithinActiveWindows,
   matchTriggerKind,
+  type ParticipationRule,
+  type TriggerKind,
 } from '../platform/participation.ts';
-import { type Orm, isChatPaused, resolveChatConfig } from './database.ts';
+import { isChatPaused, type Orm, resolveChatConfig } from './database.ts';
 import { conversationAttention } from './schema.ts';
 
 export interface ParticipationDecision {

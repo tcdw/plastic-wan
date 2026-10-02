@@ -10,6 +10,14 @@ import {
   type Usage,
 } from '@earendil-works/pi-ai';
 import { and, eq, isNull, sql } from 'drizzle-orm';
+import { createExecuteTool, type ExecutableCapability } from '../capabilities/execute-tool.ts';
+import { createReadTool } from '../capabilities/read-tool.ts';
+import { createSendTool, type TelegramSendApi } from '../capabilities/send-tool.ts';
+import { ContextBuilder, type ContextIdentity, type Injection, type StablePrompt } from '../context/context-builder.ts';
+import { encodeContextMessage, estimateMessageTokens } from '../context/context-codec.ts';
+import { type ContextGcPlan, isRenderable, planContextGc } from '../context/context-gc.ts';
+import { ContextRefStore, createCapabilityResolver } from '../context/context-refs.ts';
+import { type ContextHeader, ConversationContextStore, type RetainedContextMessage } from '../context/context-store.ts';
 import { KeyedSemaphore } from '../platform/concurrency.ts';
 import {
   type AgentSettings,
@@ -17,13 +25,6 @@ import {
   type RawConfig,
   resolveAgentSettings,
 } from '../platform/config.ts';
-import { applyToolSchemaKeywords } from '../platform/tool-schema.ts';
-import { type ContextIdentity, ContextBuilder, type Injection, type StablePrompt } from '../context/context-builder.ts';
-import { encodeContextMessage, estimateMessageTokens } from '../context/context-codec.ts';
-import { isRenderable, planContextGc, type ContextGcPlan } from '../context/context-gc.ts';
-import { ContextRefStore, createCapabilityResolver } from '../context/context-refs.ts';
-import { ConversationContextStore, type ContextHeader, type RetainedContextMessage } from '../context/context-store.ts';
-import { type SqliteStore, resolveChatConfig } from '../store/database.ts';
 import {
   type CapabilityRefResolver,
   type InvocationContext,
@@ -33,7 +34,10 @@ import {
 } from '../platform/invocation-context.ts';
 import { serializeModelRequestForAudit } from '../platform/model-request-audit.ts';
 import type { InvocationConfigSnapshot, RuntimeConfigurationStore } from '../platform/runtime-config.ts';
-import type { InvocationOutcome } from './scheduler.ts';
+import type { SecretStore } from '../platform/secrets.ts';
+import type { SystemResources } from '../platform/system-resources.ts';
+import { applyToolSchemaKeywords } from '../platform/tool-schema.ts';
+import { resolveChatConfig, type SqliteStore } from '../store/database.ts';
 import {
   agentMessages,
   buckets,
@@ -42,11 +46,6 @@ import {
   modelCalls,
   toolCalls as toolCallsTable,
 } from '../store/schema.ts';
-import type { SecretStore } from '../platform/secrets.ts';
-import { createExecuteTool, type ExecutableCapability } from '../capabilities/execute-tool.ts';
-import { createReadTool } from '../capabilities/read-tool.ts';
-import type { SystemResources } from '../platform/system-resources.ts';
-import { createSendTool, type TelegramSendApi } from '../capabilities/send-tool.ts';
 import {
   activeSleepUntil,
   createZzzTool,
@@ -56,8 +55,9 @@ import {
   meteredTokens,
   readDailyTokenBudget,
 } from '../store/sleep.ts';
-import { ConversationRuntime, type CachedConversationAgent } from './conversation-runtime.ts';
+import { type CachedConversationAgent, ConversationRuntime } from './conversation-runtime.ts';
 import { attachBucketToInvocation } from './invocation-queue.ts';
+import type { InvocationOutcome } from './scheduler.ts';
 
 /**
  * Builds per-invocation tools. Used for the execute registry (runtime-internal

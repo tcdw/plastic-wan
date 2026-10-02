@@ -51,6 +51,7 @@
     "zod": "4.4.3"
   },
   "workspaces": [
-    "apps/*"
+    "apps/*",
+    "packages/*"
   ]
 }

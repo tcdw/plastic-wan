@@ -15,15 +15,11 @@
     "isolatedModules": true,
     "erasableSyntaxOnly": true,
     "skipLibCheck": true,
-    "allowImportingTsExtensions": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "rewriteRelativeImportExtensions": true,
+    "declaration": true,
+    "rootDir": "src",
+    "outDir": "dist"
   },
-  "include": [
-    "src/**/*.ts",
-    "test/**/*.ts",
-    "scripts/**/*.ts",
-    "packages/image-service/src/**/*.ts",
-    "packages/image-service/test/**/*.ts",
-    "vitest.config.ts"
-  ]
+  "include": ["src/**/*.ts"]
 }

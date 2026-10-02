@@ -32,8 +32,8 @@ export interface ImageAdminContext {
 }
 
 export type ImageAdminResponse =
-  | { readonly status: number; readonly body: unknown }
-  | { readonly status: number; readonly bytes: Uint8Array; readonly mime: string };
+  | { readonly kind: 'json'; readonly status: number; readonly body: unknown }
+  | { readonly kind: 'content'; readonly status: number; readonly bytes: Uint8Array; readonly mime: string };
 
 export function adminActor(username: string): GenerationActor {
   return {
@@ -88,9 +88,9 @@ function compact<T extends Record<string, unknown>>(input: T): T {
 function errorResponse(error: unknown): ImageAdminResponse {
   const mapped = coreErrorStatus(error);
   if (mapped !== undefined) {
-    return { status: mapped.status, body: { error: mapped.code, message: mapped.message } };
+    return { kind: 'json', status: mapped.status, body: { error: mapped.code, message: mapped.message } };
   }
-  return { status: 500, body: { error: 'image_internal', message: '图片功能内部错误' } };
+  return { kind: 'json', status: 500, body: { error: 'image_internal', message: '图片功能内部错误' } };
 }
 
 /** Prompt/generation bodies stay small; uploads carry a base64 payload. */
@@ -136,7 +136,11 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
     applyImageConfig: (body: Record<string, unknown>) => Promise<ImageAdminResponse>,
   ): Promise<ImageAdminResponse> {
     if (core === undefined || bridge === undefined) {
-      return { status: 503, body: { error: 'image_unavailable', message: 'Image generation is not wired' } };
+      return {
+        kind: 'json',
+        status: 503,
+        body: { error: 'image_unavailable', message: 'Image generation is not wired' },
+      };
     }
     const actor = adminActor(context.username);
     const method = request.method;
@@ -145,6 +149,7 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
     // ---- status & models -------------------------------------------------
     if (resource === 'status' && method === 'GET') {
       return {
+        kind: 'json',
         status: 200,
         body: {
           enabled: bridge.enabled(),
@@ -158,14 +163,14 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
       if (id === undefined && method === 'GET') {
         const query = listSchema.safeParse(Object.fromEntries(url.searchParams));
         if (!query.success) {
-          return { status: 400, body: { error: 'invalid_query', message: '查询参数不合法' } };
+          return { kind: 'json', status: 400, body: { error: 'invalid_query', message: '查询参数不合法' } };
         }
-        return { status: 200, body: core.prompts.list(query.data) };
+        return { kind: 'json', status: 200, body: core.prompts.list(query.data) };
       }
       if (id === undefined && method === 'POST') {
         try {
           const body = promptCreateSchema.parse(await readBody(IMAGE_BODY_TEXT_LIMIT));
-          return { status: 201, body: core.prompts.create(body) };
+          return { kind: 'json', status: 201, body: core.prompts.create(body) };
         } catch (error) {
           return errorResponse(error);
         }
@@ -173,13 +178,13 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
       if (id !== undefined && method === 'GET') {
         const asset = core.prompts.get(id);
         return asset === null || asset.deletedAt !== null
-          ? { status: 404, body: { error: 'not_found', message: '素材不存在' } }
-          : { status: 200, body: asset };
+          ? { kind: 'json', status: 404, body: { error: 'not_found', message: '素材不存在' } }
+          : { kind: 'json', status: 200, body: asset };
       }
       if (id !== undefined && method === 'PUT') {
         try {
           const body = promptUpdateSchema.parse(await readBody(IMAGE_BODY_TEXT_LIMIT));
-          return { status: 200, body: core.prompts.update(id, compact(body)) };
+          return { kind: 'json', status: 200, body: core.prompts.update(id, compact(body)) };
         } catch (error) {
           return errorResponse(error);
         }
@@ -187,7 +192,7 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
       if (id !== undefined && method === 'DELETE') {
         try {
           core.prompts.remove(id);
-          return { status: 200, body: { status: 'archived' } };
+          return { kind: 'json', status: 200, body: { status: 'archived' } };
         } catch (error) {
           return errorResponse(error);
         }
@@ -199,14 +204,14 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
       if (id === undefined && method === 'GET') {
         const query = listSchema.safeParse(Object.fromEntries(url.searchParams));
         if (!query.success) {
-          return { status: 400, body: { error: 'invalid_query', message: '查询参数不合法' } };
+          return { kind: 'json', status: 400, body: { error: 'invalid_query', message: '查询参数不合法' } };
         }
-        return { status: 200, body: core.images.list(query.data) };
+        return { kind: 'json', status: 200, body: core.images.list(query.data) };
       }
       if (id === undefined && method === 'POST') {
         try {
           const body = imageCreateSchema.parse(await readBody(IMAGE_BODY_TEXT_LIMIT));
-          return { status: 201, body: await core.images.create({ ...body, source: 'upload' }) };
+          return { kind: 'json', status: 201, body: await core.images.create({ ...body, source: 'upload' }) };
         } catch (error) {
           return errorResponse(error);
         }
@@ -214,21 +219,21 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
       if (id !== undefined && action === 'content' && method === 'GET') {
         try {
           const { asset, bytes } = core.images.readContent(id);
-          return { status: 200, bytes: new Uint8Array(bytes), mime: asset.mime };
+          return { kind: 'content', status: 200, bytes: new Uint8Array(bytes), mime: asset.mime };
         } catch {
-          return { status: 404, body: { error: 'not_found', message: '图片不存在' } };
+          return { kind: 'json', status: 404, body: { error: 'not_found', message: '图片不存在' } };
         }
       }
       if (id !== undefined && method === 'GET') {
         const asset = core.images.get(id);
         return asset === null || asset.deletedAt !== null
-          ? { status: 404, body: { error: 'not_found', message: '图片不存在' } }
-          : { status: 200, body: asset };
+          ? { kind: 'json', status: 404, body: { error: 'not_found', message: '图片不存在' } }
+          : { kind: 'json', status: 200, body: asset };
       }
       if (id !== undefined && method === 'PUT') {
         try {
           const body = imageUpdateSchema.parse(await readBody(IMAGE_BODY_TEXT_LIMIT));
-          return { status: 200, body: core.images.update(id, compact(body)) };
+          return { kind: 'json', status: 200, body: core.images.update(id, compact(body)) };
         } catch (error) {
           return errorResponse(error);
         }
@@ -236,7 +241,7 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
       if (id !== undefined && method === 'DELETE') {
         try {
           core.images.remove(id);
-          return { status: 200, body: { status: 'archived' } };
+          return { kind: 'json', status: 200, body: { status: 'archived' } };
         } catch (error) {
           return errorResponse(error);
         }
@@ -249,7 +254,7 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
         try {
           const input = parseGenerationBody(await readBody(IMAGE_BODY_TEXT_LIMIT));
           const snapshot = core.generations.resolve(input);
-          return { status: 200, body: snapshot };
+          return { kind: 'json', status: 200, body: snapshot };
         } catch (error) {
           return errorResponse(error);
         }
@@ -257,9 +262,9 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
       if (id === undefined && method === 'GET') {
         const query = listSchema.safeParse(Object.fromEntries(url.searchParams));
         if (!query.success) {
-          return { status: 400, body: { error: 'invalid_query', message: '查询参数不合法' } };
+          return { kind: 'json', status: 400, body: { error: 'invalid_query', message: '查询参数不合法' } };
         }
-        return { status: 200, body: core.generations.list(query.data, actor) };
+        return { kind: 'json', status: 200, body: core.generations.list(query.data, actor) };
       }
       if (id === undefined && method === 'POST') {
         try {
@@ -271,6 +276,7 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
           const input = parseGenerationBody(raw);
           const { generation, replayed } = core.generations.create(input, actor, key);
           return {
+            kind: 'json',
             status: replayed ? 200 : 201,
             body: { generation, replayed },
           };
@@ -280,7 +286,7 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
       }
       if (id !== undefined && method === 'GET') {
         try {
-          return { status: 200, body: core.generations.get(id, actor) };
+          return { kind: 'json', status: 200, body: core.generations.get(id, actor) };
         } catch (error) {
           return errorResponse(error);
         }
@@ -293,7 +299,7 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
               ? raw.idempotency_key
               : `admin:${context.username}:${new Date().toISOString()}`;
           const { generation, replayed } = core.generations.retry(id, actor, key);
-          return { status: replayed ? 200 : 201, body: { generation, replayed } };
+          return { kind: 'json', status: replayed ? 200 : 201, body: { generation, replayed } };
         } catch (error) {
           return errorResponse(error);
         }
@@ -305,6 +311,6 @@ export function createImageAdminHandler(deps: ImageAdminDeps) {
       return await applyImageConfig(await readBody(IMAGE_BODY_TEXT_LIMIT));
     }
 
-    return { status: 404, body: { error: 'not_found', message: 'Unknown image route' } };
+    return { kind: 'json', status: 404, body: { error: 'not_found', message: 'Unknown image route' } };
   };
 }

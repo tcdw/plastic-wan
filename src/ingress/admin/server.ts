@@ -44,7 +44,7 @@ import {
   updateChat,
 } from './chats-admin.ts';
 import { clearModelPayloads, parseDeveloperSettings } from './developer-admin.ts';
-import { createImageAdminHandler } from './image-admin.ts';
+import { createImageAdminHandler, type ImageAdminResponse } from './image-admin.ts';
 import {
   createMemory,
   deleteMemory,
@@ -447,7 +447,7 @@ export class AdminServer {
         (maxBytes) => readJsonObject(request, maxBytes),
         async (body) => await this.#applyImageConfig(body),
       );
-      if ('bytes' in response) {
+      if (response.kind === 'content') {
         return new Response(new Uint8Array(response.bytes), {
           status: response.status,
           headers: { 'content-type': response.mime, 'cache-control': 'private, no-store' },
@@ -844,14 +844,18 @@ export class AdminServer {
    * now-unreferenced jar entries. Applies through the reloader lock, so the
    * snapshot publishes without a restart.
    */
-  async #applyImageConfig(body: Record<string, unknown>): Promise<Response> {
+  async #applyImageConfig(body: Record<string, unknown>): Promise<ImageAdminResponse> {
     const reloader = this.#configReloader;
     if (reloader === undefined) {
-      return json({ error: 'config_reload_unavailable', message: 'Configuration reloading is not wired' }, 503);
+      return {
+        kind: 'json',
+        status: 503,
+        body: { error: 'config_reload_unavailable', message: 'Configuration reloading is not wired' },
+      };
     }
     const enabled = body.enabled;
     if (typeof enabled !== 'boolean') {
-      return json({ error: 'invalid_body', message: 'enabled must be a boolean' }, 400);
+      return { kind: 'json', status: 400, body: { error: 'invalid_body', message: 'enabled must be a boolean' } };
     }
     const revision = await readConfigRevision(reloader.configPath);
     let edits: readonly ConfigEdit[];
@@ -861,16 +865,21 @@ export class AdminServer {
       const credentials = body.credentials;
       const models = body.models;
       if (typeof credentials !== 'object' || credentials === null || !Array.isArray(models) || models.length === 0) {
-        return json(
-          { error: 'invalid_body', message: 'enabling requires credentials (name -> secret) and a models array' },
-          400,
-        );
+        return {
+          kind: 'json',
+          status: 400,
+          body: { error: 'invalid_body', message: 'enabling requires credentials (name -> secret) and a models array' },
+        };
       }
       const credentialNames: Record<string, string> = {};
       const secretRefs: Record<string, { jar: string }> = {};
       for (const [name, plaintext] of Object.entries(credentials)) {
         if (!/^[a-zA-Z0-9_-]{1,80}$/.test(name) || typeof plaintext !== 'string' || plaintext.length === 0) {
-          return json({ error: 'invalid_body', message: `invalid credential entry: ${name}` }, 400);
+          return {
+            kind: 'json',
+            status: 400,
+            body: { error: 'invalid_body', message: `invalid credential entry: ${name}` },
+          };
         }
         credentialNames[name] = plaintext;
         secretRefs[name] = { jar: name };
@@ -882,7 +891,11 @@ export class AdminServer {
           .slice(0, 3)
           .map((error) => `${error.instancePath}: ${error.message ?? 'invalid'}`)
           .join('; ');
-        return json({ error: 'invalid_body', message: `image section is invalid: ${detail}` }, 400);
+        return {
+          kind: 'json',
+          status: 400,
+          body: { error: 'invalid_body', message: `image section is invalid: ${detail}` },
+        };
       }
       for (const plaintext of Object.values(credentialNames)) {
         this.#secrets?.remember(plaintext);
@@ -897,13 +910,17 @@ export class AdminServer {
       const message = result.fileWritten
         ? `config.jsonc was updated but not applied: ${result.message}`
         : result.message;
-      return json({ error: result.code, message }, CONFIG_WRITE_STATUS[result.code] ?? 409);
+      return { kind: 'json', status: CONFIG_WRITE_STATUS[result.code] ?? 409, body: { error: result.code, message } };
     }
     const bridgeEnabled = this.#imageBridge?.enabled() ?? false;
-    return json({
-      enabled: enabled && bridgeEnabled,
-      apply: { applied: result.applied, restart_required: result.restartRequired },
-    });
+    return {
+      kind: 'json',
+      status: 200,
+      body: {
+        enabled: enabled && bridgeEnabled,
+        apply: { applied: result.applied, restart_required: result.restartRequired },
+      },
+    };
   }
 
   async #restart(): Promise<Response> {

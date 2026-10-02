@@ -8,7 +8,7 @@ import sharp from 'sharp';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { createImageBridge } from '../src/image/bridge.ts';
 import { createImageService } from '../src/image/service.ts';
-import { adminActor, createImageAdminHandler } from '../src/ingress/admin/image-admin.ts';
+import { adminActor, createImageAdminHandler, type ImageAdminResponse } from '../src/ingress/admin/image-admin.ts';
 import { loadConfig } from '../src/platform/config.ts';
 import { readConfigRevision, writeConfigEdits } from '../src/platform/config-file.ts';
 import { ConfigReloader } from '../src/platform/config-reload.ts';
@@ -42,7 +42,7 @@ afterEach(async () => {
 
 async function fixture(): Promise<{
   handle: ReturnType<typeof createImageAdminHandler>;
-  applyImageConfig: (body: Record<string, unknown>) => Promise<{ status: number; body: unknown }>;
+  applyImageConfig: (body: Record<string, unknown>) => Promise<ImageAdminResponse>;
   configPath: string;
   store: SqliteStore;
 }> {
@@ -96,10 +96,10 @@ async function fixture(): Promise<{
   });
   const secrets = new SecretStore(keyJarPath(configPath));
   const handle = createImageAdminHandler({ service, bridge });
-  const applyImageConfig = async (body: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
+  const applyImageConfig = async (body: Record<string, unknown>): Promise<ImageAdminResponse> => {
     const enabled = body.enabled;
     if (typeof enabled !== 'boolean') {
-      return { status: 400, body: { error: 'invalid_body' } };
+      return { kind: 'json', status: 400, body: { error: 'invalid_body' } };
     }
     const revision = await readConfigRevision(configPath);
     if (!enabled) {
@@ -122,7 +122,7 @@ async function fixture(): Promise<{
       );
     }
     const applied = await reloader.reloadFromFile();
-    return { status: 200, body: { enabled: bridge.enabled(), applied: applied.ok } };
+    return { kind: 'json', status: 200, body: { enabled: bridge.enabled(), applied: applied.ok } };
   };
   cleanup.push(() => {
     bridge.stop();
@@ -159,7 +159,7 @@ async function call(
     (maxBytes) => readBody(request, maxBytes),
     fixtureRef.applyImageConfig,
   );
-  if ('bytes' in response) {
+  if (response.kind === 'content') {
     return { status: response.status, body: null, bytes: response.bytes };
   }
   return { status: response.status, body: response.body };
@@ -196,7 +196,7 @@ test('status reports disabled until the section is written, then enabled', async
       },
     ],
   });
-  expect(enable.body).toEqual({ enabled: true, applied: true });
+  expect(enable.kind === 'json' && enable.body).toEqual({ enabled: true, applied: true });
 
   // The file keeps only the SecretRef name; the plaintext lands in the jar.
   const file = await readFile(fixtureRef.configPath, 'utf8');
@@ -233,7 +233,7 @@ test('disabling removes the section, garbage-collects the jar entry, and republi
     ],
   });
   const disable = await fixtureRef.applyImageConfig({ enabled: false });
-  expect(disable.body).toEqual({ enabled: false, applied: true });
+  expect(disable.kind === 'json' && disable.body).toEqual({ enabled: false, applied: true });
   const file = await readFile(fixtureRef.configPath, 'utf8');
   expect(file).not.toContain('"image":');
   const jar = JSON.parse(await readFile(keyJarPath(fixtureRef.configPath), 'utf8')) as Record<string, string>;

@@ -1,5 +1,12 @@
 import { join } from 'node:path';
-import { createImageCore, type ImageCore, ImageStore, imageSchema } from '@plasticwan/image-service';
+import {
+  createImageCore,
+  createOpenRouterAdapter,
+  type ImageCore,
+  type ImageProviderAdapter,
+  ImageStore,
+  imageSchema,
+} from '@plasticwan/image-service';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { RawConfig } from '../platform/config.ts';
 import type { SqliteStore } from '../store/database.ts';
@@ -23,6 +30,8 @@ export type ImageService = {
 export type ImageServiceOptions = {
   /** Defaults to global fetch; tests inject a fake provider transport. */
   providerFetch?: typeof fetch;
+  /** The Phase 1 adapter set holds exactly the OpenRouter adapter. */
+  providerAdapter?: ImageProviderAdapter;
   logger?: { warn: (message: string) => void };
 };
 
@@ -39,7 +48,7 @@ export function createImageService(
   const core = createImageCore({
     db,
     store: imageStore,
-    providerFetch: options.providerFetch ?? fetch,
+    providerAdapter: options.providerAdapter ?? createOpenRouterAdapter({ fetchImpl: options.providerFetch ?? fetch }),
     // The worker starts with the process and drains on shutdown; startup
     // reconciliation (running -> interrupted, claim-less rounds -> queued)
     // runs inside worker.start() before the loop begins.

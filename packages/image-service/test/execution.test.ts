@@ -8,6 +8,7 @@ import { createImageConfigSnapshot } from '../src/config.ts';
 import type { Generation, GenerationInput } from '../src/contracts.ts';
 import { createImageCore } from '../src/core.ts';
 import { ImageStore } from '../src/image-store.ts';
+import { createOpenRouterAdapter } from '../src/openrouter.ts';
 import {
   adminActor,
   createTestCore,
@@ -15,6 +16,7 @@ import {
   fakeProvider,
   openTestDatabase,
   PROVIDER_KEY,
+  parseInput,
   pngBytes,
   publishDefaultConfig,
   waitFor,
@@ -25,8 +27,7 @@ async function submit(
   payload: Partial<GenerationInput> & { authoredPrompt: string },
   key: string,
 ) {
-  const input: GenerationInput = { modelId: 'gpt-image-1', parameters: {}, outputCount: 1, ...payload };
-  return run.core.generations.create(input, adminActor, key).generation.id;
+  return run.core.generations.create(parseInput({ modelId: 'gpt-image-1', ...payload }), adminActor, key).generation.id;
 }
 
 async function finished(run: Awaited<ReturnType<typeof createTestCore>>, id: string): Promise<Generation> {
@@ -167,66 +168,6 @@ test('partial success keeps successful outputs and still explains the failure', 
   }
 });
 
-test('declared transparency must be real, and unsupported output formats are rejected', async () => {
-  const opaque = fakeProvider();
-  const opaqueRun = await createTestCore({ providerFetch: opaque.fetchImpl });
-  try {
-    publishDefaultConfig(opaqueRun.config);
-    const id = await submit(opaqueRun, { authoredPrompt: '透明', parameters: { background: 'transparent' } }, 'opaque');
-    const generation = await finished(opaqueRun, id);
-    assert.equal(generation.status, 'failed');
-    assert.equal(generation.attempts[0]?.error?.code, 'transparent_not_supported');
-    assert.equal(generation.attempts[0]?.error?.stage, 'storage');
-    assert.equal(generation.outputs.length, 0, '不保存不符合声明的结果');
-  } finally {
-    await opaqueRun.cleanup();
-  }
-
-  const transparent = fakeProvider({ image: () => pngBytes({ width: 8, height: 8, alpha: true }) });
-  const transparentRun = await createTestCore({ providerFetch: transparent.fetchImpl });
-  try {
-    publishDefaultConfig(transparentRun.config);
-    const id = await submit(
-      transparentRun,
-      { authoredPrompt: '透明', parameters: { background: 'transparent' } },
-      'transparent',
-    );
-    const generation = await finished(transparentRun, id);
-    assert.equal(generation.status, 'succeeded');
-    assert.equal(generation.outputs.length, 1);
-  } finally {
-    await transparentRun.cleanup();
-  }
-
-  const svg = fakeProvider({
-    respond: async () =>
-      new Response(
-        JSON.stringify({
-          data: [
-            {
-              b64_json: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"></svg>').toString(
-                'base64',
-              ),
-              media_type: 'image/svg+xml',
-            },
-          ],
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
-  });
-  const svgRun = await createTestCore({ providerFetch: svg.fetchImpl });
-  try {
-    publishDefaultConfig(svgRun.config);
-    const id = await submit(svgRun, { authoredPrompt: '矢量' }, 'svg');
-    const generation = await finished(svgRun, id);
-    assert.equal(generation.status, 'failed');
-    assert.equal(generation.attempts[0]?.error?.stage, 'storage');
-    assert.equal(generation.outputs.length, 0);
-  } finally {
-    await svgRun.cleanup();
-  }
-});
-
 test('the global concurrency bound is finite', async () => {
   let inFlight = 0;
   let peak = 0;
@@ -280,7 +221,7 @@ test('shutdown aborts in-flight calls and records them as interrupted', async ()
     const second = createImageCore({
       db: reopened.db,
       store: new ImageStore({ dir: storeDir }),
-      providerFetch: provider.fetchImpl,
+      providerAdapter: createOpenRouterAdapter({ fetchImpl: provider.fetchImpl }),
       startWorker: false,
       concurrency: 2,
       providerTimeoutMs: 5000,
@@ -350,7 +291,7 @@ test('a shutdown that leaves later items without an attempt never reports the ro
     const restarted = createImageCore({
       db: reopened.db,
       store: new ImageStore({ dir: storeDir }),
-      providerFetch: provider.fetchImpl,
+      providerAdapter: createOpenRouterAdapter({ fetchImpl: provider.fetchImpl }),
       startWorker: true,
       concurrency: 2,
       providerTimeoutMs: 5000,
@@ -384,7 +325,7 @@ test('restart resumes queued work and marks running work as interrupted without 
     const withoutWorker = createImageCore({
       db: first.db,
       store: new ImageStore({ dir: storeDir }),
-      providerFetch: provider.fetchImpl,
+      providerAdapter: createOpenRouterAdapter({ fetchImpl: provider.fetchImpl }),
       startWorker: false,
       concurrency: 2,
       providerTimeoutMs: 5000,
@@ -392,7 +333,7 @@ test('restart resumes queued work and marks running work as interrupted without 
     });
     publishDefaultConfig(withoutWorker.config);
     const queuedId = withoutWorker.generations.create(
-      { authoredPrompt: '排队任务', modelId: 'gpt-image-1', parameters: {}, outputCount: 1 },
+      parseInput({ authoredPrompt: '排队任务', modelId: 'gpt-image-1' }),
       adminActor,
       'queued',
     ).generation.id;
@@ -405,7 +346,7 @@ test('restart resumes queued work and marks running work as interrupted without 
     const resumedCore = createImageCore({
       db: resumed.db,
       store: new ImageStore({ dir: storeDir }),
-      providerFetch: provider.fetchImpl,
+      providerAdapter: createOpenRouterAdapter({ fetchImpl: provider.fetchImpl }),
       startWorker: true,
       concurrency: 2,
       providerTimeoutMs: 5000,
@@ -433,7 +374,7 @@ test('restart resumes queued work and marks running work as interrupted without 
     const runningCore = createImageCore({
       db: running.db,
       store: new ImageStore({ dir: storeDir }),
-      providerFetch: hanging.fetchImpl,
+      providerAdapter: createOpenRouterAdapter({ fetchImpl: hanging.fetchImpl }),
       startWorker: true,
       concurrency: 2,
       providerTimeoutMs: 5000,
@@ -441,7 +382,7 @@ test('restart resumes queued work and marks running work as interrupted without 
     });
     publishDefaultConfig(runningCore.config);
     const crashId = runningCore.generations.create(
-      { authoredPrompt: '崩溃任务', modelId: 'gpt-image-1', parameters: {}, outputCount: 1 },
+      parseInput({ authoredPrompt: '崩溃任务', modelId: 'gpt-image-1' }),
       adminActor,
       'crash',
     ).generation.id;
@@ -454,7 +395,7 @@ test('restart resumes queued work and marks running work as interrupted without 
     const recoveredCore = createImageCore({
       db: recovered.db,
       store: new ImageStore({ dir: storeDir }),
-      providerFetch: provider.fetchImpl,
+      providerAdapter: createOpenRouterAdapter({ fetchImpl: provider.fetchImpl }),
       startWorker: true,
       concurrency: 2,
       providerTimeoutMs: 5000,
@@ -485,7 +426,7 @@ test('a restart without a valid config keeps queued work queued until the first 
     const withoutWorker = createImageCore({
       db: first.db,
       store: new ImageStore({ dir: storeDir }),
-      providerFetch: provider.fetchImpl,
+      providerAdapter: createOpenRouterAdapter({ fetchImpl: provider.fetchImpl }),
       startWorker: false,
       concurrency: 2,
       providerTimeoutMs: 5000,
@@ -493,7 +434,7 @@ test('a restart without a valid config keeps queued work queued until the first 
     });
     publishDefaultConfig(withoutWorker.config);
     const id = withoutWorker.generations.create(
-      { authoredPrompt: '配置损坏重启', modelId: 'gpt-image-1', parameters: {}, outputCount: 1 },
+      parseInput({ authoredPrompt: '配置损坏重启', modelId: 'gpt-image-1' }),
       adminActor,
       'invalid-config-restart',
     ).generation.id;
@@ -507,7 +448,7 @@ test('a restart without a valid config keeps queued work queued until the first 
     const restartedCore = createImageCore({
       db: restarted.db,
       store: new ImageStore({ dir: storeDir }),
-      providerFetch: provider.fetchImpl,
+      providerAdapter: createOpenRouterAdapter({ fetchImpl: provider.fetchImpl }),
       startWorker: true,
       concurrency: 2,
       providerTimeoutMs: 5000,

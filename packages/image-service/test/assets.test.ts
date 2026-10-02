@@ -229,8 +229,13 @@ function defaultModelNoCredential() {
     upstreamModel: 'openai/gpt-image-1',
     credentialRef: 'missing',
     providerTag: 'openai',
-    capabilities: { maxReferences: 1, maxOutputs: 1 },
-    parameters: [],
+    capabilities: {
+      imageInput: true,
+      maxInputImages: 1,
+      maxOutputs: 1,
+      aspectRatios: ['auto', '1:1'],
+      resolutionClasses: ['auto'],
+    },
   };
 }
 

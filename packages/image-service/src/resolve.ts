@@ -1,6 +1,6 @@
 import type { ImageService, PromptService } from './assets.ts';
 import {
-  effectiveParameters,
+  assertGenerationFitsCapability,
   type GenerationInput,
   type GenerationSnapshot,
   type ImageAsset,
@@ -66,15 +66,19 @@ export function resolveSnapshot(deps: ResolveDeps, input: GenerationInput, model
     }
   }
 
-  if (imageAssets.size > model.capabilities.maxReferences) {
-    throw inputError('too_many_references', `参考图数量超过模型上限（${model.capabilities.maxReferences}）`);
-  }
-
-  let effective: Record<string, string | number>;
+  // Capability checks happen before any paid call: unsupported intent is
+  // reported explicitly, never silently simulated (lossy abstraction).
   try {
-    effective = effectiveParameters(model, input);
+    assertGenerationFitsCapability(model, input);
   } catch (error) {
-    throw inputError('invalid_parameters', error instanceof Error ? error.message : '生成参数无效');
+    throw inputError('unsupported_capability', error instanceof Error ? error.message : '生成意图超出模型能力');
+  }
+  const imageRefs = [...imageAssets.values()];
+  if (imageRefs.length > 0 && !model.capabilities.imageInput) {
+    throw inputError('image_input_unsupported', '模型不支持输入图片');
+  }
+  if (imageRefs.length > model.capabilities.maxInputImages) {
+    throw inputError('too_many_input_images', `输入图片数量超过模型上限（${model.capabilities.maxInputImages}）`);
   }
 
   const resolvedPrompt = expandText(input.authoredPrompt, references, promptAssets);
@@ -91,7 +95,6 @@ export function resolveSnapshot(deps: ResolveDeps, input: GenerationInput, model
     imageAssets: [...imageAssets.values()],
     model,
     configVersion: deps.configVersion,
-    effectiveParameters: effective,
     requestSemantics: {
       adapterVersion: ADAPTER_VERSION,
       calls: input.outputCount,

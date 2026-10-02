@@ -3,12 +3,12 @@ import { type ImageConfigHandle, type ImageConfigSnapshot, ImageConfigStore } fr
 import type { ImageDatabase } from './db.ts';
 import { createGenerationService, type GenerationService } from './generations.ts';
 import type { ImageStore } from './image-store.ts';
-import { createProviderClient, type ProviderClient } from './openrouter.ts';
+import type { ImageProviderAdapter } from './provider.ts';
 import { GenerationWorker } from './worker.ts';
 
 /**
  * The assembled image generation core. It owns prompts, images, generations, the
- * provider client and the worker, and it deliberately owns nothing else: no HTTP
+ * provider adapter and the worker, and it deliberately owns nothing else: no HTTP
  * server, no MCP endpoint, no database connection, no file watcher, no auth. The
  * host opens the database, prepares configuration snapshots and injects them via
  * `config.updateConfig`; `stop()` waits for in-flight provider work to settle.
@@ -16,7 +16,7 @@ import { GenerationWorker } from './worker.ts';
 export type ImageCoreOptions = {
   db: ImageDatabase;
   store: ImageStore;
-  providerFetch: typeof fetch;
+  providerAdapter: ImageProviderAdapter;
   startWorker: boolean;
   concurrency: number;
   providerTimeoutMs: number;
@@ -33,7 +33,7 @@ export function createImageCore(options: ImageCoreOptions) {
   const redactor = config.redactor;
   const prompts = createPromptService({ db: options.db });
   const images = createImageService({ db: options.db, store: options.store });
-  const provider = createProviderClient({ fetchImpl: options.providerFetch });
+  const provider = options.providerAdapter;
   const worker = new GenerationWorker({
     db: options.db,
     config,
@@ -64,7 +64,7 @@ export function createImageCore(options: ImageCoreOptions) {
     prompts,
     images,
     generations,
-    provider,
+    adapter: provider,
     worker,
     config,
     /** Publishes a validated configuration snapshot atomically (or keeps the old one). */
@@ -77,4 +77,4 @@ export function createImageCore(options: ImageCoreOptions) {
   };
 }
 
-export type { GenerationService, ImageConfigHandle, ImageConfigSnapshot, ImageService, PromptService, ProviderClient };
+export type { GenerationService, ImageConfigHandle, ImageConfigSnapshot, ImageService, PromptService };

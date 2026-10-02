@@ -5,6 +5,7 @@ import { basename, join } from 'node:path';
 import {
   createImageConfigSnapshot,
   createImageCore,
+  createOpenRouterAdapter,
   type GenerationActor,
   type GenerationInput,
   generationCreateSchema,
@@ -74,12 +75,13 @@ const defaultModel = (overrides: Partial<ModelDefinition> = {}): ModelDefinition
   upstreamModel: 'openai/gpt-image-1',
   credentialRef: 'openrouter',
   providerTag: 'openai',
-  capabilities: { maxReferences: 2, maxOutputs: 4 },
-  parameters: [
-    { name: 'aspect_ratio', label: '画面比例', type: 'enum', options: ['auto', '1:1', '2:3'], default: '1:1' },
-    { name: 'quality', label: '质量', type: 'enum', options: ['auto', 'low', 'high'], default: 'auto' },
-    { name: 'background', label: '背景', type: 'enum', options: ['auto', 'transparent'], default: 'auto' },
-  ],
+  capabilities: {
+    imageInput: true,
+    maxInputImages: 2,
+    maxOutputs: 4,
+    aspectRatios: ['auto', '1:1', '2:3'],
+    resolutionClasses: ['auto', 'low', 'high'],
+  },
   ...overrides,
 });
 
@@ -135,7 +137,7 @@ function publishConfig(configStore: { updateConfig(snapshot: ImageConfigSnapshot
 }
 
 function parseInput(payload: Partial<GenerationInput> & { authoredPrompt: string }): GenerationInput {
-  return generationCreateSchema.parse({ modelId: 'gpt-image-1', parameters: {}, outputCount: 1, ...payload });
+  return generationCreateSchema.parse({ modelId: 'gpt-image-1', outputCount: 1, ...payload });
 }
 
 async function waitFor<T>(check: () => T | null | undefined | false, timeoutMs = 8000): Promise<T> {
@@ -273,7 +275,7 @@ test('startup reconciliation interrupts claimed rounds and resumes queued ones',
   const core = createImageCore({
     db,
     store: new ImageStore({ dir: join(config.data_dir, 'images') }),
-    providerFetch: provider.fetchImpl,
+    providerAdapter: createOpenRouterAdapter({ fetchImpl: provider.fetchImpl }),
     startWorker: true,
     concurrency: 1,
     providerTimeoutMs: 5000,
@@ -325,7 +327,7 @@ test('startup reconciliation interrupts claimed rounds and resumes queued ones',
   const resumed = createImageCore({
     db,
     store: new ImageStore({ dir: join(config.data_dir, 'images') }),
-    providerFetch: provider.fetchImpl,
+    providerAdapter: createOpenRouterAdapter({ fetchImpl: provider.fetchImpl }),
     startWorker: true,
     concurrency: 1,
     providerTimeoutMs: 5000,
@@ -374,7 +376,7 @@ test('graceful shutdown aborts in-flight provider work and lands interrupted', a
   const core = createImageCore({
     db,
     store: new ImageStore({ dir: join(config.data_dir, 'images') }),
-    providerFetch: provider.fetchImpl,
+    providerAdapter: createOpenRouterAdapter({ fetchImpl: provider.fetchImpl }),
     startWorker: true,
     concurrency: 1,
     providerTimeoutMs: 5000,

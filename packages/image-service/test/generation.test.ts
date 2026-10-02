@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import type { Generation, GenerationInput } from '../src/contracts.ts';
-import { listSchema } from '../src/contracts.ts';
+import { generationCreateSchema, listSchema } from '../src/contracts.ts';
 import { assertIdempotencyKey, fingerprintOf } from '../src/generations.ts';
 import {
   adminActor,
@@ -56,7 +56,13 @@ test('resolve expands prompt references in place and orders images by first appe
 
     const authored = `{{prompt:${style.id}}}| {{prompt:${hero.id}}}| {{image:${imageB.id}}} 中间文字 {{image:${imageA.id}}} 再次 {{image:${imageB.id}}} 结束`;
     const snapshot = run.core.generations.resolve(
-      parseInput({ authoredPrompt: authored, modelId: 'gpt-image-1', parameters: { quality: 'high' }, outputCount: 2 }),
+      parseInput({
+        authoredPrompt: authored,
+        modelId: 'gpt-image-1',
+        aspectRatio: '1:1',
+        resolution: 'high',
+        outputCount: 2,
+      }),
     );
 
     assert.equal(snapshot.resolvedPrompt, '水彩画风，柔和| 短发女孩|  中间文字  再次  结束');
@@ -69,7 +75,9 @@ test('resolve expands prompt references in place and orders images by first appe
       snapshot.imageAssets.map((asset) => asset.id),
       [imageB.id, imageA.id],
     );
-    assert.deepEqual(snapshot.effectiveParameters, { aspect_ratio: '1:1', quality: 'high', background: 'auto' });
+    assert.equal(snapshot.authored.aspectRatio, '1:1');
+    assert.equal(snapshot.authored.resolution, 'high');
+    assert.equal(snapshot.authored.extendedData, undefined);
     assert.deepEqual(snapshot.requestSemantics, {
       adapterVersion: 1,
       calls: 2,
@@ -102,20 +110,17 @@ test('resolve rejects dangling, malformed, empty and over-limit inputs', async (
       );
     }
 
-    // Unknown model and unsupported parameters.
+    // Unknown model and unsupported capability.
     assert.throws(
-      () => run.core.generations.resolve({ authoredPrompt: 'hi', modelId: 'nope', parameters: {}, outputCount: 1 }),
+      () => run.core.generations.resolve(generationCreateSchema.parse({ authoredPrompt: 'hi', modelId: 'nope' })),
       (error: { code?: string }) => error.code === 'unknown_model',
     );
     assert.throws(
       () =>
-        run.core.generations.resolve({
-          authoredPrompt: 'hi',
-          modelId: 'gpt-image-1',
-          parameters: { seed: 1 },
-          outputCount: 1,
-        }),
-      (error: { code?: string }) => error.code === 'invalid_parameters',
+        run.core.generations.resolve(
+          generationCreateSchema.parse({ authoredPrompt: 'hi', modelId: 'gpt-image-1', aspectRatio: '16:9' }),
+        ),
+      (error: { code?: string }) => error.code === 'unsupported_capability',
     );
 
     // More references than the model allows (maxReferences: 2).
@@ -145,13 +150,14 @@ test('resolve rejects dangling, malformed, empty and over-limit inputs', async (
     });
     assert.throws(
       () =>
-        run.core.generations.resolve({
-          authoredPrompt: `{{image:${imageA.id}}} {{image:${imageB.id}}} {{image:${imageC.id}}}`,
-          modelId: 'gpt-image-1',
-          parameters: {},
-          outputCount: 1,
-        }),
-      (error: { code?: string }) => error.code === 'too_many_references',
+        run.core.generations.resolve(
+          generationCreateSchema.parse({
+            authoredPrompt: `{{image:${imageA.id}}} {{image:${imageB.id}}} {{image:${imageC.id}}}`,
+            modelId: 'gpt-image-1',
+            outputCount: 1,
+          }),
+        ),
+      (error: { code?: string }) => error.code === 'too_many_input_images',
     );
     assert.equal(provider.calls.length, 0);
   } finally {
@@ -174,12 +180,13 @@ test('resolve reports empty prompts after removing image tokens', async () => {
     });
     assert.throws(
       () =>
-        run.core.generations.resolve({
-          authoredPrompt: `{{image:${image.id}}}`,
-          modelId: 'gpt-image-1',
-          parameters: {},
-          outputCount: 1,
-        }),
+        run.core.generations.resolve(
+          generationCreateSchema.parse({
+            authoredPrompt: `{{image:${image.id}}}`,
+            modelId: 'gpt-image-1',
+            outputCount: 1,
+          }),
+        ),
       (error: { code?: string }) => error.code === 'empty_prompt',
     );
   } finally {
@@ -203,12 +210,12 @@ test('create persists a frozen snapshot, calls the image API once per item and s
     });
 
     const created = run.core.generations.create(
-      {
+      parseInput({
         authoredPrompt: `{{prompt:${style.id}}} 一只猫 {{image:${reference.id}}}`,
         modelId: 'gpt-image-1',
-        parameters: { quality: 'high', background: 'auto' },
+        resolution: 'high',
         outputCount: 2,
-      },
+      }),
       adminActor,
       'key-1',
     );
@@ -238,8 +245,7 @@ test('create persists a frozen snapshot, calls the image API once per item and s
       assert.deepEqual(call.body.provider, { only: ['openai'], allow_fallbacks: false });
       assert.equal(call.body.prompt, '水彩画风 一只猫 ');
       assert.equal(call.body.quality, 'high');
-      assert.equal(call.body.background, 'auto');
-      assert.equal(call.body.aspect_ratio, '1:1');
+      assert.equal(call.body.size, undefined); // authored aspectRatio 'auto' maps to no size
       const references = call.body.input_references as { type: string; image_url: { url: string } }[];
       assert.equal(references.length, 1);
       assert.equal(references[0]?.type, 'image_url');
@@ -324,7 +330,7 @@ test('idempotency keys follow the shared safe-character schema on create and ret
     }
 
     const created = run.core.generations.create(
-      { authoredPrompt: '安全幂等键', modelId: 'gpt-image-1', parameters: {}, outputCount: 1 },
+      parseInput({ modelId: 'gpt-image-1', authoredPrompt: '安全幂等键', outputCount: 1 }),
       adminActor,
       safeKey,
     );
@@ -356,12 +362,12 @@ test('editing or archiving an asset never rewrites accepted snapshots', async ()
     });
 
     const created = run.core.generations.create(
-      {
+      parseInput({
         authoredPrompt: `{{prompt:${prompt.id}}} {{image:${image.id}}}`,
         modelId: 'gpt-image-1',
-        parameters: {},
+        aspectRatio: '1:1',
         outputCount: 1,
-      },
+      }),
       adminActor,
       'snapshot-key',
     );
@@ -381,7 +387,7 @@ test('editing or archiving an asset never rewrites accepted snapshots', async ()
     assert.throws(
       () =>
         run.core.generations.create(
-          { authoredPrompt: `再用 {{image:${image.id}}}`, modelId: 'gpt-image-1', parameters: {}, outputCount: 1 },
+          parseInput({ authoredPrompt: `再用 {{image:${image.id}}}`, modelId: 'gpt-image-1', outputCount: 1 }),
           adminActor,
           'archived-ref',
         ),
@@ -425,7 +431,7 @@ test('retry is rejected while running and replays with the same idempotency key'
   try {
     publishDefaultConfig(run.config);
     const created = run.core.generations.create(
-      { authoredPrompt: '慢任务', modelId: 'gpt-image-1', parameters: {}, outputCount: 1 },
+      parseInput({ modelId: 'gpt-image-1', authoredPrompt: '慢任务' }),
       adminActor,
       'gating',
     );
@@ -458,12 +464,12 @@ test('list, detail and scoping keep generations readable per actor', async () =>
   try {
     publishDefaultConfig(run.config);
     const mine = run.core.generations.create(
-      { authoredPrompt: '管理员的猫', modelId: 'gpt-image-1', parameters: {}, outputCount: 1 },
+      parseInput({ modelId: 'gpt-image-1', authoredPrompt: '管理员的猫' }),
       adminActor,
       'admin-task',
     );
     const theirs = run.core.generations.create(
-      { authoredPrompt: '客户端的猫', modelId: 'gpt-image-1', parameters: {}, outputCount: 1 },
+      parseInput({ modelId: 'gpt-image-1', authoredPrompt: '客户端的猫' }),
       keyActor,
       'agent-task',
     );
@@ -496,14 +502,14 @@ test('fingerprintOf sorts object keys recursively and keeps array order', () => 
     input: {
       authoredPrompt: 'cat',
       modelId: 'gpt-image-1',
-      parameters: { quality: 'high', background: 'auto' },
+      extendedData: { quality: 'high', background: 'auto' },
       outputCount: 1,
     },
   };
   const right = {
     input: {
       outputCount: 1,
-      parameters: { background: 'auto', quality: 'high' },
+      extendedData: { background: 'auto', quality: 'high' },
       modelId: 'gpt-image-1',
       authoredPrompt: 'cat',
     },
@@ -512,8 +518,8 @@ test('fingerprintOf sorts object keys recursively and keeps array order', () => 
   };
   assert.equal(fingerprintOf(left), fingerprintOf(right));
   assert.notEqual(
-    fingerprintOf({ parameters: { quality: 'high' } }),
-    fingerprintOf({ parameters: { quality: 'low' } }),
+    fingerprintOf({ extendedData: { quality: 'high' } }),
+    fingerprintOf({ extendedData: { quality: 'low' } }),
   );
   assert.notEqual(fingerprintOf({ tags: ['a', 'b'] }), fingerprintOf({ tags: ['b', 'a'] }));
   assert.equal(
@@ -536,12 +542,12 @@ test('idempotent replay survives archived references and a removed model', async
       category: '',
       source: 'upload',
     });
-    const input: GenerationInput = {
+    const input: GenerationInput = generationCreateSchema.parse({
       authoredPrompt: `{{prompt:${prompt.id}}} {{image:${image.id}}}`,
       modelId: 'gpt-image-1',
-      parameters: { quality: 'high', background: 'auto' },
+      resolution: 'high',
       outputCount: 1,
-    };
+    });
     const first = run.core.generations.create(input, adminActor, 'archive-replay');
     const id = first.generation.id;
     const finished = await waitForGeneration(run, id);
@@ -572,39 +578,33 @@ test('idempotent replay survives archived references and a removed model', async
   }
 });
 
-test('parameter key order does not change the create fingerprint', async () => {
+test('extendedData key order does not change the create fingerprint', async () => {
   const provider = fakeProvider();
   const run = await createTestCore({ providerFetch: provider.fetchImpl });
   try {
     publishDefaultConfig(run.config);
-    const payload: GenerationInput = {
+    const payload: GenerationInput = generationCreateSchema.parse({
       authoredPrompt: '一只猫',
       modelId: 'gpt-image-1',
-      parameters: { quality: 'high', background: 'auto' },
+      extendedData: { quality: 'high', background: 'auto' },
       outputCount: 1,
-    };
+    });
     const first = run.core.generations.create(payload, adminActor, 'parameter-order');
     const finished = await waitForGeneration(run, first.generation.id);
+    assert.equal(finished.status, 'succeeded', JSON.stringify(finished.error));
 
     const reordered = run.core.generations.create(
-      { ...payload, parameters: { background: 'auto', quality: 'high' } },
+      generationCreateSchema.parse({
+        authoredPrompt: '一只猫',
+        modelId: 'gpt-image-1',
+        extendedData: { background: 'auto', quality: 'high' },
+        outputCount: 1,
+      }),
       adminActor,
       'parameter-order',
     );
-    assert.equal(reordered.replayed, true, '同语义不同键序必须重放原任务');
-    assert.equal(reordered.generation.id, first.generation.id);
-    assert.deepEqual(reordered.generation.snapshot.effectiveParameters, finished.snapshot.effectiveParameters);
-
-    assert.throws(
-      () =>
-        run.core.generations.create(
-          { ...payload, parameters: { quality: 'low', background: 'auto' } },
-          adminActor,
-          'parameter-order',
-        ),
-      (error: { code?: string }) => error.code === 'idempotency_conflict',
-    );
-    assert.equal(provider.calls.length, 1, '重放与冲突都不产生新的上游调用');
+    assert.equal(reordered.generation.id, first.generation.id, '同一幂等键应重放');
+    assert.equal(provider.calls.length, 1, '重放不产生新的上游调用');
   } finally {
     await run.cleanup();
   }

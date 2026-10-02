@@ -15,6 +15,7 @@ import {
 import { createImageCore, type ImageCore } from '../src/core.ts';
 import type { ImageDatabase } from '../src/db.ts';
 import { ImageStore } from '../src/image-store.ts';
+import { createOpenRouterAdapter } from '../src/openrouter.ts';
 import { imageSchema } from '../src/schema.ts';
 
 /**
@@ -163,12 +164,13 @@ export const defaultModel = (overrides: Partial<ModelDefinition> = {}): ModelDef
   upstreamModel: 'openai/gpt-image-1',
   credentialRef: 'openrouter',
   providerTag: 'openai',
-  capabilities: { maxReferences: 2, maxOutputs: 4 },
-  parameters: [
-    { name: 'aspect_ratio', label: '画面比例', type: 'enum', options: ['auto', '1:1', '2:3'], default: '1:1' },
-    { name: 'quality', label: '质量', type: 'enum', options: ['auto', 'low', 'high'], default: 'auto' },
-    { name: 'background', label: '背景', type: 'enum', options: ['auto', 'transparent'], default: 'auto' },
-  ],
+  capabilities: {
+    imageInput: true,
+    maxInputImages: 2,
+    maxOutputs: 4,
+    aspectRatios: ['auto', '1:1', '2:3'],
+    resolutionClasses: ['auto', 'low', 'high'],
+  },
   ...overrides,
 });
 
@@ -230,7 +232,7 @@ export async function createTestCore(options: TestCoreOptions): Promise<TestCore
   const core = createImageCore({
     db,
     store: new ImageStore({ dir: storeDir }),
-    providerFetch: options.providerFetch,
+    providerAdapter: createOpenRouterAdapter({ fetchImpl: options.providerFetch }),
     startWorker: options.startWorker ?? true,
     concurrency: options.concurrency ?? 2,
     providerTimeoutMs: options.providerTimeoutMs ?? 5000,

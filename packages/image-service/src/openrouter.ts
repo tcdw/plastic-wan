@@ -1,73 +1,63 @@
-import type { ModelDefinition } from './contracts.ts';
 import { AppError } from './errors.ts';
+import type { ImageProviderAdapter, ProviderImage, ProviderInvocation } from './provider.ts';
 
 /**
- * OpenRouter dedicated Image API (verified 2026-10-01):
- *   POST https://openrouter.ai/api/v1/images
- *   body: { model, prompt, n, input_references?, provider?, <declared parameters> }
- *   response: { created, data: [{ b64_json, media_type? }], usage? }
+ * OpenRouter adapter: the first provider plugin over the lossy core API.
+ * Verified 2026-10-01: POST https://openrouter.ai/api/v1/images with
+ * { model, prompt, n, size?, quality?, input_references?, provider?, <extended> }.
  *
- * The endpoint is fixed by the Phase 1 adapter; there is deliberately no configurable
- * provider URL and no mock provider in production code.
+ * Intent mapping (the core's aspectRatio/resolution are classes, not pixels):
+ *   aspectRatio -> size ('1:1' -> 1024x1024, '2:3' -> 1024x1536, '3:2' -> 1536x1024,
+ *   'auto' -> 'auto'); ratios the vendor does not offer must not be routed here —
+ *   models declare supported ratios in their capabilities and the core rejects
+ *   the rest before a paid call. resolution -> quality ('auto' passthrough).
+ * extendedData entries are merged into the body top level: this adapter treats
+ * them as extra OpenAI image parameters and never lets them shadow reserved keys.
  */
 export const OPENROUTER_IMAGES_ENDPOINT = 'https://openrouter.ai/api/v1/images';
 export const ADAPTER_VERSION = 1 as const;
 
-export type ProviderReference = { mime: string; base64: string };
+export const ADAPTER_ID = 'openrouter' as const;
 
-export type ProviderRequest = {
-  model: ModelDefinition;
-  prompt: string;
-  parameters: Record<string, string | number>;
-  references: ProviderReference[];
-  credential: string;
-  /** Milliseconds before the call is abandoned as an uncertain (interrupted) call. */
-  timeoutMs: number;
-  /** Optional caller-owned abort signal, e.g. server shutdown. */
-  signal?: AbortSignal;
+const SIZE_BY_ASPECT_RATIO: Record<string, string> = {
+  auto: 'auto',
+  '1:1': '1024x1024',
+  '2:3': '1024x1536',
+  '3:2': '1536x1024',
 };
 
-export type ProviderResult = {
-  base64: string;
-  mediaType: string | null;
-  providerRequestId: string | null;
-  usage: Record<string, number> | null;
-};
+/** Parameter names owned by the adapter; extendedData may never shadow them. */
+const RESERVED_BODY_KEYS = new Set(['model', 'prompt', 'n', 'size', 'quality', 'input_references', 'provider']);
 
-export type ProviderCallKind = 'http' | 'interrupted' | 'protocol';
-
-export class ProviderCallError extends AppError {
-  readonly kind: ProviderCallKind;
-
-  constructor(kind: ProviderCallKind, code: string, message: string) {
-    super(code, message, kind === 'interrupted' ? 'interrupted' : 'provider');
-    this.name = 'ProviderCallError';
-    this.kind = kind;
-  }
-}
-
-/** Parameter names that are owned by the adapter and may never be authored away. */
-const RESERVED_BODY_KEYS = new Set(['model', 'prompt', 'n', 'input_references', 'provider']);
-
-export function buildImageRequestBody(
-  request: Omit<ProviderRequest, 'credential' | 'timeoutMs' | 'signal'>,
-): Record<string, unknown> {
+export function buildImageRequestBody(invocation: ProviderInvocation): Record<string, unknown> {
   const body: Record<string, unknown> = {
-    model: request.model.upstreamModel,
-    prompt: request.prompt,
+    model: invocation.model.upstreamModel,
+    prompt: invocation.prompt,
     n: 1,
-    provider: { only: [request.model.providerTag], allow_fallbacks: false },
+    provider: { only: [invocation.model.providerTag], allow_fallbacks: false },
   };
-  for (const [name, value] of Object.entries(request.parameters)) {
-    if (RESERVED_BODY_KEYS.has(name)) {
-      continue;
-    }
-    body[name] = value;
+  const size = SIZE_BY_ASPECT_RATIO[invocation.aspectRatio];
+  if (size === undefined) {
+    throw new AppError('unsupported_aspect_ratio', `适配器不支持画面比例 ${invocation.aspectRatio}`, 'input');
   }
-  if (request.references.length > 0) {
-    body.input_references = request.references.map((reference) => ({
+  if (invocation.aspectRatio !== 'auto') {
+    body.size = size;
+  }
+  if (invocation.resolution !== 'auto') {
+    body.quality = invocation.resolution;
+  }
+  if (invocation.extendedData !== undefined) {
+    for (const [key, value] of Object.entries(invocation.extendedData)) {
+      if (RESERVED_BODY_KEYS.has(key)) {
+        continue;
+      }
+      body[key] = value;
+    }
+  }
+  if (invocation.inputImages.length > 0) {
+    body.input_references = invocation.inputImages.map((image) => ({
       type: 'image_url',
-      image_url: { url: `data:${reference.mime};base64,${reference.base64}` },
+      image_url: { url: `data:${image.mime};base64,${image.base64}` },
     }));
   }
   return body;
@@ -95,23 +85,44 @@ function numericUsage(value: unknown): Record<string, number> | null {
   return Object.keys(usage).length > 0 ? usage : null;
 }
 
-export type ProviderClient = ReturnType<typeof createProviderClient>;
+export type ProviderCallKind = 'http' | 'interrupted' | 'protocol';
 
-export function createProviderClient(options: { fetchImpl: typeof fetch; endpoint?: string }) {
+export class ProviderCallError extends AppError {
+  readonly kind: ProviderCallKind;
+
+  constructor(kind: ProviderCallKind, code: string, message: string) {
+    super(code, message, kind === 'interrupted' ? 'interrupted' : 'provider');
+    this.name = 'ProviderCallError';
+    this.kind = kind;
+  }
+}
+
+/**
+ * The Phase 1 adapter set holds exactly this adapter; `ModelDefinition.provider`
+ * is validated against `ADAPTER_ID` by the config schema. Future plugins add
+ * their own adapter module — the core stays vendor-agnostic.
+ */
+export function createOpenRouterAdapter(options: {
+  fetchImpl: typeof fetch;
+  endpoint?: string;
+}): ImageProviderAdapter & {
+  endpoint: string;
+  adapterVersion: typeof ADAPTER_VERSION;
+} {
   const fetchImpl = options.fetchImpl;
   const endpoint = options.endpoint ?? OPENROUTER_IMAGES_ENDPOINT;
 
-  async function generate(request: ProviderRequest): Promise<ProviderResult> {
-    const body = buildImageRequestBody(request);
-    const timeout = AbortSignal.timeout(request.timeoutMs);
-    const signal = request.signal ? AbortSignal.any([request.signal, timeout]) : timeout;
+  async function generate(invocation: ProviderInvocation): Promise<ProviderImage> {
+    const body = buildImageRequestBody(invocation);
+    const timeout = AbortSignal.timeout(invocation.timeoutMs);
+    const signal = AbortSignal.any([invocation.signal, timeout]);
 
     let response: Response;
     try {
       response = await fetchImpl(endpoint, {
         method: 'POST',
         headers: {
-          authorization: `Bearer ${request.credential}`,
+          authorization: `Bearer ${invocation.credential}`,
           'content-type': 'application/json',
           accept: 'application/json',
         },
@@ -156,5 +167,5 @@ export function createProviderClient(options: { fetchImpl: typeof fetch; endpoin
     };
   }
 
-  return { generate, endpoint, adapterVersion: ADAPTER_VERSION };
+  return { id: ADAPTER_ID, generate, endpoint, adapterVersion: ADAPTER_VERSION };
 }

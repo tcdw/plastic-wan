@@ -6,8 +6,10 @@ import type { GenerationStatus, SafeError } from './contracts.ts';
 import type { ImageDatabase } from './db.ts';
 import { AppError, storageFailure } from './errors.ts';
 import { type AttemptRow, computeStatus, firstError, type GenerationRow } from './generations.ts';
+import type { AllowedMime } from './image-store.ts';
 import { decodeBase64Image, type ImageStore, MAX_IMAGE_BYTES } from './image-store.ts';
-import { ProviderCallError, type ProviderClient, type ProviderResult } from './openrouter.ts';
+import { ProviderCallError } from './openrouter.ts';
+import type { ImageProviderAdapter, ProviderImage } from './provider.ts';
 import type { Redactor } from './redactor.ts';
 import { redactWith } from './redactor.ts';
 import { generationAttempts, generations } from './schema.ts';
@@ -48,7 +50,7 @@ export type GenerationWorkerDeps = {
   config: ImageConfigHandle;
   images: ImageService;
   store: ImageStore;
-  provider: ProviderClient;
+  provider: ImageProviderAdapter;
   concurrency: number;
   providerTimeoutMs: number;
   shutdownTimeoutMs?: number;
@@ -112,7 +114,7 @@ export class GenerationWorker {
   private readonly config: ImageConfigHandle;
   private readonly images: ImageService;
   private readonly store: ImageStore;
-  private readonly provider: ProviderClient;
+  private readonly provider: ImageProviderAdapter;
   private readonly semaphore: Semaphore;
   private readonly providerTimeoutMs: number;
   private readonly shutdownTimeoutMs: number;
@@ -439,14 +441,18 @@ export class GenerationWorker {
     try {
       const references = snapshot.imageAssets.map((asset) => {
         const { bytes } = this.images.readContent(asset.id);
-        return { mime: asset.mime, base64: bytes.toString('base64') };
+        // Persisted assets were verified by sharp against AllowedMime; the text
+        // column only widens the type at rest.
+        return { mime: asset.mime as AllowedMime, base64: bytes.toString('base64') };
       });
       const result = await this.provider.generate({
         model: snapshot.model,
-        prompt: snapshot.finalPrompt,
-        parameters: snapshot.effectiveParameters,
-        references,
         credential,
+        prompt: snapshot.finalPrompt,
+        inputImages: references,
+        aspectRatio: snapshot.authored.aspectRatio,
+        resolution: snapshot.authored.resolution,
+        extendedData: snapshot.authored.extendedData,
         timeoutMs: this.providerTimeoutMs,
         signal,
       });
@@ -463,7 +469,7 @@ export class GenerationWorker {
     }
   }
 
-  private async storeOutput(row: GenerationRow, itemIndex: number, result: ProviderResult) {
+  private async storeOutput(row: GenerationRow, itemIndex: number, result: ProviderImage) {
     let bytes: Buffer;
     try {
       bytes = decodeBase64Image(result.base64);
@@ -484,12 +490,6 @@ export class GenerationWorker {
     }
     if (result.mediaType !== null && result.mediaType !== verified.mime) {
       throw storageFailure('output_format_rejected', '上游声明的图片格式与实际内容不一致');
-    }
-    if (row.snapshot.effectiveParameters.background === 'transparent') {
-      const hasAlpha = await this.store.hasTransparency(bytes);
-      if (!hasAlpha) {
-        throw storageFailure('transparent_not_supported', '模型返回的图片没有真实透明像素');
-      }
     }
     const stored = await this.store.store({ bytes });
     return this.images.persist(stored, {

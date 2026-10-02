@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import {
-  effectiveParameters,
+  aspectRatios,
+  assertGenerationFitsCapability,
   generationCreateSchema,
   idempotencyKeySchema,
   imageUpdateSchema,
@@ -9,6 +10,7 @@ import {
   promptCreateSchema,
   promptUpdateSchema,
   removeReference,
+  resolutionClasses,
   scanReferences,
 } from '../src/contracts.ts';
 
@@ -37,48 +39,41 @@ test('引用稳定、顺序明确、按身份移除所有重复出现', () => {
   assert.throws(() => scanReferences(`{{image:${id}}`));
   assert.throws(() => scanReferences('{{unknown:thing}}'));
 });
-test('严格生成 schema 不接受漂移引用列表或任意请求参数', () => {
-  assert.equal(generationCreateSchema.parse({ authoredPrompt: 'draw', modelId: 'model' }).outputCount, 1);
-  assert.throws(() => generationCreateSchema.parse({ authoredPrompt: 'draw', modelId: 'model', referenceIds: [] }));
-});
-test('默认值和模型能力双重校验，未知参数、非法值与组合被拒绝', () => {
-  const model = modelDefinitionSchema.parse({
-    id: 'model',
-    name: 'Model',
-    provider: 'openrouter',
-    upstreamModel: 'openai/gpt-image-1',
-    credentialRef: 'openrouter',
-    providerTag: 'openai',
-    capabilities: { maxReferences: 1, maxOutputs: 2 },
-    parameters: [{ name: 'quality', label: '质量', type: 'enum', options: ['auto', 'low'], default: 'auto' }],
-  });
-  const input = generationCreateSchema.parse({ authoredPrompt: 'draw', modelId: 'model' });
-  assert.deepEqual(effectiveParameters(model, input), { quality: 'auto' });
-  assert.throws(() => effectiveParameters(model, { ...input, parameters: { authorization: 'secret' } }));
-  assert.throws(() => effectiveParameters(model, { ...input, parameters: { quality: 'high' } }));
-  assert.throws(() => effectiveParameters(model, { ...input, outputCount: 3 }));
-  assert.throws(() =>
-    modelDefinitionSchema.parse({
-      ...model,
-      parameters: [{ name: 'quality', label: '质量', type: 'integer', min: 0, max: 5 }],
-    }),
+test('生成意图默认值收敛为离散档位，扩展数据是自由形状容器', () => {
+  const parsed = generationCreateSchema.parse({ authoredPrompt: 'draw', modelId: 'model' });
+  assert.equal(parsed.outputCount, 1);
+  assert.equal(parsed.aspectRatio, 'auto');
+  assert.equal(parsed.resolution, 'auto');
+  assert.equal(parsed.extendedData, undefined);
+  assert.equal(
+    generationCreateSchema.parse({ authoredPrompt: 'd', modelId: 'm', aspectRatio: '2:3' }).aspectRatio,
+    '2:3',
   );
-  assert.throws(() =>
-    modelDefinitionSchema.parse({
-      ...model,
-      parameters: [{ name: 'background', label: '背景', type: 'enum', options: ['magenta'] }],
-    }),
+  // extendedData is adapter-owned: any string-keyed payload passes, unknown
+  // top-level fields never do.
+  assert.deepEqual(
+    generationCreateSchema.parse({ authoredPrompt: 'd', modelId: 'm', extendedData: { seed: 7, nested: { a: true } } })
+      .extendedData,
+    { seed: 7, nested: { a: true } },
   );
+  assert.throws(() => generationCreateSchema.parse({ authoredPrompt: 'd', modelId: 'm', referenceIds: [] }));
+  assert.throws(() => generationCreateSchema.parse({ authoredPrompt: 'd', modelId: 'm', aspectRatio: '8:1' }));
+  assert.throws(() => generationCreateSchema.parse({ authoredPrompt: 'd', modelId: 'm', quality: 'high' }));
 });
-test('providerTag 接受带区域的上游端点标签，quality 接受扩展档位', () => {
+test('providerTag 接受带区域的上游端点标签', () => {
   const base = {
     id: 'model',
     name: 'Model',
     provider: 'openrouter',
     upstreamModel: 'google/gemini-3-pro-image',
     credentialRef: 'openrouter',
-    capabilities: { maxReferences: 14, maxOutputs: 1 },
-    parameters: [{ name: 'quality', label: '质量', type: 'enum', options: ['auto', 'xhigh', 'max'], default: 'auto' }],
+    capabilities: {
+      imageInput: true,
+      maxInputImages: 14,
+      maxOutputs: 1,
+      aspectRatios: ['auto', '1:1'],
+      resolutionClasses: ['auto', 'high'],
+    },
   };
   assert.equal(
     modelDefinitionSchema.parse({ ...base, providerTag: 'google-ai-studio/global' }).providerTag,
@@ -87,45 +82,73 @@ test('providerTag 接受带区域的上游端点标签，quality 接受扩展档
   for (const providerTag of ['google-ai-studio/', '/global', 'a/b/c', 'google ai']) {
     assert.throws(() => modelDefinitionSchema.parse({ ...base, providerTag }));
   }
-  assert.throws(() =>
-    modelDefinitionSchema.parse({
-      ...base,
-      providerTag: 'openai',
-      parameters: [{ name: 'quality', label: '质量', type: 'enum', options: ['ultra'] }],
-    }),
-  );
 });
-test('尺寸与比例/分辨率不能同时生效，默认值也受组合校验', () => {
-  const model = modelDefinitionSchema.parse({
-    id: 'sizes',
-    name: '尺寸模型',
+test('能力声明覆盖意图档位，不支持图片输入时不能声明输入上限', () => {
+  const base = {
+    id: 'model',
+    name: 'Model',
     provider: 'openrouter',
     upstreamModel: 'openai/gpt-image-1',
     credentialRef: 'openrouter',
     providerTag: 'openai',
-    capabilities: { maxReferences: 0, maxOutputs: 1 },
-    parameters: [
-      { name: 'size', label: '尺寸', type: 'enum', options: ['1024x1024'] },
-      { name: 'resolution', label: '分辨率', type: 'enum', options: ['1K'] },
-      { name: 'aspect_ratio', label: '比例', type: 'enum', options: ['1:1'] },
-    ],
+  };
+  const model = modelDefinitionSchema.parse({
+    ...base,
+    capabilities: {
+      imageInput: false,
+      maxInputImages: 0,
+      maxOutputs: 2,
+      aspectRatios: ['auto', '1:1'],
+      resolutionClasses: ['auto'],
+    },
   });
-  const input = generationCreateSchema.parse({ authoredPrompt: 'draw', modelId: model.id });
-  assert.deepEqual(effectiveParameters(model, { ...input, parameters: { size: '1024x1024' } }), { size: '1024x1024' });
-  assert.throws(
-    () => effectiveParameters(model, { ...input, parameters: { size: '1024x1024', resolution: '1K' } }),
-    /size/,
-  );
-  assert.throws(
-    () => effectiveParameters(model, { ...input, parameters: { size: '1024x1024', aspect_ratio: '1:1' } }),
-    /size/,
-  );
   assert.throws(() =>
     modelDefinitionSchema.parse({
-      ...model,
-      parameters: model.parameters.map((p) =>
-        p.name === 'size' ? { ...p, default: '1024x1024' } : p.name === 'resolution' ? { ...p, default: '1K' } : p,
-      ),
+      ...base,
+      capabilities: {
+        imageInput: false,
+        maxInputImages: 3,
+        maxOutputs: 2,
+        aspectRatios: ['auto'],
+        resolutionClasses: ['auto'],
+      },
     }),
   );
+  assert.throws(() =>
+    modelDefinitionSchema.parse({ ...base, capabilities: { imageInput: true, maxInputImages: 1, maxOutputs: 2 } }),
+  );
+
+  // Intent beyond the declared capability is rejected before any paid call.
+  assert.doesNotThrow(() =>
+    assertGenerationFitsCapability(model, generationCreateSchema.parse({ authoredPrompt: 'd', modelId: 'model' })),
+  );
+  assert.throws(
+    () =>
+      assertGenerationFitsCapability(
+        model,
+        generationCreateSchema.parse({ authoredPrompt: 'd', modelId: 'model', aspectRatio: '16:9' }),
+      ),
+    /画面比例/,
+  );
+  assert.throws(
+    () =>
+      assertGenerationFitsCapability(
+        model,
+        generationCreateSchema.parse({ authoredPrompt: 'd', modelId: 'model', resolution: 'high' }),
+      ),
+    /分辨率/,
+  );
+  assert.throws(
+    () =>
+      assertGenerationFitsCapability(
+        model,
+        generationCreateSchema.parse({ authoredPrompt: 'd', modelId: 'model', outputCount: 3 }),
+      ),
+    /输出数量/,
+  );
+  // Provider-specific concepts never enter the public schema.
+  for (const banned of ['seed', 'lora', 'sampler', 'steps', 'size', 'background']) {
+    assert.ok(!aspectRatios.includes(banned as never));
+    assert.ok(!resolutionClasses.includes(banned as never));
+  }
 });

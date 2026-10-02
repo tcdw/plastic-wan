@@ -90,98 +90,35 @@ export type ImageAsset = {
   deletedAt: string | null;
 };
 
-export const parameterNames = [
-  'aspect_ratio',
-  'resolution',
-  'size',
-  'quality',
-  'output_format',
-  'background',
-  'output_compression',
-  'seed',
-] as const;
-export const parameterSchema = z
-  .discriminatedUnion('type', [
-    z
-      .object({
-        name: z.enum(parameterNames),
-        label: nameSchema,
-        type: z.literal('enum'),
-        options: z.array(z.string().min(1).max(40)).min(1).max(40),
-        default: z.string().optional(),
-      })
-      .strict(),
-    z
-      .object({
-        name: z.enum(parameterNames),
-        label: nameSchema,
-        type: z.literal('integer'),
-        min: z.number().int(),
-        max: z.number().int(),
-        default: z.number().int().optional(),
-      })
-      .strict(),
-  ])
-  .superRefine((value, ctx) => {
-    if (value.type === 'enum' && value.default !== undefined && !value.options.includes(value.default)) {
-      ctx.addIssue({ code: 'custom', message: '默认值不在选项中' });
-    }
-    if (
-      value.type === 'integer' &&
-      (value.min > value.max ||
-        (value.default !== undefined && (value.default < value.min || value.default > value.max)))
-    ) {
-      ctx.addIssue({ code: 'custom', message: '参数范围或默认值无效' });
-    }
-    if (['output_compression', 'seed'].includes(value.name) !== (value.type === 'integer')) {
-      ctx.addIssue({ code: 'custom', message: '参数映射类型无效' });
-    }
-    if (value.type === 'enum') {
-      const allowed: Partial<Record<string, string[]>> = {
-        aspect_ratio: [
-          'auto',
-          '1:1',
-          '16:9',
-          '9:16',
-          '4:3',
-          '3:4',
-          '3:2',
-          '2:3',
-          '4:5',
-          '5:4',
-          '1:2',
-          '2:1',
-          '1:4',
-          '4:1',
-          '1:8',
-          '8:1',
-          '9:21',
-          '21:9',
-        ],
-        quality: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'],
-        output_format: ['png', 'jpeg', 'webp'],
-        background: ['auto', 'transparent', 'opaque'],
-        resolution: ['512', '1K', '2K', '4K'],
-      };
-      if (
-        value.name === 'size' &&
-        value.options.some(
-          (option) =>
-            !['512', '1K', '2K', '4K'].includes(option) &&
-            !/^(?:[1-9]\d{2}|[1-7]\d{3}|8000)x(?:[1-9]\d{2}|[1-7]\d{3}|8000)$/.test(option),
-        )
-      ) {
-        ctx.addIssue({ code: 'custom', message: '像素尺寸必须在100..8000范围内或使用分辨率档位' });
-      }
-      if (allowed[value.name] && value.options.some((option) => !allowed[value.name]?.includes(option))) {
-        ctx.addIssue({ code: 'custom', message: '不支持的上游参数选项' });
-      }
-    }
-    if (value.type === 'integer' && (value.min < 0 || (value.name === 'output_compression' && value.max > 100))) {
-      ctx.addIssue({ code: 'custom', message: '上游整数范围无效' });
-    }
-  });
-export type ParameterDefinition = z.infer<typeof parameterSchema>;
+/**
+ * Public generation intent. The abstraction is intentionally lossy: these two
+ * enums are the only generation controls the core exposes, and every provider
+ * adapter maps them onto its own vendor parameters. Provider-specific concepts
+ * (seed, sampler, LoRA, arbitrary width/height, ...) stay with the adapter via
+ * `extendedData` — never in this schema.
+ */
+export const aspectRatios = ['auto', '1:1', '2:3', '3:2', '4:3', '3:4', '16:9', '9:16'] as const;
+export type AspectRatio = (typeof aspectRatios)[number];
+export const resolutionClasses = ['auto', 'low', 'medium', 'high'] as const;
+export type ResolutionClass = (typeof resolutionClasses)[number];
+
+/**
+ * Provider-specific escape hatch. The core validates the container shape only:
+ * the active adapter interprets every value, nothing is portable across
+ * providers, and there is deliberately no core-level per-provider registry.
+ */
+export const extendedDataSchema = z.record(z.string(), z.unknown());
+
+export const modelCapabilitySchema = z
+  .object({
+    imageInput: z.boolean(),
+    maxInputImages: z.number().int().min(0).max(16),
+    maxOutputs: z.number().int().min(1).max(10),
+    aspectRatios: z.array(z.enum(aspectRatios)).min(1),
+    resolutionClasses: z.array(z.enum(resolutionClasses)).min(1),
+  })
+  .strict();
+export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
 export const modelDefinitionSchema = z
   .object({
     id: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
@@ -190,25 +127,12 @@ export const modelDefinitionSchema = z
     upstreamModel: z.string().regex(/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/),
     credentialRef: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
     providerTag: z.string().regex(/^[a-zA-Z0-9_-]{1,80}(?:\/[a-zA-Z0-9_-]{1,80})?$/),
-    capabilities: z
-      .object({ maxReferences: z.number().int().min(0).max(16), maxOutputs: z.number().int().min(1).max(10) })
-      .strict(),
-    parameters: z.array(parameterSchema).max(8),
+    capabilities: modelCapabilitySchema,
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (new Set(value.parameters.map((p) => p.name)).size !== value.parameters.length) {
-      ctx.addIssue({ code: 'custom', message: '参数名称重复' });
-    }
-    try {
-      effectiveParameters(value, {
-        authoredPrompt: '配置默认值校验',
-        modelId: value.id,
-        outputCount: 1,
-        parameters: {},
-      });
-    } catch {
-      ctx.addIssue({ code: 'custom', message: '模型默认参数组合无效' });
+    if (!value.capabilities.imageInput && value.capabilities.maxInputImages > 0) {
+      ctx.addIssue({ code: 'custom', message: '不支持图片输入的模型不能声明输入图片上限' });
     }
   });
 export type ModelDefinition = z.infer<typeof modelDefinitionSchema>;
@@ -217,8 +141,10 @@ export const generationCreateSchema = z
   .object({
     authoredPrompt: z.string().min(1).max(32000),
     modelId: z.string().min(1).max(80),
-    parameters: z.record(z.string(), z.union([z.string().max(80), z.number().finite()])).default({}),
+    aspectRatio: z.enum(aspectRatios).default('auto'),
+    resolution: z.enum(resolutionClasses).default('auto'),
     outputCount: z.number().int().min(1).max(10).default(1),
+    extendedData: extendedDataSchema.optional(),
   })
   .strict();
 export type GenerationInput = z.infer<typeof generationCreateSchema>;
@@ -262,7 +188,6 @@ export type GenerationSnapshot = {
   imageAssets: ImageAsset[];
   model: ModelDefinition;
   configVersion: string;
-  effectiveParameters: Record<string, string | number>;
   requestSemantics: { adapterVersion: 1; calls: number; imagesPerCall: 1; appendedInstructions: string[] };
 };
 export type GenerationStatus = 'queued' | 'running' | 'succeeded' | 'partial' | 'failed' | 'interrupted';
@@ -330,41 +255,14 @@ export function removeReference(text: string, kind: Reference['kind'], id: strin
   }
   return text;
 }
-export function effectiveParameters(
-  model: ModelDefinition,
-  authored: GenerationInput,
-): Record<string, string | number> {
-  if (authored.outputCount > model.capabilities.maxOutputs) {
-    throw new Error('输出数量超出模型限制');
+export function assertGenerationFitsCapability(model: ModelDefinition, input: GenerationInput): void {
+  if (input.outputCount > model.capabilities.maxOutputs) {
+    throw new Error(`输出数量超过模型上限（${model.capabilities.maxOutputs}）`);
   }
-  const result: Record<string, string | number> = {};
-  for (const name of Object.keys(authored.parameters)) {
-    if (!model.parameters.some((p) => p.name === name)) {
-      throw new Error(`模型不支持参数：${name}`);
-    }
+  if (!model.capabilities.aspectRatios.includes(input.aspectRatio)) {
+    throw new Error(`模型不支持画面比例 ${input.aspectRatio}`);
   }
-  for (const p of model.parameters) {
-    const value = authored.parameters[p.name] ?? p.default;
-    if (value === undefined) {
-      continue;
-    }
-    if (
-      p.type === 'enum'
-        ? typeof value !== 'string' || !p.options.includes(value)
-        : typeof value !== 'number' || !Number.isInteger(value) || value < p.min || value > p.max
-    ) {
-      throw new Error(`参数值无效：${p.label}`);
-    }
-    result[p.name] = value;
+  if (!model.capabilities.resolutionClasses.includes(input.resolution)) {
+    throw new Error(`模型不支持分辨率档位 ${input.resolution}`);
   }
-  if (result.size !== undefined && (result.resolution !== undefined || result.aspect_ratio !== undefined)) {
-    throw new Error('size 不能与 resolution 或 aspect_ratio 同时设置');
-  }
-  if (result.background === 'transparent' && result.output_format === 'jpeg') {
-    throw new Error('透明背景不能使用 JPEG');
-  }
-  if (result.output_compression !== undefined && result.output_format !== 'jpeg' && result.output_format !== 'webp') {
-    throw new Error('压缩率只能用于 JPEG 或 WebP');
-  }
-  return result;
 }

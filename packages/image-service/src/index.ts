@@ -7,6 +7,7 @@ export { createImageService, createPromptService, toImageAsset, toPromptAsset } 
 export type { ImageConfigHandle, ImageConfigSnapshot } from './config.ts';
 export { createImageConfigSnapshot, ImageConfigStore } from './config.ts';
 export type {
+  AspectRatio,
   AttemptStatus,
   ErrorResponse,
   Generation,
@@ -19,19 +20,20 @@ export type {
   GenerationStatus,
   ImageAsset,
   ListQuery,
+  ModelCapability,
   ModelDefinition,
   Page,
-  ParameterDefinition,
   PromptAsset,
   PublicModel,
   Reference,
+  ResolutionClass,
   ResolvedInput,
   SafeError,
 } from './contracts.ts';
 export {
-  // Pure functions
-  effectiveParameters,
   // Contracts
+  aspectRatios,
+  assertGenerationFitsCapability,
   generationCreateSchema,
   generationScopes,
   generationSourceSchema,
@@ -40,14 +42,15 @@ export {
   imageUpdateSchema,
   listSchema,
   maxImageBytes,
+  modelCapabilitySchema,
   modelDefinitionSchema,
-  parameterNames,
-  parameterSchema,
   promptBodySchema,
   promptCreateSchema,
   promptUpdateSchema,
+  // Pure functions
   referenceToken,
   removeReference,
+  resolutionClasses,
   scanReferences,
 } from './contracts.ts';
 export type { ImageCore, ImageCoreOptions } from './core.ts';
@@ -74,12 +77,14 @@ export {
 export type { AllowedMime, StoredImage, VerifiedImage } from './image-store.ts';
 export { decodeBase64Image, ImageStore, MAX_IMAGE_BYTES } from './image-store.ts';
 export {
+  ADAPTER_ID,
   ADAPTER_VERSION,
   buildImageRequestBody,
-  createProviderClient,
+  createOpenRouterAdapter,
   OPENROUTER_IMAGES_ENDPOINT,
   ProviderCallError,
 } from './openrouter.ts';
+export type { ImageProviderAdapter, ProviderImage, ProviderInvocation } from './provider.ts';
 export { Redactor, redactWith } from './redactor.ts';
 export { resolveSnapshot } from './resolve.ts';
 export {

@@ -15,6 +15,9 @@ import { Route as AlarmsRouteImport } from './routes/alarms'
 import { Route as ChatsRouteImport } from './routes/chats'
 import { Route as ContextsRouteImport } from './routes/contexts'
 import { Route as DeveloperRouteImport } from './routes/developer'
+import { Route as ImageGenerateRouteImport } from './routes/image-generate'
+import { Route as ImageGenerationsRouteImport } from './routes/image-generations'
+import { Route as ImageSettingsRouteImport } from './routes/image-settings'
 import { Route as InvocationsRouteImport } from './routes/invocations'
 import { Route as MemoriesRouteImport } from './routes/memories'
 import { Route as MessagesRouteImport } from './routes/messages'
@@ -22,6 +25,7 @@ import { Route as ModelsRouteImport } from './routes/models'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as StickersRouteImport } from './routes/stickers'
 import { Route as ContextsConversationIdRouteImport } from './routes/contexts_.$conversationId'
+import { Route as ImageGenerationsGenerationIdRouteImport } from './routes/image-generations/$generationId'
 import { Route as InvocationsInvocationIdRouteImport } from './routes/invocations_.$invocationId'
 import { Route as MessagesMessageIdRouteImport } from './routes/messages_.$messageId'
 
@@ -53,6 +57,21 @@ const ContextsRoute = ContextsRouteImport.update({
 const DeveloperRoute = DeveloperRouteImport.update({
   id: '/developer',
   path: '/developer',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ImageGenerateRoute = ImageGenerateRouteImport.update({
+  id: '/image-generate',
+  path: '/image-generate',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ImageGenerationsRoute = ImageGenerationsRouteImport.update({
+  id: '/image-generations',
+  path: '/image-generations',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ImageSettingsRoute = ImageSettingsRouteImport.update({
+  id: '/image-settings',
+  path: '/image-settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InvocationsRoute = InvocationsRouteImport.update({
@@ -90,6 +109,12 @@ const ContextsConversationIdRoute = ContextsConversationIdRouteImport.update({
   path: '/contexts/$conversationId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ImageGenerationsGenerationIdRoute =
+  ImageGenerationsGenerationIdRouteImport.update({
+    id: '/$generationId',
+    path: '/$generationId',
+    getParentRoute: () => ImageGenerationsRoute,
+  } as any)
 const InvocationsInvocationIdRoute = InvocationsInvocationIdRouteImport.update({
   id: '/invocations_/$invocationId',
   path: '/invocations/$invocationId',
@@ -108,6 +133,9 @@ export interface FileRoutesByFullPath {
   '/chats': typeof ChatsRoute
   '/contexts': typeof ContextsRoute
   '/developer': typeof DeveloperRoute
+  '/image-generate': typeof ImageGenerateRoute
+  '/image-generations': typeof ImageGenerationsRouteWithChildren
+  '/image-settings': typeof ImageSettingsRoute
   '/invocations': typeof InvocationsRoute
   '/memories': typeof MemoriesRoute
   '/messages': typeof MessagesRoute
@@ -115,6 +143,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/stickers': typeof StickersRoute
   '/contexts/$conversationId': typeof ContextsConversationIdRoute
+  '/image-generations/$generationId': typeof ImageGenerationsGenerationIdRoute
   '/invocations/$invocationId': typeof InvocationsInvocationIdRoute
   '/messages/$messageId': typeof MessagesMessageIdRoute
 }
@@ -125,6 +154,9 @@ export interface FileRoutesByTo {
   '/chats': typeof ChatsRoute
   '/contexts': typeof ContextsRoute
   '/developer': typeof DeveloperRoute
+  '/image-generate': typeof ImageGenerateRoute
+  '/image-generations': typeof ImageGenerationsRouteWithChildren
+  '/image-settings': typeof ImageSettingsRoute
   '/invocations': typeof InvocationsRoute
   '/memories': typeof MemoriesRoute
   '/messages': typeof MessagesRoute
@@ -132,6 +164,7 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRoute
   '/stickers': typeof StickersRoute
   '/contexts/$conversationId': typeof ContextsConversationIdRoute
+  '/image-generations/$generationId': typeof ImageGenerationsGenerationIdRoute
   '/invocations/$invocationId': typeof InvocationsInvocationIdRoute
   '/messages/$messageId': typeof MessagesMessageIdRoute
 }
@@ -143,6 +176,9 @@ export interface FileRoutesById {
   '/chats': typeof ChatsRoute
   '/contexts': typeof ContextsRoute
   '/developer': typeof DeveloperRoute
+  '/image-generate': typeof ImageGenerateRoute
+  '/image-generations': typeof ImageGenerationsRouteWithChildren
+  '/image-settings': typeof ImageSettingsRoute
   '/invocations': typeof InvocationsRoute
   '/memories': typeof MemoriesRoute
   '/messages': typeof MessagesRoute
@@ -150,6 +186,7 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/stickers': typeof StickersRoute
   '/contexts_/$conversationId': typeof ContextsConversationIdRoute
+  '/image-generations/$generationId': typeof ImageGenerationsGenerationIdRoute
   '/invocations_/$invocationId': typeof InvocationsInvocationIdRoute
   '/messages_/$messageId': typeof MessagesMessageIdRoute
 }
@@ -162,6 +199,9 @@ export interface FileRouteTypes {
     | '/chats'
     | '/contexts'
     | '/developer'
+    | '/image-generate'
+    | '/image-generations'
+    | '/image-settings'
     | '/invocations'
     | '/memories'
     | '/messages'
@@ -169,6 +209,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/stickers'
     | '/contexts/$conversationId'
+    | '/image-generations/$generationId'
     | '/invocations/$invocationId'
     | '/messages/$messageId'
   fileRoutesByTo: FileRoutesByTo
@@ -179,6 +220,9 @@ export interface FileRouteTypes {
     | '/chats'
     | '/contexts'
     | '/developer'
+    | '/image-generate'
+    | '/image-generations'
+    | '/image-settings'
     | '/invocations'
     | '/memories'
     | '/messages'
@@ -186,6 +230,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/stickers'
     | '/contexts/$conversationId'
+    | '/image-generations/$generationId'
     | '/invocations/$invocationId'
     | '/messages/$messageId'
   id:
@@ -196,6 +241,9 @@ export interface FileRouteTypes {
     | '/chats'
     | '/contexts'
     | '/developer'
+    | '/image-generate'
+    | '/image-generations'
+    | '/image-settings'
     | '/invocations'
     | '/memories'
     | '/messages'
@@ -203,6 +251,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/stickers'
     | '/contexts_/$conversationId'
+    | '/image-generations/$generationId'
     | '/invocations_/$invocationId'
     | '/messages_/$messageId'
   fileRoutesById: FileRoutesById
@@ -214,6 +263,9 @@ export interface RootRouteChildren {
   ChatsRoute: typeof ChatsRoute
   ContextsRoute: typeof ContextsRoute
   DeveloperRoute: typeof DeveloperRoute
+  ImageGenerateRoute: typeof ImageGenerateRoute
+  ImageGenerationsRoute: typeof ImageGenerationsRouteWithChildren
+  ImageSettingsRoute: typeof ImageSettingsRoute
   InvocationsRoute: typeof InvocationsRoute
   MemoriesRoute: typeof MemoriesRoute
   MessagesRoute: typeof MessagesRoute
@@ -269,6 +321,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DeveloperRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/image-generate': {
+      id: '/image-generate'
+      path: '/image-generate'
+      fullPath: '/image-generate'
+      preLoaderRoute: typeof ImageGenerateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/image-generations': {
+      id: '/image-generations'
+      path: '/image-generations'
+      fullPath: '/image-generations'
+      preLoaderRoute: typeof ImageGenerationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/image-settings': {
+      id: '/image-settings'
+      path: '/image-settings'
+      fullPath: '/image-settings'
+      preLoaderRoute: typeof ImageSettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/invocations': {
       id: '/invocations'
       path: '/invocations'
@@ -318,6 +391,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ContextsConversationIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/image-generations/$generationId': {
+      id: '/image-generations/$generationId'
+      path: '/$generationId'
+      fullPath: '/image-generations/$generationId'
+      preLoaderRoute: typeof ImageGenerationsGenerationIdRouteImport
+      parentRoute: typeof ImageGenerationsRoute
+    }
     '/invocations_/$invocationId': {
       id: '/invocations_/$invocationId'
       path: '/invocations/$invocationId'
@@ -335,6 +415,17 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface ImageGenerationsRouteChildren {
+  ImageGenerationsGenerationIdRoute: typeof ImageGenerationsGenerationIdRoute
+}
+
+const ImageGenerationsRouteChildren: ImageGenerationsRouteChildren = {
+  ImageGenerationsGenerationIdRoute: ImageGenerationsGenerationIdRoute,
+}
+
+const ImageGenerationsRouteWithChildren =
+  ImageGenerationsRoute._addFileChildren(ImageGenerationsRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminsRoute: AdminsRoute,
@@ -342,6 +433,9 @@ const rootRouteChildren: RootRouteChildren = {
   ChatsRoute: ChatsRoute,
   ContextsRoute: ContextsRoute,
   DeveloperRoute: DeveloperRoute,
+  ImageGenerateRoute: ImageGenerateRoute,
+  ImageGenerationsRoute: ImageGenerationsRouteWithChildren,
+  ImageSettingsRoute: ImageSettingsRoute,
   InvocationsRoute: InvocationsRoute,
   MemoriesRoute: MemoriesRoute,
   MessagesRoute: MessagesRoute,

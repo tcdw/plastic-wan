@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
 import { Info } from 'lucide-react';
+import { useState } from 'react';
 import { toast } from 'sonner';
-import { ConfirmDialog, MonoValue, TableShell, type ColumnSpec, ToneBadge } from '@/components/business';
+import { type ColumnSpec, ConfirmDialog, MonoValue, TableShell, ToneBadge } from '@/components/business';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { type BotAdminEntry, addBotAdmin, removeBotAdmin } from '@/lib/api';
+import { addBotAdmin, type BotAdminEntry, removeBotAdmin } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 import { formatTime } from '@/lib/format';
 import { adminsQuery } from '@/lib/queries';

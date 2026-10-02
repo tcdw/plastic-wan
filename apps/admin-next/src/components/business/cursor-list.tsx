@@ -1,8 +1,8 @@
 import {
-  useInfiniteQuery,
   type InfiniteData,
   type QueryKey,
   type UndefinedInitialDataInfiniteOptions,
+  useInfiniteQuery,
 } from '@tanstack/react-query';
 import type React from 'react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';

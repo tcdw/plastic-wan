@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { X } from 'lucide-react';
-import { useEffect, useId, useState } from 'react';
 import type React from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { MemoryChatOption } from '@/lib/api';

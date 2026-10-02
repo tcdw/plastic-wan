@@ -2,6 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import type React from 'react';
 import {
+  type BadgeSemantic,
+  type ColumnSpec,
   DetailError,
   DetailSkeleton,
   JsonViewer,
@@ -13,9 +15,7 @@ import {
   StateBadge,
   TableShell,
   TextValue,
-  type ColumnSpec,
   ToneBadge,
-  type BadgeSemantic,
 } from '@/components/business';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
@@ -33,14 +33,14 @@ import { formatCost, formatDuration, formatNumber, formatTime } from '@/lib/form
 import { invocationQuery } from '@/lib/queries';
 import {
   buildInvocationTimeline,
+  type InvocationTimelineEvent,
   isNewContextSection,
   objectField,
+  type ParsedSendArguments,
   parseJsonObject,
   parseSendArguments,
   stringField,
   timelineEventKey,
-  type InvocationTimelineEvent,
-  type ParsedSendArguments,
 } from '@/lib/timeline';
 import { cn } from '@/lib/utils';
 

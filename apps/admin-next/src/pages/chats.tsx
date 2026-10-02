@@ -3,12 +3,12 @@ import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import {
+  type ColumnSpec,
   ConfirmDialog,
   FLUSH_TABLE_CLASS,
   MonoValue,
   TableShell,
   ToneBadge,
-  type ColumnSpec,
 } from '@/components/business';
 import { Panel } from '@/components/layout/panel';
 import { RestartBanner } from '@/components/models/restart-banner';
@@ -30,10 +30,10 @@ import {
   type ChatSettings,
   type ChatSettingsView,
   type ChatsView,
-  type ThinkingLevel,
   createChat,
   deleteChat,
   restartServer,
+  type ThinkingLevel,
   updateChat,
 } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';

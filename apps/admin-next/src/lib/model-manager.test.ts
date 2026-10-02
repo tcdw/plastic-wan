@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import type { ModelMetadataDraft, ProviderModelConfig } from './api.ts';
 import {
+  AUTO_COMPAT,
   agentModelConfig,
   applyFeedback,
-  AUTO_COMPAT,
   compatConfigFromState,
   compatFieldsForApi,
   compatStateFromConfig,

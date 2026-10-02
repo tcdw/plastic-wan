@@ -1,8 +1,8 @@
 import { useMutation } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { KvList, MonoValue } from '@/components/business';
-import { HeaderFields } from '@/components/models/header-fields';
 import { Panel } from '@/components/layout/panel';
+import { HeaderFields } from '@/components/models/header-fields';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -14,7 +14,7 @@ import {
   type UpdateProviderRequest,
   updateProvider,
 } from '@/lib/api.ts';
-import { headerPayload, headerRowsFromNames, type HeaderRow, removedHeaderNames } from '@/lib/header-rows.ts';
+import { type HeaderRow, headerPayload, headerRowsFromNames, removedHeaderNames } from '@/lib/header-rows.ts';
 import { requestErrorMessage } from '@/lib/model-manager.ts';
 import { useProviderWrite } from '@/lib/use-provider-write.ts';
 

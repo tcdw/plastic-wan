@@ -3,25 +3,24 @@ import { Eye, Lightbulb, Pencil, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
+  type ColumnSpec,
   ConfirmDialog,
   FLUSH_TABLE_CLASS,
   MonoValue,
   TableShell,
   ToneBadge,
-  type ColumnSpec,
 } from '@/components/business';
+import { Panel } from '@/components/layout/panel';
 import { InUsePanel } from '@/components/models/in-use-panel';
 import { ModelEditDialog } from '@/components/models/model-edit-dialog';
 import { ModelPickerDialog, type ModelPickerMode } from '@/components/models/model-picker-dialog';
 import { ProviderConnectionCard } from '@/components/models/provider-connection-card';
 import { ProviderWizard } from '@/components/models/provider-wizard';
 import { RestartBanner } from '@/components/models/restart-banner';
-import { Panel } from '@/components/layout/panel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
-import { cn } from '@/lib/utils';
 import {
   deleteProvider,
   deleteProviderModel,
@@ -48,6 +47,7 @@ import {
 import { providersQuery } from '@/lib/queries.ts';
 import { waitForAdminServer } from '@/lib/restart.ts';
 import { useProviderWrite } from '@/lib/use-provider-write.ts';
+import { cn } from '@/lib/utils';
 
 interface ModelRow {
   readonly alias: string;

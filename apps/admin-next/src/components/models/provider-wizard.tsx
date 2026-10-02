@@ -2,7 +2,6 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { MonoValue } from '@/components/business';
 import { HeaderFields } from '@/components/models/header-fields';
-import { headerRowsFromNames, headerValues, type HeaderRow } from '@/lib/header-rows.ts';
 import { ModelDraftList } from '@/components/models/model-draft-list';
 import { ModelEditDialog } from '@/components/models/model-edit-dialog';
 import { useDraftSelection } from '@/components/models/use-draft-selection';
@@ -31,6 +30,7 @@ import {
   type ProviderModelConfig,
 } from '@/lib/api.ts';
 import { formatNumber } from '@/lib/format.ts';
+import { type HeaderRow, headerRowsFromNames, headerValues } from '@/lib/header-rows.ts';
 import { modelFormFromDraft, parseModelIds, requestErrorMessage } from '@/lib/model-manager.ts';
 import { providerPresetsQuery } from '@/lib/queries.ts';
 import { useProviderWrite } from '@/lib/use-provider-write.ts';

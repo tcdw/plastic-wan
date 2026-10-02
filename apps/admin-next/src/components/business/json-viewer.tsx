@@ -1,8 +1,8 @@
 import JsonView from '@uiw/react-json-view';
 import { darkTheme } from '@uiw/react-json-view/dark';
 import { lightTheme } from '@uiw/react-json-view/light';
-import { useState } from 'react';
 import type React from 'react';
+import { useState } from 'react';
 import { useTheme } from '@/components/themes/theme-provider';
 import { Button } from '@/components/ui/button';
 import { prettyJson } from '@/lib/format';

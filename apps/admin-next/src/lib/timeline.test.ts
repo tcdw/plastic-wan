@@ -10,13 +10,13 @@ import type {
 import {
   buildInvocationTimeline,
   contextMessageTimestamp,
+  type InvocationTimelineEvent,
   indexSendsByToolCall,
   isNewContextSection,
   parseJsonObject,
   parseSendArguments,
   sortTimelineEvents,
   timelineEventKey,
-  type InvocationTimelineEvent,
 } from './timeline.ts';
 
 const AT = '2026-09-15T10:00:00.000Z';

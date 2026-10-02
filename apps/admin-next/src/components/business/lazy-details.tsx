@@ -1,5 +1,5 @@
-import { useState } from 'react';
 import type React from 'react';
+import { useState } from 'react';
 
 /**
  * Native `<details>` disclosure whose children are mounted only after the first

@@ -19,10 +19,11 @@ Config + SecretStore
         ├─ BotCommandService / AgentModelSwitcher / ConfigReloader
         ├─ AdminServer（仅 admin.enabled = true）
         ├─ LongTaskService（long_tasks / task_receipts）
-        └─ 内置 Plugin（含 alarm）
+        ├─ 内置 Plugin（含 alarm）
+        └─ ImageService（packages/image-service 核心；单 Worker 图片生成，原文件存 <data_dir>/images）
 ```
 
-启动顺序有语义：先加载并校验配置与权限，再取得单实例锁、迁移数据库、连接 Telegram、同步 Sticker Set；随后排空 Telegram pending updates，按 Conversation 创建 startup catch-up Invocation；最后启动 MCP、Scheduler、Admin Panel 和常规 long polling。启动时加载的配置是 active 配置的起点：运行期只有白名单字段可以被 `ConfigReloader` 应用到当前进程，其余字段仍要重启，见 [配置：运行时配置热更新](configuration.md#运行时配置热更新)。关闭时停止 Bot，先停 Admin Panel 再等待 Scheduler（最多 30 秒），停止 Sticker/MCP 服务，关闭数据库并释放锁。
+启动顺序有语义：先加载并校验配置与权限，再取得单实例锁、迁移数据库、连接 Telegram、同步 Sticker Set；随后排空 Telegram pending updates，按 Conversation 创建 startup catch-up Invocation；最后启动 MCP、Scheduler、Admin Panel 和常规 long polling。启动时加载的配置是 active 配置的起点：运行期只有白名单字段可以被 `ConfigReloader` 应用到当前进程，其余字段仍要重启，见 [配置：运行时配置热更新](configuration.md#运行时配置热更新)。关闭时停止 Bot，先停 Admin Panel 再等待 Scheduler（最多 30 秒），随后停止 Image worker（在数据库连接关闭之前落地中断标记），停止 Sticker/MCP 服务，关闭数据库并释放锁。
 
 ## 主数据流
 
@@ -78,6 +79,7 @@ send Tool → Telegram API → 审计
 | `capabilities/` | 模型可调用的 Tool 与外部能力（原语、媒体、Sticker、MCP） |
 | `context/` | Conversation Context：canonical history 存储、GC、引用、编解码、模型输入组装、记忆与完成回执注入 |
 | `store/` | SQLite 连接、schema 与迁移、通用 `long-tasks` 服务及跨层共享的持久化状态 |
+| `image/` | 图片生成核心的进程级装配：借出宿主 SQLite 连接、`<data_dir>/images` 文件存储与优雅停止；领域实现与领域测试在私有包 `packages/image-service`（provider adapter 边界见包内 `provider.ts`） |
 | `platform/` | 无业务依赖的基础模块：配置、Secret、Provider、并发、子进程、Prompt 模板等 |
 | `system-resources/` | 随 runtime 发布的 `system:///` 只读资源树（System Skills） |
 

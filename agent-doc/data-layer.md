@@ -142,6 +142,14 @@ Admin 侧的 `admin_users`/`admin_sessions`/`bot_admins` 语义见 [admin-panel.
 - 原始 Update 不整体永久保存；只保存需要审计和重放的受限片段。
 - 读取 `snapshot_json`、`telegram_json`、`metadata_json` 时必须在使用前校验结构。
 
+## 图片生成域（迁移 024）
+
+迁移 `024` 建立图片生成域的五张表（`image_prompts`、`image_assets`、`image_generations`、`image_generation_attempts`、`image_idempotency_keys`），Drizzle 定义在私有包 [packages/image-service](../packages/image-service) 内并由 [src/store/schema.ts](../src/store/schema.ts) 聚合 re-export；该包同时拥有图片域的查询服务与 worker，宿主借出 SQLite 连接（同一句柄上的第二个 Drizzle 视图）而不移交所有权。与宿主表不同的语义：
+
+- 图片域主键是应用生成的 text UUID，不是 `sqliteBigInt` 行 ID；计数与尺寸列使用包内 `safeInteger` 列（`fromDriver` 强制 `number`），保证宿主 `defaultSafeIntegers(true)` 连接下这些值可安全 JSON 序列化。
+- 素材删除是软删除（`deleted_at`），原始图片文件按内容寻址存放于 `<data_dir>/images`，删除素材不删文件；文件不在 SQLite 内，`backup` 以旁路 `.images/` 快照携带（见[备份](#备份)）。
+- `image_assets.source = 'generation'` 的行通过 `generation_id + output_index` 关联产出它的生成轮次；输出项级审计在 `image_generation_attempts`（唯一键 `generation_id + round + item_index`）。
+
 ## 保留清理
 
 `backup` 在备份前调用 `purgeExpiredData`。清理仅删除已完成终态和不再被活跃引用的数据：
@@ -174,7 +182,8 @@ node src/cli.ts backup --config dev-data/config.jsonc
 3. 使用 `VACUUM INTO` 写入同目录临时文件。
 4. 非 Windows 系统将临时文件设为 `0600`。
 5. 原子 rename 为 `plasticwan-<timestamp>-<uuid>.sqlite`。
-6. 按修改时间保留 `retention.backup_copies` 份。
+6. `<data_dir>/images` 存在时，整目录复制为旁路快照 `plasticwan-<timestamp>-<uuid>.images/`。原图是归档数据而非媒体缓存，不进 SQLite，因此备份必须成对携带；SQLite 快照与目录复制之间没有跨存储原子性，快照点之后提交的行可能引用晚于复制点的文件。
+7. 按修改时间保留 `retention.backup_copies` 份，SQLite 副本与其 `.images/` 快照成对轮换删除。
 
 仓库不自带定时调度；定期备份由宿主机 cron 等外部调度运行，见[运维：Docker 部署](operations.md#docker-部署)。恢复或复制前应额外运行 `PRAGMA integrity_check`；当前备份命令不替代恢复演练。
 
@@ -190,6 +199,7 @@ dev-data/
     ├── plasticwan.sqlite-wal
     ├── plasticwan.sqlite-shm
     ├── media/
+    ├── images/
     └── backups/
 ```
 

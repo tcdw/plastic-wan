@@ -22,6 +22,7 @@ pnpm test test/skills.test.ts test/system-resources.test.ts test/plugins.test.ts
 pnpm test test/media.test.ts test/stickers.test.ts
 pnpm test test/mcp.test.ts test/web-fetch.test.ts
 pnpm test test/operations.test.ts test/foundation.test.ts test/schema.test.ts test/load-env.test.ts
+pnpm test packages/image-service/test test/image-service-store.test.ts
 pnpm test test/admin.test.ts test/admin-providers.test.ts test/admin-chats.test.ts test/model-switch.test.ts
 pnpm test test/bot-commands.test.ts
 pnpm test test/config-diff.test.ts test/config-reload.test.ts test/chat-model-runtime.test.ts
@@ -31,11 +32,13 @@ pnpm test test/alarm.test.ts test/alarm-context.test.ts
 pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-configure.test.ts
 ```
 
-上面的命令按改动范围组织；新增测试文件时同步补充对应命令与下表契约。`pnpm test` 运行 `vitest.config.ts` 的 `include` 覆盖的全部测试（`test/**/*.test.ts` 与 `apps/admin-next/src/**/*.test.ts`），文件间串行（`fileParallelism: false`）。
+上面的命令按改动范围组织；新增测试文件时同步补充对应命令与下表契约。`pnpm test` 运行 `vitest.config.ts` 的 `include` 覆盖的全部测试（`test/**/*.test.ts`、`apps/admin-next/src/**/*.test.ts` 与 `packages/image-service/test/**/*.test.ts`），文件间串行（`fileParallelism: false`）。
 
 | 测试 | 主要契约 |
 | --- | --- |
 | `foundation.test.ts` | 严格配置（含 `agent.context` 与 `agent.rate_limits`）、Secret 脱敏（含前缀与重叠值）、迁移与备份 |
+| `packages/image-service/test/*.test.ts` | 图片域核心（包内测试自带连接）：意图档位/能力校验、引用展开与去重、幂等重放/冲突、retry 全轮、透明像素校验由 adapter 决定、部分成功与未知上游结果不自动重试、崩溃恢复、关停缺项、并发上限、单 Worker 串行化 |
+| `test/image-service-store.test.ts` | 宿主借入连接下的图片域：safe-integer 列返回 number 且 JSON 无 BigInt、迁移 024 在有数据的既有库重放、宿主事务回滚核心写入、启动对账（claimed→interrupted、queued→恢复）、优雅关停中断落盘、备份图片快照成对轮换与恢复字节一致 |
 | `load-env.test.ts` | CLI `.env.local`/`.env` 加载语义：缺失跳过、dotenv 解析（含 BOM）、真实环境变量 > `.env.local` > `.env` 优先级 |
 | `schema.test.ts` | Drizzle 层 bigint/boolean 往返、STRICT 与 CHECK 约束、better-sqlite3 IMMEDIATE 事务回滚、`sql` 模板绑定与 FTS5 查询；Invocation 审计索引的新建/升级、分页统计与查询计划 |
 | `telegram-ingestion.test.ts` | allowlist、Revision、Bot/Service、Topic 隔离、先到的 `migrate_from_chat_id` 授权新 Supergroup、匿名管理员（占位 Bot + `sender_chat`）按真人处理 |

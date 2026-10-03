@@ -44,7 +44,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 
 完整路由表以 `src/ingress/admin/server.ts` 的分发为准。这里只记录路由签名看不出来的约束。
 
-**审计读端点**（`GET /auth/session`、`/overview`、`/usage`、`/invocations[/:id]`、`/contexts[/:conversation_id]`、`/messages[/:id]`、`/sticker-sets`、`/stickers`、`/alarms`、`/memories`、`/memories/chats`、`/admins`、`/provider-presets`、`/config/status`、`/image/status`、`/image/prompts[/:id]`、`/image/images[/:id[/:content]]`、`/image/generations[/:id]`）一律只读；落到审计分支的非 `GET` 请求返回 405 `method_not_allowed`。`GET /providers` 与 `GET /chats` 只读，但这两个路径同时是写端点前缀，不落到审计分支。`/usage` 额外接受 `days`（1–90，默认 7），越界返回 400 `invalid_days`；Token 序列来自 `daily_usage`，Invocation 与 Tool call 序列直接按 UTC 日期 `COUNT` `invocations` 与 `tool_calls`。`/contexts` 是按 Conversation（chat + Forum Topic）维度只读投影 Conversation Context；`:conversation_id` 是 `conversations.id` 而不是 `conversation_contexts.id`，不存在返回 404。`GET /config/status` 返回 `generation`、`active_hash`、`file_hash`、`restart_required` 与 `last_error`（`{ code, message, at }` 或 `null`）。`ConfigReloader` 未接线时，`GET /config/status` 返回 503 `config_reload_unavailable`，`PUT /model` 返回 503 `model_switch_unavailable`，`/providers` 与 `PUT /vision` 返回 503 `providers_unavailable`，`/chats` 返回 503 `chats_unavailable`。
+**审计读端点**（`GET /auth/session`、`/overview`、`/usage`、`/invocations[/:id]`、`/contexts[/:conversation_id]`、`/messages[/:id]`、`/sticker-sets`、`/stickers`、`/alarms`、`/memories`、`/memories/chats`、`/admins`、`/provider-presets`、`/config/status`、`/image/status`、`/image/config`、`/image/models`、`/image/models/endpoints?model=:id`、`/image/prompts[/:id]`、`/image/images[/:id[/:content]]`、`/image/generations[/:id]`）一律只读；落到审计分支的非 `GET` 请求返回 405 `method_not_allowed`。`GET /providers` 与 `GET /chats` 只读，但这两个路径同时是写端点前缀，不落到审计分支。`/usage` 额外接受 `days`（1–90，默认 7），越界返回 400 `invalid_days`；Token 序列来自 `daily_usage`，Invocation 与 Tool call 序列直接按 UTC 日期 `COUNT` `invocations` 与 `tool_calls`。`/contexts` 是按 Conversation（chat + Forum Topic）维度只读投影 Conversation Context；`:conversation_id` 是 `conversations.id` 而不是 `conversation_contexts.id`，不存在返回 404。`GET /config/status` 返回 `generation`、`active_hash`、`file_hash`、`restart_required` 与 `last_error`（`{ code, message, at }` 或 `null`）。`ConfigReloader` 未接线时，`GET /config/status` 返回 503 `config_reload_unavailable`，`PUT /model` 返回 503 `model_switch_unavailable`，`/providers` 与 `PUT /vision` 返回 503 `providers_unavailable`，`/chats` 返回 503 `chats_unavailable`。
 
 `GET /providers` 是 Models 页的主读端点，读的是**磁盘上的 `config.jsonc`**（不是运行中的 active 配置），因此待重启字段以文件为准：
 
@@ -91,7 +91,7 @@ Admin Panel 是随 `serve` 启动的本地审计与管理界面，覆盖 Tool Se
 | `POST /image/prompts` / `PUT` / `DELETE /image/prompts/:id` | 生图 Prompt 素材管理（创建/更新/归档）；归档的素材读取返回 404 |
 | `POST /image/images` / `PUT` / `DELETE /image/images/:id` | 参考图上传（base64，≤20 MB 原始体积）/ 元数据编辑 / 归档；`GET /image/images/:id/content` 返回二进制（带认证） |
 | `POST /image/generations` / `POST /image/generations/:id/retry` | 以 `admin:<username>` actor 提交生成（body 含 `idempotency_key`，同键同内容重放不重新计费，同键不同内容 409）或重试已有 generation |
-| `PUT /image/config` | 图片功能启停与模型/凭据配置，`If-Match` revision 规则同其它配置写端点。`enabled: true` 时 body 必须带 `credentials`（名称 → 明文；明文写入 key jar，`config.jsonc` 只保留 `{jar}` 引用）与 `models` 数组（结构按 image 段 schema 校验，不合法返回 400 `invalid_body`）；`enabled: false` 删除整个 `image` 段并回收不再被引用的 jar 条目。写入经 reloader 原子应用，无需重启；响应 `{ enabled, apply }` |
+| `PUT /image/config` | 图片功能启停与模型/凭据配置，`If-Match` revision 规则同其它配置写端点。`enabled: true` 时 body 必须带 `credentials`（名称 → 新明文；空对象保留已有 SecretRef，明文写入 key jar，`config.jsonc` 只保留 `{jar}` 引用）与 `models` 数组；可带 `credential_sources`（图片凭据名称 → 已配置的内置 OpenRouter Provider alias，服务端复用其 SecretRef，不返回密钥）。重复模型 ID 或缺失凭据引用在写入前拒绝（结构按 image 段 schema 校验，不合法返回 400 `invalid_body`）；`enabled: false` 删除整个 `image` 段并回收不再被引用的 jar 条目。写入经 reloader 原子应用，无需重启；响应 `{ enabled, apply }` |
 | `POST /restart` | 界面上的 “Restart now”。部署方未声明 `PLASTICWAN_SUPERVISED=1` 时返回 409 `restart_unsupported`；磁盘配置权限或内容校验失败时返回 422 `config_invalid` 且不退出；成功返回 202 `{ status: 'restarting' }`，随后走优雅关闭并以退出码 75（`EX_TEMPFAIL`）退出，由外部监督重新拉起 |
 | `POST /config/apply` | 重新读取 `config.jsonc` 并把热更新白名单字段应用到运行中的进程。成功返回 200 `{ status: 'applied', applied, restart_required, outside_serve, generation, active_hash, file_hash }`；失败返回 422 `{ error, message }`，此时 active 配置不变，错误记录在 `GET /config/status` 的 `last_error` |
 | `DELETE /alarms/:id` | 只取消 Alarm 投影为 `pending` 的项目：waiting 任务变为 cancelled；completed+pending receipt 则只 suppress 投递、保留完成结果。`firing`（claimed）与其它终态返回 409 `alarm_not_pending`，不存在返回 404 `not_found`。取消记录当前面板管理员与 `admin_cancelled` 原因并唤醒 Scheduler |
@@ -254,3 +254,13 @@ Bot 管理员列表（迁移 `src/store/migrations/008_bot_admins.sql`）：
 ## 验证
 
 测试命令、覆盖契约与浏览器冒烟清单见 [verification.md](verification.md) 的「静态与单元验证」「Admin Panel 冒烟」与「Admin Panel 浏览器 E2E」三节。
+
+## 图片设置与模型目录
+
+`GET /image/config` 读取文件中的启用状态、模型完整定义、凭据名称、可复用的内置 OpenRouter Provider alias 列表 `credential_providers` 与文件 `revision`，不返回密钥或 SecretRef 内容。页面据此初始化草稿；保存携带该修订，缺失返回 400 `revision_required`，过期返回 409 `config_conflict`。新增模型或修改模型时可省略已保存的凭据明文，原有 jar/env/command 引用保持不变。
+
+`GET /image/models` 从 OpenRouter 的公开 `GET /api/v1/images/models` 获取图片输出模型；`GET /image/models/endpoints?model=:id` 获取所选模型的真实供应商 `provider_tag` 与 `supported_parameters`。两者需要 Admin Session，图片禁用时仍可访问，不需要发送密钥，不写配置、不发起付费生成。固定上游地址，禁止重定向，超时 10 秒，响应流上限 8 MiB，外部响应经 TypeBox 校验，失败返回 502 `image_discovery_failed`。
+
+`src/platform/image-models.ts` 把供应商元数据转换为可保存草稿：比例、质量取核心支持的枚举交集；图片输入/输出上限限制在核心范围内；未声明的能力保守保留自动档与单张输出。必填参考图、仅矢量输出或不接受单张生成的供应商会带 `unavailableReason`，页面禁止添加。质量仍映射到 `quality`，不会把像素 `resolution` 推断成质量档。OpenRouter adapter v2 直接发送 `aspect_ratio`，避免用固定像素 `size` 错误限制目录中的横竖比例。
+
+图片设置仅在提交进行中禁用保存按钮；其它缺项在按钮旁显示并在点击时提示，拦截非法请求。完全相同的旧模型定义在前端草稿中合并，空白的新增凭据行不参与校验；保存才会修改文件。

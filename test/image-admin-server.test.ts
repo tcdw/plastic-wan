@@ -1,12 +1,12 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createOpenRouterAdapter } from '@plasticwan/image-service';
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { createImageBridge } from '../src/image/bridge.ts';
 import { createImageService } from '../src/image/service.ts';
 import { AdminServer } from '../src/ingress/admin/server.ts';
-import { loadConfig } from '../src/platform/config.ts';
+import { type FileConfig, loadConfig } from '../src/platform/config.ts';
 import { ConfigReloader } from '../src/platform/config-reload.ts';
 import { keyJarPath } from '../src/platform/key-jar.ts';
 import { AgentModelSwitcher } from '../src/platform/model-switch.ts';
@@ -35,6 +35,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const close of cleanup.splice(0)) {
     await close();
   }
@@ -47,7 +48,7 @@ interface Fixture {
   revision(): Promise<string>;
 }
 
-async function fixture(): Promise<Fixture> {
+async function fixture(transform?: (config: FileConfig) => void): Promise<Fixture> {
   const configPath = join(directory, 'config.jsonc');
   const staticDir = join(directory, 'bundle');
   await mkdir(join(staticDir, 'static'), { recursive: true });
@@ -63,6 +64,13 @@ async function fixture(): Promise<Fixture> {
         session_ttl_hours: 12,
         static_dir: staticDir.replaceAll('\\', '/'),
       };
+      config.providers['saved-router'] = {
+        kind: 'builtin',
+        provider: 'openrouter',
+        api_key: { jar: 'agent' },
+        models: config.providers.agent!.models,
+      };
+      transform?.(config);
     }),
   );
   await writeTestKeyJar(directory, {});
@@ -167,6 +175,75 @@ test('image config enable request answers JSON through the admin dispatch, not a
   expect(file).toContain('"jar"');
   expect(file).toContain('"openrouter"');
   expect(file).not.toContain('sk-or-test');
+
+  const view = await app.server.handle(
+    new Request('http://admin.test/api/image/config', { headers: { cookie: app.cookie } }),
+  );
+  const config = (await view.json()) as { revision: string; credentials: string[]; models: typeof models };
+  expect(config.credentials).toEqual(['openrouter']);
+  expect(config.models).toEqual(models);
+  expect(JSON.stringify(config)).not.toContain('sk-or-test');
+
+  const update = await app.server.handle(
+    new Request('http://admin.test/api/image/config', {
+      method: 'PUT',
+      headers: { cookie: app.cookie, 'if-match': config.revision },
+      body: JSON.stringify({ enabled: true, credentials: {}, models: [{ ...models[0], name: 'Renamed' }] }),
+    }),
+  );
+  expect(update.status).toBe(200);
+  expect(((await update.json()) as { enabled: boolean }).enabled).toBe(true);
+  expect((await loadConfig(app.configPath)).fileConfig.image?.credentials).toEqual({
+    openrouter: { jar: 'openrouter' },
+  });
+
+  const beforeConflict = await readFile(app.configPath, 'utf8');
+  const stale = await app.server.handle(
+    new Request('http://admin.test/api/image/config', {
+      method: 'PUT',
+      headers: { cookie: app.cookie, 'if-match': config.revision },
+      body: JSON.stringify({ enabled: false }),
+    }),
+  );
+  expect(stale.status).toBe(409);
+  expect(await readFile(app.configPath, 'utf8')).toBe(beforeConflict);
+});
+
+test('image settings discovery requires auth, supports disabled images and enforces config revision and Origin', async () => {
+  const app = await fixture();
+  const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    Response.json({
+      data: [{ id: 'openai/gpt-image-2', name: 'GPT Image 2', architecture: { output_modalities: ['image'] } }],
+    }),
+  );
+  const request = (path: string, headers: Record<string, string> = {}) =>
+    app.server.handle(new Request(`http://admin.test/api/image/${path}`, { headers }));
+  expect((await request('models')).status).toBe(401);
+  expect((await request('config')).status).toBe(401);
+  expect(spy).not.toHaveBeenCalled();
+  const catalog = await request('models', { cookie: app.cookie });
+  expect(catalog.status).toBe(200);
+  expect(await catalog.json()).toEqual({ models: [{ id: 'openai/gpt-image-2', name: 'GPT Image 2' }] });
+  const config = await request('config', { cookie: app.cookie });
+  expect(await config.json()).toMatchObject({ enabled: false, credentials: [], models: [] });
+  expect((await request('models/endpoints?model=bad', { cookie: app.cookie })).status).toBe(400);
+  spy.mockResolvedValueOnce(new Response('upstream details', { status: 503 }));
+  const failure = await request('models', { cookie: app.cookie });
+  expect(failure.status).toBe(502);
+  expect(await failure.text()).not.toContain('upstream details');
+  for (const [headers, status] of [
+    [{ cookie: app.cookie }, 400],
+    [{ cookie: app.cookie, 'if-match': await app.revision(), origin: 'http://other.test' }, 403],
+  ] as const) {
+    const response = await app.server.handle(
+      new Request('http://admin.test/api/image/config', {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ enabled: false }),
+      }),
+    );
+    expect(response.status).toBe(status);
+  }
 });
 
 test('image content requests still stream the stored bytes with the asset mime', async () => {
@@ -184,4 +261,72 @@ test('image content requests still stream the stored bytes with the asset mime',
   );
   const body = (await listing.json()) as { items: readonly { id: string }[] };
   expect(body.items.length).toBe(1);
+});
+
+test('repairs missing image credentials with a saved OpenRouter reference and rejects invalid drafts before writing', async () => {
+  const model = {
+    id: 'legacy-image',
+    name: 'Legacy Image',
+    provider: 'openrouter',
+    upstreamModel: 'openai/gpt-image-1',
+    credentialRef: 'openrouter',
+    providerTag: 'openai',
+    capabilities: {
+      imageInput: false,
+      maxInputImages: 0,
+      maxOutputs: 1,
+      aspectRatios: ['auto'],
+      resolutionClasses: ['auto'],
+    },
+  };
+  const app = await fixture((config) => {
+    config.image = { credentials: {}, models: [model, model] };
+  });
+  const view = await app.server.handle(
+    new Request('http://admin.test/api/image/config', { headers: { cookie: app.cookie } }),
+  );
+  const projection = (await view.json()) as { credential_providers: string[]; credentials: string[] };
+  expect(projection.credential_providers).toEqual(['saved-router']);
+  expect(projection.credentials).toEqual([]);
+  expect(JSON.stringify(projection)).not.toContain('agent-secret');
+  expect(JSON.stringify(projection)).not.toContain('jar');
+  const request = (body: unknown) =>
+    app.server.handle(
+      new Request('http://admin.test/api/image/config', {
+        method: 'PUT',
+        headers: { cookie: app.cookie, 'if-match': revision },
+        body: JSON.stringify(body),
+      }),
+    );
+  const revision = await app.revision();
+  const before = await readFile(app.configPath, 'utf8');
+  for (const body of [
+    { enabled: true, credentials: {}, models: [model] },
+    { enabled: true, credentials: {}, credential_sources: { openrouter: 'saved-router' }, models: [model, model] },
+    { enabled: true, credentials: {}, credential_sources: { openrouter: 'agent' }, models: [model] },
+    { enabled: true, credentials: {}, credential_sources: { openrouter: 123 }, models: [model] },
+    { enabled: true, credentials: {}, credential_sources: { openrouter: 'toString' }, models: [model] },
+  ]) {
+    expect((await request(body)).status).toBe(400);
+    expect(await readFile(app.configPath, 'utf8')).toBe(before);
+  }
+  const saved = await request({
+    enabled: true,
+    credentials: {},
+    credential_sources: { openrouter: 'saved-router' },
+    models: [model],
+  });
+  expect(saved.status).toBe(200);
+  expect(await saved.json()).toMatchObject({
+    enabled: true,
+    apply: { applied: ['image.credentials.openrouter', 'image.models'] },
+  });
+  const loaded = await loadConfig(app.configPath);
+  expect(loaded.fileConfig.image?.credentials).toEqual({ openrouter: { jar: 'agent' } });
+  expect(loaded.fileConfig.image?.models).toEqual([model]);
+  const status = await app.server.handle(
+    new Request('http://admin.test/api/image/status', { headers: { cookie: app.cookie } }),
+  );
+  expect(await status.json()).toMatchObject({ enabled: true, models: [{ id: 'legacy-image' }] });
+  expect(await readFile(app.configPath, 'utf8')).not.toContain('agent-secret');
 });

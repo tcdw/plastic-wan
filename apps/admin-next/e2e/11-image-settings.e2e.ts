@@ -1,0 +1,231 @@
+import { expect, test } from '@playwright/test';
+import type { ImageConfigView } from '../src/lib/api.ts';
+import { adminUrl, authStoragePath } from './helpers.ts';
+
+test.use({ storageState: authStoragePath() });
+
+const capabilities = {
+  imageInput: true,
+  maxInputImages: 14,
+  maxOutputs: 1,
+  aspectRatios: ['auto', '1:1', '16:9'],
+  resolutionClasses: ['auto'],
+};
+const endpoint = {
+  id: 'nano-banana',
+  providerTag: 'google-ai-studio',
+  providerName: 'Google AI Studio',
+  capabilities,
+  unavailableReason: null,
+};
+
+test('selects an API model, fills capabilities, saves, and reloads existing configuration without a secret', async ({
+  page,
+}) => {
+  let config: ImageConfigView = {
+    revision: 'initial',
+    enabled: false,
+    credentials: [],
+    credential_providers: [],
+    models: [],
+  };
+  const writes: Array<{ enabled: boolean; credentials: Record<string, string>; models: ImageConfigView['models'] }> =
+    [];
+  await page.route('**/api/image/**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/config')) {
+      if (route.request().method() === 'PUT') {
+        expect(route.request().headers()['if-match']).toBe(config.revision);
+        const body = route.request().postDataJSON();
+        writes.push(body);
+        config = {
+          revision: `revision-${writes.length}`,
+          enabled: body.enabled,
+          credentials: ['openrouter'],
+          credential_providers: [],
+          models: body.models,
+        };
+        await route.fulfill({ json: { enabled: true, apply: { applied: ['image'], restart_required: [] } } });
+      } else {
+        await route.fulfill({ json: config });
+      }
+    } else if (url.pathname.endsWith('/status')) {
+      await route.fulfill({ json: { enabled: config.enabled, models: config.models } });
+    } else if (url.pathname.endsWith('/endpoints')) {
+      expect(url.searchParams.get('model')).toBe('google/gemini-3.1-flash-image');
+      await route.fulfill({ json: { endpoints: [endpoint] } });
+    } else {
+      await route.fulfill({
+        json: {
+          models: [
+            { id: 'google/gemini-3.1-flash-image', name: 'Nano Banana 2' },
+            { id: 'openai/gpt-image-2', name: 'GPT Image 2' },
+          ],
+        },
+      });
+    }
+  });
+  await page.goto(await adminUrl('/image-settings'));
+  await expect(page.getByLabel('启用图片生成')).not.toBeChecked();
+  await page.getByLabel('启用图片生成').check();
+  await page.getByLabel('API key', { exact: true }).fill('e2e-image-key');
+  await page.getByLabel('搜索模型').fill('banana');
+  const picker = page.getByLabel('OpenRouter 图片模型');
+  await expect(picker.locator('option')).toHaveCount(2);
+  await picker.selectOption('google/gemini-3.1-flash-image');
+  await expect(page.getByLabel('供应商')).toHaveValue('google-ai-studio');
+  await expect(page.getByText('最多 14 张参考图', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: '添加所选模型' }).click();
+  await page.getByRole('button', { name: '保存并应用' }).click();
+  await expect(page.getByText('图片生成配置已应用')).toBeVisible();
+  expect(writes[0]).toMatchObject({
+    enabled: true,
+    credentials: { openrouter: 'e2e-image-key' },
+    models: [
+      {
+        id: 'nano-banana',
+        name: 'Nano Banana 2',
+        provider: 'openrouter',
+        providerTag: 'google-ai-studio',
+        credentialRef: 'openrouter',
+        upstreamModel: 'google/gemini-3.1-flash-image',
+        capabilities,
+      },
+    ],
+  });
+  await page.reload();
+  await expect(page.getByLabel('API key', { exact: true })).toHaveValue('');
+  await expect(page.getByRole('button', { name: '移除 Nano Banana 2' })).toBeVisible();
+  await page.getByRole('button', { name: '保存并应用' }).click();
+  await expect.poll(() => writes.length).toBe(2);
+  expect(writes[1]?.credentials).toEqual({});
+  expect(writes[1]?.models).toEqual(writes[0]?.models);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByLabel('OpenRouter 图片模型')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: '/tmp/plasticwan-image-settings-mobile.png', fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.screenshot({ path: '/tmp/plasticwan-image-settings-desktop.png', fullPage: true });
+});
+
+test('catalog and endpoint failures are retryable without inventing a model or capabilities', async ({ page }) => {
+  let catalogFailed = false;
+  let endpointFailed = false;
+  await page.route('**/api/image/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/config')) {
+      await route.fulfill({
+        json: { revision: 'first', enabled: true, credentials: ['openrouter'], credential_providers: [], models: [] },
+      });
+    } else if (path.endsWith('/status')) {
+      await route.fulfill({ json: { enabled: true, models: [] } });
+    } else if (path.endsWith('/endpoints')) {
+      if (!endpointFailed) {
+        endpointFailed = true;
+        await route.fulfill({
+          status: 502,
+          json: { error: 'image_discovery_failed', message: 'Endpoint unavailable' },
+        });
+      } else {
+        await route.fulfill({ json: { endpoints: [endpoint] } });
+      }
+    } else if (!catalogFailed) {
+      catalogFailed = true;
+      await route.fulfill({ status: 502, json: { error: 'image_discovery_failed', message: 'Catalog unavailable' } });
+    } else {
+      await route.fulfill({ json: { models: [{ id: 'google/gemini-3.1-flash-image', name: 'Nano Banana 2' }] } });
+    }
+  });
+  await page.goto(await adminUrl('/image-settings'));
+  await expect(page.getByRole('alert')).toContainText('模型列表获取失败');
+  await expect(page.getByRole('button', { name: '保存并应用' })).toBeEnabled();
+  await expect(page.getByText('请先选择模型并点击「添加所选模型」')).toBeVisible();
+  await page.getByRole('button', { name: '刷新模型列表' }).click();
+  await page.getByLabel('OpenRouter 图片模型').selectOption('google/gemini-3.1-flash-image');
+  await expect(page.getByRole('alert')).toContainText('供应商信息获取失败');
+  await expect(page.getByRole('button', { name: '添加所选模型' })).toBeDisabled();
+  await page.getByRole('button', { name: '重试供应商查询' }).click();
+  await expect(page.getByRole('button', { name: '添加所选模型' })).toBeEnabled();
+});
+
+test('repairs legacy empty credentials and duplicate models using an existing OpenRouter credential', async ({
+  page,
+}) => {
+  const model = {
+    id: 'legacy-image',
+    name: 'Legacy Image',
+    provider: 'openrouter',
+    upstreamModel: 'openai/gpt-image-1',
+    credentialRef: 'openrouter',
+    providerTag: 'openai',
+    capabilities,
+  };
+  const writes: unknown[] = [];
+  await page.route('**/api/image/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/config') && route.request().method() === 'PUT') {
+      writes.push(route.request().postDataJSON());
+      await route.fulfill({ json: { enabled: true, apply: { applied: ['image'], restart_required: [] } } });
+    } else if (path.endsWith('/config')) {
+      await route.fulfill({
+        json: {
+          revision: 'legacy',
+          enabled: true,
+          credentials: [],
+          credential_providers: ['openrouter'],
+          models: [model, model],
+        },
+      });
+    } else {
+      await route.fulfill({ json: { enabled: false, models: [] } });
+    }
+  });
+  await page.goto(await adminUrl('/image-settings'));
+  await expect(page.getByRole('button', { name: '保存并应用' })).toBeEnabled();
+  await expect(page.getByLabel('密钥来源')).toHaveValue('openrouter');
+  await expect(page.getByRole('button', { name: '移除 Legacy Image' })).toHaveCount(1);
+  await expect(page.getByText('已合并 1 个完全相同的旧模型条目，保存后生效')).toBeVisible();
+  await page.getByRole('button', { name: '添加凭据', exact: true }).click();
+  await page.getByRole('button', { name: '保存并应用' }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0]).toEqual({
+    enabled: true,
+    credentials: {},
+    credential_sources: { openrouter: 'openrouter' },
+    models: [model],
+  });
+});
+
+test('missing credentials give a visible actionable error and do not send an invalid save', async ({ page }) => {
+  let writes = 0;
+  const model = {
+    id: 'legacy-image',
+    name: 'Legacy Image',
+    provider: 'openrouter',
+    upstreamModel: 'openai/gpt-image-1',
+    credentialRef: 'openrouter',
+    providerTag: 'openai',
+    capabilities,
+  };
+  await page.route('**/api/image/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === 'PUT') {
+      writes += 1;
+    }
+    await route.fulfill({
+      json: path.endsWith('/config')
+        ? { revision: 'missing-key', enabled: true, credentials: [], credential_providers: [], models: [model] }
+        : { enabled: false, models: [] },
+    });
+  });
+  await page.goto(await adminUrl('/image-settings'));
+  const save = page.getByRole('button', { name: '保存并应用' });
+  await expect(save).toBeEnabled();
+  await expect(page.locator('#image-save-requirements')).toContainText('凭据 openrouter 尚未配置 API key');
+  await save.click();
+  await expect(page.locator('[data-sonner-toast]')).toContainText('尚未配置 API key');
+  expect(writes).toBe(0);
+  await page.getByLabel('启用图片生成').uncheck();
+  await save.click();
+  await expect.poll(() => writes).toBe(1);
+});

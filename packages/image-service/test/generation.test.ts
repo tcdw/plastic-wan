@@ -118,7 +118,7 @@ test('resolve expands prompt references in place and orders images by first appe
     assert.equal(snapshot.authored.resolution, 'high');
     assert.equal(snapshot.authored.extendedData, undefined);
     assert.deepEqual(snapshot.requestSemantics, {
-      adapterVersion: 1,
+      adapterVersion: 2,
       calls: 2,
       imagesPerCall: 1,
       appendedInstructions: [],

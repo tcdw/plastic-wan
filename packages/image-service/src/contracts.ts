@@ -194,7 +194,7 @@ export type GenerationSnapshot = {
   imageAssets: ImageAsset[];
   model: ModelDefinition;
   configVersion: string;
-  requestSemantics: { adapterVersion: 1; calls: number; imagesPerCall: 1; appendedInstructions: string[] };
+  requestSemantics: { adapterVersion: 1 | 2; calls: number; imagesPerCall: 1; appendedInstructions: string[] };
 };
 export type GenerationStatus = 'queued' | 'running' | 'succeeded' | 'partial' | 'failed' | 'interrupted';
 export type AttemptStatus = 'running' | 'succeeded' | 'failed' | 'interrupted';

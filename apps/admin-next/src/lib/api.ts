@@ -1200,6 +1200,50 @@ export function getImageStatus(): Promise<ImageStatus> {
   return call<ImageStatus>('/image/status');
 }
 
+export interface ImageModelConfig {
+  id: string;
+  name: string;
+  provider: string;
+  upstreamModel: string;
+  credentialRef: string;
+  providerTag: string;
+  capabilities: {
+    imageInput: boolean;
+    maxInputImages: number;
+    maxOutputs: number;
+    aspectRatios: string[];
+    resolutionClasses: string[];
+  };
+}
+
+export interface ImageConfigView {
+  revision: string;
+  enabled: boolean;
+  credentials: string[];
+  credential_providers: string[];
+  models: ImageModelConfig[];
+}
+
+export interface ImageCatalogEndpoint {
+  id: string;
+  providerTag: string;
+  providerName: string;
+  capabilities: ImageModelConfig['capabilities'];
+  unavailableReason: string | null;
+}
+
+export function getImageConfig(): Promise<ImageConfigView> {
+  return call('/image/config');
+}
+
+export function getImageModelCatalog(): Promise<{ models: { id: string; name: string }[] }> {
+  return call('/image/models');
+}
+
+export function getImageModelEndpoints(model: string): Promise<{ endpoints: ImageCatalogEndpoint[] }> {
+  return call(`/image/models/endpoints?${new URLSearchParams({ model })}`);
+}
+
 export function listImagePrompts(
   filters: { readonly q?: string; readonly limit?: number; readonly offset?: number } = {},
 ): Promise<ImageSimplePage<ImagePromptAsset>> {

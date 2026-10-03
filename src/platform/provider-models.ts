@@ -406,7 +406,7 @@ interface BoundedBody {
  * endpoint that declares no `content-length` buffer its whole body first, which
  * is exactly what the cap exists to prevent.
  */
-async function readBoundedText(response: Response, budget: number): Promise<BoundedBody> {
+export async function readBoundedText(response: Response, budget: number): Promise<BoundedBody> {
   const declaredLength = Number(response.headers.get('content-length'));
   if (Number.isFinite(declaredLength) && declaredLength > budget) {
     throw new Error(`Models endpoint response exceeds ${MAX_MODELS_TOTAL_BYTES} bytes`);

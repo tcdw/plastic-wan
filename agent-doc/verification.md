@@ -22,7 +22,7 @@ pnpm test test/skills.test.ts test/system-resources.test.ts test/plugins.test.ts
 pnpm test test/media.test.ts test/stickers.test.ts
 pnpm test test/mcp.test.ts test/web-fetch.test.ts
 pnpm test test/operations.test.ts test/foundation.test.ts test/schema.test.ts test/load-env.test.ts
-pnpm test packages/image-service/test test/image-service-store.test.ts
+pnpm test packages/image-service/test test/image-service-store.test.ts test/image-models.test.ts test/image-admin-server.test.ts
 pnpm test test/admin.test.ts test/admin-providers.test.ts test/admin-chats.test.ts test/model-switch.test.ts
 pnpm test test/bot-commands.test.ts
 pnpm test test/config-diff.test.ts test/config-reload.test.ts test/chat-model-runtime.test.ts
@@ -38,6 +38,7 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | --- | --- |
 | `foundation.test.ts` | 严格配置（含 `agent.context` 与 `agent.rate_limits`）、Secret 脱敏（含前缀与重叠值）、迁移与备份 |
 | `packages/image-service/test/*.test.ts` | 图片域核心（包内测试自带连接）：意图档位/能力校验、引用展开与去重、幂等重放/冲突、retry 全轮、透明像素校验由 adapter 决定、部分成功与未知上游结果不自动重试、崩溃恢复、关停缺项、并发上限、单 Worker 串行化 |
+| `test/image-models.test.ts` / `test/image-admin-server.test.ts` | 图片模型目录鉴权、禁用时发现、真实路由标签、能力映射、非法/超大/错误响应、自动配置到 adapter 的参数契约、配置回显与凭据保留、复用 OpenRouter SecretRef 修复旧空凭据、重复模型/未知凭据/错误来源在写入前拒绝、修订冲突拒绝及 Origin 边界 |
 | `test/image-service-store.test.ts` | 宿主借入连接下的图片域：safe-integer 列返回 number 且 JSON 无 BigInt、迁移 024 在有数据的既有库重放、宿主事务回滚核心写入、启动对账（claimed→interrupted、queued→恢复）、优雅关停中断落盘、备份图片快照成对轮换与恢复字节一致 |
 | `load-env.test.ts` | CLI `.env.local`/`.env` 加载语义：缺失跳过、dotenv 解析（含 BOM）、真实环境变量 > `.env.local` > `.env` 优先级 |
 | `schema.test.ts` | Drizzle 层 bigint/boolean 往返、STRICT 与 CHECK 约束、better-sqlite3 IMMEDIATE 事务回滚、`sql` 模板绑定与 FTS5 查询；Invocation 审计索引的新建/升级、分页统计与查询计划 |
@@ -343,3 +344,5 @@ pnpm test
 - 哪些真实场景执行过。
 - 哪些外部场景因 Token、Chat、Provider 或 MCP 不可用而未执行。
 - 观察到的审计状态，而不是推测状态。
+
+图片设置浏览器回归：`pnpm run admin:build` 后执行 `pnpm run admin:test:e2e 00-auth 11-image-settings`，覆盖搜索与下拉选型、自动能力、保存与回显、空密钥沿用、旧配置凭据复用与重复项合并、缺项提示但按钮可点击且不发送非法写入、目录/供应商失败重试和窄屏无横向溢出；模型目录使用固定响应，真实 OpenRouter 目录需另行只读验收。

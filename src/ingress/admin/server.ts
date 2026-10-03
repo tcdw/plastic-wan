@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 import { type ServerType, serve } from '@hono/node-server';
+import Type from 'typebox';
 import { Compile } from 'typebox/compile';
 import { DEFAULT_MEMORY_TTL_WARNING_DAYS } from '../../context/memory.ts';
 import type { ImageBridge } from '../../image/bridge.ts';
@@ -9,6 +10,11 @@ import type { ImageService } from '../../image/service.ts';
 import type { BucketScheduler } from '../../orchestration/scheduler.ts';
 import { assertConfigPermissions, loadConfig, type RawConfig } from '../../platform/config.ts';
 import { type ConfigEdit, readConfigRevision } from '../../platform/config-file.ts';
+import {
+  listOpenRouterImageEndpoints,
+  listOpenRouterImageModels,
+  validImageModelId,
+} from '../../platform/image-models.ts';
 import type { ConfigErrorCode, ConfigReloader } from '../../platform/config-reload.ts';
 import type { AgentModelOption, AgentModelSwitcher } from '../../platform/model-switch.ts';
 import type { RuntimeConfigurationStore } from '../../platform/runtime-config.ts';
@@ -44,7 +50,7 @@ import {
   updateChat,
 } from './chats-admin.ts';
 import { clearModelPayloads, parseDeveloperSettings } from './developer-admin.ts';
-import { createImageAdminHandler, type ImageAdminResponse } from './image-admin.ts';
+import { createImageAdminHandler, type ImageAdminResponse, reusableImageCredentials } from './image-admin.ts';
 import {
   createMemory,
   deleteMemory,
@@ -85,6 +91,9 @@ import {
 
 const SESSION_COOKIE = 'plasticwan_admin';
 const MAX_BODY_BYTES = 8_192;
+const imageCredentialSourcesValidator = Compile(
+  Type.Record(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), Type.String({ minLength: 1, maxLength: 80 })),
+);
 const SECURITY_HEADERS: Record<string, string> = {
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
@@ -435,6 +444,27 @@ export class AdminServer {
       return await this.#chats(request, segments);
     }
     if (segments[0] === 'image') {
+      if (route === 'image/config' && request.method === 'GET') {
+        return await this.#imageConfigView();
+      }
+      if (request.method === 'GET' && (route === 'image/models' || route === 'image/models/endpoints')) {
+        const model = url.searchParams.get('model');
+        if (route === 'image/models/endpoints' && !validImageModelId(model)) {
+          return json({ error: 'invalid_model', message: '图片模型 ID 不合法' }, 400);
+        }
+        try {
+          return json(
+            route === 'image/models'
+              ? { models: await listOpenRouterImageModels() }
+              : { endpoints: await listOpenRouterImageEndpoints(model as string) },
+          );
+        } catch (error) {
+          return json({ error: 'image_discovery_failed', message: this.#redact(error) }, 502);
+        }
+      }
+      if (route === 'image/config' && request.method === 'PUT' && requiredRevision(request) === null) {
+        return revisionRequired();
+      }
       const handler = this.#image;
       if (handler === undefined) {
         return json({ error: 'image_unavailable', message: 'Image generation is not wired' }, 503);
@@ -445,7 +475,7 @@ export class AdminServer {
         url,
         { username: session.username },
         (maxBytes) => readJsonObject(request, maxBytes),
-        async (body) => await this.#applyImageConfig(body),
+        async (body) => await this.#applyImageConfig(body, requiredRevision(request) ?? ''),
       );
       if (response.kind === 'content') {
         return new Response(new Uint8Array(response.bytes), {
@@ -832,11 +862,25 @@ export class AdminServer {
     return listProviders(loaded.fileConfig, revision, reloader.status().restartRequired);
   }
 
-  /**
-   * Restarts `serve` by exiting with a dedicated code, once the configuration on
-   * disk is known to load. A process that cannot come back up stops the bot
-   * until an operator intervenes, so this check is not optional.
-   */
+  async #imageConfigView(): Promise<Response> {
+    const reloader = this.#configReloader;
+    if (reloader === undefined) {
+      return json({ error: 'config_reload_unavailable', message: 'Configuration reloading is not wired' }, 503);
+    }
+    const revision = await readConfigRevision(reloader.configPath);
+    const loaded = await loadConfig(reloader.configPath);
+    if (revision !== (await readConfigRevision(reloader.configPath))) {
+      return json({ error: 'config_conflict', message: '配置已变化，请重新加载' }, 409);
+    }
+    return json({
+      revision,
+      enabled: loaded.fileConfig.image !== undefined,
+      credentials: Object.keys(loaded.fileConfig.image?.credentials ?? {}),
+      credential_providers: Object.keys(reusableImageCredentials(loaded.fileConfig)),
+      models: loaded.fileConfig.image?.models ?? [],
+    });
+  }
+
   /**
    * The image capability switch: enable writes the `image` section (plaintext
    * credentials travel as edit keys into the key jar, the file keeps SecretRef
@@ -844,7 +888,7 @@ export class AdminServer {
    * now-unreferenced jar entries. Applies through the reloader lock, so the
    * snapshot publishes without a restart.
    */
-  async #applyImageConfig(body: Record<string, unknown>): Promise<ImageAdminResponse> {
+  async #applyImageConfig(body: Record<string, unknown>, revision: string): Promise<ImageAdminResponse> {
     const reloader = this.#configReloader;
     if (reloader === undefined) {
       return {
@@ -857,22 +901,47 @@ export class AdminServer {
     if (typeof enabled !== 'boolean') {
       return { kind: 'json', status: 400, body: { error: 'invalid_body', message: 'enabled must be a boolean' } };
     }
-    const revision = await readConfigRevision(reloader.configPath);
+    if (revision !== (await readConfigRevision(reloader.configPath))) {
+      return { kind: 'json', status: 409, body: { error: 'config_conflict', message: '配置已变化，请重新加载后保存' } };
+    }
     let edits: readonly ConfigEdit[];
     if (!enabled) {
       edits = [{ path: ['image'], value: undefined }];
     } else {
       const credentials = body.credentials;
       const models = body.models;
-      if (typeof credentials !== 'object' || credentials === null || !Array.isArray(models) || models.length === 0) {
+      if (
+        typeof credentials !== 'object' ||
+        credentials === null ||
+        Array.isArray(credentials) ||
+        !Array.isArray(models) ||
+        models.length === 0
+      ) {
         return {
           kind: 'json',
           status: 400,
           body: { error: 'invalid_body', message: 'enabling requires credentials (name -> secret) and a models array' },
         };
       }
+      const loaded = await loadConfig(reloader.configPath);
       const credentialNames: Record<string, string> = {};
-      const secretRefs: Record<string, { jar: string }> = {};
+      const secretRefs = { ...loaded.fileConfig.image?.credentials };
+      const sources = body.credential_sources ?? {};
+      if (!imageCredentialSourcesValidator.Check(sources)) {
+        return { kind: 'json', status: 400, body: { error: 'invalid_body', message: '凭据来源格式不正确' } };
+      }
+      const reusable = reusableImageCredentials(loaded.fileConfig);
+      for (const [name, alias] of Object.entries(sources)) {
+        const ref = Object.hasOwn(reusable, alias) ? reusable[alias] : undefined;
+        if (ref === undefined) {
+          return {
+            kind: 'json',
+            status: 400,
+            body: { error: 'invalid_body', message: `OpenRouter 凭据来源不存在：${alias}` },
+          };
+        }
+        secretRefs[name] = ref;
+      }
       for (const [name, plaintext] of Object.entries(credentials)) {
         if (!/^[a-zA-Z0-9_-]{1,80}$/.test(name) || typeof plaintext !== 'string' || plaintext.length === 0) {
           return {
@@ -896,6 +965,20 @@ export class AdminServer {
           status: 400,
           body: { error: 'invalid_body', message: `image section is invalid: ${detail}` },
         };
+      }
+      const modelIds = new Set<string>();
+      for (const model of models) {
+        if (modelIds.has(model.id)) {
+          return { kind: 'json', status: 400, body: { error: 'invalid_body', message: `模型 ID 重复：${model.id}` } };
+        }
+        modelIds.add(model.id);
+        if (!Object.hasOwn(secretRefs, model.credentialRef)) {
+          return {
+            kind: 'json',
+            status: 400,
+            body: { error: 'invalid_body', message: `模型 ${model.name} 的凭据 ${model.credentialRef} 尚未配置` },
+          };
+        }
       }
       for (const plaintext of Object.values(credentialNames)) {
         this.#secrets?.remember(plaintext);

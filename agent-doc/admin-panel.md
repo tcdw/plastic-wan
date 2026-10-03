@@ -214,6 +214,7 @@ pnpm run admin:test:e2e  # Playwright 浏览器 E2E（真实 AdminServer + 临�
 
 前端约定：
 
+- 替换列表内容的详情页使用非嵌套路由文件（如 `image-generations_.$generationId.tsx`），与列表并列挂到根布局；URL 仍是 `/image-generations/:generationId`。只有需要在父页 `Outlet` 中显示的内容才使用嵌套文件，避免详情匹配成功却只渲染列表。
 - 业务页面一律 `useQuery` / `useInfiniteQuery` 并显式渲染 loading / error / data
   三态，**禁止 `useSuspenseQuery`**（401 会在渲染期抛出并落进路由错误边界，
   产生无法恢复的死屏；显式状态分支把错误留在页面内展示）。

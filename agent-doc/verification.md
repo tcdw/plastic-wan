@@ -40,6 +40,7 @@ pnpm test test/prompt-template.test.ts test/prompt-markdown.test.ts test/tui-con
 | `packages/image-service/test/*.test.ts` | 图片域核心（包内测试自带连接）：意图档位/能力校验、引用展开与去重、幂等重放/冲突、retry 全轮、透明像素校验由 adapter 决定、部分成功与未知上游结果不自动重试、崩溃恢复、关停缺项、并发上限、单 Worker 串行化 |
 | `test/image-models.test.ts` / `test/image-admin-server.test.ts` | 图片模型目录鉴权、禁用时发现、真实路由标签、能力映射、非法/超大/错误响应、自动配置到 adapter 的参数契约、配置回显与凭据保留、复用 OpenRouter SecretRef 修复旧空凭据、重复模型/未知凭据/错误来源在写入前拒绝、修订冲突拒绝及 Origin 边界 |
 | `test/image-service-store.test.ts` | 宿主借入连接下的图片域：safe-integer 列返回 number 且 JSON 无 BigInt、迁移 024 在有数据的既有库重放、宿主事务回滚核心写入、启动对账（claimed→interrupted、queued→恢复）、优雅关停中断落盘、备份图片快照成对轮换与恢复字节一致 |
+| `test/image-startup.test.ts` | 真实 `serve` 本地启动流程在首次 Telegram 调用前发布已保存图片配置，第二次启动自动恢复；缺失/结构错误/无法解析凭据仅禁用图片能力，启动日志与实际快照一致且不泄露凭据。Telegram 边界使用 mock，无外部连接 |
 | `load-env.test.ts` | CLI `.env.local`/`.env` 加载语义：缺失跳过、dotenv 解析（含 BOM）、真实环境变量 > `.env.local` > `.env` 优先级 |
 | `schema.test.ts` | Drizzle 层 bigint/boolean 往返、STRICT 与 CHECK 约束、better-sqlite3 IMMEDIATE 事务回滚、`sql` 模板绑定与 FTS5 查询；Invocation 审计索引的新建/升级、分页统计与查询计划 |
 | `telegram-ingestion.test.ts` | allowlist、Revision、Bot/Service、Topic 隔离、先到的 `migrate_from_chat_id` 授权新 Supergroup、匿名管理员（占位 Bot + `sender_chat`）按真人处理 |
@@ -346,3 +347,5 @@ pnpm test
 - 观察到的审计状态，而不是推测状态。
 
 图片设置浏览器回归：`pnpm run admin:build` 后执行 `pnpm run admin:test:e2e 00-auth 11-image-settings`，覆盖搜索与下拉选型、自动能力、保存与回显、空密钥沿用、旧配置凭据复用与重复项合并、缺项提示但按钮可点击且不发送非法写入、目录/供应商失败重试和窄屏无横向溢出；模型目录使用固定响应，真实 OpenRouter 目录需另行只读验收。
+
+生图审计详情浏览器回归：`pnpm run admin:build` 后执行 `pnpm run admin:test:e2e 00-auth 12-image-generations`，使用固定生成记录验证详情深链接、刷新、列表进入与返回；断言生成状态、Attempt 错误、上游请求编号、用量、最终 Prompt、参考图快照顺序与原图链接、无参考图及原图加载失败状态，并保证浏览过程不发起写请求或真实生图。

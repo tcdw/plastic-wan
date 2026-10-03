@@ -114,10 +114,16 @@ export async function serve(configPath: string, takeover = false): Promise<void>
     imageService = createImageService(openedStore, loaded.config, {
       logger: { warn: (message) => logEvent('image_service_warning', { message }) },
     });
+    try {
+      imageService.publishConfig(await imageService.prepareConfig(loaded.config, secrets));
+    } catch (error) {
+      // Image generation is optional; an unusable snapshot must not stop the bot.
+      logEvent('image_service_warning', {
+        message: secrets.redact(error instanceof Error ? error.message : String(error)),
+      });
+    }
     logEvent('image_service_started', {
       image_dir: imageService.imageDir,
-      // Disabled = no (or an ignored) image section; the admin panel can
-      // enable it later without a restart.
       enabled: imageService.core.config.hasValidConfig(),
     });
     if (loaded.warnings.length > 0) {

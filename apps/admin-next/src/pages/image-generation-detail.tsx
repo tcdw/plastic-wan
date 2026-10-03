@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
+import { useState } from 'react';
 import { toast } from 'sonner';
 import { KvList, MonoValue, StateBadge } from '@/components/business';
 import { Button } from '@/components/ui/button';
@@ -8,6 +9,43 @@ import { errorMessage } from '@/lib/errors';
 import { formatTime } from '@/lib/format';
 
 /** One generation: intent snapshot, per-item attempts, outputs, and error. */
+
+function ReferenceImage({
+  asset,
+  index,
+}: {
+  readonly asset: { readonly id: string; readonly name: string };
+  readonly index: number;
+}) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <figure className="min-w-0 space-y-2">
+      {failed ? (
+        <div className="bg-muted text-muted-foreground flex aspect-square items-center justify-center rounded-lg p-4 text-center text-sm">
+          图片无法加载，原图可能已清理或暂时不可用
+        </div>
+      ) : (
+        <a
+          href={imageUrl(asset.id)}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`${asset.name}（查看原图）`}
+          className="focus-visible:outline-ring block rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2"
+        >
+          <img
+            src={imageUrl(asset.id)}
+            alt={asset.name}
+            onError={() => setFailed(true)}
+            className="bg-muted aspect-square w-full rounded-lg object-contain"
+          />
+        </a>
+      )}
+      <figcaption className="text-muted-foreground text-xs break-words">
+        {index + 1} · {asset.name}
+      </figcaption>
+    </figure>
+  );
+}
 
 function GenerationDetail({ id }: { readonly id: string }) {
   const queryClient = useQueryClient();
@@ -67,20 +105,15 @@ function GenerationDetail({ id }: { readonly id: string }) {
             { label: '提交时间', value: formatTime(record.createdAt) },
             { label: '完成时间', value: record.finishedAt === null ? '—' : formatTime(record.finishedAt) },
             {
-              label: '引用',
+              label: '提示词素材',
               value:
-                record.snapshot.promptAssets.length + record.snapshot.imageAssets.length === 0 ? (
+                record.snapshot.promptAssets.length === 0 ? (
                   '—'
                 ) : (
                   <span>
                     {record.snapshot.promptAssets.map((asset) => (
                       <span key={asset.id} className="mr-1 inline-block">
-                        prompt:{asset.name}
-                      </span>
-                    ))}
-                    {record.snapshot.imageAssets.map((asset) => (
-                      <span key={asset.id} className="mr-1 inline-block">
-                        image:{asset.name}
+                        {asset.name}
                       </span>
                     ))}
                   </span>
@@ -107,6 +140,23 @@ function GenerationDetail({ id }: { readonly id: string }) {
           </div>
         )}
       </div>
+      <section aria-labelledby="reference-images-title" className="space-y-3">
+        <h2 id="reference-images-title" className="text-sm font-medium">
+          参考图
+        </h2>
+        {record.snapshot.imageAssets.length === 0 ? (
+          <p className="text-muted-foreground text-sm">本次生成未使用参考图</p>
+        ) : (
+          <>
+            <p className="text-muted-foreground text-xs">按当时提交给模型的顺序排列，点击图片查看原图</p>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+              {record.snapshot.imageAssets.map((asset, index) => (
+                <ReferenceImage key={asset.id} asset={asset} index={index} />
+              ))}
+            </div>
+          </>
+        )}
+      </section>
       <div className="space-y-2">
         <div className="text-sm font-medium">Attempt 记录</div>
         <div className="space-y-1">
@@ -142,7 +192,7 @@ function GenerationDetail({ id }: { readonly id: string }) {
 }
 
 export default function ImageGenerationDetailPage() {
-  const { generationId } = useParams({ from: '/image-generations/$generationId' });
+  const { generationId } = useParams({ from: '/image-generations_/$generationId' });
   return (
     <div className="space-y-4">
       <Link to="/image-generations" className="text-sm underline">

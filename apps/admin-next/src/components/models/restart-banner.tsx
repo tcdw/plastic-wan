@@ -1,4 +1,5 @@
 import { AlertTriangle } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 
@@ -18,6 +19,7 @@ export function RestartBanner({
   readonly pending: boolean;
   readonly onRestart: () => void;
 }): React.ReactElement | null {
+  const { t } = useTranslation();
   if (paths.length === 0) {
     return null;
   }
@@ -25,11 +27,13 @@ export function RestartBanner({
     <Alert>
       <AlertTriangle className="text-warning" />
       <AlertTitle>
-        {paths.length} {paths.length === 1 ? 'setting is' : 'settings are'} waiting for a restart
+        {t(paths.length === 1 ? 'models.models.restart.onePending' : 'models.models.restart.manyPending', {
+          count: paths.length,
+        })}
       </AlertTitle>
       <AlertDescription>
         <div className="space-y-2">
-          <p className="text-xs">Written to config.jsonc, but the running process still uses the old values:</p>
+          <p className="text-xs">{t('models.models.restart.writtenNote')}</p>
           {/* One chip per path: a long joined line wraps into an unreadable
               paragraph as soon as a few fields are waiting. */}
           <ul className="flex flex-wrap gap-1.5">
@@ -41,13 +45,10 @@ export function RestartBanner({
           </ul>
           {supervised ? (
             <Button type="button" size="sm" disabled={pending} onClick={onRestart}>
-              {pending ? 'Restarting…' : 'Restart now'}
+              {pending ? t('models.models.restart.restarting') : t('models.models.restart.restartNow')}
             </Button>
           ) : (
-            <p className="text-muted-foreground text-xs">
-              This deployment does not declare a supervisor (PLASTICWAN_SUPERVISED=1), so there is no restart button -
-              restart the server by hand.
-            </p>
+            <p className="text-muted-foreground text-xs">{t('models.models.restart.noSupervisor')}</p>
           )}
         </div>
       </AlertDescription>

@@ -21,32 +21,7 @@ import { cancelOngoingSessions, type LabelCount, type UsageEntry, wakeBot } from
 import { errorMessage } from '@/lib/errors';
 import { formatNumber, formatTime } from '@/lib/format';
 import { overviewQuery, usageQuery } from '@/lib/queries';
-
-const TOKEN_SERIES: readonly ChartSeries[] = [
-  { dataKey: 'model_tokens', label: 'Model tokens', color: 'var(--chart-1)' },
-  { dataKey: 'vision_tokens', label: 'Vision tokens', color: 'var(--chart-2)' },
-];
-const INVOCATION_SERIES: readonly ChartSeries[] = [
-  { dataKey: 'agent_invocations', label: 'Invocations', color: 'var(--chart-3)' },
-];
-const TOOL_SERIES: readonly ChartSeries[] = [{ dataKey: 'tool_calls', label: 'Tool calls', color: 'var(--chart-4)' }];
-
-const COUNT_COLUMNS: readonly ColumnSpec<LabelCount>[] = [
-  { key: 'label', title: 'State', render: (row) => <StateBadge state={row.label} /> },
-  { key: 'count', title: 'Count', align: 'right', render: (row) => formatNumber(row.count) },
-];
-
-const TOOL_COLUMNS: readonly ColumnSpec<LabelCount>[] = [
-  { key: 'label', title: 'Tool', render: (row) => row.label },
-  { key: 'count', title: 'Calls', align: 'right', render: (row) => formatNumber(row.count) },
-];
-
-const USAGE_COLUMNS: readonly ColumnSpec<UsageEntry>[] = [
-  { key: 'resource', title: 'Resource', render: (row) => row.resource },
-  { key: 'metric', title: 'Metric', render: (row) => row.metric },
-  { key: 'scope', title: 'Scope', render: (row) => row.scope },
-  { key: 'amount', title: 'Amount', align: 'right', render: (row) => formatNumber(row.amount) },
-];
+import { useTranslation } from 'react-i18next';
 
 function Stat({ title, value }: { readonly title: string; readonly value: React.ReactNode }): React.ReactElement {
   return (
@@ -86,10 +61,16 @@ function StatsSkeleton(): React.ReactElement {
 }
 
 function SleepBadge({ sleeping }: { readonly sleeping: boolean }): React.ReactElement {
-  return sleeping ? <ToneBadge tone="warning">sleeping</ToneBadge> : <ToneBadge tone="success">awake</ToneBadge>;
+  const { t } = useTranslation();
+  return sleeping ? (
+    <ToneBadge tone="warning">{t('pages.overview.sleeping')}</ToneBadge>
+  ) : (
+    <ToneBadge tone="success">{t('pages.overview.awake')}</ToneBadge>
+  );
 }
 
 export default function OverviewPage(): React.ReactElement {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [days, setDays] = useState(7);
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -111,7 +92,10 @@ export default function OverviewPage(): React.ReactElement {
     onSuccess: (result) => {
       setCancelOpen(false);
       toast.success(
-        `Canceled ${formatNumber(result.canceled_buckets)} buckets / ${formatNumber(result.canceled_invocations)} invocations`,
+        t('pages.overview.canceledBuckets', {
+          buckets: formatNumber(result.canceled_buckets),
+          invocations: formatNumber(result.canceled_invocations),
+        }),
       );
       void queryClient.invalidateQueries({ queryKey: ['overview'] });
       void queryClient.invalidateQueries({ queryKey: ['invocations'] });
@@ -124,7 +108,7 @@ export default function OverviewPage(): React.ReactElement {
     mutationFn: wakeBot,
     onSuccess: (result) => {
       setWakeOpen(false);
-      toast.success(result.was_sleeping ? 'Bot is awake' : 'Bot was already awake');
+      toast.success(result.was_sleeping ? t('pages.overview.botAwake') : t('pages.overview.botAlreadyAwake'));
       void queryClient.invalidateQueries({ queryKey: ['overview'] });
     },
     onError: () => {
@@ -139,7 +123,7 @@ export default function OverviewPage(): React.ReactElement {
   if (isError) {
     return (
       <div className="p-6 text-center">
-        <p className="text-destructive font-medium">Failed to load overview</p>
+        <p className="text-destructive font-medium">{t('pages.overview.loadFailed')}</p>
         <p className="text-muted-foreground text-sm break-words">{errorMessage(error)}</p>
       </div>
     );
@@ -151,41 +135,66 @@ export default function OverviewPage(): React.ReactElement {
     .reduce((sum, entry) => sum + entry.count, 0);
   const chartData = usage?.series.map((point) => ({ ...point })) ?? [];
 
+  const tokenSeries: readonly ChartSeries[] = [
+    { dataKey: 'model_tokens', label: t('pages.overview.seriesTokens'), color: 'var(--chart-1)' },
+    { dataKey: 'vision_tokens', label: t('pages.overview.seriesVisionTokens'), color: 'var(--chart-2)' },
+  ];
+  const invocationSeries: readonly ChartSeries[] = [
+    { dataKey: 'agent_invocations', label: t('pages.overview.seriesInvocations'), color: 'var(--chart-3)' },
+  ];
+  const toolSeries: readonly ChartSeries[] = [
+    { dataKey: 'tool_calls', label: t('pages.overview.seriesToolCalls'), color: 'var(--chart-4)' },
+  ];
+  const countColumns: readonly ColumnSpec<LabelCount>[] = [
+    { key: 'label', title: t('pages.overview.colState'), render: (row) => <StateBadge state={row.label} /> },
+    { key: 'count', title: t('pages.overview.colCount'), align: 'right', render: (row) => formatNumber(row.count) },
+  ];
+  const toolColumns: readonly ColumnSpec<LabelCount>[] = [
+    { key: 'label', title: t('pages.overview.colTool'), render: (row) => row.label },
+    { key: 'count', title: t('pages.overview.colCalls'), align: 'right', render: (row) => formatNumber(row.count) },
+  ];
+  const usageColumns: readonly ColumnSpec<UsageEntry>[] = [
+    { key: 'resource', title: t('pages.overview.colResource'), render: (row) => row.resource },
+    { key: 'metric', title: t('pages.overview.colMetric'), render: (row) => row.metric },
+    { key: 'scope', title: t('pages.overview.colScope'), render: (row) => row.scope },
+    { key: 'amount', title: t('pages.overview.colAmount'), align: 'right', render: (row) => formatNumber(row.amount) },
+  ];
+
   return (
     <div className="space-y-6">
       <Card className="px-6">
         <dl className="grid gap-6 sm:grid-cols-3">
-          <Stat title="Invocations" value={formatNumber(totalInvocations)} />
-          <Stat title="Stored messages" value={formatNumber(data.message_count)} />
-          <Stat title="Cached media analyses" value={formatNumber(data.cached_analysis_count)} />
+          <Stat title={t('pages.overview.statInvocations')} value={formatNumber(totalInvocations)} />
+          <Stat title={t('pages.overview.statStoredMessages')} value={formatNumber(data.message_count)} />
+          <Stat title={t('pages.overview.statCachedAnalyses')} value={formatNumber(data.cached_analysis_count)} />
         </dl>
       </Card>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Panel
-          title="Bot status"
+          title={t('pages.overview.botStatus')}
           action={
             data.runtime_status.sleeping ? (
               <Button type="button" size="sm" disabled={wake.isPending} onClick={() => setWakeOpen(true)}>
-                Wake now
+                {t('pages.overview.wakeNow')}
               </Button>
             ) : null
           }
         >
           <dl className="space-y-4">
-            <Field label="State">
+            <Field label={t('pages.overview.fieldState')}>
               <div className="flex flex-wrap items-center gap-2">
                 <SleepBadge sleeping={data.runtime_status.sleeping} />
                 {data.runtime_status.sleep_until !== null ? (
                   <span className="text-muted-foreground text-sm">
-                    until {formatTime(data.runtime_status.sleep_until)}
+                    {t('pages.overview.sleepUntil', { time: formatTime(data.runtime_status.sleep_until) })}
                   </span>
                 ) : null}
               </div>
             </Field>
-            <Field label="Administrator pauses">
+            <Field label={t('pages.overview.adminPauses')}>
               {data.runtime_status.paused_chats.length === 0 ? (
-                <p className="text-sm opacity-60">None</p>
+                <p className="text-sm opacity-60">{t('pages.overview.none')}</p>
               ) : (
                 <ul className="space-y-2">
                   {data.runtime_status.paused_chats.map((chat) => (
@@ -193,7 +202,9 @@ export default function OverviewPage(): React.ReactElement {
                       <span className="font-medium">
                         {chat.title ?? (chat.username === null ? chat.telegram_chat_id : `@${chat.username}`)}
                       </span>
-                      <span className="text-muted-foreground text-xs">since {formatTime(chat.paused_at)}</span>
+                      <span className="text-muted-foreground text-xs">
+                        {t('pages.overview.pausedSince', { time: formatTime(chat.paused_at) })}
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -203,7 +214,7 @@ export default function OverviewPage(): React.ReactElement {
         </Panel>
 
         <Panel
-          title="Operations"
+          title={t('pages.overview.operations')}
           action={
             <Button
               type="button"
@@ -212,28 +223,28 @@ export default function OverviewPage(): React.ReactElement {
               disabled={cancel.isPending}
               onClick={() => setCancelOpen(true)}
             >
-              Cancel ongoing
+              {t('pages.overview.cancelOngoing')}
             </Button>
           }
         >
           <dl className="space-y-4">
-            <Field label="Ongoing invocations">
+            <Field label={t('pages.overview.fieldOngoingInvocations')}>
               <p className="text-sm font-medium tabular-nums">{formatNumber(ongoingInvocations)}</p>
             </Field>
-            <Field label="Cancel ongoing">
-              <p className="text-sm">Aborts running and queued invocations and expires every pending bucket.</p>
+            <Field label={t('pages.overview.cancelOngoing')}>
+              <p className="text-sm">{t('pages.overview.cancelOngoingDesc')}</p>
             </Field>
           </dl>
         </Panel>
       </div>
 
       <Panel
-        title="Daily usage"
+        title={t('pages.overview.dailyUsage')}
         action={
           <Tabs value={String(days)} onValueChange={(value) => setDays(Number(value))}>
             <TabsList>
-              <TabsTrigger value="7">7d</TabsTrigger>
-              <TabsTrigger value="30">30d</TabsTrigger>
+              <TabsTrigger value="7">{t('pages.overview.range7d')}</TabsTrigger>
+              <TabsTrigger value="30">{t('pages.overview.range30d')}</TabsTrigger>
             </TabsList>
           </Tabs>
         }
@@ -243,45 +254,43 @@ export default function OverviewPage(): React.ReactElement {
         ) : usageError ? (
           <p className="text-destructive text-sm break-words">{errorMessage(usageErrorValue)}</p>
         ) : usage === undefined || chartData.length === 0 ? (
-          <p className="text-muted-foreground py-20 text-center text-sm">No usage data</p>
+          <p className="text-muted-foreground py-20 text-center text-sm">{t('pages.overview.noUsageData')}</p>
         ) : (
           <div className="grid gap-8 md:grid-cols-2 xl:grid-cols-3">
-            <ChartPanel title="Tokens">
-              <TimeSeriesChart data={chartData} series={TOKEN_SERIES} height={200} />
-              <p className="text-muted-foreground text-xs">
-                Token usage: input, output, cache read and cache write tokens — the definition the daily budget meters.
-              </p>
+            <ChartPanel title={t('pages.overview.chartTokens')}>
+              <TimeSeriesChart data={chartData} series={tokenSeries} height={200} />
+              <p className="text-muted-foreground text-xs">{t('pages.overview.tokenHint')}</p>
             </ChartPanel>
-            <ChartPanel title="Invocations">
-              <TimeSeriesChart data={chartData} series={INVOCATION_SERIES} height={200} />
+            <ChartPanel title={t('pages.overview.chartInvocations')}>
+              <TimeSeriesChart data={chartData} series={invocationSeries} height={200} />
             </ChartPanel>
-            <ChartPanel title="Tool calls">
-              <TimeSeriesChart data={chartData} series={TOOL_SERIES} height={200} />
+            <ChartPanel title={t('pages.overview.chartToolCalls')}>
+              <TimeSeriesChart data={chartData} series={toolSeries} height={200} />
             </ChartPanel>
           </div>
         )}
       </Panel>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <Panel title="Invocation states" flush>
+        <Panel title={t('pages.overview.invocationStates')} flush>
           <TableShell
-            columns={COUNT_COLUMNS}
+            columns={countColumns}
             data={data.invocation_states}
             rowKey={(row) => row.label}
             className={FLUSH_TABLE_CLASS}
           />
         </Panel>
-        <Panel title="Configured sticker index states" flush>
+        <Panel title={t('pages.overview.stickerIndexStates')} flush>
           <TableShell
-            columns={COUNT_COLUMNS}
+            columns={countColumns}
             data={data.sticker_index_states}
             rowKey={(row) => row.label}
             className={FLUSH_TABLE_CLASS}
           />
         </Panel>
-        <Panel title="Top tools" flush>
+        <Panel title={t('pages.overview.topTools')} flush>
           <TableShell
-            columns={TOOL_COLUMNS}
+            columns={toolColumns}
             data={data.top_tools}
             rowKey={(row) => row.label}
             className={FLUSH_TABLE_CLASS}
@@ -289,21 +298,22 @@ export default function OverviewPage(): React.ReactElement {
         </Panel>
       </div>
 
-      <Panel title="Today's usage (UTC)" flush>
+      <Panel title={t('pages.overview.todaysUsage')} flush>
         <TableShell
-          columns={USAGE_COLUMNS}
+          columns={usageColumns}
           data={data.daily_usage}
           rowKey={(row) => `${row.resource}|${row.metric}|${row.scope}`}
           className={FLUSH_TABLE_CLASS}
         />
         <p className="text-muted-foreground px-5 py-3 text-xs">
-          <code className="font-mono">model_tokens</code> is what the global daily budget meters, per chat:{' '}
-          <code className="font-mono">vision_tokens</code> is the same definition for the sticker index. Both include
-          cache reads and writes.
+          <code className="font-mono">model_tokens</code> {t('pages.overview.usageFootnoteModel')}{' '}
+          <code className="font-mono">vision_tokens</code> {t('pages.overview.usageFootnoteVision')}
         </p>
       </Panel>
 
-      <p className="text-muted-foreground text-sm">Generated at {formatTime(data.generated_at)}</p>
+      <p className="text-muted-foreground text-sm">
+        {t('pages.overview.generatedAt', { time: formatTime(data.generated_at) })}
+      </p>
 
       <ConfirmDialog
         open={cancelOpen}
@@ -312,9 +322,9 @@ export default function OverviewPage(): React.ReactElement {
             setCancelOpen(false);
           }
         }}
-        title="Cancel all ongoing sessions?"
-        description="This will abort running and queued invocations and expire every pending bucket. Messages already sent stay sent."
-        confirmText="Cancel ongoing sessions"
+        title={t('pages.overview.cancelDialogTitle')}
+        description={t('pages.overview.cancelDialogDescription')}
+        confirmText={t('pages.overview.cancelDialogConfirm')}
         destructive
         pending={cancel.isPending}
         error={cancel.isError ? errorMessage(cancel.error) : null}
@@ -327,9 +337,10 @@ export default function OverviewPage(): React.ReactElement {
             setWakeOpen(false);
           }
         }}
-        title="Wake the bot now?"
-        description="New sessions may consume the increased token budget immediately."
-        confirmText="Wake now"
+        title={t('pages.overview.wakeDialogTitle')}
+        description={t('pages.overview.wakeDialogDescription')}
+        confirmText={t('pages.overview.wakeDialogConfirm')}
+        destructive
         pending={wake.isPending}
         error={wake.isError ? errorMessage(wake.error) : null}
         onConfirm={() => wake.mutate()}

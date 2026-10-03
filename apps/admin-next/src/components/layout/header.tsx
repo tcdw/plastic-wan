@@ -1,4 +1,5 @@
 import { Breadcrumbs } from '@/components/breadcrumbs';
+import { LanguageToggle } from '@/components/themes/language-toggle';
 import { ThemeModeToggle } from '@/components/themes/theme-mode-toggle';
 import { Separator } from '@/components/ui/separator';
 import { SidebarTrigger } from '@/components/ui/sidebar';
@@ -12,6 +13,7 @@ export default function Header() {
         <Breadcrumbs />
       </div>
       <div className="flex items-center gap-2">
+        <LanguageToggle />
         <ThemeModeToggle />
       </div>
     </header>

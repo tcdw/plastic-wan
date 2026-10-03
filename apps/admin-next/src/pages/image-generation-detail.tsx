@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { KvList, MonoValue, StateBadge } from '@/components/business';
 import { Button } from '@/components/ui/button';
@@ -18,18 +19,19 @@ function ReferenceImage({
   readonly index: number;
 }) {
   const [failed, setFailed] = useState(false);
+  const { t } = useTranslation();
   return (
     <figure className="min-w-0 space-y-2">
       {failed ? (
         <div className="bg-muted text-muted-foreground flex aspect-square items-center justify-center rounded-lg p-4 text-center text-sm">
-          图片无法加载，原图可能已清理或暂时不可用
+          {t('image.detail.imageLoadFailed')}
         </div>
       ) : (
         <a
           href={imageUrl(asset.id)}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label={`${asset.name}（查看原图）`}
+          aria-label={t('image.detail.viewOriginal', { name: asset.name })}
           className="focus-visible:outline-ring block rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2"
         >
           <img
@@ -48,6 +50,7 @@ function ReferenceImage({
 }
 
 function GenerationDetail({ id }: { readonly id: string }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ['image-generation', id],
@@ -60,7 +63,7 @@ function GenerationDetail({ id }: { readonly id: string }) {
   const retry = useMutation({
     mutationFn: () => retryImageGeneration(id),
     onSuccess: ({ generation }) => {
-      toast.success(`已重新提交：${generation.id.slice(0, 8)}…`);
+      toast.success(t('image.detail.resubmittedToast', { id: generation.id.slice(0, 8) }));
       void queryClient.invalidateQueries({ queryKey: ['image-generation', id] });
       void queryClient.invalidateQueries({ queryKey: ['image-generations'] });
     },
@@ -70,10 +73,10 @@ function GenerationDetail({ id }: { readonly id: string }) {
   });
 
   if (query.isLoading) {
-    return <p className="text-muted-foreground text-sm">加载中…</p>;
+    return <p className="text-muted-foreground text-sm">{t('common.loading')}</p>;
   }
   if (query.data === undefined) {
-    return <p className="text-muted-foreground text-sm">生成不存在。</p>;
+    return <p className="text-muted-foreground text-sm">{t('image.detail.notFound')}</p>;
   }
   const record = query.data;
   const settled = record.status !== 'queued' && record.status !== 'running';
@@ -87,25 +90,31 @@ function GenerationDetail({ id }: { readonly id: string }) {
         </div>
         {settled && (
           <Button size="sm" variant="outline" onClick={() => retry.mutate()} disabled={retry.isPending}>
-            {retry.isPending ? '提交中…' : '重试'}
+            {retry.isPending ? t('common.submitting') : t('common.retry')}
           </Button>
         )}
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <KvList
           items={[
-            { label: 'Generation ID', value: <MonoValue value={record.id} /> },
-            { label: '模型', value: record.snapshot.authored.modelId },
+            { label: t('image.detail.generationId'), value: <MonoValue value={record.id} /> },
+            { label: t('image.detail.model'), value: record.snapshot.authored.modelId },
             {
-              label: '比例 / 质量',
+              label: t('image.detail.ratioQuality'),
               value: `${record.snapshot.authored.aspectRatio} · ${record.snapshot.authored.resolution}`,
             },
-            { label: '输出数', value: `${record.outputs.length}/${record.snapshot.authored.outputCount}` },
-            { label: '来源', value: `${record.source} · ${record.actorName}` },
-            { label: '提交时间', value: formatTime(record.createdAt) },
-            { label: '完成时间', value: record.finishedAt === null ? '—' : formatTime(record.finishedAt) },
             {
-              label: '提示词素材',
+              label: t('image.detail.outputCount'),
+              value: `${record.outputs.length}/${record.snapshot.authored.outputCount}`,
+            },
+            { label: t('image.detail.source'), value: `${record.source} · ${record.actorName}` },
+            { label: t('image.detail.submitted'), value: formatTime(record.createdAt) },
+            {
+              label: t('image.detail.finished'),
+              value: record.finishedAt === null ? '—' : formatTime(record.finishedAt),
+            },
+            {
+              label: t('image.detail.promptAssets'),
               value:
                 record.snapshot.promptAssets.length === 0 ? (
                   '—'
@@ -123,7 +132,7 @@ function GenerationDetail({ id }: { readonly id: string }) {
         />
         {record.error !== null ? (
           <div className="bg-destructive/10 space-y-1 rounded p-3">
-            <div className="text-sm font-medium">错误：{record.error.code}</div>
+            <div className="text-sm font-medium">{t('image.detail.errorPrefix', { code: record.error.code })}</div>
             <p className="text-sm break-words">{record.error.message}</p>
           </div>
         ) : (
@@ -142,13 +151,13 @@ function GenerationDetail({ id }: { readonly id: string }) {
       </div>
       <section aria-labelledby="reference-images-title" className="space-y-3">
         <h2 id="reference-images-title" className="text-sm font-medium">
-          参考图
+          {t('image.detail.referenceImages')}
         </h2>
         {record.snapshot.imageAssets.length === 0 ? (
-          <p className="text-muted-foreground text-sm">本次生成未使用参考图</p>
+          <p className="text-muted-foreground text-sm">{t('image.detail.noReferenceImages')}</p>
         ) : (
           <>
-            <p className="text-muted-foreground text-xs">按当时提交给模型的顺序排列，点击图片查看原图</p>
+            <p className="text-muted-foreground text-xs">{t('image.detail.orderingHint')}</p>
             <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
               {record.snapshot.imageAssets.map((asset, index) => (
                 <ReferenceImage key={asset.id} asset={asset} index={index} />
@@ -158,7 +167,7 @@ function GenerationDetail({ id }: { readonly id: string }) {
         )}
       </section>
       <div className="space-y-2">
-        <div className="text-sm font-medium">Attempt 记录</div>
+        <div className="text-sm font-medium">{t('image.detail.attemptsTitle')}</div>
         <div className="space-y-1">
           {record.attempts.map((attempt) => (
             <div key={attempt.id} className="bg-muted/50 flex flex-wrap items-center gap-2 rounded px-3 py-1.5 text-xs">
@@ -180,11 +189,13 @@ function GenerationDetail({ id }: { readonly id: string }) {
               )}
             </div>
           ))}
-          {record.attempts.length === 0 && <p className="text-muted-foreground text-xs">尚无 attempt。</p>}
+          {record.attempts.length === 0 && (
+            <p className="text-muted-foreground text-xs">{t('image.detail.noAttempts')}</p>
+          )}
         </div>
       </div>
       <div className="bg-muted/50 rounded p-3">
-        <div className="text-muted-foreground text-xs">最终 Prompt（已展开引用）</div>
+        <div className="text-muted-foreground text-xs">{t('image.detail.finalPromptLabel')}</div>
         <pre className="text-xs whitespace-pre-wrap">{record.snapshot.finalPrompt}</pre>
       </div>
     </div>
@@ -193,10 +204,11 @@ function GenerationDetail({ id }: { readonly id: string }) {
 
 export default function ImageGenerationDetailPage() {
   const { generationId } = useParams({ from: '/image-generations_/$generationId' });
+  const { t } = useTranslation();
   return (
     <div className="space-y-4">
       <Link to="/image-generations" className="text-sm underline">
-        ← 返回列表
+        {t('image.detail.backToList')}
       </Link>
       <GenerationDetail id={generationId} />
     </div>

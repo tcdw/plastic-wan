@@ -29,5 +29,8 @@ export default defineConfig({
     trace: 'off',
     screenshot: 'off',
     video: 'off',
+    // Pin the browser locale so the SPA's navigator-language detection always
+    // resolves to English, independent of the machine running the suite.
+    locale: 'en-US',
   },
 });

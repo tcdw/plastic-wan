@@ -65,16 +65,16 @@ test('deep link and reload show generation audit details without the history lis
   await page.goto(await adminUrl(detailPath));
   await expect(page.getByText('Generation ID', { exact: true })).toBeVisible();
   await expect(page.getByText(generation.id, { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '生图记录', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Generation history', exact: true })).toHaveCount(0);
   await expect(page.getByText('failed', { exact: true })).toHaveCount(2);
-  await expect(page.getByText('错误：provider_timeout', { exact: true })).toBeVisible();
+  await expect(page.getByText('Error: provider_timeout', { exact: true })).toBeVisible();
   await expect(page.getByText('Fixture generation failed', { exact: true })).toBeVisible();
-  await expect(page.getByText('Attempt 记录', { exact: true })).toBeVisible();
+  await expect(page.getByText('Attempt log', { exact: true })).toBeVisible();
   await expect(page.getByText('fixture-request-id', { exact: true })).toBeVisible();
   await expect(page.getByText('input_tokens 42', { exact: true })).toBeVisible();
   await expect(page.getByText('Fixture upstream timed out', { exact: true })).toBeVisible();
   await expect(page.getByText(generation.snapshot.finalPrompt, { exact: true })).toBeVisible();
-  await expect(page.getByText('本次生成未使用参考图', { exact: true })).toBeVisible();
+  await expect(page.getByText('This generation used no reference images', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByText('Generation ID', { exact: true })).toBeVisible();
   await expect(page.getByText(generation.id, { exact: true })).toBeVisible();
@@ -102,13 +102,13 @@ test('reference previews use the frozen names and order, load the original asset
     route.fulfill({ contentType: 'image/png', body: bytes }),
   );
   await page.goto(await adminUrl(`/image-generations/${generation.id}`));
-  const gallery = page.getByRole('region', { name: '参考图', exact: true });
+  const gallery = page.getByRole('region', { name: 'Reference images', exact: true });
   await expect(gallery.locator('figcaption')).toHaveText(['1 · Garden at submission', '2 · Character at submission']);
   for (const reference of references) {
     const preview = gallery.getByRole('img', { name: reference.name, exact: true });
     await expect(preview).toHaveAttribute('src', `/api/image/images/${reference.id}/content`);
     await expect.poll(() => preview.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(32);
-    const link = gallery.getByRole('link', { name: `${reference.name}（查看原图）`, exact: true });
+    const link = gallery.getByRole('link', { name: `View original: ${reference.name}`, exact: true });
     await expect(link).toHaveAttribute('href', `/api/image/images/${reference.id}/content`);
     await expect(link).toHaveAttribute('target', '_blank');
   }
@@ -136,8 +136,12 @@ test('missing reference content keeps its snapshot name and the audit details vi
     }),
   );
   await page.goto(await adminUrl(`/image-generations/${generation.id}`));
-  const gallery = page.getByRole('region', { name: '参考图', exact: true });
-  await expect(gallery.getByText('图片无法加载，原图可能已清理或暂时不可用', { exact: true })).toBeVisible();
+  const gallery = page.getByRole('region', { name: 'Reference images', exact: true });
+  await expect(
+    gallery.getByText('Image failed to load; the original may have been cleaned up or is temporarily unavailable', {
+      exact: true,
+    }),
+  ).toBeVisible();
   await expect(gallery.locator('figcaption')).toHaveText('1 · Original reference');
   await expect(gallery.getByRole('img')).toHaveCount(0);
   await expect(page.getByText(generation.snapshot.finalPrompt, { exact: true })).toBeVisible();
@@ -149,15 +153,15 @@ test('missing reference content keeps its snapshot name and the audit details vi
 test('history links open the audit detail and return to the history list', async ({ page }) => {
   const finish = watchPageIssues(page);
   await page.goto(await adminUrl('/image-generations'));
-  await expect(page.getByRole('heading', { name: '生图记录', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Generation history', exact: true })).toBeVisible();
   await page.getByRole('link', { name: `${generation.id.slice(0, 8)}…`, exact: true }).click();
   await expect(page).toHaveURL(await adminUrl(`/image-generations/${generation.id}`));
   await expect(page.getByText('Generation ID', { exact: true })).toBeVisible();
   await expect(page.getByText(generation.snapshot.finalPrompt, { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '生图记录', exact: true })).toHaveCount(0);
-  await page.getByRole('link', { name: '← 返回列表', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Generation history', exact: true })).toHaveCount(0);
+  await page.getByRole('link', { name: '← Back to list', exact: true }).click();
   await expect(page).toHaveURL(await adminUrl('/image-generations'));
-  await expect(page.getByRole('heading', { name: '生图记录', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Generation history', exact: true })).toBeVisible();
   await expect(page.getByText('Generation ID', { exact: true })).toHaveCount(0);
   const issues = finish();
   expect(issues.pageErrors).toEqual([]);

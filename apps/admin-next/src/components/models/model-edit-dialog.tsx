@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { LazyDetails } from '@/components/business';
 import { Button } from '@/components/ui/button';
 import {
@@ -52,6 +53,7 @@ function FieldLabel({
   readonly draft: ModelMetadataDraft | null;
   readonly field: DraftField;
 }): React.ReactElement {
+  const { t } = useTranslation();
   return (
     <span className="flex flex-wrap items-center gap-2">
       <Label htmlFor={htmlFor}>{label}</Label>
@@ -59,7 +61,7 @@ function FieldLabel({
         <>
           <span className="text-muted-foreground text-xs">{fieldSourceLabel(draft, field)}</span>
           {isDraftFieldUnconfirmed(draft, field) ? (
-            <span className="text-warning text-xs font-medium">confirm</span>
+            <span className="text-warning text-xs font-medium">{t('models.models.edit.confirmMarker')}</span>
           ) : null}
         </>
       )}
@@ -95,6 +97,7 @@ export function ModelEditDialog({
   error,
   onSubmit,
 }: ModelEditDialogProps): React.ReactElement {
+  const { t } = useTranslation();
   // The form is initialized once, at mount: every caller renders this dialog
   // only while it has a target and remounts it (a fresh `key`) for the next one,
   // so there is no state to sync after the first render.
@@ -136,7 +139,7 @@ export function ModelEditDialog({
         <div className="space-y-4">
           {confirmations.length > 0 ? (
             <p className="text-warning text-xs">
-              Confirm or fill in: {confirmations.join(', ')}. The panel fills in no defaults.
+              {t('models.models.edit.confirmIntro', { fields: confirmations.join(', ') })}
             </p>
           ) : null}
           {/* Naming the match makes "confirm" actionable: a cross-provider or
@@ -144,7 +147,7 @@ export function ModelEditDialog({
           {matchNote === null ? null : <p className="text-muted-foreground text-xs">{matchNote}</p>}
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <FieldLabel htmlFor="model-id" label="id" draft={null} field="name" />
+              <FieldLabel htmlFor="model-id" label={t('models.models.edit.id')} draft={null} field="name" />
               <Input
                 id="model-id"
                 value={form.id}
@@ -154,7 +157,7 @@ export function ModelEditDialog({
               {touched && errors.id !== undefined ? <p className="text-destructive text-sm">{errors.id}</p> : null}
             </div>
             <div className="space-y-2">
-              <FieldLabel htmlFor="model-name" label="name" draft={draft} field="name" />
+              <FieldLabel htmlFor="model-name" label={t('models.models.edit.name')} draft={draft} field="name" />
               <Input
                 id="model-name"
                 value={form.name}
@@ -162,7 +165,12 @@ export function ModelEditDialog({
               />
             </div>
             <div className="space-y-2">
-              <FieldLabel htmlFor="model-context" label="context_window" draft={draft} field="context_window" />
+              <FieldLabel
+                htmlFor="model-context"
+                label={t('models.models.edit.contextWindow')}
+                draft={draft}
+                field="context_window"
+              />
               <Input
                 id="model-context"
                 type="number"
@@ -176,7 +184,12 @@ export function ModelEditDialog({
               ) : null}
             </div>
             <div className="space-y-2">
-              <FieldLabel htmlFor="model-max-tokens" label="max_tokens" draft={draft} field="max_tokens" />
+              <FieldLabel
+                htmlFor="model-max-tokens"
+                label={t('models.models.edit.maxTokens')}
+                draft={draft}
+                field="max_tokens"
+              />
               <Input
                 id="model-max-tokens"
                 type="number"
@@ -192,7 +205,7 @@ export function ModelEditDialog({
           </div>
 
           <div className="space-y-2">
-            <FieldLabel htmlFor="model-input-text" label="input" draft={draft} field="input" />
+            <FieldLabel htmlFor="model-input-text" label={t('models.models.edit.input')} draft={draft} field="input" />
             <div className="flex flex-wrap items-center gap-4">
               {INPUT_MODALITIES.map((modality) => (
                 <label key={modality} className="flex items-center gap-2 text-sm" htmlFor={`model-input-${modality}`}>
@@ -214,7 +227,7 @@ export function ModelEditDialog({
                   checked={form.reasoning}
                   onChange={(event) => setForm((previous) => ({ ...previous, reasoning: event.target.checked }))}
                 />
-                reasoning
+                {t('models.models.edit.reasoning')}
               </label>
               {draft === null ? null : (
                 <span className="text-muted-foreground text-xs">{fieldSourceLabel(draft, 'reasoning')}</span>
@@ -227,7 +240,12 @@ export function ModelEditDialog({
               drops them, so the row goes away with the checkbox. */}
           {form.reasoning ? (
             <div className="space-y-2">
-              <FieldLabel htmlFor="model-thinking-off" label="thinking levels" draft={draft} field="thinking_levels" />
+              <FieldLabel
+                htmlFor="model-thinking-off"
+                label={t('models.models.edit.thinkingLevels')}
+                draft={draft}
+                field="thinking_levels"
+              />
               <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                 {THINKING_LEVELS.map((level) => (
                   <label key={level} className="flex items-center gap-2 text-sm" htmlFor={`model-thinking-${level}`}>
@@ -242,15 +260,13 @@ export function ModelEditDialog({
                   </label>
                 ))}
               </div>
-              <p className="text-muted-foreground text-xs">
-                The levels this model accepts. Leave all unchecked to use Pi's default: off, minimal, low, medium, high.
-              </p>
+              <p className="text-muted-foreground text-xs">{t('models.models.edit.thinkingHint')}</p>
             </div>
           ) : null}
 
           <div className="space-y-2">
             <Label htmlFor="model-tool-schema" className="font-mono text-xs">
-              tool_schema_keywords
+              {t('models.models.edit.toolSchema')}
             </Label>
             <Select
               value={form.tool_schema_keywords}
@@ -262,20 +278,16 @@ export function ModelEditDialog({
               <SelectContent>
                 {TOOL_SCHEMA_KEYWORDS_OPTIONS.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
-                    {option.label}
+                    {option.value === AUTO_COMPAT ? t('models.models.edit.automatic') : option.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-muted-foreground text-xs">
-              Which JSON Schema keywords this model's tool definitions may carry. Automatic sends every keyword the
-              runtime builds; minimal drops the validation-only ones that grammar-constrained endpoints reject with
-              "unsupported schema keyword".
-            </p>
+            <p className="text-muted-foreground text-xs">{t('models.models.edit.toolSchemaHint')}</p>
           </div>
 
           <div className="space-y-2">
-            <FieldLabel htmlFor="model-cost-input" label="cost (USD per 1M tokens)" draft={draft} field="cost" />
+            <FieldLabel htmlFor="model-cost-input" label={t('models.models.edit.cost')} draft={draft} field="cost" />
             <div className="grid gap-2 sm:grid-cols-4">
               {COST_FIELDS.map((field) => (
                 <div key={field} className="space-y-1">
@@ -302,12 +314,9 @@ export function ModelEditDialog({
           </div>
 
           {showAdvanced ? (
-            <LazyDetails summary="Advanced" className="text-sm">
+            <LazyDetails summary={t('models.models.edit.advanced')} className="text-sm">
               <div className="space-y-3 pt-3">
-                <p className="text-muted-foreground text-xs">
-                  Auto leaves the field out of the configuration and lets Pi detect it from the address and the
-                  provider. Only the fields {api} honours are listed here.
-                </p>
+                <p className="text-muted-foreground text-xs">{t('models.models.edit.advancedHint', { api })}</p>
                 {compatFields.map((spec) => (
                   <div key={spec.field} className="space-y-1">
                     <Label htmlFor={`compat-${spec.field}`} className="font-mono text-xs">
@@ -323,7 +332,7 @@ export function ModelEditDialog({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value={AUTO_COMPAT}>Auto</SelectItem>
+                        <SelectItem value={AUTO_COMPAT}>{t('models.models.edit.auto')}</SelectItem>
                         {spec.options.map((option) => (
                           <SelectItem key={option.value} value={option.value}>
                             {option.label}
@@ -341,7 +350,7 @@ export function ModelEditDialog({
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" disabled={pending} onClick={() => onOpenChange(false)}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button
             type="button"
@@ -354,7 +363,7 @@ export function ModelEditDialog({
               onSubmit(modelFormToConfig(form, api));
             }}
           >
-            {pending ? 'Saving…' : 'Save'}
+            {pending ? t('common.saving') : t('common.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

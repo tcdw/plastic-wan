@@ -1,6 +1,7 @@
 import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useTranslation } from 'react-i18next';
 import { type HeaderRow, newRowId } from '@/lib/header-rows.ts';
 
 /**
@@ -20,6 +21,7 @@ export function HeaderFields({
   readonly valuesRequired: boolean;
   readonly idPrefix: string;
 }): React.ReactElement {
+  const { t } = useTranslation();
   const update = (index: number, patch: Partial<HeaderRow>): void => {
     onChange(rows.map((row, position) => (position === index ? { ...row, ...patch } : row)));
   };
@@ -30,7 +32,7 @@ export function HeaderFields({
         <div key={row.id} className="flex flex-wrap items-end gap-2">
           <div className="min-w-40 flex-1 space-y-1">
             <label className="text-muted-foreground text-xs" htmlFor={`${idPrefix}-header-name-${String(index)}`}>
-              Header
+              {t('models.models.headers.header')}
             </label>
             <Input
               id={`${idPrefix}-header-name-${String(index)}`}
@@ -42,14 +44,14 @@ export function HeaderFields({
           </div>
           <div className="min-w-48 flex-1 space-y-1">
             <label className="text-muted-foreground text-xs" htmlFor={`${idPrefix}-header-value-${String(index)}`}>
-              Value
+              {t('models.models.headers.value')}
             </label>
             <Input
               id={`${idPrefix}-header-value-${String(index)}`}
               type="password"
               autoComplete="new-password"
               value={row.value}
-              placeholder={row.existing ? 'Set - leave empty to keep' : ''}
+              placeholder={row.existing ? t('models.models.headers.keepPlaceholder') : ''}
               onChange={(event) => update(index, { value: event.target.value })}
             />
           </div>
@@ -57,7 +59,11 @@ export function HeaderFields({
             type="button"
             variant="outline"
             size="icon"
-            aria-label={row.existing ? `Delete header ${row.name}` : 'Remove header row'}
+            aria-label={
+              row.existing
+                ? t('models.models.headers.deleteAria', { name: row.name })
+                : t('models.models.headers.removeAria')
+            }
             onClick={() => onChange(rows.filter((_, position) => position !== index))}
           >
             <Trash2 className="size-4" />
@@ -65,7 +71,7 @@ export function HeaderFields({
         </div>
       ))}
       {valuesRequired && rows.some((row) => row.existing && row.value.length === 0) ? (
-        <p className="text-warning text-xs">Changing base_url requires every header value again</p>
+        <p className="text-warning text-xs">{t('models.models.headers.valuesRequired')}</p>
       ) : null}
       <Button
         type="button"
@@ -74,7 +80,7 @@ export function HeaderFields({
         onClick={() => onChange([...rows, { id: newRowId(), name: '', value: '', existing: false }])}
       >
         <Plus className="size-4" />
-        Add header
+        {t('models.models.headers.add')}
       </Button>
     </div>
   );

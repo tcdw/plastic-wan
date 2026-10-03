@@ -7,6 +7,10 @@ import { Toaster } from '@/components/ui/sonner';
 import { getQueryClient } from '@/lib/query-client';
 import { routeTree } from './routeTree.gen';
 
+// Side-effect import: initializes i18next (sync, resources inline) before any
+// component renders.
+import '@/lib/i18n';
+
 import '@/styles/globals.css';
 
 const queryClient = getQueryClient();

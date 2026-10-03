@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { useTranslation } from 'react-i18next';
 import { KvList, MonoValue, ToneBadge } from '@/components/business';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,27 +16,44 @@ function shortHash(hash: string): string {
   return hash.slice(0, 12);
 }
 
-function PathList({ paths }: { readonly paths: readonly string[] }): React.ReactElement {
+function PathList({
+  paths,
+  noneLabel,
+}: {
+  readonly paths: readonly string[];
+  readonly noneLabel: string;
+}): React.ReactElement {
   if (paths.length === 0) {
-    return <span className="text-muted-foreground">none</span>;
+    return <span className="text-muted-foreground">{noneLabel}</span>;
   }
   return <MonoValue value={paths.join(', ')} />;
 }
 
 function AppliedResult({ result }: { readonly result: ConfigApplyResponse }): React.ReactElement {
+  const { t } = useTranslation();
   return (
     <KvList
       className="mt-3"
       items={[
-        { label: 'Applied', value: <PathList paths={result.applied} /> },
-        { label: 'Restart required', value: <PathList paths={result.restart_required} /> },
-        { label: 'Outside serve', value: <PathList paths={result.outside_serve} /> },
+        {
+          label: t('models.settings.applied'),
+          value: <PathList paths={result.applied} noneLabel={t('models.settings.none')} />,
+        },
+        {
+          label: t('models.settings.restartRequired'),
+          value: <PathList paths={result.restart_required} noneLabel={t('models.settings.none')} />,
+        },
+        {
+          label: t('models.settings.outsideServe'),
+          value: <PathList paths={result.outside_serve} noneLabel={t('models.settings.none')} />,
+        },
       ]}
     />
   );
 }
 
 export default function SettingsPage(): React.ReactElement {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const write = useProviderWrite();
   const [success, setSuccess] = useState(false);
@@ -54,7 +72,7 @@ export default function SettingsPage(): React.ReactElement {
     },
     onError: (error) => {
       setSuccess(false);
-      setFailure(error instanceof ApiError ? `${error.code}: ${error.message}` : 'Request failed');
+      setFailure(error instanceof ApiError ? `${error.code}: ${error.message}` : t('common.requestFailed'));
     },
   });
 
@@ -93,45 +111,43 @@ export default function SettingsPage(): React.ReactElement {
     <div className="max-w-lg space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle>Admin credentials</CardTitle>
-          <CardDescription>Change the username and password. The current session remains signed in.</CardDescription>
+          <CardTitle>{t('models.settings.adminCredentials')}</CardTitle>
+          <CardDescription>{t('models.settings.adminCredentialsDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="username">New username</Label>
+              <Label htmlFor="username">{t('models.settings.newUsername')}</Label>
               <Input
                 id="username"
                 autoComplete="username"
                 {...register('username', {
-                  required: 'Username is required',
+                  required: t('models.settings.usernameRequired'),
                   pattern: {
                     value: /^[A-Za-z0-9._-]{3,32}$/,
-                    message: '3-32 letters, digits, dot, underscore, or hyphen',
+                    message: t('models.settings.usernamePattern'),
                   },
                 })}
               />
               {errors.username && <p className="text-destructive text-sm">{errors.username.message}</p>}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">New password</Label>
+              <Label htmlFor="password">{t('models.settings.newPassword')}</Label>
               <Input
                 id="password"
                 type="password"
                 autoComplete="new-password"
                 {...register('password', {
-                  required: 'Password is required',
-                  minLength: { value: 12, message: 'At least 12 characters' },
+                  required: t('models.settings.passwordRequired'),
+                  minLength: { value: 12, message: t('models.settings.passwordMin') },
                 })}
               />
               {errors.password && <p className="text-destructive text-sm">{errors.password.message}</p>}
             </div>
-            {success && (
-              <p className="text-success text-sm">Credentials updated; all other sessions were signed out.</p>
-            )}
+            {success && <p className="text-success text-sm">{t('models.settings.credentialsUpdated')}</p>}
             {failure && <p className="text-destructive text-sm">{failure}</p>}
             <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? 'Updating…' : 'Update credentials'}
+              {isSubmitting ? t('models.settings.updating') : t('models.settings.updateCredentials')}
             </Button>
           </form>
         </CardContent>
@@ -139,39 +155,42 @@ export default function SettingsPage(): React.ReactElement {
 
       <Card>
         <CardHeader>
-          <CardTitle>Configuration file</CardTitle>
-          <CardDescription>
-            Apply config.jsonc to the running process. Fields outside the hot-update list are reported as waiting for a
-            restart instead.
-          </CardDescription>
+          <CardTitle>{t('models.settings.configFile')}</CardTitle>
+          <CardDescription>{t('models.settings.configFileDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
           {status.isPending ? (
-            <p className="text-muted-foreground text-sm">Loading…</p>
+            <p className="text-muted-foreground text-sm">{t('common.loading')}</p>
           ) : status.isError || current === undefined ? (
             <p className="text-destructive text-sm break-words">{errorMessage(status.error)}</p>
           ) : (
             <>
               <KvList
                 items={[
-                  { label: 'Generation', value: current.generation },
-                  { label: 'Active hash', value: <MonoValue value={shortHash(current.active_hash)} /> },
-                  { label: 'File hash', value: <MonoValue value={shortHash(current.file_hash)} /> },
+                  { label: t('models.settings.generation'), value: current.generation },
                   {
-                    label: 'Active configuration',
+                    label: t('models.settings.activeHash'),
+                    value: <MonoValue value={shortHash(current.active_hash)} />,
+                  },
+                  { label: t('models.settings.fileHash'), value: <MonoValue value={shortHash(current.file_hash)} /> },
+                  {
+                    label: t('models.settings.activeConfig'),
                     value:
                       current.active_hash === current.file_hash ? (
-                        <ToneBadge tone="success">matches the file</ToneBadge>
+                        <ToneBadge tone="success">{t('models.settings.matchesFile')}</ToneBadge>
                       ) : (
-                        <ToneBadge tone="warning">file has changes</ToneBadge>
+                        <ToneBadge tone="warning">{t('models.settings.fileHasChanges')}</ToneBadge>
                       ),
                   },
-                  { label: 'Restart required', value: <PathList paths={current.restart_required} /> },
                   {
-                    label: 'Last error',
+                    label: t('models.settings.restartRequired'),
+                    value: <PathList paths={current.restart_required} noneLabel={t('models.settings.none')} />,
+                  },
+                  {
+                    label: t('models.settings.lastError'),
                     value:
                       current.last_error === null ? (
-                        <span className="text-muted-foreground">none</span>
+                        <span className="text-muted-foreground">{t('models.settings.none')}</span>
                       ) : (
                         <span className="text-destructive">
                           {current.last_error.code}: {current.last_error.message} ({current.last_error.at})
@@ -188,7 +207,7 @@ export default function SettingsPage(): React.ReactElement {
                     applyMutation.mutate();
                   }}
                 >
-                  {applyMutation.isPending ? 'Applying…' : 'Apply config file'}
+                  {applyMutation.isPending ? t('models.settings.applying') : t('models.settings.applyConfigFile')}
                 </Button>
               </div>
               {applyFailure !== null && <p className="text-destructive mt-3 text-sm break-words">{applyFailure}</p>}

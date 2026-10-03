@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Panel } from '@/components/layout/panel';
 import { Button } from '@/components/ui/button';
@@ -20,25 +21,32 @@ const selectClass =
   'h-10 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-ring disabled:opacity-50';
 
 export default function ImageSettingsPage() {
+  const { t } = useTranslation();
   const config = useQuery({ queryKey: ['image-config'], queryFn: getImageConfig });
   const status = useQuery({ queryKey: ['image-status'], queryFn: getImageStatus });
   return (
     <div className="max-w-3xl space-y-6">
       <div className="space-y-2">
-        <h1 className="text-xl font-semibold">图片生成设置</h1>
+        <h1 className="text-xl font-semibold">{t('image.settings.title')}</h1>
         <p className="text-muted-foreground text-sm">
-          当前状态：
-          {status.isPending ? '加载中…' : status.isError ? '读取失败' : status.data.enabled ? '已启用' : '已禁用'}
-          。保存后立即生效，无需重启。
+          {t('image.settings.statusLine', {
+            status: status.isPending
+              ? t('common.loading')
+              : status.isError
+                ? t('image.settings.statusReadFailed')
+                : status.data.enabled
+                  ? t('common.enabled')
+                  : t('common.disabled'),
+          })}
         </p>
       </div>
       {config.isPending ? (
-        <p className="text-muted-foreground text-sm">正在读取配置…</p>
+        <p className="text-muted-foreground text-sm">{t('image.settings.readingConfig')}</p>
       ) : config.isError ? (
         <div role="alert" className="space-y-3">
           <p className="text-destructive text-sm">{errorMessage(config.error)}</p>
           <Button variant="outline" onClick={() => void config.refetch()}>
-            重新加载
+            {t('common.reload')}
           </Button>
         </div>
       ) : (
@@ -49,6 +57,7 @@ export default function ImageSettingsPage() {
 }
 
 function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [enabled, setEnabled] = useState(initial.enabled);
   const credentialNames = [...new Set([...initial.credentials, ...initial.models.map((model) => model.credentialRef)])];
@@ -114,17 +123,20 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
   const validationError = !enabled
     ? null
     : models.length === 0
-      ? '请先选择模型并点击「添加所选模型」'
+      ? t('image.settings.noModelsSelected')
       : new Set(models.map((model) => model.id)).size !== models.length
-        ? '模型 ID 重复，请移除重复的模型条目'
+        ? t('image.settings.duplicateModelIds')
         : invalidName
-          ? '凭据名称只能包含字母、数字、下划线或短横线，长度为 1–80 个字符'
+          ? t('image.settings.invalidCredentialName')
           : new Set(editedCredentials.map((entry) => entry.name)).size !== editedCredentials.length
-            ? '凭据名称重复，请改名或移除重复条目'
+            ? t('image.settings.duplicateCredentialNames')
             : missingReference
-              ? `模型 ${missingReference.name} 的凭据 ${missingReference.credentialRef} 尚未配置`
+              ? t('image.settings.modelCredentialMissing', {
+                  model: missingReference.name,
+                  credential: missingReference.credentialRef,
+                })
               : missingKey
-                ? `凭据 ${missingKey.name} 尚未配置 API key，请输入密钥或选择已有的 OpenRouter 凭据`
+                ? t('image.settings.credentialKeyMissing', { name: missingKey.name })
                 : null;
 
   const save = useMutation({
@@ -155,7 +167,7 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
       );
     },
     onSuccess: async (result) => {
-      toast.success(result.enabled ? '图片生成配置已应用' : '图片生成已禁用');
+      toast.success(result.enabled ? t('image.settings.appliedToast') : t('image.settings.disabledToast'));
       setCredentials((current) => current.map((entry) => ({ ...entry, secret: '' })));
       await Promise.all(
         ['image-config', 'image-status', 'providers', 'config-status'].map((key) =>
@@ -189,7 +201,7 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
 
   return (
     <div className="space-y-6">
-      <Panel title="启用与凭据">
+      <Panel title={t('image.settings.enablePanelTitle')}>
         <fieldset disabled={save.isPending} className="min-w-0 space-y-5">
           <div className="flex items-center gap-3">
             <input
@@ -199,17 +211,15 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
               onChange={(event) => setEnabled(event.target.checked)}
               className="size-4"
             />
-            <Label htmlFor="image-enabled">启用图片生成</Label>
+            <Label htmlFor="image-enabled">{t('image.settings.enableLabel')}</Label>
           </div>
           {enabled && (
             <>
-              <p className="text-muted-foreground text-sm">
-                可复用已保存的 OpenRouter 凭据，或输入新的 API key。已有图片凭据留空即可沿用。
-              </p>
+              <p className="text-muted-foreground text-sm">{t('image.settings.credentialsHint')}</p>
               {credentials.map((entry, index) => (
                 <div key={entry.key} className="grid gap-3 sm:grid-cols-[160px_1fr]">
                   <div className="space-y-2">
-                    <Label htmlFor={`credential-name-${index}`}>凭据名称</Label>
+                    <Label htmlFor={`credential-name-${index}`}>{t('image.settings.credentialName')}</Label>
                     <Input
                       id={`credential-name-${index}`}
                       value={entry.name}
@@ -226,7 +236,7 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
                   <div className="space-y-2">
                     {!entry.saved && initial.credential_providers.length > 0 && (
                       <div className="space-y-2">
-                        <Label htmlFor={`credential-source-${index}`}>密钥来源</Label>
+                        <Label htmlFor={`credential-source-${index}`}>{t('image.settings.keySource')}</Label>
                         <select
                           id={`credential-source-${index}`}
                           className={selectClass}
@@ -239,10 +249,10 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
                             )
                           }
                         >
-                          <option value="">输入新的 API key</option>
+                          <option value="">{t('image.settings.newKeyOption')}</option>
                           {initial.credential_providers.map((alias) => (
                             <option key={alias} value={alias}>
-                              使用已保存的 {alias} 凭据
+                              {t('image.settings.savedCredentialOption', { alias })}
                             </option>
                           ))}
                         </select>
@@ -250,13 +260,15 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
                     )}
                     {entry.source === '' && (
                       <>
-                        <Label htmlFor={`credential-key-${index}`}>API key</Label>
+                        <Label htmlFor={`credential-key-${index}`}>{t('image.settings.apiKeyLabel')}</Label>
                         <Input
                           id={`credential-key-${index}`}
                           type="password"
                           autoComplete="new-password"
                           placeholder={
-                            initial.credentials.includes(entry.name) ? '已配置，留空沿用' : '输入 OpenRouter API key'
+                            initial.credentials.includes(entry.name)
+                              ? t('image.settings.configuredPlaceholder')
+                              : t('image.settings.newKeyPlaceholder')
                           }
                           value={entry.secret}
                           onChange={(event) =>
@@ -278,7 +290,7 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
                       disabled={models.some((model) => model.credentialRef === entry.name)}
                       onClick={() => setCredentials((current) => current.filter((item) => item.key !== entry.key))}
                     >
-                      移除凭据
+                      {t('image.settings.removeCredential')}
                     </Button>
                   )}
                 </div>
@@ -293,7 +305,7 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
                   ])
                 }
               >
-                添加凭据
+                {t('image.settings.addCredential')}
               </Button>
             </>
           )}
@@ -301,7 +313,7 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
       </Panel>
       {enabled && (
         <Panel
-          title="图片模型"
+          title={t('image.settings.modelsPanelTitle')}
           action={
             <Button
               size="sm"
@@ -314,30 +326,28 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
                 }
               }}
             >
-              {catalog.isFetching ? '获取中…' : '刷新模型列表'}
+              {catalog.isFetching ? t('image.settings.fetchingModels') : t('image.settings.refreshModels')}
             </Button>
           }
         >
           <fieldset disabled={save.isPending} className="min-w-0 space-y-5">
-            <p className="text-muted-foreground text-sm">
-              从 OpenRouter 实时目录选择，名称、供应商和支持的参数会自动填好。
-            </p>
+            <p className="text-muted-foreground text-sm">{t('image.settings.modelsHint')}</p>
             {catalog.isError && (
               <p role="alert" className="text-destructive text-sm">
-                模型列表获取失败：{errorMessage(catalog.error)}。请点击刷新重试。
+                {t('image.settings.catalogError', { error: errorMessage(catalog.error) })}
               </p>
             )}
             <div className="space-y-2">
-              <Label htmlFor="image-model-search">搜索模型</Label>
+              <Label htmlFor="image-model-search">{t('image.settings.searchModels')}</Label>
               <Input
                 id="image-model-search"
-                placeholder="输入模型名称或 ID"
+                placeholder={t('image.settings.searchPlaceholder')}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="image-model-select">OpenRouter 图片模型</Label>
+              <Label htmlFor="image-model-select">{t('image.settings.modelSelectLabel')}</Label>
               <select
                 id="image-model-select"
                 className={selectClass}
@@ -349,7 +359,11 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
                 }}
               >
                 <option value="">
-                  {catalog.isPending ? '正在获取模型…' : visibleModels.length === 0 ? '没有匹配的模型' : '请选择模型'}
+                  {catalog.isPending
+                    ? t('image.settings.fetchingModelsOption')
+                    : visibleModels.length === 0
+                      ? t('image.settings.noMatchingModels')
+                      : t('image.settings.selectModelOption')}
                 </option>
                 {visibleModels.map((model) => (
                   <option key={model.id} value={model.id}>
@@ -362,26 +376,28 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
               <div className="space-y-3">
                 {endpoints.isPending ? (
                   <p role="status" className="text-muted-foreground text-sm">
-                    正在读取供应商与模型能力…
+                    {t('image.settings.readingEndpoints')}
                   </p>
                 ) : endpoints.isError ? (
                   <div role="alert" className="space-y-2">
-                    <p className="text-destructive text-sm">供应商信息获取失败：{errorMessage(endpoints.error)}</p>
+                    <p className="text-destructive text-sm">
+                      {t('image.settings.endpointsError', { error: errorMessage(endpoints.error) })}
+                    </p>
                     <Button size="sm" variant="outline" onClick={() => void endpoints.refetch()}>
-                      重试供应商查询
+                      {t('image.settings.retryProviders')}
                     </Button>
                   </div>
                 ) : (
                   <>
                     <div className="space-y-2">
-                      <Label htmlFor="image-provider-select">供应商</Label>
+                      <Label htmlFor="image-provider-select">{t('image.settings.provider')}</Label>
                       <select
                         id="image-provider-select"
                         className={selectClass}
                         value={selectedEndpoint?.providerTag ?? ''}
                         onChange={(event) => setProviderTag(event.target.value)}
                       >
-                        {!selectedEndpoint && <option value="">暂无可用供应商</option>}
+                        {!selectedEndpoint && <option value="">{t('image.settings.noProviders')}</option>}
                         {availableEndpoints.map((endpoint) => (
                           <option
                             key={endpoint.providerTag}
@@ -397,14 +413,14 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
                       <ModelCapabilities capabilities={selectedEndpoint.capabilities} />
                     ) : (
                       <p role="status" className="text-muted-foreground text-sm">
-                        {availableEndpoints[0]?.unavailableReason ?? '该模型当前没有可用供应商，请选择其他模型'}
+                        {availableEndpoints[0]?.unavailableReason ?? t('image.settings.noAvailableProvider')}
                       </p>
                     )}
                   </>
                 )}
                 {credentials.length > 1 && (
                   <div className="space-y-2">
-                    <Label htmlFor="image-credential-select">使用凭据</Label>
+                    <Label htmlFor="image-credential-select">{t('image.settings.useCredential')}</Label>
                     <select
                       id="image-credential-select"
                       className={selectClass}
@@ -433,15 +449,15 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
               }
               onClick={addModel}
             >
-              {alreadyAdded ? '此模型和供应商已添加' : '添加所选模型'}
+              {alreadyAdded ? t('image.settings.alreadyAdded') : t('image.settings.addModel')}
             </Button>
             {mergedDuplicates > 0 && (
               <p className="text-muted-foreground text-sm">
-                已合并 {mergedDuplicates} 个完全相同的旧模型条目，保存后生效
+                {t('image.settings.mergedDuplicates', { count: mergedDuplicates })}
               </p>
             )}
             {models.length === 0 ? (
-              <p className="text-muted-foreground text-sm">尚未添加模型，请至少选择一个</p>
+              <p className="text-muted-foreground text-sm">{t('image.settings.noModelsYet')}</p>
             ) : (
               <ul className="space-y-5">
                 {models.map((model) => (
@@ -450,16 +466,17 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
                       <div className="min-w-0 space-y-1">
                         <p className="text-sm font-medium">{model.name}</p>
                         <p className="text-muted-foreground break-all text-xs">
-                          {model.upstreamModel} · {model.providerTag} · 凭据 {model.credentialRef}
+                          {model.upstreamModel} · {model.providerTag} ·{' '}
+                          {t('image.settings.credentialRef', { name: model.credentialRef })}
                         </p>
                       </div>
                       <Button
                         size="sm"
                         variant="ghost"
-                        aria-label={`移除 ${model.name}`}
+                        aria-label={t('image.settings.removeModel', { name: model.name })}
                         onClick={() => setModels((current) => current.filter((item) => item !== model))}
                       >
-                        移除
+                        {t('image.settings.remove')}
                       </Button>
                     </div>
                     <ModelCapabilities capabilities={model.capabilities} />
@@ -491,23 +508,36 @@ function ImageSettingsForm({ initial }: { initial: ImageConfigView }) {
         aria-describedby={validationError ? 'image-save-requirements' : undefined}
         disabled={save.isPending}
       >
-        {save.isPending ? '保存中…' : '保存并应用'}
+        {save.isPending ? t('common.saving') : t('image.settings.saveAndApply')}
       </Button>
     </div>
   );
 }
 
 function ModelCapabilities({ capabilities }: { capabilities: ImageModelConfig['capabilities'] }) {
+  const { t } = useTranslation();
+  const qualityNames: Record<string, string> = {
+    auto: t('image.settings.enumAuto'),
+    low: t('image.settings.enumLow'),
+    medium: t('image.settings.enumMedium'),
+    high: t('image.settings.enumHigh'),
+  };
   return (
     <p className="text-muted-foreground text-xs leading-relaxed">
-      {capabilities.imageInput ? `最多 ${capabilities.maxInputImages} 张参考图` : '仅文字生图'} · 最多{' '}
-      {capabilities.maxOutputs} 张输出
+      {capabilities.imageInput
+        ? t('image.settings.capabilitiesInput', { count: capabilities.maxInputImages })
+        : t('image.settings.capabilitiesTextOnly')}{' '}
+      · {t('image.settings.capabilitiesOutputs', { count: capabilities.maxOutputs })}
       <br />
-      比例：{capabilities.aspectRatios.map((value) => (value === 'auto' ? '自动' : value)).join('、')}
-      {' · '}质量：
-      {capabilities.resolutionClasses
-        .map((value) => ({ auto: '自动', low: '低', medium: '中', high: '高' })[value] ?? value)
-        .join('、')}
+      {t('image.settings.aspectRatiosLabel', {
+        values: capabilities.aspectRatios
+          .map((value) => (value === 'auto' ? t('image.settings.enumAuto') : value))
+          .join('、'),
+      })}
+      {' · '}
+      {t('image.settings.qualityLabel', {
+        values: capabilities.resolutionClasses.map((value) => qualityNames[value] ?? value).join('、'),
+      })}
     </p>
   );
 }

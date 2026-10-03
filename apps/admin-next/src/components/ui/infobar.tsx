@@ -3,6 +3,7 @@ import { useRender } from '@base-ui/react/use-render';
 import { useLocation } from '@tanstack/react-router';
 import { cva, type VariantProps } from 'class-variance-authority';
 import * as React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icons } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -210,6 +211,7 @@ function Infobar({
   collapsible?: 'offcanvas' | 'icon' | 'none';
 }) {
   const { isMobile, state, setOpen, openMobile, setOpenMobile, isPathnameChanging } = useInfobar();
+  const { t } = useTranslation();
 
   if (collapsible === 'none') {
     return (
@@ -246,8 +248,8 @@ function Infobar({
           side={side}
         >
           <SheetHeader className="sr-only">
-            <SheetTitle>Infobar</SheetTitle>
-            <SheetDescription>Displays the mobile infobar.</SheetDescription>
+            <SheetTitle>{t('layout.misc.infobar')}</SheetTitle>
+            <SheetDescription>{t('layout.misc.infobarMobileDescription')}</SheetDescription>
           </SheetHeader>
           <div className="flex h-full w-full flex-col">{children}</div>
         </SheetContent>
@@ -292,6 +294,7 @@ function Infobar({
 
 function InfobarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
   const { toggleInfobar } = useInfobar();
+  const { t } = useTranslation();
 
   return (
     <Button
@@ -300,7 +303,7 @@ function InfobarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       variant="ghost"
       size="icon"
       className={cn('size-7', className)}
-      aria-label="Close info panel"
+      aria-label={t('layout.misc.closeInfoPanel')}
       onClick={(event) => {
         onClick?.(event);
         toggleInfobar();
@@ -314,15 +317,16 @@ function InfobarTrigger({ className, onClick, ...props }: React.ComponentProps<t
 
 function InfobarRail({ className, ...props }: React.ComponentProps<'button'>) {
   const { toggleInfobar } = useInfobar();
+  const { t } = useTranslation();
 
   return (
     <button
       data-infobar="rail"
       data-slot="infobar-rail"
-      aria-label="Toggle Infobar"
+      aria-label={t('layout.misc.toggleInfobar')}
       tabIndex={-1}
       onClick={toggleInfobar}
-      title="Toggle Infobar"
+      title={t('layout.misc.toggleInfobar')}
       className={cn(
         'hover:after:bg-sidebar-border absolute inset-y-0 z-20 hidden w-4 -translate-x-1/2 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] sm:flex',
         'in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize',

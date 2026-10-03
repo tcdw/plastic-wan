@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   ChatFilter,
   type ColumnSpec,
@@ -15,28 +16,8 @@ import type { MessageListItem } from '@/lib/api';
 import { formatNumber, formatTime } from '@/lib/format';
 import { messagesQuery } from '@/lib/queries';
 
-function nonEmpty(value: string): string | undefined {
-  return value.length > 0 ? value : undefined;
-}
-
 const ID_LINK =
   'decoration-border hover:decoration-foreground font-medium tabular-nums underline underline-offset-4 transition-colors';
-
-function SenderCell({ row }: { readonly row: MessageListItem }): React.ReactElement {
-  if (row.sender === null) {
-    return row.sent_by_bot ? (
-      <ToneBadge tone="neutral">bot</ToneBadge>
-    ) : (
-      <span className="text-muted-foreground">—</span>
-    );
-  }
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className="break-words">{row.sender.display_name}</span>
-      {row.sender.is_bot === true ? <ToneBadge tone="neutral">bot</ToneBadge> : null}
-    </div>
-  );
-}
 
 /** Text or caption; non-text kinds carry a neutral kind badge so a sticker row isn't just a dash. */
 function MessageCell({ row }: { readonly row: MessageListItem }): React.ReactElement {
@@ -53,77 +34,94 @@ function MessageCell({ row }: { readonly row: MessageListItem }): React.ReactEle
   );
 }
 
-const COLUMNS: readonly ColumnSpec<MessageListItem>[] = [
-  {
-    key: 'id',
-    title: 'ID',
-    render: (row) => (
-      <Link to="/messages/$messageId" params={{ messageId: row.id }} className={ID_LINK}>
-        {row.id}
-      </Link>
-    ),
-  },
-  {
-    key: 'chat',
-    title: 'Chat',
-    className: 'min-w-40',
-    render: (row) => (
-      <div className="min-w-0 space-y-0.5">
-        <div className="font-medium break-words">{row.chat.title ?? row.chat.telegram_chat_id}</div>
-        <div className="text-muted-foreground text-xs">
-          {row.chat.type}
-          {row.chat.message_thread_id === 0 ? '' : ` · topic ${row.chat.message_thread_id}`}
-        </div>
-      </div>
-    ),
-  },
-  { key: 'sender', title: 'Sender', render: (row) => <SenderCell row={row} /> },
-  {
-    key: 'text',
-    title: 'Message',
-    className: 'min-w-72 whitespace-normal',
-    render: (row) => <MessageCell row={row} />,
-  },
-  {
-    key: 'revision_count',
-    title: 'Revisions',
-    align: 'right',
-    className: 'tabular-nums',
-    render: (row) => formatNumber(row.revision_count),
-  },
-  {
-    key: 'media_count',
-    title: 'Media',
-    align: 'right',
-    className: 'tabular-nums',
-    render: (row) => formatNumber(row.media_count),
-  },
-  {
-    key: 'telegram_message_id',
-    title: 'Telegram ID',
-    className: 'text-muted-foreground ps-6 tabular-nums',
-    render: (row) => row.telegram_message_id,
-  },
-  {
-    key: 'received_at',
-    title: 'Received',
-    className: 'text-muted-foreground',
-    render: (row) => formatTime(row.received_at),
-  },
-];
-
 export default function MessagesPage(): React.ReactElement {
+  const { t } = useTranslation();
   const [search, setSearch] = useState<string | undefined>(undefined);
   const [chat, setChat] = useState<string | undefined>(undefined);
   const filters = useMemo(() => ({ search, chat }), [search, chat]);
+
+  const COLUMNS: readonly ColumnSpec<MessageListItem>[] = [
+    {
+      key: 'id',
+      title: t('invocations.messages.columns.id'),
+      render: (row) => (
+        <Link to="/messages/$messageId" params={{ messageId: row.id }} className={ID_LINK}>
+          {row.id}
+        </Link>
+      ),
+    },
+    {
+      key: 'chat',
+      title: t('invocations.messages.columns.chat'),
+      className: 'min-w-40',
+      render: (row) => (
+        <div className="min-w-0 space-y-0.5">
+          <div className="font-medium break-words">{row.chat.title ?? row.chat.telegram_chat_id}</div>
+          <div className="text-muted-foreground text-xs">
+            {row.chat.type}
+            {row.chat.message_thread_id === 0 ? '' : ` · topic ${row.chat.message_thread_id}`}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'sender',
+      title: t('invocations.messages.columns.sender'),
+      render: (row) =>
+        row.sender === null ? (
+          row.sent_by_bot ? (
+            <ToneBadge tone="neutral">bot</ToneBadge>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )
+        ) : (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="break-words">{row.sender.display_name}</span>
+            {row.sender.is_bot === true ? <ToneBadge tone="neutral">bot</ToneBadge> : null}
+          </div>
+        ),
+    },
+    {
+      key: 'text',
+      title: t('invocations.messages.columns.message'),
+      className: 'min-w-72 whitespace-normal',
+      render: (row) => <MessageCell row={row} />,
+    },
+    {
+      key: 'revision_count',
+      title: t('invocations.messages.columns.revisions'),
+      align: 'right',
+      className: 'tabular-nums',
+      render: (row) => formatNumber(row.revision_count),
+    },
+    {
+      key: 'media_count',
+      title: t('invocations.messages.columns.media'),
+      align: 'right',
+      className: 'tabular-nums',
+      render: (row) => formatNumber(row.media_count),
+    },
+    {
+      key: 'telegram_message_id',
+      title: t('invocations.messages.columns.telegramId'),
+      className: 'text-muted-foreground ps-6 tabular-nums',
+      render: (row) => row.telegram_message_id,
+    },
+    {
+      key: 'received_at',
+      title: t('invocations.messages.columns.received'),
+      className: 'text-muted-foreground',
+      render: (row) => formatTime(row.received_at),
+    },
+  ];
 
   return (
     <div className="space-y-4">
       <FilterToolbar>
         <TextFilter
-          placeholder="Search text or caption"
+          placeholder={t('invocations.messages.searchPlaceholder')}
           value={search}
-          onCommit={(value) => setSearch(nonEmpty(value))}
+          onCommit={(value) => setSearch(value.length > 0 ? value : undefined)}
           onClear={() => setSearch(undefined)}
           widthClassName="w-72"
         />
@@ -135,8 +133,8 @@ export default function MessagesPage(): React.ReactElement {
         empty={
           <Empty>
             <EmptyHeader>
-              <EmptyTitle>No messages</EmptyTitle>
-              <EmptyDescription>No messages match the current filters.</EmptyDescription>
+              <EmptyTitle>{t('invocations.messages.empty.title')}</EmptyTitle>
+              <EmptyDescription>{t('invocations.messages.empty.description')}</EmptyDescription>
             </EmptyHeader>
           </Empty>
         }

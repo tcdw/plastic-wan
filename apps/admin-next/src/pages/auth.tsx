@@ -7,8 +7,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, type Credentials, createFirstAdmin, login } from '@/lib/api';
 import { sessionQuery } from '@/lib/queries';
+import { useTranslation } from 'react-i18next';
 
 export function LoginForm(): React.ReactElement {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -18,7 +20,7 @@ export function LoginForm(): React.ReactElement {
       await queryClient.invalidateQueries({ queryKey: sessionQuery.queryKey });
     },
     onError: (error) => {
-      setFailure(error instanceof ApiError ? `${error.code}: ${error.message}` : 'Request failed');
+      setFailure(error instanceof ApiError ? `${error.code}: ${error.message}` : t('common.requestFailed'));
     },
   });
 
@@ -37,40 +39,40 @@ export function LoginForm(): React.ReactElement {
     <div className="flex min-h-full items-center justify-center p-6">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>Plastic Wan admin sign-in</CardTitle>
-          <CardDescription>Enter your credentials to continue.</CardDescription>
+          <CardTitle>{t('pages.auth.loginTitle')}</CardTitle>
+          <CardDescription>{t('pages.auth.loginDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="username">{t('pages.auth.username')}</Label>
               <Input
                 id="username"
                 autoComplete="username"
                 autoFocus
                 {...register('username', {
-                  required: 'Username is required',
+                  required: t('pages.auth.usernameRequired'),
                   pattern: {
                     value: /^[A-Za-z0-9._-]{3,32}$/,
-                    message: '3-32 letters, digits, dot, underscore, or hyphen',
+                    message: t('pages.auth.usernamePattern'),
                   },
                 })}
               />
               {errors.username && <p className="text-destructive text-sm">{errors.username.message}</p>}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">{t('pages.auth.password')}</Label>
               <Input
                 id="password"
                 type="password"
                 autoComplete="current-password"
-                {...register('password', { required: 'Password is required' })}
+                {...register('password', { required: t('pages.auth.passwordRequired') })}
               />
               {errors.password && <p className="text-destructive text-sm">{errors.password.message}</p>}
             </div>
             {failure && <p className="text-destructive text-sm">{failure}</p>}
             <Button type="submit" className="w-full" disabled={isSubmitting}>
-              {isSubmitting ? 'Signing in…' : 'Sign in'}
+              {isSubmitting ? t('pages.auth.signingIn') : t('pages.auth.signIn')}
             </Button>
           </form>
         </CardContent>
@@ -80,6 +82,7 @@ export function LoginForm(): React.ReactElement {
 }
 
 export function SetupForm(): React.ReactElement {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -89,7 +92,7 @@ export function SetupForm(): React.ReactElement {
       await queryClient.invalidateQueries({ queryKey: sessionQuery.queryKey });
     },
     onError: (error) => {
-      setFailure(error instanceof ApiError ? `${error.code}: ${error.message}` : 'Request failed');
+      setFailure(error instanceof ApiError ? `${error.code}: ${error.message}` : t('common.requestFailed'));
     },
   });
 
@@ -108,45 +111,43 @@ export function SetupForm(): React.ReactElement {
     <div className="flex min-h-full items-center justify-center p-6">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>Create the administrator account</CardTitle>
-          <CardDescription>
-            First run. Choose a username and a password of at least 12 characters. Only an Argon2id hash is stored.
-          </CardDescription>
+          <CardTitle>{t('pages.auth.setupTitle')}</CardTitle>
+          <CardDescription>{t('pages.auth.setupDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="username">{t('pages.auth.username')}</Label>
               <Input
                 id="username"
                 autoComplete="username"
                 autoFocus
                 {...register('username', {
-                  required: 'Username is required',
+                  required: t('pages.auth.usernameRequired'),
                   pattern: {
                     value: /^[A-Za-z0-9._-]{3,32}$/,
-                    message: '3-32 letters, digits, dot, underscore, or hyphen',
+                    message: t('pages.auth.usernamePattern'),
                   },
                 })}
               />
               {errors.username && <p className="text-destructive text-sm">{errors.username.message}</p>}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">{t('pages.auth.password')}</Label>
               <Input
                 id="password"
                 type="password"
                 autoComplete="new-password"
                 {...register('password', {
-                  required: 'Password is required',
-                  minLength: { value: 12, message: 'At least 12 characters' },
+                  required: t('pages.auth.passwordRequired'),
+                  minLength: { value: 12, message: t('pages.auth.passwordMinLength') },
                 })}
               />
               {errors.password && <p className="text-destructive text-sm">{errors.password.message}</p>}
             </div>
             {failure && <p className="text-destructive text-sm">{failure}</p>}
             <Button type="submit" className="w-full" disabled={isSubmitting}>
-              {isSubmitting ? 'Creating…' : 'Create account'}
+              {isSubmitting ? t('pages.auth.creating') : t('pages.auth.createAccount')}
             </Button>
           </form>
         </CardContent>

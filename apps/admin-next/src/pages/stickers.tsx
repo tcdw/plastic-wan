@@ -18,6 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ApiError, type StickerEntry, type StickerSetEntry } from '@/lib/api';
 import { formatNumber, formatTime } from '@/lib/format';
 import { stickerSetsQuery, stickersQuery } from '@/lib/queries';
+import { useTranslation } from 'react-i18next';
 
 const INDEX_STATES = ['pending', 'running', 'success', 'error'] as const;
 
@@ -28,7 +29,12 @@ function nonEmpty(value: string): string | undefined {
 const CODE = 'bg-muted rounded px-1 py-0.5 font-mono text-xs';
 
 function ConfiguredBadge({ configured }: { readonly configured: boolean }): React.ReactElement {
-  return configured ? <ToneBadge tone="success">yes</ToneBadge> : <ToneBadge tone="neutral">disabled</ToneBadge>;
+  const { t } = useTranslation();
+  return configured ? (
+    <ToneBadge tone="success">{t('pages.stickers.yes')}</ToneBadge>
+  ) : (
+    <ToneBadge tone="neutral">{t('pages.stickers.disabled')}</ToneBadge>
+  );
 }
 
 function Section({
@@ -51,108 +57,8 @@ function Section({
   );
 }
 
-const SET_COLUMNS: readonly ColumnSpec<StickerSetEntry>[] = [
-  {
-    key: 'alias',
-    title: 'Set',
-    render: (row) => (
-      <div className="space-y-0.5">
-        <div className="font-medium">{row.title ?? row.alias}</div>
-        <div className="text-muted-foreground text-xs">
-          {row.alias} · {row.telegram_name}
-        </div>
-      </div>
-    ),
-  },
-  { key: 'configured', title: 'Configured', render: (row) => <ConfiguredBadge configured={row.configured} /> },
-  { key: 'sync_state', title: 'Sync', render: (row) => <StateBadge state={row.sync_state} /> },
-  {
-    key: 'sticker_count',
-    title: 'Stickers',
-    align: 'right',
-    className: 'tabular-nums',
-    render: (row) => formatNumber(row.sticker_count),
-  },
-  {
-    key: 'indexed_count',
-    title: 'Indexed',
-    align: 'right',
-    className: 'tabular-nums',
-    render: (row) => formatNumber(row.indexed_count),
-  },
-  {
-    key: 'pending_count',
-    title: 'Pending',
-    align: 'right',
-    className: 'tabular-nums',
-    render: (row) => formatNumber(row.pending_count),
-  },
-  {
-    key: 'error_count',
-    title: 'Errors',
-    align: 'right',
-    className: 'tabular-nums',
-    render: (row) => formatNumber(row.error_count),
-  },
-  { key: 'error_code', title: 'Error', className: 'ps-6', render: (row) => <TextValue value={row.error_code} /> },
-  {
-    key: 'last_synced_at',
-    title: 'Last synced',
-    className: 'text-muted-foreground',
-    render: (row) => formatTime(row.last_synced_at),
-  },
-];
-
-const STICKER_COLUMNS: readonly ColumnSpec<StickerEntry>[] = [
-  {
-    key: 'emoji',
-    title: 'Sticker',
-    render: (row) => (
-      <div className="space-y-0.5">
-        <div>{row.emoji ?? <span className="text-muted-foreground">—</span>}</div>
-        <div className="text-muted-foreground text-xs">
-          {row.set_alias} · {row.format}
-        </div>
-      </div>
-    ),
-  },
-  { key: 'index_state', title: 'Index state', render: (row) => <StateBadge state={row.index_state} /> },
-  {
-    key: 'description',
-    title: 'Description',
-    className: 'min-w-64 whitespace-normal',
-    render: (row) => (
-      <p className="line-clamp-2 max-w-md break-words">
-        {row.analysis?.description ?? <span className="text-muted-foreground">—</span>}
-      </p>
-    ),
-  },
-  {
-    key: 'model',
-    title: 'Model',
-    render: (row) =>
-      row.analysis === null ? (
-        <span className="text-muted-foreground">—</span>
-      ) : (
-        `${row.analysis.provider ?? '?'}/${row.analysis.model ?? '?'}`
-      ),
-  },
-  {
-    key: 'failure_count',
-    title: 'Failures',
-    align: 'right',
-    className: 'tabular-nums',
-    render: (row) => formatNumber(row.failure_count),
-  },
-  {
-    key: 'updated_at',
-    title: 'Updated',
-    className: 'text-muted-foreground ps-6',
-    render: (row) => formatTime(row.updated_at),
-  },
-];
-
 export default function StickersPage(): React.ReactElement {
+  const { t } = useTranslation();
   const [set, setSet] = useState<string | undefined>(undefined);
   const [state, setState] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState<string | undefined>(undefined);
@@ -161,61 +67,179 @@ export default function StickersPage(): React.ReactElement {
 
   const setOptions = (sets.data?.items ?? []).map((entry) => ({ value: entry.alias, label: entry.alias }));
 
+  const setColumns: readonly ColumnSpec<StickerSetEntry>[] = [
+    {
+      key: 'alias',
+      title: t('pages.stickers.colSet'),
+      render: (row) => (
+        <div className="space-y-0.5">
+          <div className="font-medium">{row.title ?? row.alias}</div>
+          <div className="text-muted-foreground text-xs">
+            {row.alias} · {row.telegram_name}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'configured',
+      title: t('pages.stickers.colConfigured'),
+      render: (row) => <ConfiguredBadge configured={row.configured} />,
+    },
+    { key: 'sync_state', title: t('pages.stickers.colSync'), render: (row) => <StateBadge state={row.sync_state} /> },
+    {
+      key: 'sticker_count',
+      title: t('pages.stickers.colStickers'),
+      align: 'right',
+      className: 'tabular-nums',
+      render: (row) => formatNumber(row.sticker_count),
+    },
+    {
+      key: 'indexed_count',
+      title: t('pages.stickers.colIndexed'),
+      align: 'right',
+      className: 'tabular-nums',
+      render: (row) => formatNumber(row.indexed_count),
+    },
+    {
+      key: 'pending_count',
+      title: t('pages.stickers.colPending'),
+      align: 'right',
+      className: 'tabular-nums',
+      render: (row) => formatNumber(row.pending_count),
+    },
+    {
+      key: 'error_count',
+      title: t('pages.stickers.colErrors'),
+      align: 'right',
+      className: 'tabular-nums',
+      render: (row) => formatNumber(row.error_count),
+    },
+    {
+      key: 'error_code',
+      title: t('pages.stickers.colError'),
+      className: 'ps-6',
+      render: (row) => <TextValue value={row.error_code} />,
+    },
+    {
+      key: 'last_synced_at',
+      title: t('pages.stickers.colLastSynced'),
+      className: 'text-muted-foreground',
+      render: (row) => formatTime(row.last_synced_at),
+    },
+  ];
+
+  const stickerColumns: readonly ColumnSpec<StickerEntry>[] = [
+    {
+      key: 'emoji',
+      title: t('pages.stickers.colSticker'),
+      render: (row) => (
+        <div className="space-y-0.5">
+          <div>{row.emoji ?? <span className="text-muted-foreground">—</span>}</div>
+          <div className="text-muted-foreground text-xs">
+            {row.set_alias} · {row.format}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'index_state',
+      title: t('pages.stickers.colIndexState'),
+      render: (row) => <StateBadge state={row.index_state} />,
+    },
+    {
+      key: 'description',
+      title: t('pages.stickers.colDescription'),
+      className: 'min-w-64 whitespace-normal',
+      render: (row) => (
+        <p className="line-clamp-2 max-w-md break-words">
+          {row.analysis?.description ?? <span className="text-muted-foreground">—</span>}
+        </p>
+      ),
+    },
+    {
+      key: 'model',
+      title: t('pages.stickers.colModel'),
+      render: (row) =>
+        row.analysis === null ? (
+          <span className="text-muted-foreground">—</span>
+        ) : (
+          `${row.analysis.provider ?? '?'}/${row.analysis.model ?? '?'}`
+        ),
+    },
+    {
+      key: 'failure_count',
+      title: t('pages.stickers.colFailures'),
+      align: 'right',
+      className: 'tabular-nums',
+      render: (row) => formatNumber(row.failure_count),
+    },
+    {
+      key: 'updated_at',
+      title: t('pages.stickers.colUpdated'),
+      className: 'text-muted-foreground ps-6',
+      render: (row) => formatTime(row.updated_at),
+    },
+  ];
+
   return (
     <div className="space-y-10">
       <Section
-        title="Configured sticker sets"
+        title={t('pages.stickers.setsTitle')}
         description={
           <>
-            Only sets listed in <code className={CODE}>telegram.sticker_sets</code> are synchronized here. Stickers
-            received in chats are not automatically added or approved for sending.
+            {t('pages.stickers.setsDescPre')} <code className={CODE}>telegram.sticker_sets</code>{' '}
+            {t('pages.stickers.setsDescPost')}
           </>
         }
       >
         {sets.isPending ? <Skeleton className="h-32 w-full rounded-xl" /> : null}
         {sets.isError ? (
           <Alert variant="destructive">
-            <AlertTitle>Failed to load sticker sets</AlertTitle>
+            <AlertTitle>{t('pages.stickers.loadSetsFailed')}</AlertTitle>
             <AlertDescription>
               {sets.error instanceof ApiError
                 ? `${sets.error.code}: ${sets.error.message}`
                 : sets.error instanceof Error
                   ? sets.error.message
-                  : 'Admin request failed'}
+                  : t('pages.stickers.adminRequestFailed')}
             </AlertDescription>
           </Alert>
         ) : null}
         {!sets.isPending && !sets.isError ? (
           <TableShell
-            columns={SET_COLUMNS}
+            columns={setColumns}
             data={sets.data?.items ?? []}
             rowKey={(row) => row.id}
-            emptyText="No sticker sets configured."
+            emptyText={t('pages.stickers.emptySets')}
             className={LIST_TABLE_CLASS}
           />
         ) : null}
       </Section>
       <Section
-        title="Bot search index"
+        title={t('pages.stickers.indexTitle')}
         description={
           <>
-            Only successfully analyzed stickers from configured sets appear here and are available to the{' '}
-            <code className={CODE}>search_stickers</code> capability (called through{' '}
-            <code className={CODE}>execute</code>
-            ). On-demand analyses of chat media are stored separately and appear in message details.
+            {t('pages.stickers.indexDescPre')} <code className={CODE}>search_stickers</code>{' '}
+            {t('pages.stickers.indexDescMid')} <code className={CODE}>execute</code>
+            {t('pages.stickers.indexDescPost')}
           </>
         }
       >
         <FilterToolbar>
-          <SelectFilter placeholder="Sticker set" value={set} onChange={setSet} options={setOptions} />
           <SelectFilter
-            placeholder="Index state"
+            placeholder={t('pages.stickers.filterSet')}
+            value={set}
+            onChange={setSet}
+            options={setOptions}
+          />
+          <SelectFilter
+            placeholder={t('pages.stickers.filterState')}
             value={state}
             onChange={setState}
             options={INDEX_STATES.map((value) => ({ value, label: value }))}
           />
           <TextFilter
-            placeholder="Search description or emoji"
+            placeholder={t('pages.stickers.filterSearch')}
             value={search}
             onCommit={(value) => setSearch(nonEmpty(value))}
             onClear={() => setSearch(undefined)}
@@ -227,26 +251,26 @@ export default function StickersPage(): React.ReactElement {
           filters={filters}
           renderItems={(items) => (
             <TableShell
-              columns={STICKER_COLUMNS}
+              columns={stickerColumns}
               data={items}
               rowKey={(row) => row.id}
               className={LIST_TABLE_CLASS}
               expandedRender={(row) => (
                 <div className="space-y-4">
                   <div className="space-y-1">
-                    <p className="text-muted-foreground text-xs">Next retry</p>
+                    <p className="text-muted-foreground text-xs">{t('pages.stickers.nextRetry')}</p>
                     <p>{formatTime(row.next_retry_at)}</p>
                   </div>
                   <div className="space-y-1">
-                    <p className="text-muted-foreground text-xs">Analysis version</p>
+                    <p className="text-muted-foreground text-xs">{t('pages.stickers.analysisVersion')}</p>
                     <TextValue value={row.analysis?.analysis_version ?? null} />
                   </div>
                   <div className="space-y-1">
-                    <p className="text-muted-foreground text-xs">Description</p>
+                    <p className="text-muted-foreground text-xs">{t('pages.stickers.colDescription')}</p>
                     <p className="break-words whitespace-pre-wrap">{row.analysis?.description ?? '—'}</p>
                   </div>
                   <div className="space-y-1">
-                    <p className="text-muted-foreground text-xs">Metadata</p>
+                    <p className="text-muted-foreground text-xs">{t('pages.stickers.metadata')}</p>
                     <JsonViewer value={row.analysis?.metadata_json ?? null} />
                   </div>
                 </div>

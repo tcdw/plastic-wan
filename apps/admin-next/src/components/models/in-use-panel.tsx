@@ -1,4 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { KvList, MonoValue } from '@/components/business';
 import { Panel } from '@/components/layout/panel';
@@ -20,6 +21,7 @@ export function InUsePanel({
   readonly view: ProvidersView;
   readonly revision: string;
 }): React.ReactElement {
+  const { t } = useTranslation();
   const write = useProviderWrite();
   const agentModel = agentModelConfig(view);
   // The file always names a configured agent model; if it was edited away under
@@ -38,12 +40,15 @@ export function InUsePanel({
   });
 
   return (
-    <Panel title="In use">
+    <Panel title={t('models.models.inUse.title')}>
       <KvList
         items={[
-          { label: 'Agent model', value: <MonoValue value={`${view.agent.provider} / ${view.agent.model}`} /> },
           {
-            label: 'Thinking effort',
+            label: t('models.models.inUse.agentModel'),
+            value: <MonoValue value={`${view.agent.provider} / ${view.agent.model}`} />,
+          },
+          {
+            label: t('models.models.inUse.thinkingEffort'),
             value: (
               <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <Select
@@ -55,7 +60,7 @@ export function InUsePanel({
                     }
                   }}
                 >
-                  <SelectTrigger size="sm" className="w-32" aria-label="Thinking effort">
+                  <SelectTrigger size="sm" className="w-32" aria-label={t('models.models.inUse.thinkingEffort')}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -66,11 +71,14 @@ export function InUsePanel({
                     ))}
                   </SelectContent>
                 </Select>
-                <span className="text-muted-foreground text-xs">Resets to the weakest level on a model switch</span>
+                <span className="text-muted-foreground text-xs">{t('models.models.inUse.resetsNote')}</span>
               </span>
             ),
           },
-          { label: 'Vision model', value: <MonoValue value={`${view.vision.provider} / ${view.vision.model}`} /> },
+          {
+            label: t('models.models.inUse.visionModel'),
+            value: <MonoValue value={`${view.vision.provider} / ${view.vision.model}`} />,
+          },
         ]}
       />
     </Panel>

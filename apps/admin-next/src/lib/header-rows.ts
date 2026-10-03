@@ -2,6 +2,8 @@
  * Pure header-row logic behind `HeaderFields`, kept out of the component so it
  * can be unit tested without the UI.
  */
+import i18n from './i18n.ts';
+
 export interface HeaderRow {
   /** Stable React key: the name is editable, so it cannot identify the row. */
   readonly id: string;
@@ -40,17 +42,17 @@ export function headerPayload(
     const name = row.name.trim();
     if (name.length === 0) {
       if (!row.existing) {
-        return { headers: undefined, error: 'Every header needs a name' };
+        return { headers: undefined, error: i18n.t('models.models.headers.needsName') };
       }
       continue;
     }
     if (seen.has(name)) {
-      return { headers: undefined, error: `Header ${name} is listed twice` };
+      return { headers: undefined, error: i18n.t('models.models.headers.listedTwice', { name }) };
     }
     seen.add(name);
     if (row.value.length === 0) {
       if (!row.existing) {
-        return { headers: undefined, error: `Header ${name} needs a value` };
+        return { headers: undefined, error: i18n.t('models.models.headers.needsValue', { name }) };
       }
       continue;
     }

@@ -1,6 +1,7 @@
 import { Search, X } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -47,6 +48,7 @@ export function TextFilter({
   className,
   widthClassName = 'w-56',
 }: TextFilterProps): React.ReactElement {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState(value ?? '');
 
   useEffect(() => {
@@ -75,11 +77,23 @@ export function TextFilter({
           }
         }}
       />
-      <Button type="button" size="icon-sm" variant="outline" onClick={commit} aria-label="Apply filter">
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="outline"
+        onClick={commit}
+        aria-label={t('layout.business.applyFilter')}
+      >
         <Search />
       </Button>
       {draft.length > 0 ? (
-        <Button type="button" size="icon-sm" variant="ghost" onClick={clear} aria-label="Clear filter">
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          onClick={clear}
+          aria-label={t('layout.business.clearFilter')}
+        >
           <X />
         </Button>
       ) : null}
@@ -105,6 +119,7 @@ export function SelectFilter<T extends string>({
   options,
   className,
 }: SelectFilterProps<T>): React.ReactElement {
+  const { t } = useTranslation();
   return (
     <Select
       value={value ?? ALL_OPTION_VALUE}
@@ -117,7 +132,7 @@ export function SelectFilter<T extends string>({
         </span>
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value={ALL_OPTION_VALUE}>All</SelectItem>
+        <SelectItem value={ALL_OPTION_VALUE}>{t('layout.business.all')}</SelectItem>
         {options.map((option) => (
           <SelectItem key={option.value} value={option.value}>
             {option.label}

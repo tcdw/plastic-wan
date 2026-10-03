@@ -1,4 +1,5 @@
 import { Pencil } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { MonoValue, ToneBadge } from '@/components/business';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -45,11 +46,12 @@ export function ModelDraftList({
   readonly onSearchChange: (value: string) => void;
   readonly emptyText: string;
 }): React.ReactElement {
+  const { t } = useTranslation();
   return (
     <div className="space-y-3">
       <Input
-        aria-label="Search models"
-        placeholder="Search models"
+        aria-label={t('models.models.drafts.search')}
+        placeholder={t('models.models.drafts.search')}
         value={search}
         onChange={(event) => onSearchChange(event.target.value)}
       />
@@ -65,7 +67,7 @@ export function ModelDraftList({
                 <input
                   type="checkbox"
                   className="mt-1.5 size-4 shrink-0 rounded border-input"
-                  aria-label={`Select ${draft.id}`}
+                  aria-label={t('models.models.shared.select', { id: draft.id })}
                   checked={selected.has(draft.id)}
                   disabled={draft.configured}
                   onChange={() => onToggle(draft.id)}
@@ -76,27 +78,47 @@ export function ModelDraftList({
                     {draft.name === null ? null : (
                       <span className="text-muted-foreground truncate text-xs">{draft.name}</span>
                     )}
-                    {draft.configured ? <ToneBadge tone="neutral">Configured</ToneBadge> : null}
-                    {confirmed ? <ToneBadge tone="success">Confirmed</ToneBadge> : null}
+                    {draft.configured ? (
+                      <ToneBadge tone="neutral">{t('models.models.drafts.configured')}</ToneBadge>
+                    ) : null}
+                    {confirmed ? <ToneBadge tone="success">{t('models.models.drafts.confirmed')}</ToneBadge> : null}
                     {needsConfirmation ? (
-                      <ToneBadge tone="warning">{unconfirmedFields(draft).length} to confirm</ToneBadge>
+                      <ToneBadge tone="warning">
+                        {t('models.models.drafts.toConfirm', { count: unconfirmedFields(draft).length })}
+                      </ToneBadge>
                     ) : null}
                   </div>
                   <p className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 text-xs">
                     <Metric
-                      label="context"
+                      label={t('models.models.drafts.context')}
                       value={draft.context_window === null ? '—' : formatNumber(draft.context_window)}
                     />
                     <Metric
-                      label="max output"
+                      label={t('models.models.drafts.maxOutput')}
                       value={draft.max_tokens === null ? '—' : formatNumber(draft.max_tokens)}
                     />
-                    <Metric label="input" value={draft.input === null ? '—' : draft.input.join('+')} />
-                    <Metric label="reasoning" value={draft.reasoning === null ? '—' : draft.reasoning ? 'yes' : 'no'} />
+                    <Metric
+                      label={t('models.models.drafts.input')}
+                      value={draft.input === null ? '—' : draft.input.join('+')}
+                    />
+                    <Metric
+                      label={t('models.models.drafts.reasoning')}
+                      value={
+                        draft.reasoning === null
+                          ? '—'
+                          : draft.reasoning
+                            ? t('models.models.drafts.yes')
+                            : t('models.models.drafts.no')
+                      }
+                    />
                     {draft.reasoning === true ? (
                       <Metric
-                        label="thinking"
-                        value={draft.thinking_levels === null ? 'Pi default' : draft.thinking_levels.join(' / ')}
+                        label={t('models.models.drafts.thinking')}
+                        value={
+                          draft.thinking_levels === null
+                            ? t('models.models.drafts.piDefault')
+                            : draft.thinking_levels.join(' / ')
+                        }
                       />
                     ) : null}
                   </p>
@@ -110,7 +132,7 @@ export function ModelDraftList({
                 </div>
                 <Button type="button" variant="ghost" size="xs" onClick={() => onEdit(draft)}>
                   <Pencil />
-                  Edit
+                  {t('common.edit')}
                 </Button>
               </li>
             );

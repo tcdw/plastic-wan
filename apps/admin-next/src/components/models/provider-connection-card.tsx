@@ -1,4 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { useEffect, useState } from 'react';
 import { KvList, MonoValue } from '@/components/business';
 import { Panel } from '@/components/layout/panel';
@@ -39,6 +40,7 @@ export function ProviderConnectionCard({
   readonly revision: string;
   readonly onDetect: () => void;
 }): React.ReactElement {
+  const { t } = useTranslation();
   const write = useProviderWrite();
   // The provider and revision the drafts below were built from. Every comparison
   // and the If-Match of a save use this baseline, never the latest query data:
@@ -114,16 +116,16 @@ export function ProviderConnectionCard({
       // Moving the address without re-entering the credentials would let a
       // stolen session point a stored key at another server.
       if (apiKey.length === 0) {
-        setLocalError('Changing base_url requires the API key again');
+        setLocalError(t('models.models.connection.needsApiKey'));
         return;
       }
       const missing = base.header_names.filter((name) => !headers.some((row) => row.existing && row.name === name));
       if (missing.length > 0) {
-        setLocalError(`A header cannot be removed while base_url changes: ${missing.join(', ')}`);
+        setLocalError(t('models.models.connection.headerRemoved', { names: missing.join(', ') }));
         return;
       }
       if (headers.some((row) => row.existing && row.value.length === 0)) {
-        setLocalError('Changing base_url requires every header value again');
+        setLocalError(t('models.models.headers.valuesRequired'));
         return;
       }
     }
@@ -141,14 +143,14 @@ export function ProviderConnectionCard({
 
   return (
     <Panel
-      title="Connection"
+      title={t('models.models.connection.title')}
       action={
         <div className="flex items-center gap-2">
           <Button type="button" size="sm" variant="outline" onClick={onDetect}>
-            Test
+            {t('models.models.connection.test')}
           </Button>
           <Button type="button" size="sm" disabled={!dirty || stale || save.isPending} onClick={submit}>
-            {save.isPending ? 'Saving…' : 'Save'}
+            {save.isPending ? t('common.saving') : t('common.save')}
           </Button>
         </div>
       }
@@ -157,7 +159,7 @@ export function ProviderConnectionCard({
         {custom ? (
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="provider-base-url">base_url</Label>
+              <Label htmlFor="provider-base-url">{t('models.models.connection.baseUrl')}</Label>
               <Input
                 id="provider-base-url"
                 value={baseUrl}
@@ -168,7 +170,7 @@ export function ProviderConnectionCard({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="provider-api">api</Label>
+              <Label htmlFor="provider-api">{t('models.models.connection.api')}</Label>
               <Select value={api} onValueChange={(value) => setApi(value as ProviderApi)}>
                 <SelectTrigger id="provider-api" className="w-full">
                   <SelectValue />
@@ -182,25 +184,26 @@ export function ProviderConnectionCard({
                 </SelectContent>
               </Select>
               {api === 'google-generative-ai' ? (
-                <p className="text-muted-foreground text-xs">
-                  base_url must already carry the version path, for example end with /v1beta.
-                </p>
+                <p className="text-muted-foreground text-xs">{t('models.models.connection.googleNote')}</p>
               ) : null}
             </div>
           </div>
         ) : (
           <KvList
             items={[
-              { label: 'Built-in provider', value: <MonoValue value={provider.provider ?? ''} /> },
-              { label: 'base_url', value: <MonoValue value={provider.base_url} /> },
-              { label: 'api', value: <MonoValue value={provider.api} /> },
+              {
+                label: t('models.models.connection.builtinProvider'),
+                value: <MonoValue value={provider.provider ?? ''} />,
+              },
+              { label: t('models.models.connection.baseUrl'), value: <MonoValue value={provider.base_url} /> },
+              { label: t('models.models.connection.api'), value: <MonoValue value={provider.api} /> },
             ]}
           />
         )}
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="provider-api-key">API Key</Label>
+            <Label htmlFor="provider-api-key">{t('models.models.connection.apiKey')}</Label>
             <Input
               id="provider-api-key"
               type="password"
@@ -212,15 +215,15 @@ export function ProviderConnectionCard({
               }}
             />
             <p className="text-muted-foreground text-xs">
-              Set - leave empty to keep it
-              {baseUrlChanged ? ' · required again after a base_url change' : ''}
+              {t('models.models.connection.keepHint')}
+              {baseUrlChanged ? t('models.models.connection.keepHintChanged') : ''}
             </p>
           </div>
         </div>
 
         {custom ? (
           <div className="space-y-2">
-            <p className="text-sm font-medium">Headers</p>
+            <p className="text-sm font-medium">{t('models.models.connection.headersTitle')}</p>
             <HeaderFields
               rows={headers}
               onChange={(rows) => {
@@ -233,19 +236,12 @@ export function ProviderConnectionCard({
           </div>
         ) : null}
 
-        {baseUrlChanged ? (
-          <p className="text-warning text-xs">
-            Changing base_url requires the API key and every header value in the same save
-          </p>
-        ) : null}
+        {baseUrlChanged ? <p className="text-warning text-xs">{t('models.models.connection.changedWarning')}</p> : null}
         {stale && dirty ? (
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-warning text-sm break-words">
-              config.jsonc changed since you started editing. Reload to edit the current version; your unsaved changes
-              here are discarded.
-            </p>
+            <p className="text-warning text-sm break-words">{t('models.models.connection.staleWarning')}</p>
             <Button type="button" size="sm" variant="outline" onClick={() => resetDrafts(provider, revision)}>
-              Reload
+              {t('common.reload')}
             </Button>
           </div>
         ) : null}

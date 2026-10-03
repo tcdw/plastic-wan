@@ -1,3 +1,5 @@
+import i18n from './i18n.ts';
+
 const STATE_COLORS: Record<string, string> = {
   completed: 'green',
   success: 'green',
@@ -38,7 +40,7 @@ export function formatTime(value: string | null): string {
 }
 
 export function formatNumber(value: number | null): string {
-  return value === null ? '—' : value.toLocaleString('en-US');
+  return value === null ? '—' : value.toLocaleString(i18n.language);
 }
 
 export function formatCost(value: number | null): string {

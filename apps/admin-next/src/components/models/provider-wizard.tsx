@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { MonoValue } from '@/components/business';
 import { HeaderFields } from '@/components/models/header-fields';
 import { ModelDraftList } from '@/components/models/model-draft-list';
@@ -29,7 +30,6 @@ import {
   type ProviderKind,
   type ProviderModelConfig,
 } from '@/lib/api.ts';
-import { formatNumber } from '@/lib/format.ts';
 import { type HeaderRow, headerRowsFromNames, headerValues } from '@/lib/header-rows.ts';
 import { modelFormFromDraft, parseModelIds, requestErrorMessage } from '@/lib/model-manager.ts';
 import { providerPresetsQuery } from '@/lib/queries.ts';
@@ -38,12 +38,6 @@ import { useProviderWrite } from '@/lib/use-provider-write.ts';
 const ALIAS_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 
 type WizardStep = 'connection' | 'credentials' | 'models';
-
-const STEP_TITLES: Record<WizardStep, string> = {
-  connection: 'Connection',
-  credentials: 'Credentials',
-  models: 'Models',
-};
 
 /**
  * New-provider wizard: connection → credentials → models. The model
@@ -60,6 +54,7 @@ export function ProviderWizard({
   /** Runs after a successful create, so the page can select the new provider. */
   readonly onCreated: (alias: string) => void;
 }): React.ReactElement {
+  const { t } = useTranslation();
   const write = useProviderWrite();
   const presets = useQuery(providerPresetsQuery);
   const selection = useDraftSelection();
@@ -75,6 +70,11 @@ export function ProviderWizard({
   const [ids, setIds] = useState('');
   const [editing, setEditing] = useState<DiscoveredModel | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const stepTitles: Record<WizardStep, string> = {
+    connection: t('models.models.wizard.stepConnection'),
+    credentials: t('models.models.wizard.stepCredentials'),
+    models: t('models.models.wizard.stepModels'),
+  };
 
   const preset = (presets.data?.presets ?? []).find((candidate) => candidate.id === presetId) ?? null;
   const aliasValid = ALIAS_PATTERN.test(alias);
@@ -93,7 +93,7 @@ export function ProviderWizard({
         throw new Error(payload.error);
       }
       if (apiKey.length === 0) {
-        throw new Error('Enter the API key first');
+        throw new Error(t('models.models.wizard.enterApiKeyFirst'));
       }
       return await discoverProviderModels({
         ...connection,
@@ -110,7 +110,7 @@ export function ProviderWizard({
     mutationFn: async () => {
       const parsed = parseModelIds(ids);
       if (parsed.length === 0) {
-        throw new Error('Enter at least one model id');
+        throw new Error(t('models.models.wizard.enterModelId'));
       }
       const result = await lookupModelMetadata({ ...connection, ids: parsed });
       return result.models.map((draft) => ({ ...draft, configured: false }));
@@ -175,52 +175,49 @@ export function ProviderWizard({
     >
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>New provider - {STEP_TITLES[step]}</DialogTitle>
-          <DialogDescription>The new provider is written to config.jsonc and applied immediately.</DialogDescription>
+          <DialogTitle>{t('models.models.wizard.title', { step: stepTitles[step] })}</DialogTitle>
+          <DialogDescription>{t('models.models.wizard.description')}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           {step === 'connection' ? (
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="wizard-kind">kind</Label>
+                <Label htmlFor="wizard-kind">{t('models.models.wizard.kind')}</Label>
                 <Select value={kind} onValueChange={(value) => setKind(value as ProviderKind)}>
                   <SelectTrigger id="wizard-kind" className="w-full sm:w-64">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="builtin">builtin (a provider Pi ships)</SelectItem>
-                    <SelectItem value="custom">custom (your own endpoint)</SelectItem>
+                    <SelectItem value="builtin">{t('models.models.wizard.builtinKind')}</SelectItem>
+                    <SelectItem value="custom">{t('models.models.wizard.customKind')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="wizard-alias">alias</Label>
+                <Label htmlFor="wizard-alias">{t('models.models.wizard.alias')}</Label>
                 <Input
                   id="wizard-alias"
                   value={alias}
                   placeholder="openrouter"
                   onChange={(event) => setAlias(event.target.value)}
                 />
-                <p className="text-muted-foreground text-xs">
-                  Starts with a letter; letters, digits, underscore and hyphen only, up to 64. An alias cannot be
-                  renamed later.
-                </p>
+                <p className="text-muted-foreground text-xs">{t('models.models.wizard.aliasHint')}</p>
                 {alias.length > 0 && !aliasValid ? (
-                  <p className="text-destructive text-sm">alias does not match the allowed pattern</p>
+                  <p className="text-destructive text-sm">{t('models.models.wizard.aliasInvalid')}</p>
                 ) : null}
               </div>
               {kind === 'builtin' ? (
                 <div className="space-y-2">
-                  <Label htmlFor="wizard-preset">Pi provider</Label>
+                  <Label htmlFor="wizard-preset">{t('models.models.wizard.piProvider')}</Label>
                   {presets.isPending ? (
-                    <p className="text-muted-foreground text-sm">Loading presets…</p>
+                    <p className="text-muted-foreground text-sm">{t('models.models.wizard.loadingPresets')}</p>
                   ) : presets.isError ? (
                     <p className="text-destructive text-sm break-words">{requestErrorMessage(presets.error)}</p>
                   ) : (
                     <Select value={presetId} onValueChange={setPresetId}>
                       <SelectTrigger id="wizard-preset" className="w-full">
-                        <SelectValue placeholder="Pick a built-in provider" />
+                        <SelectValue placeholder={t('models.models.wizard.pickPreset')} />
                       </SelectTrigger>
                       <SelectContent>
                         {(presets.data?.presets ?? []).map((candidate) => (
@@ -233,14 +230,15 @@ export function ProviderWizard({
                   )}
                   {preset === null ? null : (
                     <p className="text-muted-foreground text-xs">
-                      base_url: <MonoValue value={preset.base_url} />
+                      {t('models.models.wizard.presetBaseUrl')}
+                      <MonoValue value={preset.base_url} />
                     </p>
                   )}
                 </div>
               ) : (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="wizard-base-url">base_url</Label>
+                    <Label htmlFor="wizard-base-url">{t('models.models.connection.baseUrl')}</Label>
                     <Input
                       id="wizard-base-url"
                       value={baseUrl}
@@ -249,7 +247,7 @@ export function ProviderWizard({
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="wizard-api">api</Label>
+                    <Label htmlFor="wizard-api">{t('models.models.connection.api')}</Label>
                     <Select value={api} onValueChange={(value) => setApi(value as ProviderApi)}>
                       <SelectTrigger id="wizard-api" className="w-full">
                         <SelectValue />
@@ -263,9 +261,7 @@ export function ProviderWizard({
                       </SelectContent>
                     </Select>
                     {api === 'google-generative-ai' ? (
-                      <p className="text-muted-foreground text-xs">
-                        base_url must already carry the version path, for example /v1beta.
-                      </p>
+                      <p className="text-muted-foreground text-xs">{t('models.models.wizard.googleNote')}</p>
                     ) : null}
                   </div>
                 </div>
@@ -276,7 +272,7 @@ export function ProviderWizard({
           {step === 'credentials' ? (
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="wizard-api-key">API Key</Label>
+                <Label htmlFor="wizard-api-key">{t('models.models.connection.apiKey')}</Label>
                 <Input
                   id="wizard-api-key"
                   type="password"
@@ -284,14 +280,11 @@ export function ProviderWizard({
                   value={apiKey}
                   onChange={(event) => setApiKey(event.target.value)}
                 />
-                <p className="text-muted-foreground text-xs">
-                  This key fetches the model list and is stored in key.json next to the configuration file; config.jsonc
-                  only names its entry.
-                </p>
+                <p className="text-muted-foreground text-xs">{t('models.models.wizard.apiKeyHint')}</p>
               </div>
               {kind === 'custom' ? (
                 <div className="space-y-2">
-                  <p className="text-sm font-medium">Headers (optional)</p>
+                  <p className="text-sm font-medium">{t('models.models.wizard.headersOptional')}</p>
                   <HeaderFields rows={headers} onChange={setHeaders} valuesRequired={false} idPrefix="wizard" />
                 </div>
               ) : null}
@@ -300,10 +293,7 @@ export function ProviderWizard({
 
           {step === 'models' ? (
             <div className="space-y-4">
-              <p className="text-muted-foreground text-xs">
-                The provider is not saved yet, so the listing is fetched in temporary mode with the key above. There is
-                no preset model list: only what you select is written to the configuration.
-              </p>
+              <p className="text-muted-foreground text-xs">{t('models.models.wizard.tempModeNote')}</p>
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"
@@ -314,11 +304,11 @@ export function ProviderWizard({
                     discover.mutate();
                   }}
                 >
-                  {fetchPending ? 'Fetching…' : 'Fetch models'}
+                  {fetchPending ? t('models.models.picker.fetching') : t('models.models.wizard.fetch')}
                 </Button>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="wizard-ids">Or enter model ids by hand (one per line, or comma separated)</Label>
+                <Label htmlFor="wizard-ids">{t('models.models.wizard.idsLabel')}</Label>
                 <Textarea id="wizard-ids" rows={2} value={ids} onChange={(event) => setIds(event.target.value)} />
                 <Button
                   type="button"
@@ -329,7 +319,7 @@ export function ProviderWizard({
                     lookup.mutate();
                   }}
                 >
-                  Look up metadata
+                  {t('models.models.wizard.lookup')}
                 </Button>
               </div>
               {fetchError === null ? null : (
@@ -345,18 +335,18 @@ export function ProviderWizard({
                     onEdit={setEditing}
                     search={selection.search}
                     onSearchChange={selection.setSearch}
-                    emptyText="No matching models."
+                    emptyText={t('models.models.shared.emptyList')}
                   />
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-muted-foreground text-xs">
-                      {formatNumber(selection.selectedCount)} selected
+                      {t('models.models.shared.selectedCount', { count: selection.selectedCount })}
                       {selection.unresolved.length === 0
                         ? ''
-                        : ` · ${selection.unresolved.map((draft) => draft.id).join(', ')} still need fields confirmed`}
+                        : ` · ${t('models.models.shared.unresolvedSuffix', { ids: selection.unresolved.map((draft) => draft.id).join(', ') })}`}
                     </p>
                     {selection.confirmable === 0 ? null : (
                       <Button type="button" variant="outline" size="sm" onClick={selection.confirmSelected}>
-                        Accept listed values ({formatNumber(selection.confirmable)})
+                        {t('models.models.shared.acceptListed', { count: selection.confirmable })}
                       </Button>
                     )}
                   </div>
@@ -370,7 +360,7 @@ export function ProviderWizard({
 
         <DialogFooter>
           <Button type="button" variant="outline" disabled={create.isPending} onClick={onClose}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           {step === 'connection' ? (
             <Button
@@ -378,17 +368,17 @@ export function ProviderWizard({
               disabled={!aliasValid || (kind === 'builtin' ? presetId.length === 0 : baseUrl.trim().length === 0)}
               onClick={() => setStep('credentials')}
             >
-              Next
+              {t('models.models.wizard.next')}
             </Button>
           ) : null}
           {step === 'credentials' ? (
             <Button type="button" disabled={apiKey.length === 0} onClick={() => setStep('models')}>
-              Next
+              {t('models.models.wizard.next')}
             </Button>
           ) : null}
           {step === 'models' ? (
             <Button type="button" disabled={create.isPending || selection.models === null} onClick={submit}>
-              {create.isPending ? 'Saving…' : 'Create provider'}
+              {create.isPending ? t('common.saving') : t('models.models.wizard.createProvider')}
             </Button>
           ) : null}
         </DialogFooter>
@@ -404,8 +394,8 @@ export function ProviderWizard({
             }
           }}
           api={kind === 'builtin' ? (preset?.api ?? api) : api}
-          title={`Confirm ${editing.id}`}
-          description="Values come from the provider listing or models.dev; anything marked for confirming has to be confirmed or replaced."
+          title={t('models.models.wizard.confirmTitle', { model: editing.id })}
+          description={t('models.models.wizard.confirmDescription')}
           initial={modelFormFromDraft(editing, kind === 'builtin' ? (preset?.api ?? api) : api)}
           lockId
           draft={editing}

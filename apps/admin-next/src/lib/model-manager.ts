@@ -7,7 +7,6 @@ import {
   type ModelCostConfig,
   type ModelInput,
   type ModelMetadataDraft,
-  type ModelsDevConfidence,
   type ModelsDevMatch,
   type ProviderApi,
   type ProviderModelConfig,
@@ -15,6 +14,7 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from './api.ts';
+import i18n from './i18n.ts';
 import { errorMessage } from './errors.ts';
 
 /**
@@ -40,21 +40,30 @@ const DRAFT_FIELDS: readonly DraftField[] = [
  */
 const OPTIONAL_FIELDS: readonly DraftField[] = ['name', 'thinking_levels'];
 
-const SOURCE_LABELS: Record<MetadataSource, string> = {
+const SOURCE_LABELS: Record<MetadataSource, string | null> = {
   openrouter: 'OpenRouter',
   vercel: 'Vercel',
   gemini: 'Gemini',
   'models.dev': 'models.dev',
-  'models.dev-cross-provider': 'models.dev (other provider)',
-  'models.dev-fuzzy': 'models.dev (fuzzy match)',
-  missing: 'missing',
+  'models.dev-cross-provider': null,
+  'models.dev-fuzzy': null,
+  missing: null,
 };
 
 /** Sources that are a lead rather than an answer, so the field needs confirming. */
 const GUESSED_SOURCES: readonly MetadataSource[] = ['models.dev-cross-provider', 'models.dev-fuzzy'];
 
 export function metadataSourceLabel(source: MetadataSource): string {
-  return SOURCE_LABELS[source];
+  const fixed = SOURCE_LABELS[source];
+  if (fixed !== null) {
+    return fixed;
+  }
+  if (source === 'missing') {
+    return i18n.t('models.models.source.missing');
+  }
+  return source === 'models.dev-cross-provider'
+    ? i18n.t('models.models.source.crossProvider')
+    : i18n.t('models.models.source.fuzzy');
 }
 
 export function fieldSourceLabel(draft: ModelMetadataDraft, field: DraftField): string {
@@ -77,18 +86,18 @@ export function isDraftFieldUnconfirmed(draft: ModelMetadataDraft, field: DraftF
   return !OPTIONAL_FIELDS.includes(field) && draft[field] === null;
 }
 
-const CONFIDENCE_NOTES: Record<ModelsDevConfidence, string> = {
-  exact: '',
-  'cross-provider': ' (other provider - check its price and limits)',
-  fuzzy: ' (fuzzy match - check every field)',
-};
-
 /** Where a draft's metadata was matched, so "needs confirming" is explainable. */
 export function matchLabel(match: ModelsDevMatch | null): string | null {
   if (match === null) {
     return null;
   }
-  return `Matched against models.dev ${match.provider} / ${match.model}${CONFIDENCE_NOTES[match.confidence]}`;
+  const note =
+    match.confidence === 'cross-provider'
+      ? i18n.t('models.models.match.crossProviderNote')
+      : match.confidence === 'fuzzy'
+        ? i18n.t('models.models.match.fuzzyNote')
+        : '';
+  return `${i18n.t('models.models.match.matched', { provider: match.provider, model: match.model })}${note}`;
 }
 
 export function draftNeedsConfirmation(draft: ModelMetadataDraft): boolean {
@@ -285,24 +294,24 @@ function parseNonNegativeNumber(value: string): number | null {
 export function validateModelForm(form: ModelFormState): ModelFormErrors {
   const errors: ModelFormErrors = {};
   if (form.id.trim().length === 0) {
-    errors.id = 'id is required';
+    errors.id = i18n.t('models.models.validation.idRequired');
   }
   if (form.input.length === 0) {
-    errors.input = 'select at least one input modality';
+    errors.input = i18n.t('models.models.validation.inputRequired');
   }
   const contextWindow = parsePositiveInteger(form.context_window);
   if (contextWindow === null) {
-    errors.context_window = 'a positive integer is required';
+    errors.context_window = i18n.t('models.models.validation.positiveInteger');
   }
   const maxTokens = parsePositiveInteger(form.max_tokens);
   if (maxTokens === null) {
-    errors.max_tokens = 'a positive integer is required';
+    errors.max_tokens = i18n.t('models.models.validation.positiveInteger');
   } else if (contextWindow !== null && maxTokens > contextWindow) {
-    errors.max_tokens = 'max output cannot exceed the context window';
+    errors.max_tokens = i18n.t('models.models.validation.maxTokensExceeds');
   }
   const costs = [form.cost.input, form.cost.output, form.cost.cache_read, form.cost.cache_write];
   if (costs.some((value) => parseNonNegativeNumber(value) === null)) {
-    errors.cost = 'all four prices are required (0 is allowed)';
+    errors.cost = i18n.t('models.models.validation.costRequired');
   }
   return errors;
 }
@@ -486,17 +495,23 @@ export function applyFeedback(apply: ModelApplySummary): { readonly title: strin
   const restart = apply.restart_required.join(', ');
   if (apply.restart_required.length > 0) {
     return {
-      title: 'Saved, restart required',
+      title: i18n.t('models.models.feedback.savedRestartRequired'),
       description:
         applied.length === 0
-          ? `Waiting for a restart: ${restart}`
-          : `Applied: ${applied}. Waiting for a restart: ${restart}`,
+          ? i18n.t('models.models.feedback.restartWaiting', { paths: restart })
+          : i18n.t('models.models.feedback.appliedAndWaiting', { applied, restart }),
     };
   }
   if (apply.applied.length > 0) {
-    return { title: 'Applied', description: `Applied: ${applied}` };
+    return {
+      title: i18n.t('models.models.feedback.applied'),
+      description: i18n.t('models.models.feedback.appliedDetail', { paths: applied }),
+    };
   }
-  return { title: 'Saved', description: 'config.jsonc was updated; no field needed a hot apply' };
+  return {
+    title: i18n.t('models.models.feedback.saved'),
+    description: i18n.t('models.models.feedback.savedDescription'),
+  };
 }
 
 export function isConfigConflict(error: unknown): boolean {
@@ -506,7 +521,7 @@ export function isConfigConflict(error: unknown): boolean {
 /** Error text for the page and its dialogs; conflicts get a readable message. */
 export function writeErrorMessage(error: unknown): string {
   if (isConfigConflict(error)) {
-    return 'config.jsonc changed while you were editing. It has been read again - try once more.';
+    return i18n.t('models.models.feedback.writeConflict');
   }
   return errorMessage(error);
 }

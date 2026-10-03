@@ -19,6 +19,7 @@ import { addBotAdmin, type BotAdminEntry, removeBotAdmin } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 import { formatTime } from '@/lib/format';
 import { adminsQuery } from '@/lib/queries';
+import { useTranslation } from 'react-i18next';
 
 const ADMIN_ID_PATTERN = /^\d{1,19}$/;
 
@@ -30,6 +31,7 @@ function SourceBadge({ source }: { readonly source: string }): React.ReactElemen
 }
 
 export default function AdminsPage(): React.ReactElement {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [addOpen, setAddOpen] = useState(false);
   const [userIdDraft, setUserIdDraft] = useState('');
@@ -44,7 +46,7 @@ export default function AdminsPage(): React.ReactElement {
       setAddOpen(false);
       setUserIdDraft('');
       setUserIdError(null);
-      toast.success('Bot admin added');
+      toast.success(t('pages.admins.adminAdded'));
       void queryClient.invalidateQueries({ queryKey: ['admins'] });
     },
     onError: () => {
@@ -56,7 +58,7 @@ export default function AdminsPage(): React.ReactElement {
     mutationFn: removeBotAdmin,
     onSuccess: () => {
       setRemoving(null);
-      toast.success('Bot admin removed');
+      toast.success(t('pages.admins.adminRemoved'));
       void queryClient.invalidateQueries({ queryKey: ['admins'] });
     },
     onError: () => {
@@ -67,21 +69,25 @@ export default function AdminsPage(): React.ReactElement {
   });
 
   const columns: readonly ColumnSpec<BotAdminEntry>[] = [
-    { key: 'telegram_user_id', title: 'Telegram user ID', render: (row) => <MonoValue value={row.telegram_user_id} /> },
+    {
+      key: 'telegram_user_id',
+      title: t('pages.admins.colTelegramUserId'),
+      render: (row) => <MonoValue value={row.telegram_user_id} />,
+    },
     {
       key: 'display_name',
-      title: 'Display name',
+      title: t('pages.admins.colDisplayName'),
       render: (row) =>
         row.display_name.length === 0 ? <span className="text-muted-foreground">—</span> : row.display_name,
     },
-    { key: 'added_by', title: 'Source', render: (row) => <SourceBadge source={row.added_by} /> },
-    { key: 'created_at', title: 'Added', render: (row) => formatTime(row.created_at) },
+    { key: 'added_by', title: t('pages.admins.colSource'), render: (row) => <SourceBadge source={row.added_by} /> },
+    { key: 'created_at', title: t('pages.admins.colAdded'), render: (row) => formatTime(row.created_at) },
     {
       key: 'actions',
-      title: 'Actions',
+      title: t('pages.admins.colActions'),
       render: (row) => (
         <Button type="button" size="sm" variant="destructive" onClick={() => setRemoving(row)}>
-          Remove
+          {t('pages.admins.remove')}
         </Button>
       ),
     },
@@ -90,7 +96,7 @@ export default function AdminsPage(): React.ReactElement {
   const submitAdd = (): void => {
     const trimmed = userIdDraft.trim();
     if (!ADMIN_ID_PATTERN.test(trimmed)) {
-      setUserIdError('Numeric Telegram user ID (1-19 digits)');
+      setUserIdError(t('pages.admins.invalidUserId'));
       return;
     }
     setUserIdError(null);
@@ -101,23 +107,22 @@ export default function AdminsPage(): React.ReactElement {
     <div className="space-y-4">
       <Alert>
         <Info className="text-foreground" />
-        <AlertTitle>Telegram bot admins</AlertTitle>
+        <AlertTitle>{t('pages.admins.alertTitle')}</AlertTitle>
         <AlertDescription>
-          These Telegram users may run <code>/pause</code> and <code>/resume</code> in allowed chats. They are bot
-          administrators, unrelated to the admin panel login account. The user ID is the numeric Telegram account ID
-          (see <code>@userinfobot</code>); entries seeded from <code>telegram.admins</code> in the config are re-added
-          on startup and cannot be permanently removed.
+          {t('pages.admins.alertDesc1')} <code>/pause</code> {t('pages.admins.alertDesc2')} <code>/resume</code>{' '}
+          {t('pages.admins.alertDesc3')} <code>@userinfobot</code>
+          {t('pages.admins.alertDesc4')} <code>telegram.admins</code> {t('pages.admins.alertDesc5')}
         </AlertDescription>
       </Alert>
 
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" onClick={() => setAddOpen(true)}>
-          Add bot admin
+          {t('pages.admins.addAdmin')}
         </Button>
       </div>
 
       {admins.isPending ? (
-        <div className="text-muted-foreground py-8 text-center text-sm">Loading bot admins…</div>
+        <div className="text-muted-foreground py-8 text-center text-sm">{t('pages.admins.loadingAdmins')}</div>
       ) : admins.isError ? (
         <p className="text-destructive text-sm break-words">{errorMessage(admins.error)}</p>
       ) : (
@@ -125,7 +130,7 @@ export default function AdminsPage(): React.ReactElement {
           columns={columns}
           data={admins.data.items}
           rowKey={(row) => row.telegram_user_id}
-          emptyText="No bot admins yet."
+          emptyText={t('pages.admins.emptyAdmins')}
           className="max-w-full overflow-x-auto"
         />
       )}
@@ -133,17 +138,15 @@ export default function AdminsPage(): React.ReactElement {
       <Dialog open={addOpen} onOpenChange={(open) => !open && setAddOpen(false)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add bot admin</DialogTitle>
-            <DialogDescription>
-              Enter the numeric Telegram user ID of the account that should control the bot.
-            </DialogDescription>
+            <DialogTitle>{t('pages.admins.addTitle')}</DialogTitle>
+            <DialogDescription>{t('pages.admins.addDescription')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label htmlFor="admin-user-id">Telegram user ID</Label>
+            <Label htmlFor="admin-user-id">{t('pages.admins.userIdLabel')}</Label>
             <Input
               id="admin-user-id"
               inputMode="numeric"
-              placeholder="e.g. 123456789"
+              placeholder={t('pages.admins.userIdPlaceholder')}
               value={userIdDraft}
               onChange={(event) => {
                 setUserIdDraft(event.target.value);
@@ -160,10 +163,10 @@ export default function AdminsPage(): React.ReactElement {
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" disabled={add.isPending} onClick={() => setAddOpen(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button type="button" disabled={add.isPending} onClick={submitAdd}>
-              {add.isPending ? 'Adding…' : 'Add'}
+              {add.isPending ? t('pages.admins.adding') : t('pages.admins.add')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -176,9 +179,9 @@ export default function AdminsPage(): React.ReactElement {
             setRemoving(null);
           }
         }}
-        title={`Remove admin ${removing?.telegram_user_id ?? ''}?`}
-        description="The user will no longer be able to run bot commands; config-seeded entries return on the next restart."
-        confirmText="Remove admin"
+        title={t('pages.admins.removeTitle', { id: removing?.telegram_user_id ?? '' })}
+        description={t('pages.admins.removeDescription')}
+        confirmText={t('pages.admins.removeConfirm')}
         destructive
         pending={remove.isPending}
         error={remove.isError ? errorMessage(remove.error) : null}

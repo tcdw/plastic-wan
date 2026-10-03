@@ -138,8 +138,10 @@ test.describe('routes and deep links', () => {
 
   test('/developer renders the recording switch and cleanup action', async ({ page }) => {
     await page.goto(await adminUrl('/developer'));
-    await expect(page.getByRole('switch', { name: '记录原始请求报文以便调试' })).not.toBeChecked();
-    await expect(page.getByRole('button', { name: '清除此前记录的原始请求报文', exact: true })).toBeVisible();
+    await expect(page.getByRole('switch', { name: 'Record raw request payloads for debugging' })).not.toBeChecked();
+    await expect(
+      page.getByRole('button', { name: 'Clear previously recorded raw request payloads', exact: true }),
+    ).toBeVisible();
   });
 });
 

@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Eye, Lightbulb, Pencil, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import {
   type ColumnSpec,
@@ -69,16 +70,18 @@ function ProviderBadges({
   readonly view: { readonly agent: { provider: string }; readonly vision: { provider: string } };
   readonly provider: ProviderView;
 }): React.ReactElement {
+  const { t } = useTranslation();
   const usage = providerUsage(view, provider.alias);
   return (
     <span className="flex flex-wrap items-center gap-1">
-      {usage.agent ? <ToneBadge tone="success">Agent in use</ToneBadge> : null}
-      {usage.vision ? <ToneBadge tone="info">Vision in use</ToneBadge> : null}
+      {usage.agent ? <ToneBadge tone="success">{t('models.models.page.agentInUse')}</ToneBadge> : null}
+      {usage.vision ? <ToneBadge tone="info">{t('models.models.page.visionInUse')}</ToneBadge> : null}
     </span>
   );
 }
 
 export default function ModelsPage(): React.ReactElement {
+  const { t } = useTranslation();
   const write = useProviderWrite();
   const providers = useQuery(providersQuery);
   const [selectedAlias, setSelectedAlias] = useState<string | null>(null);
@@ -104,7 +107,7 @@ export default function ModelsPage(): React.ReactElement {
       switchAgentModel({ provider: alias, model }, revision),
     onSuccess: (result) => {
       // Models do not share one set of levels, so the switch always resets it.
-      write.succeeded(result.apply, `Thinking effort reset to ${result.current.thinking_level}.`);
+      write.succeeded(result.apply, t('models.models.page.thinkingReset', { level: result.current.thinking_level }));
     },
     onError: (error) => {
       toast.error(writeErrorMessage(error));
@@ -145,9 +148,7 @@ export default function ModelsPage(): React.ReactElement {
         // it closes; reopening starts from the refreshed definition.
         setEditing(null);
         saveModel.reset();
-        toast.error(
-          'config.jsonc changed while you were editing. Nothing was saved - open the model again to edit the current version.',
-        );
+        toast.error(t('models.models.page.editConflictToast'));
       }
     },
   });
@@ -179,15 +180,15 @@ export default function ModelsPage(): React.ReactElement {
   const restart = useMutation({
     mutationFn: restartServer,
     onSuccess: async () => {
-      toast.info('Restarting the server…', {
-        description: 'The page disconnects for a moment and reloads when it is back.',
+      toast.info(t('models.models.page.restarting'), {
+        description: t('models.models.page.restartingDescription'),
       });
       const recovered = await waitForAdminServer();
       write.refresh();
       if (recovered) {
-        toast.success('The server is back');
+        toast.success(t('models.models.page.serverBack'));
       } else {
-        toast.error('Timed out waiting for the server; check the supervisor configuration');
+        toast.error(t('models.models.page.restartTimeout'));
       }
     },
     onError: (error) => {
@@ -210,7 +211,7 @@ export default function ModelsPage(): React.ReactElement {
   if (providers.isError || view === undefined) {
     return (
       <div className="p-6 text-center">
-        <p className="text-destructive font-medium">Failed to load providers</p>
+        <p className="text-destructive font-medium">{t('models.models.page.loadFailed')}</p>
         <p className="text-muted-foreground text-sm break-words">{errorMessage(providers.error)}</p>
       </div>
     );
@@ -226,7 +227,7 @@ export default function ModelsPage(): React.ReactElement {
   const columns: readonly ColumnSpec<ModelRow>[] = [
     {
       key: 'model',
-      title: 'Model',
+      title: t('models.models.page.colModel'),
       className: 'max-w-96 min-w-48 whitespace-normal',
       render: (row) => (
         <div className="space-y-0.5">
@@ -237,19 +238,19 @@ export default function ModelsPage(): React.ReactElement {
     },
     {
       key: 'flags',
-      title: 'Flags',
+      title: t('models.models.page.colFlags'),
       render: (row) => (
         <span className="text-muted-foreground flex items-center gap-1.5">
           {isImageCapable(row.model) ? (
             <>
               <Eye className="size-[1.15em]" aria-hidden="true" />
-              <span className="sr-only">accepts image input</span>
+              <span className="sr-only">{t('models.models.page.srOnlyImage')}</span>
             </>
           ) : null}
           {row.model.reasoning ? (
             <>
               <Lightbulb className="size-[1.15em]" aria-hidden="true" />
-              <span className="sr-only">reasoning model</span>
+              <span className="sr-only">{t('models.models.page.srOnlyReasoning')}</span>
             </>
           ) : null}
         </span>
@@ -257,21 +258,21 @@ export default function ModelsPage(): React.ReactElement {
     },
     {
       key: 'context',
-      title: 'Context',
+      title: t('models.models.page.colContext'),
       align: 'right',
       className: 'tabular-nums',
       render: (row) => formatNumber(row.model.context_window),
     },
     {
       key: 'max_tokens',
-      title: 'Max output',
+      title: t('models.models.page.colMaxOutput'),
       align: 'right',
       className: 'tabular-nums',
       render: (row) => formatNumber(row.model.max_tokens),
     },
     {
       key: 'usage',
-      title: 'In use',
+      title: t('models.models.page.colInUse'),
       render: (row) => {
         const usage = modelUsage(view, row.alias, row.model.id);
         if (usage === null) {
@@ -279,15 +280,19 @@ export default function ModelsPage(): React.ReactElement {
         }
         return (
           <span className="flex flex-wrap items-center gap-1">
-            {usage === 'agent' || usage === 'both' ? <ToneBadge tone="success">Agent</ToneBadge> : null}
-            {usage === 'vision' || usage === 'both' ? <ToneBadge tone="info">Vision</ToneBadge> : null}
+            {usage === 'agent' || usage === 'both' ? (
+              <ToneBadge tone="success">{t('models.models.page.agentBadge')}</ToneBadge>
+            ) : null}
+            {usage === 'vision' || usage === 'both' ? (
+              <ToneBadge tone="info">{t('models.models.page.visionBadge')}</ToneBadge>
+            ) : null}
           </span>
         );
       },
     },
     {
       key: 'actions',
-      title: 'Actions',
+      title: t('models.models.page.colActions'),
       align: 'right',
       render: (row) => {
         const usage = modelUsage(view, row.alias, row.model.id);
@@ -300,7 +305,7 @@ export default function ModelsPage(): React.ReactElement {
               disabled={!isTextCapable(row.model) || usage === 'agent' || usage === 'both' || switchAgent.isPending}
               onClick={() => switchAgent.mutate({ alias: row.alias, model: row.model.id })}
             >
-              Set as agent
+              {t('models.models.page.setAsAgent')}
             </Button>
             <Button
               type="button"
@@ -309,13 +314,13 @@ export default function ModelsPage(): React.ReactElement {
               disabled={!isImageCapable(row.model) || usage === 'vision' || usage === 'both' || switchVision.isPending}
               onClick={() => switchVision.mutate({ alias: row.alias, model: row.model.id })}
             >
-              Set as vision
+              {t('models.models.page.setAsVision')}
             </Button>
             <Button
               type="button"
               size="icon-sm"
               variant="ghost"
-              aria-label={`Edit ${row.model.id}`}
+              aria-label={t('models.models.page.editModelAria', { model: row.model.id })}
               onClick={() => setEditing({ alias: row.alias, model: row.model, revision })}
             >
               <Pencil />
@@ -325,7 +330,7 @@ export default function ModelsPage(): React.ReactElement {
               size="icon-sm"
               variant="ghost"
               className="text-muted-foreground hover:text-destructive"
-              aria-label={`Delete ${row.model.id}`}
+              aria-label={t('models.models.page.deleteModelAria', { model: row.model.id })}
               disabled={usage !== null}
               onClick={() => setDeletingModel({ alias: row.alias, model: row.model.id })}
             >
@@ -354,25 +359,25 @@ export default function ModelsPage(): React.ReactElement {
           table's min-content and scrolls the whole page sideways. */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
         <Panel
-          title="Providers"
+          title={t('models.models.page.providersTitle')}
           className="self-start"
           action={
             <Button type="button" size="sm" onClick={() => setWizardOpen(true)}>
-              New provider
+              {t('models.models.page.newProvider')}
             </Button>
           }
         >
           <div className="space-y-3">
             <Input
-              aria-label="Search providers"
-              placeholder="Search providers"
+              aria-label={t('models.models.page.searchProviders')}
+              placeholder={t('models.models.page.searchProviders')}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
             {view.providers.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No providers configured yet.</p>
+              <p className="text-muted-foreground text-sm">{t('models.models.page.noProviders')}</p>
             ) : listed.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No matching providers.</p>
+              <p className="text-muted-foreground text-sm">{t('models.models.page.noMatchingProviders')}</p>
             ) : (
               <ul className="space-y-0.5">
                 {listed.map((provider) => {
@@ -383,7 +388,7 @@ export default function ModelsPage(): React.ReactElement {
                           row would nest one inside it. */}
                       <button
                         type="button"
-                        aria-label={`Provider ${provider.alias}`}
+                        aria-label={t('models.models.page.providerAria', { alias: provider.alias })}
                         aria-current={active ? 'true' : undefined}
                         className={cn(
                           'w-full space-y-1 rounded-lg px-3 py-2 text-left transition-colors',
@@ -401,7 +406,12 @@ export default function ModelsPage(): React.ReactElement {
                         <span className="flex flex-wrap items-center gap-1.5">
                           <ProviderBadges view={view} provider={provider} />
                           <span className="text-muted-foreground text-xs tabular-nums">
-                            {provider.models.length} {provider.models.length === 1 ? 'model' : 'models'}
+                            {t(
+                              provider.models.length === 1
+                                ? 'models.models.page.oneModel'
+                                : 'models.models.page.manyModels',
+                              { count: provider.models.length },
+                            )}
                           </span>
                         </span>
                       </button>
@@ -417,7 +427,7 @@ export default function ModelsPage(): React.ReactElement {
           {selected === null ? (
             <Card>
               <CardContent className="text-muted-foreground py-8 text-center text-sm">
-                Create a provider first, then enter its API key to fetch the model list.
+                {t('models.models.page.emptyState')}
               </CardContent>
             </Card>
           ) : (
@@ -437,7 +447,7 @@ export default function ModelsPage(): React.ReactElement {
                   onClick={() => setDeletingProvider(selected)}
                 >
                   <Trash2 />
-                  Delete provider
+                  {t('models.models.page.deleteProvider')}
                 </Button>
               </div>
 
@@ -449,7 +459,7 @@ export default function ModelsPage(): React.ReactElement {
               />
 
               <Panel
-                title="Models"
+                title={t('models.models.page.modelsTitle')}
                 flush
                 action={
                   <div className="flex flex-wrap items-center gap-2">
@@ -459,7 +469,7 @@ export default function ModelsPage(): React.ReactElement {
                       variant="outline"
                       onClick={() => setPicker({ mode: 'discover', alias: selected.alias, nonce: Date.now() })}
                     >
-                      Fetch models
+                      {t('models.models.page.fetchModels')}
                     </Button>
                     <Button
                       type="button"
@@ -467,7 +477,7 @@ export default function ModelsPage(): React.ReactElement {
                       variant="outline"
                       onClick={() => setPicker({ mode: 'manual', alias: selected.alias, nonce: Date.now() })}
                     >
-                      Add by id
+                      {t('models.models.page.addById')}
                     </Button>
                   </div>
                 }
@@ -479,7 +489,7 @@ export default function ModelsPage(): React.ReactElement {
                   data={rows}
                   rowKey={(row) => `${row.alias}/${row.model.id}`}
                   className={FLUSH_TABLE_CLASS}
-                  emptyText="Enter the API key, then fetch the model list"
+                  emptyText={t('models.models.page.emptyModels')}
                 />
               </Panel>
             </>
@@ -515,8 +525,8 @@ export default function ModelsPage(): React.ReactElement {
             }
           }}
           api={view.providers.find((provider) => provider.alias === editing.alias)?.api ?? 'openai-completions'}
-          title={`Edit ${editing.model.id}`}
-          description="Editing replaces this model's whole definition in config.jsonc; the change is applied right away, and a run already in flight keeps the definition it started with."
+          title={t('models.models.page.editTitle', { model: editing.model.id })}
+          description={t('models.models.page.editDescription')}
           initial={modelFormFromConfig(
             editing.model,
             view.providers.find((provider) => provider.alias === editing.alias)?.api ?? 'openai-completions',
@@ -536,13 +546,13 @@ export default function ModelsPage(): React.ReactElement {
             setDeletingModel(null);
           }
         }}
-        title="Delete this model?"
+        title={t('models.models.page.deleteModelTitle')}
         description={
           deletingModel === null
             ? ''
-            : `${deletingModel.model} will be removed from the models of ${deletingModel.alias}.`
+            : t('models.models.page.deleteModelDescription', { model: deletingModel.model, alias: deletingModel.alias })
         }
-        confirmText="Delete model"
+        confirmText={t('models.models.page.deleteModelConfirm')}
         destructive
         pending={removeModel.isPending}
         error={removeModel.isError ? writeErrorMessage(removeModel.error) : null}
@@ -560,13 +570,13 @@ export default function ModelsPage(): React.ReactElement {
             setDeletingProvider(null);
           }
         }}
-        title="Delete this provider?"
+        title={t('models.models.page.deleteProviderTitle')}
         description={
           deletingProvider === null
             ? ''
-            : `${deletingProvider.alias} and its model list will be removed from config.jsonc.`
+            : t('models.models.page.deleteProviderDescription', { alias: deletingProvider.alias })
         }
-        confirmText="Delete provider"
+        confirmText={t('models.models.page.deleteProviderConfirm')}
         destructive
         pending={removeProvider.isPending}
         error={removeProvider.isError ? writeErrorMessage(removeProvider.error) : null}

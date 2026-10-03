@@ -66,18 +66,18 @@ test('selects an API model, fills capabilities, saves, and reloads existing conf
     }
   });
   await page.goto(await adminUrl('/image-settings'));
-  await expect(page.getByLabel('启用图片生成')).not.toBeChecked();
-  await page.getByLabel('启用图片生成').check();
+  await expect(page.getByLabel('Enable image generation')).not.toBeChecked();
+  await page.getByLabel('Enable image generation').check();
   await page.getByLabel('API key', { exact: true }).fill('e2e-image-key');
-  await page.getByLabel('搜索模型').fill('banana');
-  const picker = page.getByLabel('OpenRouter 图片模型');
+  await page.getByLabel('Search models').fill('banana');
+  const picker = page.getByLabel('OpenRouter image model');
   await expect(picker.locator('option')).toHaveCount(2);
   await picker.selectOption('google/gemini-3.1-flash-image');
-  await expect(page.getByLabel('供应商')).toHaveValue('google-ai-studio');
-  await expect(page.getByText('最多 14 张参考图', { exact: false })).toBeVisible();
-  await page.getByRole('button', { name: '添加所选模型' }).click();
-  await page.getByRole('button', { name: '保存并应用' }).click();
-  await expect(page.getByText('图片生成配置已应用')).toBeVisible();
+  await expect(page.getByLabel('Provider')).toHaveValue('google-ai-studio');
+  await expect(page.getByText('Up to 14 reference images', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Add selected model' }).click();
+  await page.getByRole('button', { name: 'Save and apply' }).click();
+  await expect(page.getByText('Image generation configuration applied')).toBeVisible();
   expect(writes[0]).toMatchObject({
     enabled: true,
     credentials: { openrouter: 'e2e-image-key' },
@@ -95,13 +95,13 @@ test('selects an API model, fills capabilities, saves, and reloads existing conf
   });
   await page.reload();
   await expect(page.getByLabel('API key', { exact: true })).toHaveValue('');
-  await expect(page.getByRole('button', { name: '移除 Nano Banana 2' })).toBeVisible();
-  await page.getByRole('button', { name: '保存并应用' }).click();
+  await expect(page.getByRole('button', { name: 'Remove Nano Banana 2' })).toBeVisible();
+  await page.getByRole('button', { name: 'Save and apply' }).click();
   await expect.poll(() => writes.length).toBe(2);
   expect(writes[1]?.credentials).toEqual({});
   expect(writes[1]?.models).toEqual(writes[0]?.models);
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByLabel('OpenRouter 图片模型')).toBeVisible();
+  await expect(page.getByLabel('OpenRouter image model')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: '/tmp/plasticwan-image-settings-mobile.png', fullPage: true });
   await page.setViewportSize({ width: 1280, height: 1000 });
@@ -137,15 +137,15 @@ test('catalog and endpoint failures are retryable without inventing a model or c
     }
   });
   await page.goto(await adminUrl('/image-settings'));
-  await expect(page.getByRole('alert')).toContainText('模型列表获取失败');
-  await expect(page.getByRole('button', { name: '保存并应用' })).toBeEnabled();
-  await expect(page.getByText('请先选择模型并点击「添加所选模型」')).toBeVisible();
-  await page.getByRole('button', { name: '刷新模型列表' }).click();
-  await page.getByLabel('OpenRouter 图片模型').selectOption('google/gemini-3.1-flash-image');
-  await expect(page.getByRole('alert')).toContainText('供应商信息获取失败');
-  await expect(page.getByRole('button', { name: '添加所选模型' })).toBeDisabled();
-  await page.getByRole('button', { name: '重试供应商查询' }).click();
-  await expect(page.getByRole('button', { name: '添加所选模型' })).toBeEnabled();
+  await expect(page.getByRole('alert')).toContainText('Failed to fetch the model list');
+  await expect(page.getByRole('button', { name: 'Save and apply' })).toBeEnabled();
+  await expect(page.getByText('Select a model and click "Add selected model" first')).toBeVisible();
+  await page.getByRole('button', { name: 'Refresh model list' }).click();
+  await page.getByLabel('OpenRouter image model').selectOption('google/gemini-3.1-flash-image');
+  await expect(page.getByRole('alert')).toContainText('Failed to fetch provider information');
+  await expect(page.getByRole('button', { name: 'Add selected model' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Retry provider lookup' }).click();
+  await expect(page.getByRole('button', { name: 'Add selected model' })).toBeEnabled();
 });
 
 test('repairs legacy empty credentials and duplicate models using an existing OpenRouter credential', async ({
@@ -181,12 +181,12 @@ test('repairs legacy empty credentials and duplicate models using an existing Op
     }
   });
   await page.goto(await adminUrl('/image-settings'));
-  await expect(page.getByRole('button', { name: '保存并应用' })).toBeEnabled();
-  await expect(page.getByLabel('密钥来源')).toHaveValue('openrouter');
-  await expect(page.getByRole('button', { name: '移除 Legacy Image' })).toHaveCount(1);
-  await expect(page.getByText('已合并 1 个完全相同的旧模型条目，保存后生效')).toBeVisible();
-  await page.getByRole('button', { name: '添加凭据', exact: true }).click();
-  await page.getByRole('button', { name: '保存并应用' }).click();
+  await expect(page.getByRole('button', { name: 'Save and apply' })).toBeEnabled();
+  await expect(page.getByLabel('Key source')).toHaveValue('openrouter');
+  await expect(page.getByRole('button', { name: 'Remove Legacy Image' })).toHaveCount(1);
+  await expect(page.getByText('Merged 1 identical legacy model entries; takes effect on save')).toBeVisible();
+  await page.getByRole('button', { name: 'Add credential', exact: true }).click();
+  await page.getByRole('button', { name: 'Save and apply' }).click();
   await expect.poll(() => writes.length).toBe(1);
   expect(writes[0]).toEqual({
     enabled: true,
@@ -219,13 +219,15 @@ test('missing credentials give a visible actionable error and do not send an inv
     });
   });
   await page.goto(await adminUrl('/image-settings'));
-  const save = page.getByRole('button', { name: '保存并应用' });
+  const save = page.getByRole('button', { name: 'Save and apply' });
   await expect(save).toBeEnabled();
-  await expect(page.locator('#image-save-requirements')).toContainText('凭据 openrouter 尚未配置 API key');
+  await expect(page.locator('#image-save-requirements')).toContainText(
+    'Credential openrouter has no API key configured',
+  );
   await save.click();
-  await expect(page.locator('[data-sonner-toast]')).toContainText('尚未配置 API key');
+  await expect(page.locator('[data-sonner-toast]')).toContainText('has no API key configured');
   expect(writes).toBe(0);
-  await page.getByLabel('启用图片生成').uncheck();
+  await page.getByLabel('Enable image generation').uncheck();
   await save.click();
   await expect.poll(() => writes).toBe(1);
 });

@@ -41,24 +41,14 @@ import { isConfigConflict, isThinkingLevel } from '@/lib/model-manager';
 import { chatsQuery } from '@/lib/queries';
 import { waitForAdminServer } from '@/lib/restart';
 import { useProviderWrite } from '@/lib/use-provider-write';
-
-function topicsText(settings: ChatSettingsView): string {
-  return settings.topic_ids === null ? 'All topics' : settings.topic_ids.join(', ');
-}
-
-function modelText(settings: ChatSettingsView): string {
-  return `${settings.effective.provider} / ${settings.effective.model}`;
-}
-
-function modelSource(settings: ChatSettingsView): string {
-  return `${settings.provider === null ? 'Default model' : 'Chat override'} · thinking ${settings.effective.thinking_level}${
-    settings.thinking_level === null ? ' (inherited)' : ''
-  }`;
-}
+import { useTranslation } from 'react-i18next';
 
 /** A field the file and the running process disagree on shows the running value underneath. */
 function RunningNote({ value }: { readonly value: string | null }): React.ReactElement | null {
-  return value === null ? null : <p className="text-muted-foreground text-xs">Running: {value}</p>;
+  const { t } = useTranslation();
+  return value === null ? null : (
+    <p className="text-muted-foreground text-xs">{t('pages.chats.runningNote', { value })}</p>
+  );
 }
 
 function runningDiff(row: ChatEntry, text: (settings: ChatSettingsView) => string): string | null {
@@ -91,6 +81,7 @@ function ChatDialog({
   readonly chat: ChatEntry | null;
   readonly onClose: () => void;
 }): React.ReactElement {
+  const { t } = useTranslation();
   const write = useProviderWrite();
   const [id, setId] = useState(chat?.id ?? '');
   const [topics, setTopics] = useState(chat?.saved?.topic_ids?.join(', ') ?? '');
@@ -121,15 +112,13 @@ function ChatDialog({
       write.failed(error);
       if (isConfigConflict(error)) {
         onClose();
-        toast.error(
-          'config.jsonc changed while you were editing. Nothing was saved - reopen the Chat to review the current settings.',
-        );
+        toast.error(t('pages.chats.configConflictEdit'));
       }
     },
   });
   const submit = (): void => {
     if (!validId(id.trim())) {
-      setValidation('Chat ID must be a nonzero integer within the safe integer range.');
+      setValidation(t('pages.chats.invalidChatId'));
       return;
     }
     const topicIds = topics.trim().length === 0 ? null : topics.trim().split(/[\s,]+/);
@@ -137,15 +126,15 @@ function ChatDialog({
       topicIds !== null &&
       (topicIds.some((topic) => !validId(topic, true)) || new Set(topicIds).size !== topicIds.length)
     ) {
-      setValidation('Topic IDs must be unique positive safe integers, separated by commas or spaces.');
+      setValidation(t('pages.chats.invalidTopicIds'));
       return;
     }
     if (thinking === 'inherit' && !inheritAllowed) {
-      setValidation('A Chat model override needs its own thinking effort.');
+      setValidation(t('pages.chats.thinkingRequired'));
       return;
     }
     if (selected === undefined || !levels.includes(thinking === 'inherit' ? view.defaults.thinking_level : thinking)) {
-      setValidation('Choose a thinking effort supported by the selected model.');
+      setValidation(t('pages.chats.thinkingUnsupported'));
       return;
     }
     setValidation(null);
@@ -160,11 +149,8 @@ function ChatDialog({
     <Dialog open onOpenChange={(open) => !open && !save.isPending && onClose()}>
       <DialogContent className="max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{chat === null ? 'Add Chat' : 'Edit Chat'}</DialogTitle>
-          <DialogDescription>
-            Chat and Topic allowlists require a restart. Model settings apply to the next invocation in an active Chat,
-            across all its Topics.
-          </DialogDescription>
+          <DialogTitle>{chat === null ? t('pages.chats.addChat') : t('pages.chats.editChat')}</DialogTitle>
+          <DialogDescription>{t('pages.chats.dialogDescription')}</DialogDescription>
         </DialogHeader>
         <form
           className="space-y-5"
@@ -175,32 +161,28 @@ function ChatDialog({
         >
           <fieldset disabled={save.isPending} className="space-y-5">
             <div className="space-y-2">
-              <Label htmlFor="chat-id">Telegram Chat ID</Label>
+              <Label htmlFor="chat-id">{t('pages.chats.chatIdLabel')}</Label>
               <Input
                 id="chat-id"
                 value={id}
                 readOnly={chat !== null}
-                placeholder="e.g. -1001234567890"
+                placeholder={t('pages.chats.chatIdPlaceholder')}
                 onChange={(event) => setId(event.target.value)}
               />
-              <p className="text-muted-foreground text-xs">
-                Negative for groups and supergroups; positive for private Chats. IDs cannot be renamed.
-              </p>
+              <p className="text-muted-foreground text-xs">{t('pages.chats.chatIdHint')}</p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="chat-topics">Topic IDs</Label>
+              <Label htmlFor="chat-topics">{t('pages.chats.topicIdsLabel')}</Label>
               <Input
                 id="chat-topics"
                 value={topics}
-                placeholder="All topics"
+                placeholder={t('pages.chats.allTopics')}
                 onChange={(event) => setTopics(event.target.value)}
               />
-              <p className="text-muted-foreground text-xs">
-                Leave empty to allow all topics. Otherwise, only the listed Topic IDs are allowed.
-              </p>
+              <p className="text-muted-foreground text-xs">{t('pages.chats.topicIdsHint')}</p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="chat-model">Agent model</Label>
+              <Label htmlFor="chat-model">{t('pages.chats.agentModelLabel')}</Label>
               <Select
                 value={model}
                 onValueChange={(value) => {
@@ -214,7 +196,9 @@ function ChatDialog({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="inherit">
-                    Global default ({view.defaults.provider} / {view.defaults.model})
+                    {t('pages.chats.globalDefaultModel', {
+                      model: `${view.defaults.provider} / ${view.defaults.model}`,
+                    })}
                   </SelectItem>
                   {view.models.map((item) => (
                     <SelectItem key={modelKey(item.provider, item.model)} value={modelKey(item.provider, item.model)}>
@@ -223,13 +207,10 @@ function ChatDialog({
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-muted-foreground text-xs">
-                Changing models resets thinking to the weakest supported effort; a Chat model always sets its own
-                thinking. Global default clears the model and thinking overrides.
-              </p>
+              <p className="text-muted-foreground text-xs">{t('pages.chats.modelHint')}</p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="chat-thinking">Thinking effort</Label>
+              <Label htmlFor="chat-thinking">{t('pages.chats.thinkingLabel')}</Label>
               <Select
                 value={thinking}
                 onValueChange={(value) => {
@@ -244,7 +225,8 @@ function ChatDialog({
                 <SelectContent>
                   {inheritAllowed ? (
                     <SelectItem value="inherit" disabled={!inheritSupported}>
-                      Global default ({view.defaults.thinking_level}){inheritSupported ? '' : ' - unsupported'}
+                      {t('pages.chats.globalDefaultLevel', { level: view.defaults.thinking_level })}
+                      {inheritSupported ? '' : t('pages.chats.unsupportedSuffix')}
                     </SelectItem>
                   ) : null}
                   {levels.map((level) => (
@@ -268,10 +250,10 @@ function ChatDialog({
           ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" disabled={save.isPending} onClick={onClose}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button type="submit" disabled={save.isPending}>
-              {save.isPending ? 'Saving…' : 'Save Chat'}
+              {save.isPending ? t('common.saving') : t('pages.chats.saveChat')}
             </Button>
           </DialogFooter>
         </form>
@@ -281,6 +263,7 @@ function ChatDialog({
 }
 
 export default function ChatsPage(): React.ReactElement {
+  const { t } = useTranslation();
   const query = useQuery(chatsQuery);
   const write = useProviderWrite();
   const [editing, setEditing] = useState<{ readonly view: ChatsView; readonly chat: ChatEntry | null } | null>(null);
@@ -303,13 +286,13 @@ export default function ChatsPage(): React.ReactElement {
   const restart = useMutation({
     mutationFn: restartServer,
     onSuccess: async () => {
-      toast.info('Restarting the server…');
+      toast.info(t('pages.chats.restarting'));
       const recovered = await waitForAdminServer();
       write.refresh();
       if (recovered) {
-        toast.success('The server is back');
+        toast.success(t('pages.chats.serverBack'));
       } else {
-        toast.error('Timed out waiting for the server; check the supervisor configuration');
+        toast.error(t('pages.chats.restartTimeout'));
       }
     },
     onError: (error) => toast.error(errorMessage(error)),
@@ -324,7 +307,7 @@ export default function ChatsPage(): React.ReactElement {
           {errorMessage(query.error)}
         </p>
         <Button variant="outline" onClick={() => void query.refetch()}>
-          Retry
+          {t('common.retry')}
         </Button>
       </div>
     );
@@ -332,29 +315,36 @@ export default function ChatsPage(): React.ReactElement {
   const view = query.data;
   // A Chat removed from the file is still running until restart: show what it runs.
   const shown = (row: ChatEntry): ChatSettingsView | null => row.saved ?? row.active;
+  const topicsText = (settings: ChatSettingsView): string =>
+    settings.topic_ids === null ? t('pages.chats.allTopics') : settings.topic_ids.join(', ');
+  const modelText = (settings: ChatSettingsView): string =>
+    `${settings.effective.provider} / ${settings.effective.model}`;
+  const modelSource = (settings: ChatSettingsView): string =>
+    `${settings.provider === null ? t('pages.chats.defaultModel') : t('pages.chats.chatOverride')} · ${t('pages.chats.thinkingShort', { level: settings.effective.thinking_level })}${
+      settings.thinking_level === null ? t('pages.chats.inheritedSuffix') : ''
+    }`;
   const columns: readonly ColumnSpec<ChatEntry>[] = [
     {
       key: 'chat',
-      title: 'Chat',
+      title: t('pages.chats.colChat'),
       render: (row) => (
         <div className="space-y-1">
           <p className={row.title === null ? 'text-muted-foreground font-medium' : 'font-medium'}>
-            {row.title ?? 'Unknown Chat'}
+            {row.title ?? t('pages.chats.unknownChat')}
           </p>
           <p className="text-muted-foreground text-xs">
-            <span className="font-mono">{row.id}</span> · {row.type ?? (row.id.startsWith('-') ? 'Group' : 'Private')}
+            <span className="font-mono">{row.id}</span> ·{' '}
+            {row.type ?? (row.id.startsWith('-') ? t('pages.chats.group') : t('pages.chats.private'))}
           </p>
           {row.runtime_chat_id !== row.id ? (
-            <p className="text-muted-foreground text-xs">
-              Migrated to <span className="font-mono">{row.runtime_chat_id}</span>
-            </p>
+            <p className="text-muted-foreground text-xs">{t('pages.chats.migratedTo', { id: row.runtime_chat_id })}</p>
           ) : null}
         </div>
       ),
     },
     {
       key: 'topics',
-      title: 'Topics',
+      title: t('pages.chats.colTopics'),
       render: (row) => {
         const settings = shown(row);
         return settings === null ? null : (
@@ -369,7 +359,7 @@ export default function ChatsPage(): React.ReactElement {
     },
     {
       key: 'model',
-      title: 'Agent model',
+      title: t('pages.chats.colAgentModel'),
       render: (row) => {
         const settings = shown(row);
         return settings === null ? null : (
@@ -377,7 +367,11 @@ export default function ChatsPage(): React.ReactElement {
             <MonoValue value={modelText(settings)} />
             <p className="text-muted-foreground text-xs">{modelSource(settings)}</p>
             <RunningNote
-              value={runningDiff(row, (item) => `${modelText(item)} · thinking ${item.effective.thinking_level}`)}
+              value={runningDiff(
+                row,
+                (item) =>
+                  `${modelText(item)} · ${t('pages.chats.thinkingShort', { level: item.effective.thinking_level })}`,
+              )}
             />
           </div>
         );
@@ -385,21 +379,21 @@ export default function ChatsPage(): React.ReactElement {
     },
     {
       key: 'status',
-      title: 'Status',
+      title: t('pages.chats.colStatus'),
       render: (row) =>
         row.saved === null ? (
-          <ToneBadge tone="warning">Removal pending</ToneBadge>
+          <ToneBadge tone="warning">{t('pages.chats.removalPending')}</ToneBadge>
         ) : row.active === null ? (
-          <ToneBadge tone="warning">Addition pending</ToneBadge>
+          <ToneBadge tone="warning">{t('pages.chats.additionPending')}</ToneBadge>
         ) : JSON.stringify(row.saved) !== JSON.stringify(row.active) ? (
-          <ToneBadge tone="warning">Changes pending</ToneBadge>
+          <ToneBadge tone="warning">{t('pages.chats.changesPending')}</ToneBadge>
         ) : (
-          <ToneBadge tone="success">Active</ToneBadge>
+          <ToneBadge tone="success">{t('pages.chats.active')}</ToneBadge>
         ),
     },
     {
       key: 'actions',
-      title: 'Actions',
+      title: t('pages.chats.colActions'),
       align: 'right',
       render: (row) =>
         row.saved === null ? null : (
@@ -408,7 +402,7 @@ export default function ChatsPage(): React.ReactElement {
               type="button"
               size="icon-sm"
               variant="ghost"
-              aria-label="Edit"
+              aria-label={t('common.edit')}
               onClick={() => setEditing({ view, chat: row })}
             >
               <Pencil />
@@ -418,7 +412,7 @@ export default function ChatsPage(): React.ReactElement {
               size="icon-sm"
               variant="ghost"
               className="text-muted-foreground hover:text-destructive"
-              aria-label="Remove"
+              aria-label={t('pages.chats.remove')}
               disabled={view.items.filter((item) => item.saved !== null).length <= 1}
               onClick={() => {
                 remove.reset();
@@ -440,12 +434,12 @@ export default function ChatsPage(): React.ReactElement {
         onRestart={() => restart.mutate()}
       />
       <Panel
-        title="Chat allowlist"
+        title={t('pages.chats.allowlistTitle')}
         flush
         action={
           <Button size="sm" onClick={() => setEditing({ view, chat: null })}>
             <Plus />
-            Add Chat
+            {t('pages.chats.addChat')}
           </Button>
         }
       >
@@ -454,7 +448,7 @@ export default function ChatsPage(): React.ReactElement {
           data={view.items}
           rowKey={(row) => row.id}
           className={FLUSH_TABLE_CLASS}
-          emptyText="No Chats configured."
+          emptyText={t('pages.chats.emptyChats')}
         />
       </Panel>
       {editing !== null ? (
@@ -467,9 +461,9 @@ export default function ChatsPage(): React.ReactElement {
             setRemoving(null);
           }
         }}
-        title={`Remove Chat ${removing?.chat.id ?? ''}?`}
-        description="This removes the Chat and its Topic scope from config.jsonc, including its model and other overrides. The running allowlist stays unchanged until restart. Stored history is kept."
-        confirmText="Remove Chat"
+        title={t('pages.chats.removeTitle', { id: removing?.chat.id ?? '' })}
+        description={t('pages.chats.removeDescription')}
+        confirmText={t('pages.chats.removeConfirm')}
         destructive
         pending={remove.isPending}
         error={remove.isError ? errorMessage(remove.error) : null}

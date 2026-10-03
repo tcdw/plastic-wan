@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   ChatFilter,
   type ColumnSpec,
@@ -24,107 +25,105 @@ const INVOCATION_STATES = [
   'skipped_budget',
 ] as const;
 
-const COLUMNS: readonly ColumnSpec<InvocationListItem>[] = [
-  {
-    key: 'id',
-    title: 'ID',
-    render: (row) => (
-      <Link
-        to="/invocations/$invocationId"
-        params={{ invocationId: row.id }}
-        className="decoration-border hover:decoration-foreground font-medium tabular-nums underline underline-offset-4 transition-colors"
-      >
-        {row.id}
-      </Link>
-    ),
-  },
-  {
-    key: 'state',
-    title: 'State',
-    render: (row) => <StateBadge state={row.state} />,
-  },
-  {
-    key: 'chat',
-    title: 'Chat',
-    render: (row) => (
-      <div className="min-w-0 space-y-0.5">
-        <div className="font-medium">{row.chat.title ?? row.chat.telegram_chat_id}</div>
-        <div className="text-muted-foreground text-xs">
-          {row.chat.type}
-          {row.chat.message_thread_id === 0 ? '' : ` · topic ${row.chat.message_thread_id}`}
-        </div>
-      </div>
-    ),
-  },
-  {
-    key: 'turns',
-    title: 'Turns',
-    align: 'right',
-    className: 'tabular-nums',
-    render: (row) => String(row.turns_used),
-  },
-  {
-    key: 'tools',
-    title: 'Tools',
-    align: 'right',
-    className: 'tabular-nums',
-    render: (row) => String(row.tool_call_count),
-  },
-  {
-    key: 'sends',
-    title: 'Sends',
-    align: 'right',
-    className: 'tabular-nums',
-    render: (row) => String(row.sends_used),
-  },
-  {
-    key: 'tokens',
-    title: 'Tokens',
-    align: 'right',
-    className: 'tabular-nums',
-    render: (row) => formatNumber(row.total_tokens),
-  },
-  {
-    key: 'cost',
-    title: 'Cost',
-    align: 'right',
-    className: 'tabular-nums',
-    render: (row) => formatCost(row.total_cost),
-  },
-  {
-    key: 'side-effect',
-    title: 'Side effect',
-    className: 'ps-6',
-    render: (row) => (row.side_effect_started ? 'started' : <span className="text-muted-foreground">none</span>),
-  },
-  {
-    key: 'created',
-    title: 'Created',
-    className: 'text-muted-foreground',
-    render: (row) => formatTime(row.created_at),
-  },
-];
-
 export default function InvocationsPage(): React.ReactElement {
+  const { t } = useTranslation();
   const [state, setState] = useState<string | undefined>(undefined);
   const [chat, setChat] = useState<string | undefined>(undefined);
   const filters = useMemo(() => ({ state, chat }), [state, chat]);
+
+  const COLUMNS: readonly ColumnSpec<InvocationListItem>[] = [
+    {
+      key: 'id',
+      title: t('invocations.invocations.columns.id'),
+      render: (row) => (
+        <Link
+          to="/invocations/$invocationId"
+          params={{ invocationId: row.id }}
+          className="decoration-border hover:decoration-foreground font-medium tabular-nums underline underline-offset-4 transition-colors"
+        >
+          {row.id}
+        </Link>
+      ),
+    },
+    {
+      key: 'state',
+      title: t('invocations.invocations.columns.state'),
+      render: (row) => <StateBadge state={row.state} />,
+    },
+    {
+      key: 'chat',
+      title: t('invocations.invocations.columns.chat'),
+      render: (row) => (
+        <div className="min-w-0 space-y-0.5">
+          <div className="font-medium">{row.chat.title ?? row.chat.telegram_chat_id}</div>
+          <div className="text-muted-foreground text-xs">
+            {row.chat.type}
+            {row.chat.message_thread_id === 0 ? '' : ` · topic ${row.chat.message_thread_id}`}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'turns',
+      title: t('invocations.invocations.columns.turns'),
+      align: 'right',
+      className: 'tabular-nums',
+      render: (row) => String(row.turns_used),
+    },
+    {
+      key: 'tools',
+      title: t('invocations.invocations.columns.tools'),
+      align: 'right',
+      className: 'tabular-nums',
+      render: (row) => String(row.tool_call_count),
+    },
+    {
+      key: 'sends',
+      title: t('invocations.invocations.columns.sends'),
+      align: 'right',
+      className: 'tabular-nums',
+      render: (row) => String(row.sends_used),
+    },
+    {
+      key: 'tokens',
+      title: t('invocations.invocations.columns.tokens'),
+      align: 'right',
+      className: 'tabular-nums',
+      render: (row) => formatNumber(row.total_tokens),
+    },
+    {
+      key: 'cost',
+      title: t('invocations.invocations.columns.cost'),
+      align: 'right',
+      className: 'tabular-nums',
+      render: (row) => formatCost(row.total_cost),
+    },
+    {
+      key: 'side-effect',
+      title: t('invocations.invocations.columns.sideEffect'),
+      className: 'ps-6',
+      render: (row) => (row.side_effect_started ? 'started' : <span className="text-muted-foreground">none</span>),
+    },
+    {
+      key: 'created',
+      title: t('invocations.invocations.columns.created'),
+      className: 'text-muted-foreground',
+      render: (row) => formatTime(row.created_at),
+    },
+  ];
 
   return (
     <div className="space-y-4">
       <FilterToolbar>
         <SelectFilter
-          placeholder="State"
+          placeholder={t('invocations.invocations.statePlaceholder')}
           value={state}
           onChange={setState}
           options={INVOCATION_STATES.map((value) => ({ value, label: value }))}
         />
         <ChatFilter value={chat} onChange={setChat} />
       </FilterToolbar>
-      <p className="text-muted-foreground text-xs">
-        Tokens counts every token the model calls involved, cache reads and writes included — the same definition the
-        daily budget meters. The per-call breakdown is on the invocation page.
-      </p>
+      <p className="text-muted-foreground text-xs">{t('invocations.invocations.tokensNote')}</p>
       <CursorList
         factory={invocationsQuery}
         filters={filters}

@@ -3,6 +3,7 @@ import { darkTheme } from '@uiw/react-json-view/dark';
 import { lightTheme } from '@uiw/react-json-view/light';
 import type React from 'react';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useTheme } from '@/components/themes/theme-provider';
 import { Button } from '@/components/ui/button';
 import { prettyJson } from '@/lib/format';
@@ -77,6 +78,7 @@ export function JsonViewer({
   collapseThresholdChars = DEFAULT_COLLAPSE_THRESHOLD_CHARS,
   className,
 }: JsonViewerProps): React.ReactElement {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<'tree' | 'text'>(defaultMode);
   const text = prettyJson(value);
   if (text === null) {
@@ -96,18 +98,20 @@ export function JsonViewer({
           disabled={!canTree}
           onClick={() => setMode('tree')}
         >
-          Tree
+          {t('layout.business.tree')}
         </Button>
         <Button size="xs" variant={mode === 'text' ? 'secondary' : 'ghost'} onClick={() => setMode('text')}>
-          Text
+          {t('layout.business.text')}
         </Button>
         {title !== undefined ? <span className="text-muted-foreground text-xs">{title}</span> : null}
-        {collapsed ? <span className="text-muted-foreground text-xs">{text.length} chars</span> : null}
+        {collapsed ? (
+          <span className="text-muted-foreground text-xs">{t('layout.business.chars', { n: text.length })}</span>
+        ) : null}
       </div>
       {mode === 'tree' && canTree ? (
         collapsed ? (
           <LazyDetails
-            summary={`Payload (${text.length} chars) — click to expand`}
+            summary={t('layout.business.payloadSummary', { n: text.length })}
             summaryClassName="text-muted-foreground hover:bg-muted cursor-pointer rounded px-1 py-0.5 text-xs transition-colors"
             contentClassName={cn('mt-1', BOX)}
           >

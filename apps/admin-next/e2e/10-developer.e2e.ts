@@ -6,7 +6,7 @@ test.use({ storageState: authStoragePath() });
 test('Developer persists recording preferences and confirms payload-only cleanup', async ({ page }, testInfo) => {
   await page.goto(await adminUrl('/settings'));
   await page.getByRole('link', { name: 'Developer', exact: true }).click();
-  const recording = page.getByRole('switch', { name: '记录原始请求报文以便调试' });
+  const recording = page.getByRole('switch', { name: 'Record raw request payloads for debugging' });
   await expect(recording).not.toBeChecked();
   await page.screenshot({ path: testInfo.outputPath('developer-desktop.png'), fullPage: true });
   await recording.click();
@@ -20,16 +20,16 @@ test('Developer persists recording preferences and confirms payload-only cleanup
   const before = await (await page.request.get(detailUrl)).json();
   expect(before.model_calls.some((call: { request_json: string | null }) => call.request_json !== null)).toBe(true);
 
-  await page.getByRole('button', { name: '清除此前记录的原始请求报文', exact: true }).click();
+  await page.getByRole('button', { name: 'Clear previously recorded raw request payloads', exact: true }).click();
   const dialog = page.getByRole('alertdialog');
-  await expect(dialog).toContainText('不会压缩数据库文件');
-  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(dialog).toContainText('The database file is not compacted.');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   expect(await (await page.request.get(detailUrl)).json()).toEqual(before);
 
-  await page.getByRole('button', { name: '清除此前记录的原始请求报文', exact: true }).click();
-  await dialog.getByRole('button', { name: '确认清除', exact: true }).click();
+  await page.getByRole('button', { name: 'Clear previously recorded raw request payloads', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Confirm clear', exact: true }).click();
   await expect(dialog).not.toBeVisible();
-  await expect(page.getByRole('status').filter({ hasText: '已清除' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Cleared debug payloads' })).toBeVisible();
   const after = await (await page.request.get(detailUrl)).json();
   expect(after).toEqual({
     ...before,
@@ -47,19 +47,19 @@ test('Developer persists recording preferences and confirms payload-only cleanup
 
 test('Developer reports saved-but-not-applied settings and recovers through Settings', async ({ page }) => {
   await page.goto(await adminUrl('/developer'));
-  const recording = page.getByRole('switch', { name: '记录原始请求报文以便调试' });
+  const recording = page.getByRole('switch', { name: 'Record raw request payloads for debugging' });
   await expect(recording).not.toBeChecked();
   await e2eFetch('/fail-next-config-apply', { method: 'POST' });
   await recording.click();
   await expect(page.getByRole('alert')).toContainText('updated but not applied');
   await expect(recording).toBeChecked();
-  await expect(page.getByRole('status').filter({ hasText: '当前运行状态：关闭' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Current running state: Off' })).toBeVisible();
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
   await page.getByRole('button', { name: 'Apply config file' }).click();
   await expect(page.getByText('developer.record_model_payloads', { exact: false })).toBeVisible();
   await page.getByRole('link', { name: 'Developer', exact: true }).click();
   await expect(recording).toBeChecked();
-  await expect(page.getByText('文件设置与运行状态不同。', { exact: false })).not.toBeVisible();
+  await expect(page.getByText('The file setting differs from the running state.', { exact: false })).not.toBeVisible();
   await recording.click();
   await expect(recording).not.toBeChecked();
 });
@@ -71,15 +71,15 @@ test('Developer actions and confirmation fit a mobile dark viewport', async ({ p
     localStorage.setItem('admin-theme', 'dark');
   });
   await page.reload();
-  await expect(page.getByRole('switch', { name: '记录原始请求报文以便调试' })).toBeInViewport();
+  await expect(page.getByRole('switch', { name: 'Record raw request payloads for debugging' })).toBeInViewport();
   await page.screenshot({ path: testInfo.outputPath('developer-mobile-dark.png'), fullPage: true });
-  await page.getByRole('button', { name: '清除此前记录的原始请求报文', exact: true }).click();
-  await expect(page.getByRole('button', { name: '确认清除', exact: true })).toBeInViewport();
+  await page.getByRole('button', { name: 'Clear previously recorded raw request payloads', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Confirm clear', exact: true })).toBeInViewport();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({
     path: testInfo.outputPath('developer-confirm-mobile-dark.png'),
     fullPage: true,
     animations: 'disabled',
   });
-  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
 });

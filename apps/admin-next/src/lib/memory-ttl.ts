@@ -6,6 +6,8 @@
  * edits at day granularity like the old frontend).
  */
 
+import i18n from './i18n.ts';
+
 export const DAY_SECONDS = 86_400;
 export const MEMORY_MAX_CONTENT_LENGTH = 150;
 export const TTL_MIN_DAYS = 1;
@@ -26,10 +28,10 @@ export function isTtlDaysValid(days: number | null | undefined): boolean {
 /** Human-readable TTL: whole days when exact, else rounded hours (>= 1h), else raw seconds. */
 export function formatTtl(seconds: number): string {
   if (seconds % DAY_SECONDS === 0) {
-    return `${seconds / DAY_SECONDS} d`;
+    return `${seconds / DAY_SECONDS} ${i18n.t('pages.memories.ttlUnitDays')}`;
   }
   if (seconds >= 3_600) {
-    return `${Math.round(seconds / 3_600)} h`;
+    return `${Math.round(seconds / 3_600)} ${i18n.t('pages.memories.ttlUnitHours')}`;
   }
-  return `${seconds} s`;
+  return `${seconds} ${i18n.t('pages.memories.ttlUnitSeconds')}`;
 }

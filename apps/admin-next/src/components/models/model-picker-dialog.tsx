@@ -1,5 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { MonoValue } from '@/components/business';
 import { HeaderFields } from '@/components/models/header-fields';
 import { ModelDraftList } from '@/components/models/model-draft-list';
@@ -25,7 +26,6 @@ import {
   type ProviderModelConfig,
   type ProviderView,
 } from '@/lib/api.ts';
-import { formatNumber } from '@/lib/format.ts';
 import { type HeaderRow, headerRowsFromNames, headerValues } from '@/lib/header-rows.ts';
 import { modelFormFromDraft, parseModelIds, requestErrorMessage } from '@/lib/model-manager.ts';
 import { useProviderWrite } from '@/lib/use-provider-write.ts';
@@ -49,6 +49,7 @@ export function ModelPickerDialog({
   readonly revision: string;
   readonly onClose: () => void;
 }): React.ReactElement {
+  const { t } = useTranslation();
   const write = useProviderWrite();
   const selection = useDraftSelection();
   const [endpoint, setEndpoint] = useState<string | null>(null);
@@ -76,7 +77,7 @@ export function ModelPickerDialog({
         throw new Error(payload.error);
       }
       if (apiKey.length === 0) {
-        throw new Error('Temporary mode needs an API key');
+        throw new Error(t('models.models.picker.tempModeKeyNeeded'));
       }
       return await discoverProviderModels({
         ...connection,
@@ -95,7 +96,7 @@ export function ModelPickerDialog({
     mutationFn: async () => {
       const parsed = parseModelIds(ids);
       if (parsed.length === 0) {
-        throw new Error('Enter at least one model id');
+        throw new Error(t('models.models.wizard.enterModelId'));
       }
       const result = await lookupModelMetadata({ ...connection, ids: parsed });
       return {
@@ -141,12 +142,12 @@ export function ModelPickerDialog({
     >
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{mode === 'discover' ? 'Fetch models' : 'Add models by id'}</DialogTitle>
+          <DialogTitle>
+            {mode === 'discover' ? t('models.models.picker.discoverTitle') : t('models.models.picker.manualTitle')}
+          </DialogTitle>
           <DialogDescription>
-            {provider.alias} · {provider.api}
-            {mode === 'discover'
-              ? ' · metadata from the provider listing and models.dev'
-              : ' · metadata only; the listing endpoint is not called'}
+            {t('models.models.picker.base', { alias: provider.alias, api: provider.api })}
+            {mode === 'discover' ? t('models.models.picker.metadataListing') : t('models.models.picker.metadataOnly')}
           </DialogDescription>
         </DialogHeader>
 
@@ -155,18 +156,19 @@ export function ModelPickerDialog({
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2">
                 <Button type="button" variant="ghost" size="sm" onClick={() => setTempMode((previous) => !previous)}>
-                  {tempMode ? 'Use the saved connection' : 'Use temporary mode (key from this form)'}
+                  {tempMode ? t('models.models.picker.useSaved') : t('models.models.picker.useTemp')}
                 </Button>
                 {endpoint === null ? null : (
                   <span className="text-muted-foreground text-xs">
-                    endpoint: <MonoValue value={endpoint} />
+                    {t('models.models.picker.endpointLabel')}
+                    <MonoValue value={endpoint} />
                   </span>
                 )}
               </div>
               {tempMode ? (
                 <div className="space-y-3 rounded-md border p-3">
                   <div className="space-y-1">
-                    <Label htmlFor="picker-api-key">API Key</Label>
+                    <Label htmlFor="picker-api-key">{t('models.models.connection.apiKey')}</Label>
                     <Input
                       id="picker-api-key"
                       type="password"
@@ -189,13 +191,17 @@ export function ModelPickerDialog({
                   discover.mutate();
                 }}
               >
-                {fetchPending ? 'Fetching…' : selection.drafts.length === 0 ? 'Fetch' : 'Fetch again'}
+                {fetchPending
+                  ? t('models.models.picker.fetching')
+                  : selection.drafts.length === 0
+                    ? t('models.models.picker.fetch')
+                    : t('models.models.picker.fetchAgain')}
               </Button>
             </div>
           ) : (
             <div className="space-y-3">
               <div className="space-y-1">
-                <Label htmlFor="picker-ids">Model ids (one per line, or comma separated)</Label>
+                <Label htmlFor="picker-ids">{t('models.models.picker.idsLabel')}</Label>
                 <Textarea
                   id="picker-ids"
                   rows={3}
@@ -213,7 +219,7 @@ export function ModelPickerDialog({
                   lookup.mutate();
                 }}
               >
-                {fetchPending ? 'Looking up…' : 'Look up metadata'}
+                {fetchPending ? t('models.models.picker.lookingUp') : t('models.models.wizard.lookup')}
               </Button>
             </div>
           )}
@@ -224,8 +230,7 @@ export function ModelPickerDialog({
 
           {metadataError === null ? null : (
             <p className="text-muted-foreground text-xs break-words">
-              models.dev metadata is unavailable ({metadataError}). The models listed can still be added, but every
-              field has to be confirmed by hand.
+              {t('models.models.picker.metadataUnavailable', { error: metadataError })}
             </p>
           )}
 
@@ -239,18 +244,18 @@ export function ModelPickerDialog({
                 onEdit={setEditing}
                 search={selection.search}
                 onSearchChange={selection.setSearch}
-                emptyText="No matching models."
+                emptyText={t('models.models.shared.emptyList')}
               />
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-muted-foreground text-xs">
-                  {formatNumber(selection.selectedCount)} selected
+                  {t('models.models.shared.selectedCount', { count: selection.selectedCount })}
                   {selection.unresolved.length === 0
                     ? ''
-                    : ` · ${selection.unresolved.map((draft) => draft.id).join(', ')} still need fields confirmed`}
+                    : ` · ${t('models.models.shared.unresolvedSuffix', { ids: selection.unresolved.map((draft) => draft.id).join(', ') })}`}
                 </p>
                 {selection.confirmable === 0 ? null : (
                   <Button type="button" variant="outline" size="sm" onClick={selection.confirmSelected}>
-                    Accept listed values ({formatNumber(selection.confirmable)})
+                    {t('models.models.shared.acceptListed', { count: selection.confirmable })}
                   </Button>
                 )}
               </div>
@@ -263,7 +268,7 @@ export function ModelPickerDialog({
 
         <DialogFooter>
           <Button type="button" variant="outline" disabled={append.isPending} onClick={onClose}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button
             type="button"
@@ -275,8 +280,10 @@ export function ModelPickerDialog({
             }}
           >
             {append.isPending
-              ? 'Adding…'
-              : `Add ${formatNumber(selection.selectedCount)} ${selection.selectedCount === 1 ? 'model' : 'models'}`}
+              ? t('models.models.picker.adding')
+              : t(selection.selectedCount === 1 ? 'models.models.picker.addOne' : 'models.models.picker.addMany', {
+                  count: selection.selectedCount,
+                })}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -291,8 +298,8 @@ export function ModelPickerDialog({
             }
           }}
           api={provider.api}
-          title={`Confirm ${editing.id}`}
-          description="Values come from the provider listing or models.dev; anything marked for confirming has to be confirmed or replaced."
+          title={t('models.models.wizard.confirmTitle', { model: editing.id })}
+          description={t('models.models.wizard.confirmDescription')}
           initial={modelFormFromDraft(editing, provider.api)}
           lockId
           draft={editing}

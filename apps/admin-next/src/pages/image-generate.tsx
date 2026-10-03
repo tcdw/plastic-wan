@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -79,6 +80,7 @@ function OutputGrid({ generation }: { readonly generation: ImageGenerationRecord
 }
 
 export default function ImageGeneratePage() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const fileInput = useRef<HTMLInputElement>(null);
   const [prompt, setPrompt] = useState('');
@@ -131,7 +133,7 @@ export default function ImageGeneratePage() {
         idempotency_key: `admin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       }),
     onSuccess: ({ generation, replayed }) => {
-      toast.success(replayed ? '重复请求已重放（未重新计费）' : '生成已提交');
+      toast.success(replayed ? t('image.generate.replayedToast') : t('image.generate.submittedToast'));
       setPending(generation);
       queryClient.invalidateQueries({ queryKey: ['image-generations'] });
     },
@@ -148,7 +150,7 @@ export default function ImageGeneratePage() {
       return uploadAsset({ name: file.name, base64, mime });
     },
     onSuccess: (asset) => {
-      toast.success(`已上传 ${asset.name}`);
+      toast.success(t('image.generate.uploadedToast', { name: asset.name }));
       queryClient.invalidateQueries({ queryKey: ['image-assets-picker'] });
     },
     onError: (error) => {
@@ -159,13 +161,13 @@ export default function ImageGeneratePage() {
   if (status.data !== undefined && !status.data.enabled) {
     return (
       <div className="space-y-3">
-        <h1 className="text-xl font-semibold">图片生成</h1>
+        <h1 className="text-xl font-semibold">{t('image.generate.title')}</h1>
         <p className="text-muted-foreground text-sm">
-          图片生成功能当前处于禁用状态。可在{' '}
+          {t('image.generate.disabledIntro')}
           <Link to="/image-settings" className="underline">
-            图片设置
-          </Link>{' '}
-          中启用。
+            {t('image.generate.disabledLink')}
+          </Link>
+          .
         </p>
       </div>
     );
@@ -175,24 +177,27 @@ export default function ImageGeneratePage() {
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
       <div className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="image-prompt">生成 Prompt</Label>
+          <Label htmlFor="image-prompt">{t('image.generate.promptLabel')}</Label>
           <Textarea
             id="image-prompt"
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             rows={6}
-            placeholder="描述要生成的画面；{{prompt:…}} 与 {{image:…}} 引用会被展开"
+            placeholder={t('image.generate.promptPlaceholder', {
+              promptRef: '{{prompt:…}}',
+              imageRef: '{{image:…}}',
+            })}
           />
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="space-y-1">
-            <Label>模型</Label>
+            <Label>{t('image.generate.model')}</Label>
             <select
               className="border-input bg-background w-full rounded border px-2 py-1.5 text-sm"
               value={modelId}
               onChange={(event) => setModelId(event.target.value)}
             >
-              <option value="">默认（唯一模型）</option>
+              <option value="">{t('image.generate.defaultModelOption')}</option>
               {status.data?.models.map((model) => (
                 <option key={model.id} value={model.id}>
                   {model.name}
@@ -201,7 +206,7 @@ export default function ImageGeneratePage() {
             </select>
           </div>
           <div className="space-y-1">
-            <Label>比例</Label>
+            <Label>{t('image.generate.aspectRatio')}</Label>
             <select
               className="border-input bg-background w-full rounded border px-2 py-1.5 text-sm"
               value={aspectRatio}
@@ -215,7 +220,7 @@ export default function ImageGeneratePage() {
             </select>
           </div>
           <div className="space-y-1">
-            <Label>质量</Label>
+            <Label>{t('image.generate.quality')}</Label>
             <select
               className="border-input bg-background w-full rounded border px-2 py-1.5 text-sm"
               value={resolution}
@@ -229,7 +234,7 @@ export default function ImageGeneratePage() {
             </select>
           </div>
           <div className="space-y-1">
-            <Label>数量</Label>
+            <Label>{t('image.generate.count')}</Label>
             <Input
               type="number"
               min={1}
@@ -241,18 +246,18 @@ export default function ImageGeneratePage() {
         </div>
         <div className="space-y-3 rounded border p-3">
           <SelectedRefs
-            title="已选 Prompt 引用"
+            title={t('image.generate.selectedPromptRefs')}
             refs={promptRefs}
             onRemove={(id) => setPromptRefs((current) => current.filter((entry) => entry.id !== id))}
           />
           <SelectedRefs
-            title="已选参考图"
+            title={t('image.generate.selectedImageRefs')}
             refs={imageRefs}
             onRemove={(id) => setImageRefs((current) => current.filter((entry) => entry.id !== id))}
           />
           <div className="grid gap-2 sm:grid-cols-2">
             <div className="space-y-1">
-              <div className="text-muted-foreground text-xs">Prompt 素材</div>
+              <div className="text-muted-foreground text-xs">{t('image.generate.promptAssets')}</div>
               <div className="flex max-h-28 flex-wrap gap-1 overflow-y-auto">
                 {prompts.data?.items.map((entry) => (
                   <button
@@ -267,19 +272,19 @@ export default function ImageGeneratePage() {
                       )
                     }
                   >
-                    + {entry.name}
+                    {t('image.generate.addAssetRef', { name: entry.name })}
                   </button>
                 ))}
               </div>
             </div>
             <div className="space-y-1">
-              <div className="text-muted-foreground text-xs">参考图</div>
+              <div className="text-muted-foreground text-xs">{t('image.generate.referenceImages')}</div>
               <div className="flex flex-wrap gap-2">
                 {assets.data?.items.slice(0, 8).map((entry) => (
                   <button
                     key={entry.id}
                     type="button"
-                    title={`+ ${entry.name}`}
+                    title={t('image.generate.addAssetRef', { name: entry.name })}
                     className="hover:ring-primary rounded ring-offset-2"
                     onClick={() =>
                       setImageRefs((current) =>
@@ -318,7 +323,7 @@ export default function ImageGeneratePage() {
                   onClick={() => fileInput.current?.click()}
                   disabled={upload.isPending}
                 >
-                  {upload.isPending ? '上传中…' : '上传参考图'}
+                  {upload.isPending ? t('common.uploading') : t('image.generate.uploadReference')}
                 </Button>
               </div>
             </div>
@@ -326,7 +331,7 @@ export default function ImageGeneratePage() {
         </div>
         <div className="flex gap-2">
           <Button type="button" onClick={() => submit.mutate()} disabled={submit.isPending || prompt.trim() === ''}>
-            {submit.isPending ? '提交中…' : '生成'}
+            {submit.isPending ? t('common.submitting') : t('image.generate.generate')}
           </Button>
           <Button
             type="button"
@@ -334,31 +339,31 @@ export default function ImageGeneratePage() {
             onClick={() => resolvePreview.mutate()}
             disabled={resolvePreview.isPending || prompt.trim() === ''}
           >
-            {resolvePreview.isPending ? '解析中…' : '解析预览'}
+            {resolvePreview.isPending ? t('image.generate.resolving') : t('image.generate.resolvePreview')}
           </Button>
         </div>
         {resolved !== null && (
           <div className="bg-muted space-y-1 rounded p-3">
-            <div className="text-muted-foreground text-xs">解析后的 Prompt（不付费）</div>
+            <div className="text-muted-foreground text-xs">{t('image.generate.resolvedPromptLabel')}</div>
             <pre className="text-xs whitespace-pre-wrap">{resolved}</pre>
           </div>
         )}
       </div>
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium">本次输出</h2>
+          <h2 className="text-sm font-medium">{t('image.generate.outputsTitle')}</h2>
           {pending !== null && (
             <Link
               to="/image-generations/$generationId"
               params={{ generationId: pending.id }}
               className="text-xs underline"
             >
-              审计详情
+              {t('image.generate.auditDetail')}
             </Link>
           )}
         </div>
         {pending === null ? (
-          <p className="text-muted-foreground text-sm">提交后输出会显示在这里。</p>
+          <p className="text-muted-foreground text-sm">{t('image.generate.outputsPlaceholder')}</p>
         ) : (
           <OutputGrid generation={pending} />
         )}

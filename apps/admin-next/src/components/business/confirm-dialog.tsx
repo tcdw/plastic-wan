@@ -1,4 +1,5 @@
 import type React from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -41,18 +42,20 @@ export function ConfirmDialog({
   title,
   description,
   confirmText,
-  cancelText = 'Dismiss',
+  cancelText,
   destructive = false,
   pending,
   error,
   onConfirm,
 }: ConfirmDialogProps): React.ReactElement {
-  if (confirmText.trim().length === 0 || cancelText.trim().length === 0) {
+  const { t } = useTranslation();
+  const dismissLabel = cancelText ?? t('common.dismiss');
+  if (confirmText.trim().length === 0 || dismissLabel.trim().length === 0) {
     throw new Error('ConfirmDialog: confirmText and cancelText must be non-empty');
   }
-  if (confirmText === cancelText) {
+  if (confirmText === dismissLabel) {
     throw new Error(
-      `ConfirmDialog: confirmText ("${confirmText}") must differ from the dismiss label ("${cancelText}")`,
+      `ConfirmDialog: confirmText ("${confirmText}") must differ from the dismiss label ("${dismissLabel}")`,
     );
   }
   return (
@@ -64,7 +67,7 @@ export function ConfirmDialog({
         </AlertDialogHeader>
         {error !== null ? <p className="text-destructive break-words text-sm">{error}</p> : null}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={pending}>{cancelText}</AlertDialogCancel>
+          <AlertDialogCancel disabled={pending}>{dismissLabel}</AlertDialogCancel>
           <AlertDialogAction
             variant={destructive ? 'destructive' : 'default'}
             disabled={pending}
@@ -73,7 +76,7 @@ export function ConfirmDialog({
               onConfirm();
             }}
           >
-            {pending ? 'Working…' : confirmText}
+            {pending ? t('common.working') : confirmText}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

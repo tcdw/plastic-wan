@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useId, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { MemoryChatOption } from '@/lib/api';
@@ -36,6 +37,7 @@ export function ChatFilter({
   readonly className?: string;
 }): React.ReactElement {
   const listId = useId();
+  const { t } = useTranslation();
   const chats = useQuery(memoryChatsQuery);
   const items = chats.data?.items ?? [];
   const applied = items.find((chat) => chat.telegram_chat_id === value);
@@ -86,12 +88,12 @@ export function ChatFilter({
     <div className={cn('relative flex items-center gap-1', className)}>
       <Input
         role="combobox"
-        aria-label="Chat"
+        aria-label={t('layout.business.chat')}
         aria-expanded={showList}
         aria-controls={listId}
         aria-autocomplete="list"
         {...(showList && active >= 0 ? { 'aria-activedescendant': `${listId}-${active}` } : {})}
-        placeholder="Chat name or ID"
+        placeholder={t('layout.business.chatNameOrId')}
         className="h-8 w-56"
         value={draft}
         onFocus={() => setOpen(true)}
@@ -112,7 +114,7 @@ export function ChatFilter({
           size="icon-sm"
           variant="ghost"
           onClick={() => apply(undefined)}
-          aria-label="Clear chat filter"
+          aria-label={t('layout.business.clearChatFilter')}
         >
           <X />
         </Button>

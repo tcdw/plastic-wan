@@ -47,6 +47,8 @@ import {
   TTL_MIN_DAYS,
 } from '@/lib/memory-ttl';
 import { memoriesQuery, memoryChatsQuery } from '@/lib/queries';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 
 const MEMORY_STATES = ['active', 'expired', 'long_ttl'] as const;
 
@@ -74,39 +76,45 @@ function parseThreadId(value: string): number | null {
   return Number.isInteger(parsed) && parsed >= 0 && parsed <= 1_000_000 ? parsed : null;
 }
 
-function validateMemoryForm(values: MemoryFormValues, editing: boolean): MemoryFormErrors {
+function validateMemoryForm(values: MemoryFormValues, editing: boolean, t: TFunction): MemoryFormErrors {
   const errors: MemoryFormErrors = {};
   if (!editing && values.chat_id.length === 0) {
-    errors.chat_id = 'Chat is required';
+    errors.chat_id = t('pages.memories.chatRequired');
   }
   if (parseThreadId(values.message_thread_id) === null) {
-    errors.message_thread_id = 'Topic must be an integer between 0 and 1000000';
+    errors.message_thread_id = t('pages.memories.topicInvalid');
   }
   if (values.content.length === 0) {
-    errors.content = 'Content is required';
+    errors.content = t('pages.memories.contentRequired');
   } else if (values.content.length > MEMORY_MAX_CONTENT_LENGTH) {
-    errors.content = `At most ${MEMORY_MAX_CONTENT_LENGTH} characters`;
+    errors.content = t('pages.memories.contentTooLong', { count: MEMORY_MAX_CONTENT_LENGTH });
   }
   if (values.ttl_days.trim().length === 0) {
     if (!editing) {
-      errors.ttl_days = 'TTL in days is required';
+      errors.ttl_days = t('pages.memories.ttlRequired');
     }
   } else if (!isTtlDaysValid(Number(values.ttl_days))) {
-    errors.ttl_days = `TTL must be between ${TTL_MIN_DAYS} and ${TTL_MAX_DAYS} days`;
+    errors.ttl_days = t('pages.memories.ttlInvalid', { min: TTL_MIN_DAYS, max: TTL_MAX_DAYS });
   }
   return errors;
 }
 
 function MemoryStatus({ row }: { readonly row: MemoryEntry }): React.ReactElement {
+  const { t } = useTranslation();
   return (
     <span className="inline-flex flex-wrap items-center gap-1">
-      {row.long_ttl ? <ToneBadge tone="warning">long TTL</ToneBadge> : null}
-      {row.expired ? <ToneBadge tone="neutral">expired</ToneBadge> : <ToneBadge tone="success">active</ToneBadge>}
+      {row.long_ttl ? <ToneBadge tone="warning">{t('pages.memories.longTtl')}</ToneBadge> : null}
+      {row.expired ? (
+        <ToneBadge tone="neutral">{t('pages.memories.expired')}</ToneBadge>
+      ) : (
+        <ToneBadge tone="success">{t('pages.memories.active')}</ToneBadge>
+      )}
     </span>
   );
 }
 
 export default function MemoriesPage(): React.ReactElement {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [state, setState] = useState<string | undefined>(undefined);
   const [chat, setChat] = useState<string | undefined>(undefined);
@@ -140,7 +148,7 @@ export default function MemoriesPage(): React.ReactElement {
       setCreateOpen(false);
       setCreateValues(EMPTY_FORM);
       setCreateErrors({});
-      toast.success('Memory created');
+      toast.success(t('pages.memories.memoryCreated'));
       invalidateMemories();
       // A new memory may have created a conversation, so chat options can change.
       void queryClient.invalidateQueries({ queryKey: ['memory-chats'] });
@@ -161,7 +169,7 @@ export default function MemoriesPage(): React.ReactElement {
       setEditing(null);
       setEditValues(EMPTY_FORM);
       setEditErrors({});
-      toast.success('Memory updated');
+      toast.success(t('pages.memories.memoryUpdated'));
       invalidateMemories();
     },
     onError: () => {
@@ -173,7 +181,7 @@ export default function MemoriesPage(): React.ReactElement {
     mutationFn: deleteMemory,
     onSuccess: () => {
       setDeleting(null);
-      toast.success('Memory deleted');
+      toast.success(t('pages.memories.memoryDeleted'));
       invalidateMemories();
     },
     onError: () => {
@@ -184,33 +192,35 @@ export default function MemoriesPage(): React.ReactElement {
   });
 
   const columns: readonly ColumnSpec<MemoryEntry>[] = [
-    { key: 'id', title: 'ID', render: (row) => <MonoValue value={row.id} /> },
+    { key: 'id', title: t('pages.memories.colId'), render: (row) => <MonoValue value={row.id} /> },
     {
       key: 'chat',
-      title: 'Chat',
+      title: t('pages.memories.colChat'),
       render: (row) => (
         <div className="min-w-0 space-y-0.5">
           <div className="font-medium">{row.chat.title ?? row.chat.telegram_chat_id}</div>
           <div className="text-muted-foreground text-xs">
             {row.chat.telegram_chat_id}
-            {row.chat.message_thread_id === 0 ? '' : ` · topic ${row.chat.message_thread_id}`}
+            {row.chat.message_thread_id === 0
+              ? ''
+              : t('pages.memories.topicSuffix', { topic: row.chat.message_thread_id })}
           </div>
         </div>
       ),
     },
     {
       key: 'content',
-      title: 'Content',
+      title: t('pages.memories.colContent'),
       className: 'max-w-80 min-w-40 whitespace-normal',
       render: (row) => <div className="line-clamp-2 whitespace-pre-wrap">{row.content}</div>,
     },
-    { key: 'created_at', title: 'Created', render: (row) => formatTime(row.created_at) },
-    { key: 'expires_at', title: 'Expires', render: (row) => formatTime(row.expires_at) },
-    { key: 'ttl', title: 'TTL', render: (row) => formatTtl(row.ttl_seconds) },
-    { key: 'status', title: 'Status', render: (row) => <MemoryStatus row={row} /> },
+    { key: 'created_at', title: t('pages.memories.colCreated'), render: (row) => formatTime(row.created_at) },
+    { key: 'expires_at', title: t('pages.memories.colExpires'), render: (row) => formatTime(row.expires_at) },
+    { key: 'ttl', title: t('pages.memories.colTtl'), render: (row) => formatTtl(row.ttl_seconds) },
+    { key: 'status', title: t('pages.memories.colStatus'), render: (row) => <MemoryStatus row={row} /> },
     {
       key: 'actions',
-      title: 'Actions',
+      title: t('pages.memories.colActions'),
       render: (row) => (
         <div className="flex items-center gap-1">
           <Button
@@ -223,10 +233,10 @@ export default function MemoriesPage(): React.ReactElement {
               setEditing(row);
             }}
           >
-            Edit
+            {t('common.edit')}
           </Button>
           <Button type="button" size="sm" variant="destructive" onClick={() => setDeleting(row)}>
-            Delete
+            {t('common.delete')}
           </Button>
         </div>
       ),
@@ -242,22 +252,21 @@ export default function MemoriesPage(): React.ReactElement {
     <div className="space-y-4">
       <Alert>
         <Info className="text-foreground" />
-        <AlertTitle>Agent-managed short-term memory</AlertTitle>
+        <AlertTitle>{t('pages.memories.alertTitle')}</AlertTitle>
         <AlertDescription>
-          The agent saves and deletes notes itself via the <code>add_memory</code> / <code>delete_memory</code>{' '}
-          capabilities (called through <code>execute</code>); notes expire by TTL. Entries whose remaining lifetime
-          exceeds the configured warning threshold are flagged — review them: keep, delete, or promote durable knowledge
-          into <code>agents.md</code>.
+          {t('pages.memories.alertDesc1')} <code>add_memory</code> {t('pages.memories.alertDesc2')}{' '}
+          <code>delete_memory</code> {t('pages.memories.alertDesc3')} <code>execute</code>
+          {t('pages.memories.alertDesc4')} <code>agents.md</code>.
         </AlertDescription>
       </Alert>
 
       <FilterToolbar>
         <Button type="button" onClick={() => setCreateOpen(true)}>
-          New memory
+          {t('pages.memories.newMemory')}
         </Button>
         <ChatFilter value={chat} onChange={setChat} />
         <SelectFilter
-          placeholder="State"
+          placeholder={t('pages.memories.filterState')}
           value={state}
           onChange={setState}
           options={MEMORY_STATES.map((value) => ({ value, label: value }))}
@@ -267,7 +276,9 @@ export default function MemoriesPage(): React.ReactElement {
       <CursorList
         factory={memoriesQuery}
         filters={filters}
-        empty={<div className="text-muted-foreground py-8 text-center text-sm">No memories match these filters.</div>}
+        empty={
+          <div className="text-muted-foreground py-8 text-center text-sm">{t('pages.memories.emptyMemories')}</div>
+        }
         renderItems={(items) => (
           <TableShell columns={columns} data={items} rowKey={(row) => row.id} className="max-w-full overflow-x-auto" />
         )}
@@ -276,20 +287,18 @@ export default function MemoriesPage(): React.ReactElement {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>New memory</DialogTitle>
-            <DialogDescription>
-              Create a note the agent will see in this conversation&apos;s context until its TTL expires.
-            </DialogDescription>
+            <DialogTitle>{t('pages.memories.createTitle')}</DialogTitle>
+            <DialogDescription>{t('pages.memories.createDescription')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="memory-chat">Chat</Label>
+              <Label htmlFor="memory-chat">{t('pages.memories.chatLabel')}</Label>
               <Select
                 {...(createValues.chat_id.length === 0 ? {} : { value: createValues.chat_id })}
                 onValueChange={(value) => setCreateValues((previous) => ({ ...previous, chat_id: value }))}
               >
-                <SelectTrigger id="memory-chat" className="w-full" aria-label="Select a chat">
-                  <SelectValue placeholder="Select a chat" />
+                <SelectTrigger id="memory-chat" className="w-full" aria-label={t('pages.memories.selectChat')}>
+                  <SelectValue placeholder={t('pages.memories.selectChat')} />
                 </SelectTrigger>
                 <SelectContent>
                   {chatOptions.map((option) => (
@@ -299,7 +308,9 @@ export default function MemoriesPage(): React.ReactElement {
                   ))}
                 </SelectContent>
               </Select>
-              {chats.isPending ? <p className="text-muted-foreground text-xs">Loading chat options…</p> : null}
+              {chats.isPending ? (
+                <p className="text-muted-foreground text-xs">{t('pages.memories.loadingChatOptions')}</p>
+              ) : null}
               {chats.isError ? (
                 <p className="text-destructive text-xs break-words">{errorMessage(chats.error)}</p>
               ) : null}
@@ -308,7 +319,7 @@ export default function MemoriesPage(): React.ReactElement {
               ) : null}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="memory-thread">Forum topic (0 = main thread)</Label>
+              <Label htmlFor="memory-thread">{t('pages.memories.threadLabel')}</Label>
               <Input
                 id="memory-thread"
                 type="number"
@@ -325,7 +336,7 @@ export default function MemoriesPage(): React.ReactElement {
               ) : null}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="memory-content">Content</Label>
+              <Label htmlFor="memory-content">{t('pages.memories.contentLabel')}</Label>
               <Textarea
                 id="memory-content"
                 rows={3}
@@ -341,7 +352,7 @@ export default function MemoriesPage(): React.ReactElement {
               ) : null}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="memory-ttl">TTL in days</Label>
+              <Label htmlFor="memory-ttl">{t('pages.memories.ttlLabel')}</Label>
               <Input
                 id="memory-ttl"
                 type="number"
@@ -361,20 +372,20 @@ export default function MemoriesPage(): React.ReactElement {
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" disabled={create.isPending} onClick={() => setCreateOpen(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               type="button"
               disabled={create.isPending}
               onClick={() => {
-                const errors = validateMemoryForm(createValues, false);
+                const errors = validateMemoryForm(createValues, false, t);
                 setCreateErrors(errors);
                 if (Object.keys(errors).length === 0) {
                   create.mutate(createValues);
                 }
               }}
             >
-              {create.isPending ? 'Creating…' : 'Create'}
+              {create.isPending ? t('pages.memories.creating') : t('common.create')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -383,14 +394,12 @@ export default function MemoriesPage(): React.ReactElement {
       <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit memory {editing?.id ?? ''}</DialogTitle>
-            <DialogDescription>
-              Changing the content or TTL takes effect on future sessions. Leaving TTL empty keeps the current expiry.
-            </DialogDescription>
+            <DialogTitle>{t('pages.memories.editTitle', { id: editing?.id ?? '' })}</DialogTitle>
+            <DialogDescription>{t('pages.memories.editDescription')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="edit-content">Content</Label>
+              <Label htmlFor="edit-content">{t('pages.memories.contentLabel')}</Label>
               <Textarea
                 id="edit-content"
                 rows={3}
@@ -406,7 +415,7 @@ export default function MemoriesPage(): React.ReactElement {
               ) : null}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="edit-ttl">Renew TTL in days (leave empty to keep current expiry)</Label>
+              <Label htmlFor="edit-ttl">{t('pages.memories.renewTtlLabel')}</Label>
               <Input
                 id="edit-ttl"
                 type="number"
@@ -426,7 +435,7 @@ export default function MemoriesPage(): React.ReactElement {
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" disabled={update.isPending} onClick={() => setEditing(null)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               type="button"
@@ -435,14 +444,14 @@ export default function MemoriesPage(): React.ReactElement {
                 if (editing === null) {
                   return;
                 }
-                const errors = validateMemoryForm(editValues, true);
+                const errors = validateMemoryForm(editValues, true, t);
                 setEditErrors(errors);
                 if (Object.keys(errors).length === 0) {
                   update.mutate({ id: editing.id, values: editValues });
                 }
               }}
             >
-              {update.isPending ? 'Saving…' : 'Save'}
+              {update.isPending ? t('common.saving') : t('common.save')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -455,9 +464,9 @@ export default function MemoriesPage(): React.ReactElement {
             setDeleting(null);
           }
         }}
-        title="Delete this memory?"
-        description="The agent will no longer see it in future sessions."
-        confirmText="Delete memory"
+        title={t('pages.memories.deleteTitle')}
+        description={t('pages.memories.deleteDescription')}
+        confirmText={t('pages.memories.deleteConfirm')}
         destructive
         pending={remove.isPending}
         error={remove.isError ? errorMessage(remove.error) : null}

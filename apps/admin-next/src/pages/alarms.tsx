@@ -21,16 +21,18 @@ import { type AlarmListItem, cancelAlarm } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 import { formatTime } from '@/lib/format';
 import { alarmsQuery } from '@/lib/queries';
+import { useTranslation } from 'react-i18next';
 
 const ALARM_STATES = ['pending', 'firing', 'fired', 'cancelled'] as const;
 
 function ChatCell({ row }: { readonly row: AlarmListItem }): React.ReactElement {
+  const { t } = useTranslation();
   return (
     <div className="min-w-0 space-y-0.5">
       <div className="font-medium">{row.chat.title ?? row.chat.telegram_chat_id}</div>
       <div className="text-muted-foreground text-xs">
         {row.chat.telegram_chat_id}
-        {row.chat.message_thread_id === '0' ? '' : ` · topic ${row.chat.message_thread_id}`}
+        {row.chat.message_thread_id === '0' ? '' : t('pages.alarms.topicSuffix', { topic: row.chat.message_thread_id })}
       </div>
     </div>
   );
@@ -46,42 +48,47 @@ function TargetCell({ row }: { readonly row: AlarmListItem }): React.ReactElemen
 }
 
 function InvocationLink({ id }: { readonly id: string }): React.ReactElement {
+  const { t } = useTranslation();
   return (
     <Link
       to="/invocations/$invocationId"
       params={{ invocationId: id }}
       className="font-mono text-xs break-all underline-offset-4 hover:underline"
     >
-      Tool session {id}
+      {t('pages.alarms.toolSession', { id })}
     </Link>
   );
 }
 
 function AlarmDetails({ row }: { readonly row: AlarmListItem }): React.ReactElement {
+  const { t } = useTranslation();
   const createdBy = row.created_by_invocation_id;
-  const fired = `${formatTime(row.fired_at)}${row.invocation_outcome === null ? '' : ` · outcome ${row.invocation_outcome}`}${row.completion_reason === null ? '' : ` (${row.completion_reason})`}`;
-  const cancelled = `${formatTime(row.cancelled_at)}${row.cancelled_by === null ? '' : ` · by ${row.cancelled_by}`}${row.cancel_reason === null ? '' : ` · reason ${row.cancel_reason}`}${row.admin_cancelled ? ' · admin-cancelled' : ''}`;
+  const fired = `${formatTime(row.fired_at)}${row.invocation_outcome === null ? '' : t('pages.alarms.outcomeSuffix', { outcome: row.invocation_outcome })}${row.completion_reason === null ? '' : t('pages.alarms.firedReasonSuffix', { reason: row.completion_reason })}`;
+  const cancelled = `${formatTime(row.cancelled_at)}${row.cancelled_by === null ? '' : t('pages.alarms.bySuffix', { by: row.cancelled_by })}${row.cancel_reason === null ? '' : t('pages.alarms.reasonSuffix', { reason: row.cancel_reason })}${row.admin_cancelled ? t('pages.alarms.adminCancelledSuffix') : ''}`;
   return (
     <KvList
       items={[
-        { label: 'Alarm ID', value: <MonoValue value={row.id} /> },
-        { label: 'Conversation ID', value: <MonoValue value={row.conversation_id} /> },
-        { label: 'Scheduled (UTC)', value: <MonoValue value={row.scheduled_at} /> },
+        { label: t('pages.alarms.labelAlarmId'), value: <MonoValue value={row.id} /> },
+        { label: t('pages.alarms.labelConversationId'), value: <MonoValue value={row.conversation_id} /> },
+        { label: t('pages.alarms.labelScheduledUtc'), value: <MonoValue value={row.scheduled_at} /> },
         {
-          label: 'Telegram chat / thread',
-          value: `${row.chat.telegram_chat_id}${row.chat.message_thread_id === '0' ? '' : ` · thread ${row.chat.message_thread_id}`}`,
+          label: t('pages.alarms.labelTelegramChat'),
+          value: `${row.chat.telegram_chat_id}${row.chat.message_thread_id === '0' ? '' : t('pages.alarms.threadSuffix', { thread: row.chat.message_thread_id })}`,
         },
-        { label: 'Target user ID', value: <MonoValue value={row.target_user_id} /> },
-        { label: 'Summary', value: <span className="text-wrap whitespace-pre-wrap">{row.summary}</span> },
+        { label: t('pages.alarms.labelTargetUserId'), value: <MonoValue value={row.target_user_id} /> },
         {
-          label: 'Created',
-          value: `${formatTime(row.created_at)}${createdBy === null ? '' : ` · created by Tool session ${createdBy}`}`,
+          label: t('pages.alarms.labelSummary'),
+          value: <span className="text-wrap whitespace-pre-wrap">{row.summary}</span>,
         },
-        { label: 'Fired', value: fired },
-        { label: 'Cancelled', value: cancelled },
-        { label: 'Updated', value: formatTime(row.updated_at) },
         {
-          label: 'Invocation',
+          label: t('pages.alarms.labelCreated'),
+          value: `${formatTime(row.created_at)}${createdBy === null ? '' : t('pages.alarms.createdBySuffix', { id: createdBy })}`,
+        },
+        { label: t('pages.alarms.labelFired'), value: fired },
+        { label: t('pages.alarms.labelCancelled'), value: cancelled },
+        { label: t('pages.alarms.labelUpdated'), value: formatTime(row.updated_at) },
+        {
+          label: t('pages.alarms.labelInvocation'),
           value: row.invocation_id === null ? <TextValue value={null} /> : <InvocationLink id={row.invocation_id} />,
         },
       ]}
@@ -90,6 +97,7 @@ function AlarmDetails({ row }: { readonly row: AlarmListItem }): React.ReactElem
 }
 
 export default function AlarmsPage(): React.ReactElement {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [state, setState] = useState<string | undefined>(undefined);
   const [chat, setChat] = useState<string | undefined>(undefined);
@@ -101,7 +109,7 @@ export default function AlarmsPage(): React.ReactElement {
     mutationFn: cancelAlarm,
     onSuccess: () => {
       setCancelling(null);
-      toast.success('Alarm cancelled');
+      toast.success(t('pages.alarms.alarmCancelled'));
       void queryClient.invalidateQueries({ queryKey: ['alarms'] });
     },
     onError: () => {
@@ -113,19 +121,19 @@ export default function AlarmsPage(): React.ReactElement {
   });
 
   const columns: readonly ColumnSpec<AlarmListItem>[] = [
-    { key: 'state', title: 'Status', render: (row) => <StateBadge state={row.state} /> },
-    { key: 'scheduled_at', title: 'Scheduled', render: (row) => formatTime(row.scheduled_at) },
-    { key: 'chat', title: 'Chat/Topic', render: (row) => <ChatCell row={row} /> },
-    { key: 'target', title: 'Target user', render: (row) => <TargetCell row={row} /> },
+    { key: 'state', title: t('pages.alarms.colStatus'), render: (row) => <StateBadge state={row.state} /> },
+    { key: 'scheduled_at', title: t('pages.alarms.colScheduled'), render: (row) => formatTime(row.scheduled_at) },
+    { key: 'chat', title: t('pages.alarms.colChat'), render: (row) => <ChatCell row={row} /> },
+    { key: 'target', title: t('pages.alarms.colTargetUser'), render: (row) => <TargetCell row={row} /> },
     {
       key: 'summary',
-      title: 'Summary',
+      title: t('pages.alarms.colSummary'),
       className: 'max-w-72 min-w-40 whitespace-normal',
       render: (row) => <div className="line-clamp-1">{row.summary}</div>,
     },
     {
       key: 'invocation',
-      title: 'Invocation',
+      title: t('pages.alarms.colInvocation'),
       render: (row) => {
         const id = row.invocation_id ?? row.created_by_invocation_id;
         return id === null ? <span className="text-muted-foreground">—</span> : <InvocationLink id={id} />;
@@ -133,11 +141,11 @@ export default function AlarmsPage(): React.ReactElement {
     },
     {
       key: 'action',
-      title: 'Action',
+      title: t('pages.alarms.colAction'),
       render: (row) =>
         row.state === 'pending' ? (
           <Button type="button" size="sm" variant="destructive" onClick={() => setCancelling(row)}>
-            Cancel
+            {t('common.cancel')}
           </Button>
         ) : (
           <span className="text-muted-foreground">—</span>
@@ -149,14 +157,14 @@ export default function AlarmsPage(): React.ReactElement {
     <div className="space-y-4">
       <FilterToolbar>
         <SelectFilter
-          placeholder="State"
+          placeholder={t('pages.alarms.filterState')}
           value={state}
           onChange={setState}
           options={ALARM_STATES.map((value) => ({ value, label: value }))}
         />
         <ChatFilter value={chat} onChange={setChat} />
         <TextFilter
-          placeholder="Target user ID"
+          placeholder={t('pages.alarms.filterTargetUserId')}
           value={target}
           onCommit={setTarget}
           onClear={() => setTarget(undefined)}
@@ -165,7 +173,7 @@ export default function AlarmsPage(): React.ReactElement {
       <CursorList
         factory={alarmsQuery}
         filters={filters}
-        empty={<div className="text-muted-foreground py-8 text-center text-sm">No alarms match these filters.</div>}
+        empty={<div className="text-muted-foreground py-8 text-center text-sm">{t('pages.alarms.emptyAlarms')}</div>}
         renderItems={(items) => (
           <TableShell
             columns={columns}
@@ -183,9 +191,9 @@ export default function AlarmsPage(): React.ReactElement {
             setCancelling(null);
           }
         }}
-        title="Cancel this pending alarm?"
-        description="It will remain visible in audit history."
-        confirmText="Cancel alarm"
+        title={t('pages.alarms.cancelTitle')}
+        description={t('pages.alarms.cancelDescription')}
+        confirmText={t('pages.alarms.cancelConfirm')}
         destructive
         pending={cancel.isPending}
         error={cancel.isError ? errorMessage(cancel.error) : null}

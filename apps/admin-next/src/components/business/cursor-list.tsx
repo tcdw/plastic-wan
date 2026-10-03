@@ -5,6 +5,7 @@ import {
   useInfiniteQuery,
 } from '@tanstack/react-query';
 import type React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
@@ -64,12 +65,13 @@ function CursorListSkeleton({ rows }: { readonly rows: number }): React.ReactEle
 }
 
 function CursorListError({ error, title }: { readonly error: unknown; readonly title: string }): React.ReactElement {
+  const { t } = useTranslation();
   const message =
     error instanceof ApiError
       ? `${error.code}: ${error.message}`
       : error instanceof Error
         ? error.message
-        : 'Admin request failed';
+        : t('invocations.business.cursorList.adminRequestFailed');
   return (
     <Alert variant="destructive">
       <AlertTitle>{title}</AlertTitle>
@@ -83,11 +85,12 @@ export function CursorList<T, TQueryKey extends QueryKey = QueryKey>({
   filters,
   renderItems,
   empty,
-  errorTitle = 'Request failed',
+  errorTitle,
   skeletonRows = 6,
-  loadMoreLabel = 'Load more',
+  loadMoreLabel,
   className,
 }: CursorListProps<T, TQueryKey>): React.ReactNode {
+  const { t } = useTranslation();
   const query = useInfiniteQuery(factory(filters));
   const items = flatPages(query.data);
 
@@ -95,15 +98,15 @@ export function CursorList<T, TQueryKey extends QueryKey = QueryKey>({
     return <CursorListSkeleton rows={skeletonRows} />;
   }
   if (query.isError) {
-    return <CursorListError error={query.error} title={errorTitle} />;
+    return <CursorListError error={query.error} title={errorTitle ?? t('common.requestFailed')} />;
   }
   if (items.length === 0) {
     return (
       empty ?? (
         <Empty>
           <EmptyHeader>
-            <EmptyTitle>No records</EmptyTitle>
-            <EmptyDescription>No records match the current filters.</EmptyDescription>
+            <EmptyTitle>{t('common.noRecords')}</EmptyTitle>
+            <EmptyDescription>{t('invocations.business.cursorList.noRecordsDescription')}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       )
@@ -121,7 +124,9 @@ export function CursorList<T, TQueryKey extends QueryKey = QueryKey>({
             disabled={query.isFetchingNextPage}
             onClick={() => void query.fetchNextPage()}
           >
-            {query.isFetchingNextPage ? 'Loading more…' : loadMoreLabel}
+            {query.isFetchingNextPage
+              ? t('invocations.business.cursorList.loadingMore')
+              : (loadMoreLabel ?? t('invocations.business.cursorList.loadMore'))}
           </Button>
         </div>
       ) : null}

@@ -35,6 +35,10 @@ Admin Panel 与 `serve` 同进程启动，用于本地审计和受控管理；�
 - **Settings**：对手改配置使用 **Apply config file**，并查看 Saved 与 Running 状态及 `restart_required`。
 - **Developer**：按需记录模型调用的调试报文，或在确认后清除已有报文。
 
+## 界面语言
+
+界面支持英文与简体中文。顶栏右侧的语言切换按钮在两种语言间切换，立即生效并写入浏览器 `localStorage`（`admin-language`）；未手动选择时跟随浏览器语言（`zh` 开头解析为中文，否则英文）。技术名词（Invocation、Context、Prompt、Token 等）在中文界面中保留英文原文；后端返回的错误消息始终按服务端原文显示（错误码 + 消息）。
+
 ## 开发者调试报文
 
 Developer 页的「记录原始请求报文以便调试」开关写回 `config.jsonc`，保存成功后立即应用到后续模型调用：

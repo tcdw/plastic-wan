@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ConfirmDialog } from '@/components/business';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,6 +12,7 @@ import { developerQuery } from '@/lib/queries';
 import { useProviderWrite } from '@/lib/use-provider-write';
 
 export default function DeveloperPage(): React.ReactElement {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const settings = useQuery(developerQuery);
   const write = useProviderWrite();
@@ -40,12 +42,12 @@ export default function DeveloperPage(): React.ReactElement {
     <div className="max-w-lg space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle>调试报文</CardTitle>
-          <CardDescription>仅在需要调查模型调用时开启。</CardDescription>
+          <CardTitle>{t('models.developer.debugTitle')}</CardTitle>
+          <CardDescription>{t('models.developer.debugDescription')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {settings.isPending ? (
-            <p className="text-muted-foreground text-sm">Loading…</p>
+            <p className="text-muted-foreground text-sm">{t('common.loading')}</p>
           ) : settings.isError || current === undefined ? (
             <p role="alert" className="text-destructive text-sm break-words">
               {errorMessage(settings.error)}
@@ -54,9 +56,9 @@ export default function DeveloperPage(): React.ReactElement {
             <>
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="record-model-payloads">记录原始请求报文以便调试</Label>
+                  <Label htmlFor="record-model-payloads">{t('models.developer.recordLabel')}</Label>
                   <p id="payload-description" className="text-muted-foreground text-sm">
-                    开启后保存模型调用的原始请求与响应快照，以便在 Invocation 详情中排查问题。可能显著增加数据库占用。
+                    {t('models.developer.recordDescription')}
                   </p>
                 </div>
                 <Switch
@@ -67,13 +69,12 @@ export default function DeveloperPage(): React.ReactElement {
                   onCheckedChange={(enabled) => update.mutate({ enabled, revision: current.revision })}
                 />
               </div>
-              <p className="text-muted-foreground text-xs">
-                默认关闭。修改后对新的模型调用生效；关闭不会清除历史报文。
-              </p>
+              <p className="text-muted-foreground text-xs">{t('models.developer.recordHint')}</p>
               {current.record_model_payloads !== current.active_record_model_payloads ? (
                 <p role="status" className="text-warning text-sm">
-                  文件设置与运行状态不同。当前运行状态：{current.active_record_model_payloads ? '开启' : '关闭'}。 请在
-                  Settings 中应用配置文件。
+                  {t('models.developer.stateMismatch', {
+                    status: current.active_record_model_payloads ? t('common.on') : t('common.off'),
+                  })}
                 </p>
               ) : null}
               {update.isError ? (
@@ -87,11 +88,8 @@ export default function DeveloperPage(): React.ReactElement {
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>历史报文</CardTitle>
-          <CardDescription>
-            清除已保存的模型请求与响应快照，保留 Invocation、调用记录、Token、费用、状态和错误审计。 SQLite
-            会复用释放的空间，数据库文件不一定立即缩小。
-          </CardDescription>
+          <CardTitle>{t('models.developer.historyTitle')}</CardTitle>
+          <CardDescription>{t('models.developer.historyDescription')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <Button
@@ -103,11 +101,11 @@ export default function DeveloperPage(): React.ReactElement {
               setConfirmClear(true);
             }}
           >
-            清除此前记录的原始请求报文
+            {t('models.developer.clearButton')}
           </Button>
           {clear.isSuccess ? (
             <p role="status" className="text-success text-sm">
-              已清除 {clear.data.cleared_model_calls} 条模型调用的调试报文。
+              {t('models.developer.cleared', { count: clear.data.cleared_model_calls })}
             </p>
           ) : null}
         </CardContent>
@@ -119,10 +117,10 @@ export default function DeveloperPage(): React.ReactElement {
             setConfirmClear(open);
           }
         }}
-        title="清除此前记录的原始请求报文？"
-        description="此操作不可撤销，仅清除模型请求与响应快照，保留其他审计数据。开启记录时，新报文仍会继续保存。不会压缩数据库文件。"
-        confirmText="确认清除"
-        cancelText="取消"
+        title={t('models.developer.confirmTitle')}
+        description={t('models.developer.confirmDescription')}
+        confirmText={t('models.developer.confirmClear')}
+        cancelText={t('common.cancel')}
         destructive
         pending={clear.isPending}
         error={clear.isError ? errorMessage(clear.error) : null}

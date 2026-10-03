@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import type React from 'react';
 import { Fragment, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
@@ -48,9 +49,11 @@ export function TableShell<T>({
   rowKey,
   expandedRender,
   isExpandable,
-  emptyText = 'No records',
+  emptyText,
   className,
 }: TableShellProps<T>): React.ReactElement {
+  const { t } = useTranslation();
+  const empty = emptyText ?? t('common.noRecords');
   const [expandedKeys, setExpandedKeys] = useState<ReadonlySet<string>>(new Set());
 
   const toggleRow = (key: string): void => {
@@ -73,7 +76,7 @@ export function TableShell<T>({
       <Table>
         <TableHeader>
           <TableRow>
-            {hasExpand ? <TableHead className="w-9" aria-label="Row details" /> : null}
+            {hasExpand ? <TableHead className="w-9" aria-label={t('layout.business.rowDetails')} /> : null}
             {columns.map((column) => (
               <TableHead
                 key={column.key}
@@ -89,7 +92,7 @@ export function TableShell<T>({
           {data.length === 0 ? (
             <TableRow>
               <TableCell colSpan={columnCount} className="text-muted-foreground h-16 text-center">
-                {emptyText}
+                {empty}
               </TableCell>
             </TableRow>
           ) : (
@@ -108,7 +111,7 @@ export function TableShell<T>({
                             size="icon-xs"
                             variant="ghost"
                             aria-expanded={open}
-                            aria-label="Toggle row details"
+                            aria-label={t('layout.business.toggleRowDetails')}
                             onClick={() => toggleRow(key)}
                           >
                             {open ? <ChevronDown /> : <ChevronRight />}

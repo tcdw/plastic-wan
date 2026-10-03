@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { type ColumnSpec, ConfirmDialog, TableShell } from '@/components/business';
 import { Button } from '@/components/ui/button';
@@ -22,12 +23,13 @@ import { formatTime } from '@/lib/format';
 /** Asset management: prompt templates and reference images, with upload and archive. */
 
 function PromptEditor({ onDone }: { readonly onDone: () => void }) {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [body, setBody] = useState('');
   const create = useMutation({
     mutationFn: () => createImagePrompt({ name, body }),
     onSuccess: () => {
-      toast.success('素材已创建');
+      toast.success(t('image.assets.createdToast'));
       onDone();
     },
     onError: (error) => {
@@ -36,12 +38,16 @@ function PromptEditor({ onDone }: { readonly onDone: () => void }) {
   });
   return (
     <div className="space-y-2 rounded border p-3">
-      <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="素材名称" />
+      <Input
+        value={name}
+        onChange={(event) => setName(event.target.value)}
+        placeholder={t('image.assets.namePlaceholder')}
+      />
       <Textarea
         value={body}
         onChange={(event) => setBody(event.target.value)}
         rows={4}
-        placeholder="素材正文（不支持 {{ 嵌套）"
+        placeholder={t('image.assets.bodyPlaceholder')}
       />
       <div className="flex gap-2">
         <Button
@@ -49,10 +55,10 @@ function PromptEditor({ onDone }: { readonly onDone: () => void }) {
           onClick={() => create.mutate()}
           disabled={create.isPending || name.trim() === '' || body.trim() === ''}
         >
-          创建
+          {t('common.create')}
         </Button>
         <Button size="sm" variant="outline" onClick={onDone}>
-          取消
+          {t('common.cancel')}
         </Button>
       </div>
     </div>
@@ -60,6 +66,7 @@ function PromptEditor({ onDone }: { readonly onDone: () => void }) {
 }
 
 export default function ImageAssetsPage() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<'prompts' | 'images'>('prompts');
   const [creating, setCreating] = useState(false);
@@ -77,7 +84,7 @@ export default function ImageAssetsPage() {
       return archiving.kind === 'prompt' ? archiveImagePrompt(archiving.id) : archiveImageAsset(archiving.id);
     },
     onSuccess: () => {
-      toast.success('已归档');
+      toast.success(t('image.assets.archivedToast'));
       setArchiving(null);
       queryClient.invalidateQueries({ queryKey: ['image-assets'] });
     },
@@ -99,7 +106,7 @@ export default function ImageAssetsPage() {
       return uploadAsset({ name: file.name, base64, mime });
     },
     onSuccess: () => {
-      toast.success('已上传');
+      toast.success(t('image.assets.uploadedToast'));
       queryClient.invalidateQueries({ queryKey: ['image-assets'] });
     },
     onError: (error) => {
@@ -108,27 +115,35 @@ export default function ImageAssetsPage() {
   });
 
   const promptColumns: readonly ColumnSpec<ImagePromptAsset>[] = [
-    { key: 'name', title: '名称', render: (row) => <span className="font-medium">{row.name}</span> },
-    { key: 'category', title: '分类', render: (row) => row.category },
-    { key: 'updated', title: '更新时间', render: (row) => formatTime(row.updated_at) },
+    {
+      key: 'name',
+      title: t('image.assets.columnName'),
+      render: (row) => <span className="font-medium">{row.name}</span>,
+    },
+    { key: 'category', title: t('image.assets.columnCategory'), render: (row) => row.category },
+    { key: 'updated', title: t('image.assets.columnUpdated'), render: (row) => formatTime(row.updated_at) },
   ];
   const assetColumns: readonly ColumnSpec<ImageAssetInfo>[] = [
     {
       key: 'preview',
-      title: '预览',
+      title: t('image.assets.columnPreview'),
       render: (row) => (
         <img src={imageUrl(row.id)} alt={row.name} className="bg-muted h-10 w-10 rounded object-cover" />
       ),
     },
-    { key: 'name', title: '名称', render: (row) => <span className="font-medium">{row.name}</span> },
-    { key: 'source', title: '来源', render: (row) => row.source },
-    { key: 'created', title: '创建时间', render: (row) => formatTime(row.created_at) },
+    {
+      key: 'name',
+      title: t('image.assets.columnName'),
+      render: (row) => <span className="font-medium">{row.name}</span>,
+    },
+    { key: 'source', title: t('image.assets.columnSource'), render: (row) => row.source },
+    { key: 'created', title: t('image.assets.columnCreated'), render: (row) => formatTime(row.created_at) },
   ];
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">生图资产</h1>
+        <h1 className="text-xl font-semibold">{t('image.assets.title')}</h1>
         <div className="flex gap-2">
           {tab === 'images' && (
             <>
@@ -151,13 +166,13 @@ export default function ImageAssetsPage() {
                 onClick={() => fileInput.current?.click()}
                 disabled={upload.isPending}
               >
-                {upload.isPending ? '上传中…' : '上传图片'}
+                {upload.isPending ? t('common.uploading') : t('image.assets.uploadImage')}
               </Button>
             </>
           )}
           {tab === 'prompts' && (
             <Button size="sm" variant="outline" onClick={() => setCreating(true)}>
-              新建素材
+              {t('image.assets.newAsset')}
             </Button>
           )}
           <div className="bg-muted flex rounded p-0.5 text-sm">
@@ -166,14 +181,14 @@ export default function ImageAssetsPage() {
               className={`rounded px-3 py-1 ${tab === 'prompts' ? 'bg-background font-medium' : ''}`}
               onClick={() => setTab('prompts')}
             >
-              Prompt 素材
+              {t('image.assets.tabPrompts')}
             </button>
             <button
               type="button"
               className={`rounded px-3 py-1 ${tab === 'images' ? 'bg-background font-medium' : ''}`}
               onClick={() => setTab('images')}
             >
-              图片
+              {t('image.assets.tabImages')}
             </button>
           </div>
         </div>
@@ -193,14 +208,14 @@ export default function ImageAssetsPage() {
           columns={promptColumns}
           data={prompts.data?.items ?? []}
           rowKey={(row) => row.id}
-          emptyText={prompts.isLoading ? '加载中…' : '暂无 Prompt 素材'}
+          emptyText={prompts.isLoading ? t('common.loading') : t('image.assets.emptyPrompts')}
           expandedRender={(row) => (
             <Button
               size="sm"
               variant="ghost"
               onClick={() => setArchiving({ kind: 'prompt', id: row.id, name: row.name })}
             >
-              归档
+              {t('image.assets.archive')}
             </Button>
           )}
         />
@@ -209,14 +224,14 @@ export default function ImageAssetsPage() {
           columns={assetColumns}
           data={assets.data?.items ?? []}
           rowKey={(row) => row.id}
-          emptyText={assets.isLoading ? '加载中…' : '暂无图片'}
+          emptyText={assets.isLoading ? t('common.loading') : t('image.assets.emptyImages')}
           expandedRender={(row) => (
             <Button
               size="sm"
               variant="ghost"
               onClick={() => setArchiving({ kind: 'image', id: row.id, name: row.name })}
             >
-              归档
+              {t('image.assets.archive')}
             </Button>
           )}
         />
@@ -229,9 +244,9 @@ export default function ImageAssetsPage() {
             setArchiving(null);
           }
         }}
-        title={archiving === null ? '' : `归档 ${archiving.name}`}
-        description="归档后不再出现在选择列表；已引用它的历史生成不受影响。"
-        confirmText="归档"
+        title={archiving === null ? '' : t('image.assets.archiveConfirmTitle', { name: archiving.name })}
+        description={t('image.assets.archiveConfirmDescription')}
+        confirmText={t('image.assets.archive')}
         pending={archive.isPending}
         error={archive.isError ? errorMessage(archive.error) : null}
         onConfirm={() => archive.mutate()}

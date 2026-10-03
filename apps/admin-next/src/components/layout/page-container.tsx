@@ -1,4 +1,5 @@
 import type React from 'react';
+import { useTranslation } from 'react-i18next';
 import type { InfobarContent } from '@/components/ui/infobar';
 import { Heading } from '../ui/heading';
 
@@ -36,11 +37,13 @@ export default function PageContainer({
   infoContent?: InfobarContent;
   pageHeaderAction?: React.ReactNode;
 }) {
+  const { t } = useTranslation();
+
   if (!access) {
     return (
       <div className="flex flex-1 items-center justify-center p-4 md:p-6">
         {accessFallback ?? (
-          <div className="text-muted-foreground text-center text-lg">You do not have access to this page.</div>
+          <div className="text-muted-foreground text-center text-lg">{t('layout.business.noAccess')}</div>
         )}
       </div>
     );

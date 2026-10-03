@@ -1,0 +1,58 @@
+/**
+ * Layout chrome and shared business components. English is the source catalog;
+ * `zh-CN/layout.ts` mirrors this structure key for key.
+ */
+export const layout = {
+  // Referenced flat as t("layout.switchLanguage") by themes/language-toggle.tsx.
+  switchLanguage: 'Switch language',
+  nav: {
+    observe: 'Observe',
+    manage: 'Manage',
+    account: 'Account',
+    overview: 'Overview',
+    toolSessions: 'Tool sessions',
+    contexts: 'Contexts',
+    messages: 'Messages',
+    botStickerSets: 'Bot sticker sets',
+    imageGenerate: 'Image generation',
+    imageGenerations: 'Image generations',
+    alarms: 'Alarms',
+    memories: 'Memories',
+    botAdmins: 'Bot admins',
+    models: 'Models',
+    imageSettings: 'Image settings',
+    chats: 'Chats',
+    developer: 'Developer',
+    settings: 'Settings',
+  },
+  theme: {
+    toggleTheme: 'Toggle theme: {{mode}}',
+    light: 'Light',
+    dark: 'Dark',
+    system: 'System',
+    tooltip: 'Theme: {{mode}}',
+  },
+  business: {
+    rowDetails: 'Row details',
+    toggleRowDetails: 'Toggle row details',
+    applyFilter: 'Apply filter',
+    clearFilter: 'Clear filter',
+    all: 'All',
+    chat: 'Chat',
+    chatNameOrId: 'Chat name or ID',
+    clearChatFilter: 'Clear chat filter',
+    tree: 'Tree',
+    text: 'Text',
+    chars: '{{n}} chars',
+    payloadSummary: 'Payload ({{n}} chars) — click to expand',
+    noAccess: 'You do not have access to this page.',
+  },
+  misc: {
+    admin: 'Admin',
+    signOut: 'Sign out',
+    infobar: 'Infobar',
+    infobarMobileDescription: 'Displays the mobile infobar.',
+    closeInfoPanel: 'Close info panel',
+    toggleInfobar: 'Toggle Infobar',
+  },
+};

@@ -813,7 +813,9 @@ export function seedAdminFixture(store: SqliteStore): AdminSeedResult {
       conversationId: T.conversation,
       content: 'Alice prefers short replies.',
       createdAt: '2026-09-10T08:00:12.000Z',
-      expiresAt: '2026-10-01T08:00:12.000Z',
+      // Must stay active regardless of when the fixture runs: a fixed date
+      // silently aged into "expired" and broke the state=expired filter E2E.
+      expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
       updatedAt: '2026-09-10T08:00:12.000Z',
     })
     .run();

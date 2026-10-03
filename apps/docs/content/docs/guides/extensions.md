@@ -7,6 +7,8 @@ description: 区分只读 System Skills、内置 Agent Plugin 和配置的 MCP T
 
 这三类扩展都能让 Agent 获得额外能力，但来源、发现方式和安全边界不同。当前发行版内置 Plugin 包含 `web_fetch` 与 Alarm；不要把本页当成插件市场或第三方扩展承诺。
 
+图片生成见[生成和发送图片](images.md)。[语音发送](voice.md)不是 Plugin、MCP 或独立 Skill，而是 `send` 原语的 `kind: "voice"`：配置 `voice` 后，在同一次调用中先合成 MP3，再通过既有发送屏障、限流和审计交付 Telegram。
+
 ## System Skills：只读操作说明
 
 System Skill 是随 Plastic Wan 发布的只读 Markdown 文档包。System prompt 只包含 Skill 索引，模型需要先用 `read` 读取 `system:///skills/<name>/SKILL.md`，再按文档使用 `execute` 调用内部能力。

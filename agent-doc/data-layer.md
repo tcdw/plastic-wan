@@ -18,6 +18,8 @@ Plastic Wan 使用单个 SQLite 数据库保存消息、调度状态、能力索
 
 迁移 `021` 删除旧 `internal_contexts` 旁路观察，不向 canonical history 回填，也不删任务、回执或正常审计。工具结果只随 `context_messages` 保留；本次移除旧提示词也会改变稳定 prompt hash，升级后首次打开 Conversation 时仍按既有规则重建 Context，不为旧外挂保留兼容通道。迁移 `022` 为既有回执回填其所属 Invocation 的 Bucket，并把唯一性从 Invocation 转为非空 `bucket_id`；因此同一 Invocation 可保留多个 receipt。
 
+迁移 `026_voice_send_kind.sql` 沿用 `025` 的重建模式，仅重建 `telegram_sends`，使 `kind` 的 CHECK 包含 `voice`；不新增表。语音合成结果不进入 SQLite 或文件存储，只有既有 Tool Call 与发送审计。
+
 新增迁移时：
 
 1. 创建下一个连续编号文件。
@@ -120,6 +122,8 @@ Alarm 是 `plugin_id = 'alarm'` 的任务投影。`long_tasks.created_by_user_id
 Developer 清除端点按主键范围分批把 `model_calls.request_json` / `response_json` 置为 `NULL`，不删除行、不改变关联或 retention，也不触碰 `telegram_sends` 的同名字段。两列本来就可空，无需新增迁移；释放空间供 SQLite 复用，不保证文件立即缩小，不执行 `VACUUM`，不修改旧备份。
 
 `side_effect_started` 和 `outcome_unknown` 用于阻止不可逆 Tool 的盲目重试。审计记录应保留稳定错误码；不要依赖解析自由文本错误。
+
+语音成功发送后，`telegram_sends.kind = 'voice'`；Bot 的 `message_revisions.kind = 'voice'`，`caption` 保存 `🎙️ <text>`，不新增媒体行。合成失败仅在 `tool_calls` 记录稳定拒绝码，不写 `telegram_sends`；Provider 响应体和密钥不保存、不记录到日志。音频不持久化，因此没有额外音频保留或备份对象。
 
 ### 媒体与 Sticker 缓存
 

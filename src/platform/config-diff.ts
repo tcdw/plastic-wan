@@ -58,6 +58,7 @@ const HOT_PATHS: ReadonlySet<string> = new Set([
   'vision.model',
   'vision.max_output_tokens',
   'image',
+  'voice',
 ]);
 
 /**
@@ -66,9 +67,10 @@ const HOT_PATHS: ReadonlySet<string> = new Set([
  * per-model paths, which are built dynamically — because a reload rebuilds the
  * model registry and publishes it with the configuration. The image section is
  * hot as a whole for the same reason: a reload re-resolves its SecretRefs and
- * republishes the image snapshot atomically.
+ * republishes the image snapshot atomically. The voice section is read from the
+ * active configuration by every invocation, so it is hot as a whole too.
  */
-const HOT_PREFIXES: readonly string[] = ['agent.rate_limits.', 'providers.', 'image.'];
+const HOT_PREFIXES: readonly string[] = ['agent.rate_limits.', 'providers.', 'image.', 'voice.'];
 
 /**
  * `serve` reads these only through `backup` and the pre-migration backup, so

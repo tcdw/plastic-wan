@@ -13,6 +13,8 @@
 
 数据层使用 `better-sqlite3`（原生模块，随 `pnpm install` 安装）。官方为 Node LTS 提供预编译二进制；没有匹配的预编译包时会回退到本地源码编译，此时需要 `python3`、`make` 与 C++ 工具链（Docker 镜像已在 builder 阶段预置）。
 
+可选语音依赖：配置 `voice` 时，服务需要能访问 `https://api.fish.audio/v1/tts`，并持有 Fish Audio API key 与声音模型 ID。每次 `send kind:voice` 同步请求合成（45 秒超时、MP3 最大 8 MiB），再经正常发送边界交付 Telegram。没有独立语音启动日志或 doctor 探针；失败看 `tool_calls` 的 `voice_*` / `aborted` 错误码，合成失败不会产生 `telegram_sends`，模型应改用文本。不要为排错记录 Provider 响应体或密钥。配置与热应用见 [configuration.md](configuration.md#voice-语音发送)。
+
 macOS（Homebrew）：
 
 ```bash

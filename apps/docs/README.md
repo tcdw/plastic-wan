@@ -26,6 +26,7 @@ Markdown、`llms.txt`、`llms-full.txt` 只有生产构建能完整验证，不�
 - 安全下载示例唯一源：`examples/`。完整配置与正文 JSONC 片段由真实 `loadConfig` 做离线校验，不解析 SecretRef 或使用真实密钥。
 - `scripts/docs-prepare.ts` 从当前 `ConfigSchema` 生成 `reference/fields.md` 和 `public/config.schema.json`，复制白名单示例，并生成 `public/build-info.json`。这些文件被 Git 忽略，不手改、不另存第二份 Schema。生成页关闭编辑链接与 Git 更新时间：2.0.22 的默认组件不识别这些 frontmatter 开关，主题以两个小包装落实，`docs:verify` 验证生成页隐藏且手写页仍有编辑链接。
 - Schema 字段表只描述类型与显式约束，不推导运行时默认值。字段、权限、热更新、迁移、用户可见行为改变时，同一变更更新相关手写指南和测试。
+- 可选媒体生成指南分别维护在 `content/docs/guides/images.md` 与 `voice.md`，并在指南导航与文档首页登记。语音属于 `send kind:voice` 的同步合成发送，不是插件或后台生成流程；配置样例仅使用 SecretRef 与声音模型占位 ID。
 - 页面与 llms 共享完整 Git SHA；未提交修改明确标为本地预览。更新时间不是适用版本，SHA 也不自动等于 `latest` 镜像。
 - 仅保留轻量主题扩展，布局/导航/搜索/Markdown 使用 Rspress。`static-search-links` 针对 2.0.22 的 extensionless 搜索结果补上原生 `normalizeHref`。其本地搜索仅用 FlexSearch Document（不启用 worker/持久化），因此精确 alias 到同包 compact ESM 构建，避免完整版未使用的 worker fallback 把构建机路径带入 JS；不跳过泄漏检查。
 - `patches/@rspress__core@2.0.22.patch` 修复默认搜索的全局 Enter 越界和空结果上下键取模：仅处理打开面板的搜索输入，有实际结果才导航。通过 pnpm 的 `patchedDependencies` 锁定并安装，不手改安装目录；`test/docs-search.test.ts` 执行已安装包的实际事件处理器。Docker 安装层也复制补丁，最终 runtime 不复制补丁或 docs。按钮补充 `:focus-visible` 边框。升级 Rspress/FlexSearch 后复查路由、compact alias、来源控件与键盘补丁的必要性，并运行生产浏览器验收。

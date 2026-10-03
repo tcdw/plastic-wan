@@ -17,10 +17,11 @@ import {
   telegramSends,
   toolCalls,
 } from '../store/schema.ts';
+import { FishAudioTtsError, type VoiceSynthesizer } from '../voice/fish-tts.ts';
 
 export const SendInputSchema = Type.Object(
   {
-    kind: Type.Optional(Type.Enum({ text: 'text', sticker: 'sticker', image: 'image' })),
+    kind: Type.Optional(Type.Enum({ text: 'text', sticker: 'sticker', image: 'image', voice: 'voice' })),
     text: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
     parse_mode: Type.Optional(Type.Literal('MarkdownV2')),
     sticker_ref: Type.Optional(Type.String({ minLength: 1 })),
@@ -53,7 +54,16 @@ export type SendToolInput =
       readonly image_generation_id: string;
       readonly text?: string;
       readonly reply_to_message_id?: string;
-    };
+    }
+  | { readonly kind: 'voice'; readonly text: string; readonly reply_to_message_id?: string };
+
+/**
+ * Spoken text limit: the transcript becomes the audio caption (`🎙️ ` + text),
+ * and Telegram caps captions at 1024 characters.
+ */
+const VOICE_TEXT_MAX = 1000;
+
+const VOICE_FILE_NAME = 'voice-reply.mp3';
 
 function narrowSendInput(input: Static<typeof SendInputSchema>): SendToolInput | undefined {
   const kind =
@@ -77,6 +87,17 @@ function narrowSendInput(input: Static<typeof SendInputSchema>): SendToolInput |
       return undefined;
     }
     return { kind, sticker_ref: input.sticker_ref, ...reply };
+  }
+  if (kind === 'voice') {
+    if (
+      input.text === undefined ||
+      input.parse_mode !== undefined ||
+      input.sticker_ref !== undefined ||
+      input.image_generation_id !== undefined
+    ) {
+      return undefined;
+    }
+    return { kind, text: input.text, ...reply };
   }
   if (input.image_generation_id === undefined) {
     return undefined;
@@ -144,6 +165,20 @@ export interface TelegramSendApi {
       readonly caption?: string;
     },
   ): Promise<TelegramSendResponse[]>;
+  /**
+   * Delivers one synthesized voice reply as an MP3 audio message. Optional like
+   * the picture methods; the send tool rejects voice sends without it.
+   */
+  sendGeneratedAudio?(
+    chatId: string,
+    bytes: Uint8Array,
+    fileName: string,
+    options: {
+      readonly message_thread_id?: number;
+      readonly reply_parameters?: { readonly message_id: number };
+      readonly caption?: string;
+    },
+  ): Promise<TelegramSendResponse>;
 }
 
 export interface SendToolEnvironment {
@@ -178,6 +213,11 @@ export interface SendToolEnvironment {
       conversationId: bigint,
     ) => readonly { readonly assetId: string; readonly bytes: Uint8Array; readonly fileName: string }[] | undefined;
   };
+  /**
+   * Text-to-speech for `kind:voice`, bound to the active voice configuration.
+   * Absent when voice is not configured; voice sends are then rejected.
+   */
+  readonly voice?: { readonly synthesize: VoiceSynthesizer };
 }
 
 function completionMention(
@@ -217,10 +257,14 @@ export function createSendTool(
   ]
     .filter((part) => part.length > 0)
     .join(' ');
+  const voiceGuide =
+    environment.voice === undefined
+      ? ''
+      : ` For a spoken reply, set kind to voice and put exactly what to say in text: plain speech in Chinese, Japanese or English, at most ${VOICE_TEXT_MAX} characters, no Markdown, emoji, code or URLs. It is synthesized and sent as one MP3 audio message with the text as its transcript caption. Use voice only when someone asks for a voice reply or to hear something read aloud, or when one brief spoken line clearly adds value; otherwise reply in text. Do not imitate a specific real person or copyrighted character. If voice synthesis fails, nothing was sent; reply in text instead if a reply is still warranted.`;
   return {
     name: 'send',
     label: 'Send to Telegram',
-    description: `Publish exactly one warranted user-visible Telegram message or sticker. Use this only after deciding the new messages or a current task completion require a reply, clarification, or confirmation; do not use it merely because the tool is available, to answer history-only content, or to publish private reasoning. Keep the message concise and self-contained. For text, kind may be omitted; omit parse_mode for plain text, or set parse_mode to MarkdownV2 only when the text is correctly escaped. ${textConstraints} For a sticker, kind must be sticker and sticker_ref must be a stk_ value returned by the search_stickers capability (via execute); img_ refs cannot be sent. Set reply_to_message_id only to a message visible in this conversation, preferring the relevant new message; when several separate discussions are active, set it on every message so each reply is visibly attached to the one it answers. Success means Telegram accepted the send; if the tool fails or reports an unknown outcome, do not claim it was sent and do not blindly retry. One batch of new messages may hold several separate discussions among different people: keep one message to one discussion, calling send once per discussion you choose to answer rather than merging unrelated discussions into a single message, and leave a discussion unanswered when you have nothing to add to it. Still do not split one answer across several messages; repeated sends are rate limited per chat.`,
+    description: `Publish exactly one warranted user-visible Telegram message or sticker. Use this only after deciding the new messages or a current task completion require a reply, clarification, or confirmation; do not use it merely because the tool is available, to answer history-only content, or to publish private reasoning. Keep the message concise and self-contained. For text, kind may be omitted; omit parse_mode for plain text, or set parse_mode to MarkdownV2 only when the text is correctly escaped. ${textConstraints} For a sticker, kind must be sticker and sticker_ref must be a stk_ value returned by the search_stickers capability (via execute); img_ refs cannot be sent. Set reply_to_message_id only to a message visible in this conversation, preferring the relevant new message; when several separate discussions are active, set it on every message so each reply is visibly attached to the one it answers. Success means Telegram accepted the send; if the tool fails or reports an unknown outcome, do not claim it was sent and do not blindly retry. One batch of new messages may hold several separate discussions among different people: keep one message to one discussion, calling send once per discussion you choose to answer rather than merging unrelated discussions into a single message, and leave a discussion unanswered when you have nothing to add to it. Still do not split one answer across several messages; repeated sends are rate limited per chat.${voiceGuide}`,
     parameters: SendInputSchema,
     executionMode: 'sequential',
     execute: async (toolCallId, input, signal) => {
@@ -292,6 +336,35 @@ export function createSendTool(
       if (send.kind === 'image' && (send.text?.length ?? 0) > 1024) {
         recordRejectedSend(environment, toolCallId, input, 'send_caption_too_long');
         throw new Error('image caption must not exceed 1024 characters');
+      }
+      if (send.kind === 'voice' && environment.voice === undefined) {
+        recordRejectedSend(environment, toolCallId, input, 'voice_disabled');
+        throw new Error('voice replies are not enabled on this runtime; reply in text instead');
+      }
+      if (send.kind === 'voice' && send.text.length > VOICE_TEXT_MAX) {
+        recordRejectedSend(environment, toolCallId, input, 'voice_text_too_long');
+        throw new Error(`voice text must not exceed ${VOICE_TEXT_MAX} characters`);
+      }
+      let voiceAudio: Uint8Array | undefined;
+      if (send.kind === 'voice' && environment.voice !== undefined) {
+        // Synthesis comes before the abort, deadline and barrier checks below,
+        // so a clip that takes seconds is still judged at the moment it would
+        // actually go out. A failed clip is not a send: nothing reached Telegram.
+        try {
+          voiceAudio = await environment.voice.synthesize(send.text, signal);
+        } catch (error) {
+          const aborted = signal?.aborted === true;
+          const errorCode = aborted
+            ? 'aborted'
+            : `voice_${error instanceof FishAudioTtsError ? error.code : 'synthesis_error'}`;
+          recordRejectedSend(environment, toolCallId, input, errorCode);
+          throw new Error(
+            aborted
+              ? 'Not sent: aborted'
+              : `Voice synthesis failed (${errorCode}); nothing was sent. Reply in text instead if a reply is still warranted.`,
+          );
+        }
+        sendText = `🎙️ ${send.text.trim()}`;
       }
       // A cancelled or expired run must not start a side effect: the model may
       // have queued this call before the abort or deadline landed.
@@ -425,6 +498,17 @@ export function createSendTool(
                 throw new Error('Telegram returned no message for the delivered pictures');
               }
               response = first;
+              break;
+            }
+            if (voiceAudio !== undefined) {
+              const sendAudio = environment.api.sendGeneratedAudio;
+              if (sendAudio === undefined) {
+                throw new Error('voice delivery is not wired into this runtime');
+              }
+              response = await sendAudio(environment.context.chatId.toString(), voiceAudio, VOICE_FILE_NAME, {
+                ...options,
+                caption: sendText,
+              });
               break;
             }
             throw new Error('sticker_ref is not authorized in this conversation context');
@@ -656,7 +740,7 @@ function recordOutgoingMessage(
       senderId: sender.id,
       kind: input.kind,
       text: input.kind === 'text' ? sentText : null,
-      caption: input.kind === 'image' ? (input.text ?? null) : null,
+      caption: input.kind === 'image' ? (input.text ?? null) : input.kind === 'voice' ? sentText : null,
       replyToMessageId: input.reply_to_message_id === undefined ? null : BigInt(input.reply_to_message_id),
       createdAt: recordedAt,
       rawFragmentJson: JSON.stringify({

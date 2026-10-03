@@ -55,6 +55,7 @@ import {
   meteredTokens,
   readDailyTokenBudget,
 } from '../store/sleep.ts';
+import { fishAudioSynthesizer } from '../voice/fish-tts.ts';
 import { type CachedConversationAgent, ConversationRuntime } from './conversation-runtime.ts';
 import { attachBucketToInvocation } from './invocation-queue.ts';
 import type { InvocationOutcome } from './scheduler.ts';
@@ -214,6 +215,9 @@ export class AgentRuntime {
       disallowBlankLines: config.agent.send_disallow_blank_lines === true,
       deadline: Number.MAX_SAFE_INTEGER,
       bot: this.#bot,
+      ...(config.voice === undefined
+        ? {}
+        : { voice: { synthesize: fishAudioSynthesizer(config.voice, this.#secrets) } }),
     });
     validateToolRegistry(
       [
@@ -407,6 +411,11 @@ export class AgentRuntime {
         bot: this.#bot,
         ...(config.agent.send_barrier_enabled === true ? { holdForNewMessages } : {}),
         ...(this.#imageGeneration === undefined ? {} : { imageGeneration: this.#imageGeneration }),
+        // Built from the configuration this run started with, so a reload of
+        // the voice section applies from the next invocation on.
+        ...(config.voice === undefined
+          ? {}
+          : { voice: { synthesize: fishAudioSynthesizer(config.voice, this.#secrets) } }),
       }),
       createExecuteTool({
         store: this.#store,

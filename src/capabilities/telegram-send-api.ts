@@ -6,7 +6,8 @@ import type { TelegramSendApi } from '../capabilities/send-tool.ts';
  * Adapts the grammY API to the send tool's explicit surface. The two plain
  * methods pass through; the generated-picture methods map onto sendPhoto and
  * sendMediaGroup, carrying back the photo sizes the tool records for canonical
- * history. Only the fields the send tool reads are preserved.
+ * history, and generated voice clips map onto sendAudio. Only the fields the
+ * send tool reads are preserved.
  */
 export function grammySendApi(api: Api): TelegramSendApi {
   type SentMessage = { message_id: number; date: number; chat: { id: number }; photo?: unknown };
@@ -34,6 +35,14 @@ export function grammySendApi(api: Api): TelegramSendApi {
     sendSticker: (chatId, sticker, options) => api.sendSticker(chatId, sticker, options),
     sendGeneratedPhoto: async (chatId, bytes, fileName, options) => {
       const message = await api.sendPhoto(chatId, new InputFile(Buffer.from(bytes), fileName), {
+        ...(options.message_thread_id === undefined ? {} : { message_thread_id: options.message_thread_id }),
+        ...(options.reply_parameters === undefined ? {} : { reply_parameters: options.reply_parameters }),
+        ...(options.caption === undefined ? {} : { caption: options.caption }),
+      });
+      return narrow(message);
+    },
+    sendGeneratedAudio: async (chatId, bytes, fileName, options) => {
+      const message = await api.sendAudio(chatId, new InputFile(Buffer.from(bytes), fileName), {
         ...(options.message_thread_id === undefined ? {} : { message_thread_id: options.message_thread_id }),
         ...(options.reply_parameters === undefined ? {} : { reply_parameters: options.reply_parameters }),
         ...(options.caption === undefined ? {} : { caption: options.caption }),

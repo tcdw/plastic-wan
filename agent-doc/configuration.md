@@ -38,6 +38,7 @@ node src/cli.ts check-config --config dev-data/config.jsonc
 | `providers.<alias>`（新增、删除、改 kind）与 `providers.<alias>.*`（连接字段、模型列表） | Provider 的每个字段都热更新：reload 按新定义重建注册表。模型列表变化只替换该 Provider 的模型；连接字段变化会重新解析它的 SecretRef |
 | `vision.provider`、`vision.model`、`vision.max_output_tokens` | 下一次 vision 分析使用新模型；`max_output_tokens` 在构建注册表时与新模型的上限一起校验，并和模型一起在分析开始时从同一份快照取出，等待中发布的新值只影响之后的分析 |
 | `image`（整段：存在性、`credentials`、`models` 及所有子字段） | 图片功能启停与配置都热应用：reload 重新解析 image SecretRef 并原子发布新的图片快照，下一次提交生效；进行中的生成继续用它开始时的凭据快照。段被剥离（结构不合法）或删除都等于禁用，Agent 与 Admin 同步失去图片工具与页面能力，不需要重启 |
+| `voice`、`voice.*`（整段与所有子字段） | 语音启停、API key 引用、声音模型与合成模型都热应用；下一次 Invocation 从 active 配置构建 send Tool，每段音频重新解析 SecretRef，key jar 轮换也作用于下一次 Invocation |
 
 `outside_serve` 字段（`serve` 从不读取，下一次 `backup` 生效，既不算已应用也不算待重启）：`paths.backups`、`retention.online_days`、`retention.backup_copies`。
 
@@ -113,6 +114,8 @@ command SecretRef：
 | `providers` | 内置或自定义 Provider 别名 |
 | `agent` | 对话模型、Prompt、并发与限流、上下文保留策略、全局 Token 预算 |
 | `vision` | Sticker 视觉模型、并发、Prompt 版本和预算 |
+| `image` | 可选的图片生成凭据与模型 |
+| `voice` | 可选的 Fish Audio 同步语音发送配置 |
 | `mcp` | 可选的 stdio/Streamable HTTP Server |
 | `admin` | 可选的 Admin Panel（审计只读 + 受控管理写端点） |
 | `developer` | 可选的开发者调试配置；`record_model_payloads` 缺省为 `false` |
@@ -370,6 +373,28 @@ Agent 不再配置 `max_output_tokens`：每次请求的输出上限直接使用
 - `background_sticker_concurrency` 当前必须为 `1`。
 - `prompt_version` 参与视觉缓存版本；改变描述规则时递增。
 - `daily_budget` 同时限制 Token 和图片数，但只作用于后台 Sticker 索引（`daily_usage` 的 `system`/`sticker_index`）；聊天触发的 `read_image` 计入全局 `agent.daily_budget.max_tokens`。
+
+## Voice 语音发送
+
+`voice` 是可选的顶层段（`VoiceSectionSchema`）：缺省即语音禁用，不影响文本发送。配置示例：
+
+```jsonc
+{
+  "voice": {
+    "api_key": { "jar": "fish_audio" },
+    "reference_id": "0123456789abcdef0123456789abcdef",
+    "model": "s2.1-pro-free"
+  }
+}
+```
+
+- `api_key` 必须是 SecretRef；示例只引用配置同目录 `key.json` 中的 `fish_audio` 条目，不接受明文密钥。
+- `reference_id` 必填，是 32 位十六进制 Fish Audio 声音模型 ID；示例是占位值，部署时替换为实际模型 ID。
+- `model` 可选，只允许 `s2.1-pro-free`（默认）或 `s2.1-pro`。
+- `voice` 在 `HOT_PATHS`、`voice.` 在 `HOT_PREFIXES` 中，整段增删与子字段修改都可热应用。没有 watcher，仍需 Admin「Apply config file」或 `/model` 应用文件。每次 Invocation 用 active 配置构建 send Tool，每段音频合成时解析 API key；配置热应用或 key jar 轮换从下一次 Invocation 生效。
+- 无单独语音 Admin UI、doctor 探针或新增日志事件；调用审计沿用 `tool_calls` 与正常发送审计。
+
+语音使用 `send kind:voice`，在一次调用内合成并发送；顺序、限制和失败码见 [telegram-agent-flow.md](telegram-agent-flow.md#同步语音发送)。
 
 ## Image 生成
 

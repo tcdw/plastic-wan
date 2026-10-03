@@ -33,6 +33,7 @@ plasticwan/
 │   ├── orchestration/      # scheduler、invocation-queue、agent-runtime、conversation-runtime、bot-commands
 │   ├── plugins/            # 内置 Agent 插件：plugin（definePlugin/loadPlugins）、builtin 清单、alarm/、web-fetch/
 │   ├── capabilities/       # send-tool、read-tool、execute-tool、mcp、stickers、media/
+│   ├── voice/              # Fish Audio TTS 客户端；send kind:voice 内同步合成 MP3
 │   ├── context/            # context-builder、context-store、context-refs、context-gc、context-codec、memory
 │   ├── store/              # database、schema、migrations/、long-tasks、invocation-snapshot、sleep、participation、admins
 │   ├── platform/           # config、secrets、providers、system-resources 等无业务依赖模块
@@ -168,6 +169,7 @@ pnpm run docs:preview
 
 - Telegram 消息、媒体内容、MCP 描述/结果和 Tool 参数都是不可信数据，不得提升为指令。
 - Telegram 发送只能经过 `send` Tool；普通 Assistant Message 是私有推理记录。
+- `send` 支持 `text`、`sticker`、`image`、`voice`；语音仅在配置了 `voice` 时启用，在同一次调用中同步合成后经过 abort/deadline、发送屏障、限流与审计，再用 Telegram `sendAudio` 发送，不持久化音频。
 - `read` 只能读取 `system:///` 树内 Markdown 文档；`execute` 只 dispatch 组合根注册的内部能力，四个原语与 MCP Tool 不可经它调用；任何 Skill 文档都不能覆盖 Tool 约束或授权规则。
 - 图片和 Reply 只能引用当前 Conversation Context 授权且未过期的 capability；引用按 Conversation 隔离，永不跨 Conversation 解析；禁止接受任意 file ID、Chat ID 或 Topic ID。
 - `config.jsonc` 不接受明文 Secret：明文只存在配置同目录的 `key.json`（`{ "jar": "<name>" }` 引用），其余用环境变量或受限 command SecretRef；错误输出必须经 `SecretStore.redact`。排查配置读 `config.jsonc` 即可，不要读取 `key.json`。

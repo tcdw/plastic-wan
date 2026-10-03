@@ -64,6 +64,8 @@ Pi Agent（按 Conversation 缓存，播种自 canonical history）
 send Tool → Telegram API → 审计
 ```
 
+`send` 支持 `text`、`sticker`、`image`、`voice`。语音是同一次 Tool Call 内的同步发送：`src/voice/` 向 Fish Audio 合成 MP3，随后检查 abort/deadline、发送屏障，再限流、写发送审计并调用 Telegram `sendAudio`。合成失败或屏障拦截都不算发送；音频只在内存中传递，不落库或写文件。每次 Invocation 根据 active 配置构建 send Tool，每段音频重新解析 SecretRef；没有独立语音服务、后台任务或管理页面。
+
 每个 Conversation 持有一份持久化的 **Conversation Context**（`conversation_contexts` + `context_messages`）：它是 canonical history，进程重启与 Agent 缓存驱逐都不影响它。Pi Agent 实例按 Conversation 缓存在 `ConversationRuntime` 里，启动时从 canonical history 播种，是**可丢弃的缓存**而不是事实源。一次 Invocation 是一个运行窗口——期间可以注入多批新消息、多次调用模型与 Tool、多次 `send`——但 Invocation 最终仍会结束，Context 保留到下一次。Context 的增长由 checkpoint + 丢弃式 GC 控制（见 [Context 生命周期](telegram-agent-flow.md#context-生命周期)），没有 summarization 或 compaction。Conversation 级短期记忆（`memories`）随每一批注入，按创建时间升序排列在注入块内，TTL 到期或 Agent 主动删除后消失。
 
 ## 模块职责
@@ -80,6 +82,7 @@ send Tool → Telegram API → 审计
 | `context/` | Conversation Context：canonical history 存储、GC、引用、编解码、模型输入组装、记忆与完成回执注入 |
 | `store/` | SQLite 连接、schema 与迁移、通用 `long-tasks` 服务及跨层共享的持久化状态 |
 | `image/` | 图片生成核心的进程级装配：借出宿主 SQLite 连接、`<data_dir>/images` 文件存储与优雅停止；领域实现与领域测试在私有包 `packages/image-service`（provider adapter 边界见包内 `provider.ts`） |
+| `voice/` | Fish Audio TTS 客户端：同步返回有界 MP3 字节与稳定错误码，由 `send` 完成 Telegram 交付 |
 | `platform/` | 无业务依赖的基础模块：配置、Secret、Provider、并发、子进程、Prompt 模板等 |
 | `system-resources/` | 随 runtime 发布的 `system:///` 只读资源树（System Skills） |
 
@@ -141,3 +144,4 @@ Conversation Context 是运行时自己写下的历史，但它由模型输出�
 | FFmpeg / FFprobe | 视频 Sticker 中间帧提取 |
 | python-lottie | TGS 代表帧先导出 SVG，再由 Sharp 转 PNG/JPEG |
 | MCP SDK | stdio 与 Streamable HTTP Server |
+| Fish Audio（可选，`api.fish.audio`） | 配置 `voice` 后，在 `send kind:voice` 中同步进行文本转语音 |

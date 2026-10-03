@@ -18,10 +18,22 @@ description: 按配置节理解 Plastic Wan 的必填项、覆盖关系与运行
 | `providers` | 已启用 Provider 与模型定义；凭据使用 SecretRef。 |
 | `agent` | 主模型、Prompt、全局 Token 预算、并发、Context 和发送限流。 |
 | `vision` | 图片/Sticker 模型、并发、独立 Token 与图片日预算。 |
+| `image` | 可选的图片生成凭据与模型，整段可热应用；见[图片指南](../guides/images.md)。 |
+| `voice` | 可选的 Fish Audio 同步语音发送，缺省禁用，整段可热应用；见[语音指南](../guides/voice.md)。 |
 | `admin` | 本地管理面板；修改后重启。 |
 | `developer` | 可选调试设置；`record_model_payloads` 可省略，默认 `false`，可热应用。详见[Developer 页面](../configure/admin.md#开发者调试报文)。 |
 | `mcp` | 受限 stdio 或 Streamable HTTP Tool；修改后重启。 |
 | `retention` | 在线保留天数与备份份数，仅下次备份使用。 |
+
+## Voice 字段
+
+| 字段 | 要求与语义 |
+| --- | --- |
+| `voice.api_key` | 必填 SecretRef，例如 `{ "jar": "fish_audio" }`，不接受明文 API key。 |
+| `voice.reference_id` | 必填，32 位十六进制 Fish Audio 声音模型 ID。 |
+| `voice.model` | 可选，`s2.1-pro-free`（默认）或 `s2.1-pro`。 |
+
+`voice` 缺省即禁用；整段增删与所有子字段都可热应用。每次 Invocation 从 active 配置构建 send Tool，合成每段音频时重新解析密钥，配置热应用或 key jar 轮换从下一次 Invocation 生效。语音在 `send kind:voice` 内同步合成后交付，不保存音频，无独立 Admin UI 或 doctor 探针。
 
 ## 覆盖与隔离
 

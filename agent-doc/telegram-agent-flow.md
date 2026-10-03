@@ -275,6 +275,8 @@ Alarm 是第一个 `plugin_id = "alarm"` 的 consumer，通过 `execute.call` �
 
 - 文本默认按纯文本发送；显式设置 `parse_mode: "MarkdownV2"` 时由 Telegram 按 MarkdownV2 解析。只提供 `text`（以及可选的 `reply_to_message_id`）时，`kind` 默认为 `text`。
 - 配置允许且当前 Conversation Context 授权的 Sticker（`stk_` 引用）。
+- 已生成的图片（`kind: "image"`，通过 `image_generation_id` 交付，见 [Image 生成](#image-生成)）。
+- 配置了 `voice` 时可同步合成并发送语音（`kind: "voice"`，`text` 就是要说的话，见下一节）。
 - 可选 Reply：模型传 `reply_to_message_id`，目标必须命中当前 Conversation Context 里仍在保留段内且未过期的 `reply:<telegram_message_id>` 引用。
 
 发送前写 pending 审计并标记副作用边界。明确失败可按策略处理；网络中断后无法确认 Telegram 是否接收时记录 `outcome_unknown`，不能盲目重发。
@@ -288,6 +290,37 @@ Alarm 是第一个 `plugin_id = "alarm"` 的 consumer，通过 `execute.call` �
 `agent.send_disallow_blank_lines` 开启（默认关闭）时，包含任何空行的文本同样在发送前被拒绝，错误码 `send_blank_lines`。
 
 `agent.rate_limits.sends_per_window` / `window_seconds` 限制同一 Chat 在滑动窗口内的 `telegram_sends` 行数，不区分状态（失败的尝试同样消耗额度，否则失败重试的循环就没有刹车）；超出时 Tool Call 记为 `error`/`send_rate_limited`，不写 `telegram_sends`。这是长活 Invocation 取代 per-Invocation `max_sends` 的刹车。
+
+### 同步语音发送
+
+`send` 接受 `kind: "voice"` 与 1–1000 字符的 `text`，文本必须是实际要说的话，以中文、日文或英文的普通口语表达，不是合成指令。语音不允许 `parse_mode`、`sticker_ref` 或 `image_generation_id`，混用记为 `send_input_invalid`。可选 Reply 仍走相同的 Conversation 引用授权。
+
+同一次调用内的顺序固定为：
+
+```text
+输入校验 → Fish Audio 同步合成 MP3
+  → abort / Invocation deadline 检查
+  → send 屏障
+  → Chat 发送限流 → pending 审计与副作用边界
+  → Telegram sendAudio → 正常成功审计与历史记录
+```
+
+`src/voice/fish-tts.ts` 向 `https://api.fish.audio/v1/tts` POST，格式为 MP3，超时 45 秒，响应上限 8 MiB。合成期间到达的新消息仍会在**合成后**触发既有屏障（`send_barrier`），不会因为合成开始时没有新消息而直接发出过时回复。音频只在内存中存在；Telegram 使用文件名 `voice-reply.mp3` 与 caption `🎙️ <text>`，这是 `sendAudio` 附件，不是 `sendVoice`。
+
+拒绝码记录在 `tool_calls`：
+
+| 错误码 | 语义 |
+| --- | --- |
+| `voice_disabled` | 没有 `voice` 配置 |
+| `voice_text_too_long` | 语音正文超过 1000 字符 |
+| `voice_missing_api_key`、`voice_invalid_input`、`voice_invalid_options` | 密钥解析或合成输入、选项失败 |
+| `voice_http_error`、`voice_invalid_response`、`voice_audio_too_large`、`voice_timeout`、`voice_network_error` | Fish Audio 请求或音频响应失败 |
+| `voice_synthesis_error` | 其他合成异常 |
+| `aborted` | 合成期间运行被取消 |
+
+合成失败不是发送：不写 `telegram_sends`，不调用 Telegram；错误结果明确告诉模型没有发送任何消息，应改用文本。Provider 响应体和密钥不保存、不记日志。合成成功仍可能被既有 `deadline_exceeded`、`send_barrier` 或 `send_rate_limited` 拒绝。
+
+只有配置了 `voice` 时，send Tool 描述才附加语音指导：用户明确要求语音、朗读，或一句简短口语确实增加价值时才说；其余默认文本，不模仿真人或受版权保护的角色。是否用语音由模型决定，不由 runtime 关键词强制。成功后消息 revision kind 为 `voice`、caption 为 `🎙️ <text>`，没有媒体行；除正常审计和消息历史外不保存音频。
 
 ### 一条消息对应一个话题
 

@@ -282,6 +282,22 @@ export const ImageSectionSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/**
+ * Fish Audio text-to-speech for `send kind:voice`. Absent = voice disabled. The
+ * section is hot: every invocation builds its send tool from the active
+ * configuration and resolves the API key per clip, so a reload or key-jar
+ * rotation applies to the next voice send.
+ */
+export const VoiceSectionSchema = Type.Object(
+  {
+    api_key: SecretRefSchema,
+    // The 32-hex Fish Audio voice model id, sent as `reference_id`.
+    reference_id: Type.String({ pattern: '^[0-9a-fA-F]{32}$' }),
+    model: Type.Optional(Type.Union([Type.Literal('s2.1-pro-free'), Type.Literal('s2.1-pro')])),
+  },
+  Strict,
+);
+
 export const ConfigSchema = Type.Object(
   {
     version: Type.Literal(1),
@@ -352,6 +368,7 @@ export const ConfigSchema = Type.Object(
       Strict,
     ),
     image: Type.Optional(ImageSectionSchema),
+    voice: Type.Optional(VoiceSectionSchema),
     retention: Type.Object({ online_days: PositiveInteger, backup_copies: PositiveInteger }, Strict),
     paths: Type.Object(
       {

@@ -289,12 +289,20 @@ Alarm 是第一个 `plugin_id = "alarm"` 的 consumer，通过 `execute.call` �
 
 `agent.rate_limits.sends_per_window` / `window_seconds` 限制同一 Chat 在滑动窗口内的 `telegram_sends` 行数，不区分状态（失败的尝试同样消耗额度，否则失败重试的循环就没有刹车）；超出时 Tool Call 记为 `error`/`send_rate_limited`，不写 `telegram_sends`。这是长活 Invocation 取代 per-Invocation `max_sends` 的刹车。
 
+### 一条消息对应一个话题
+
+`send` 的 Tool 描述要求「一条消息对应一个话题」：同一批新消息里有多拨人在聊不相关的事情时，模型为每个它选择参与的话题各调用一次 `send`，并分别带上指向该话题内消息的 `reply_to_message_id`，而不是把不相关的内容合进一条消息。没话要说的话题可以不回；单个回答仍然不拆成多条。
+
+这只是 Tool 描述层面的倾向，runtime 不做任何分线判断，也不强制 `reply_to_message_id`——话题归属完全由模型从消息头的 `re:N`、`uid:N` 与时间顺序自行推断，Forum Topic 隔离在这里不起作用（同一个 Topic 内部的多话题属于同一个 Conversation）。描述里原先有一句「repeated sends are rate limited per chat, so say what matters in one message instead of splitting it」，它反过来鼓励了合并，是群聊回复「串味」的成因之一，已经删掉：`sends_per_window` 本身足够宽松，不需要用它压制正常的分条回复。机制侧不需要改动，一轮内多次 `send` 本来就各自独立审计、独立计数、独立失败。
+
+代价是群里会更容易连发若干条，从而更容易撞上 Telegram 自己的群聊发送速率限制；那只是多走一次既有的 429 `retry_after` 重试，不丢消息。
+
 ### send 屏障
 
 `agent.send_barrier_enabled` 开启时，`send` 在所有输入校验都通过、即将写 pending 审计之前多做一次判断：模型组织回复期间，同一 Conversation 是否又开了 `collecting` Bucket。若有，就不发这条，而是：
 
 1. 在同一事务里把这个 Bucket attach 进当前 Invocation（与到期 attach 同一个 `attachBucketToInvocation`：写 `invocation_buckets`、Bucket 置 `running`、按 `sequence_no` 续写 `invocation_messages` 快照），再 `queueInjection`。
-2. 本次 Tool Call 记为 `error` / `send_barrier`，不写 `telegram_sends`、不消耗发送配额；Tool 结果告诉模型新消息紧随其后，请读完再决定发什么。
+2. 本次 Tool Call 记为 `error` / `send_barrier`，不写 `telegram_sends`、不消耗发送配额；Tool 结果告诉模型新消息紧随其后，请读完再决定发什么——两批延续同一个话题时可以一条消息同时回应，是不同话题则各发一条。
 3. 该 turn 结束时，turn 边界上既有的 `injectPending` 把这批 steer 进去（它本身就是一个 checkpoint），模型在下一次调用里同时看到被拦的原因与新批次。
 
 约束：

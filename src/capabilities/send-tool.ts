@@ -38,7 +38,7 @@ class SendHeldBack extends Error {}
  * the next turn boundary, so the model reads it right after this result.
  */
 export const SEND_BARRIER_TEXT =
-  'Not sent: new messages arrived in this conversation before this reply went out. They follow as a new batch; read them, then decide again what, if anything, to send. One message can answer both batches.';
+  'Not sent: new messages arrived in this conversation before this reply went out. They follow as a new batch; read them, then decide again what, if anything, to send. One message can answer both batches when they continue the same discussion; when they are separate discussions, answer each with its own send.';
 
 export type SendToolInput =
   | {
@@ -220,7 +220,7 @@ export function createSendTool(
   return {
     name: 'send',
     label: 'Send to Telegram',
-    description: `Publish exactly one warranted user-visible Telegram message or sticker. Use this only after deciding the new messages or a current task completion require a reply, clarification, or confirmation; do not use it merely because the tool is available, to answer history-only content, or to publish private reasoning. Keep the message concise and self-contained. For text, kind may be omitted; omit parse_mode for plain text, or set parse_mode to MarkdownV2 only when the text is correctly escaped. ${textConstraints} For a sticker, kind must be sticker and sticker_ref must be a stk_ value returned by the search_stickers capability (via execute); img_ refs cannot be sent. Set reply_to_message_id only to a message visible in this conversation, preferring the relevant new message. Success means Telegram accepted the send; if the tool fails or reports an unknown outcome, do not claim it was sent and do not blindly retry. Repeated sends are rate limited per chat, so say what matters in one message instead of splitting it.`,
+    description: `Publish exactly one warranted user-visible Telegram message or sticker. Use this only after deciding the new messages or a current task completion require a reply, clarification, or confirmation; do not use it merely because the tool is available, to answer history-only content, or to publish private reasoning. Keep the message concise and self-contained. For text, kind may be omitted; omit parse_mode for plain text, or set parse_mode to MarkdownV2 only when the text is correctly escaped. ${textConstraints} For a sticker, kind must be sticker and sticker_ref must be a stk_ value returned by the search_stickers capability (via execute); img_ refs cannot be sent. Set reply_to_message_id only to a message visible in this conversation, preferring the relevant new message; when several separate discussions are active, set it on every message so each reply is visibly attached to the one it answers. Success means Telegram accepted the send; if the tool fails or reports an unknown outcome, do not claim it was sent and do not blindly retry. One batch of new messages may hold several separate discussions among different people: keep one message to one discussion, calling send once per discussion you choose to answer rather than merging unrelated discussions into a single message, and leave a discussion unanswered when you have nothing to add to it. Still do not split one answer across several messages; repeated sends are rate limited per chat.`,
     parameters: SendInputSchema,
     executionMode: 'sequential',
     execute: async (toolCallId, input, signal) => {

@@ -221,6 +221,10 @@ describe('send tool', () => {
     );
     expect(tool.description).toContain('Text must fit the schema limit.');
     expect(tool.description).toContain('do not claim it was sent and do not blindly retry');
+    // Unrelated discussions get one send each. The description must not talk the
+    // model back into merging them, which is what made group replies run together.
+    expect(tool.description).toContain('keep one message to one discussion');
+    expect(tool.description).not.toContain('instead of splitting it');
     expect(Compile(tool.parameters).Check({ text: 'world', reply_to_message_id: '10' })).toBe(true);
     expect(Compile(tool.parameters).Check({ text: '*formatted*', parse_mode: 'MarkdownV2' })).toBe(true);
     expect(Compile(tool.parameters).Check({ text: '<b>formatted</b>', parse_mode: 'HTML' })).toBe(false);
